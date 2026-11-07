@@ -1,5 +1,5 @@
 // The browser in run_code's SDK: the VM's Chromium (guest.nix), which
-// programs drive with Playwright over CDP; see "浏览器" in
+// programs drive with Playwright over CDP; see "The browser" in
 // docs/rust-rewrite.md. The first program that wants it starts it. Its
 // tabs outlive the program, and its profile the VM: the next program finds
 // them as this one left them.

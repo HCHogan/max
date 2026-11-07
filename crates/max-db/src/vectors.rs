@@ -1,7 +1,7 @@
 //! Vectors of what rows say, for `history`'s search by meaning:
 //! one for each chat row that says something. The recall vector worker
 //! writes them; `recall` reads them. As with the stickers', each keeps the
-//! model that made it, and another model's don't count. See "召回".
+//! model that made it, and another model's don't count. See "Recall".
 
 use chrono::{DateTime, Utc};
 use max_core::ids::{ConversationId, MessageId};

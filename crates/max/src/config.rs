@@ -48,7 +48,8 @@ pub struct Config {
 }
 
 /// The model that turns text into vectors for search by meaning; see
-/// "发图". Its vectors must be 1024 long, as the schema's are: bge-m3's.
+/// "Sending images". Its vectors must be 1024 long, as the schema's are:
+/// bge-m3's.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Embedding {
@@ -64,7 +65,7 @@ impl Embedding {
     }
 }
 
-/// Web search, through Exa; see "网页搜索".
+/// Web search, through Exa; see "Web search".
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Search {
@@ -112,8 +113,8 @@ impl GitHub {
 }
 
 /// An HTTP API the VMs call through the host: their calls go on to
-/// `base_url` with its secret, which stays on the host; see "宿主带 key 的
-/// API".
+/// `base_url` with its secret, which stays on the host; see "Host-keyed
+/// APIs".
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Api {
@@ -251,7 +252,7 @@ pub struct Author {
     pub email: String,
 }
 
-/// Where downloaded media go; see "媒体".
+/// Where downloaded media go; see "Media".
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Media {
@@ -308,7 +309,7 @@ pub struct Database {
 }
 
 /// Models in three layers: how to reach a provider, what each of its
-/// models is, and who uses which. See "LLM：provider、模型、选用".
+/// models is, and who uses which. See "LLM: providers, models and selection".
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Llm {
@@ -421,7 +422,7 @@ pub struct Qq {
     pub app_secret_file: PathBuf,
 }
 
-/// The groups' VMs; see "VM 进程". The NixOS module fills this in: the
+/// The groups' VMs; see "VM processes". The NixOS module fills this in: the
 /// programs, and the taps it made.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -450,7 +451,7 @@ pub struct Vm {
     #[serde(default = "vm_idle")]
     pub idle_minutes: u64,
     /// At most this many groups' VMs are kept on for the units Max keeps
-    /// in them; see "常驻程序".
+    /// in them; see "Resident programs".
     #[serde(default = "kept")]
     pub kept: usize,
     /// The groups whose VMs are on the operations network.
@@ -464,7 +465,7 @@ pub struct Vm {
 
 /// The operations network: a dedicated Tailscale client in a network
 /// namespace of its own, which these groups' VMs reach the fleet through
-/// with `ssh <host>`. See "运维网络" in docs/rust-rewrite.md.
+/// with `ssh <host>`. See "The operations network" in docs/rust-rewrite.md.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Operations {

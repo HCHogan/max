@@ -1,9 +1,9 @@
 # max-pi: pi in print mode, for one of Max's background jobs. The first
 # line of stdin is the job as JSON, and all max writes; max-job.ts keeps
-# the job's contract with the host (see "后台 agent" and "和 harness 脱钩"
-# in docs/rust-rewrite.md). pi's model calls and Max's tools both go to
-# Max's MCP service at 127.0.0.1:7777 with the job's token: the
-# provider's key stays on the host.
+# the job's contract with the host (see "Background agents" and
+# "Decoupling from the harness" in docs/rust-rewrite.md). pi's model calls
+# and Max's tools both go to Max's MCP service at 127.0.0.1:7777 with the
+# job's token: the provider's key stays on the host.
 #
 # The job: contract (1), token, task, model (the provider's id), api
 # ("openai-completions" or "openai-responses"), window, max_output and

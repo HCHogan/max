@@ -3,7 +3,8 @@
 //! tools: the runner's SDK calls them by these names, and the model sees
 //! the picture or the video, not a value. The host never decodes a video:
 //! the VM's ffmpeg made it small (video.js), the host reads its movie
-//! header for the length, and the provider gets the bytes. See "多模态结果".
+//! header for the length, and the provider gets the bytes. See
+//! "Multimodal results".
 
 use std::sync::{Arc, Mutex};
 

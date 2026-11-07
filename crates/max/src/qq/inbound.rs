@@ -1,4 +1,4 @@
-//! QQ's messages as `Inbound`: see "入站" under "QQ 官方机器人" in
+//! QQ's messages as `Inbound`: see "Inbound" under "The official QQ bot" in
 //! docs/rust-rewrite.md. Text with `<@openid>` mentions and
 //! `<faceType=…>` faces becomes nodes; attachments become media, with
 //! where to download them; the

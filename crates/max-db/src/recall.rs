@@ -3,7 +3,7 @@
 //! or the captions of its pictures and stickers. The rows' vectors find
 //! more, near the query's by meaning. These find the candidates; ranking
 //! them is the caller's.
-//! See "召回".
+//! See "Recall".
 
 use max_core::ids::{ConversationId, MessageId};
 use sqlx::{Connection, PgConnection};

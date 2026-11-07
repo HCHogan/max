@@ -1,6 +1,6 @@
 //! Starting a VM: its directory and disk, two virtiofsd and a
 //! cloud-hypervisor as max's own children, then SSH once the guest
-//! answers. The command lines are the ones checked on tank; see "VM 进程".
+//! answers. The command lines are the ones checked on tank; see "VM processes".
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;

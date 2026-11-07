@@ -1,6 +1,6 @@
 # A group's VM: a NixOS guest that cloud-hypervisor boots straight into its
 # kernel. max starts it as its own child, with a command line of its own
-# making (see docs/rust-rewrite.md, "VM 进程"); this module only builds the
+# making (see docs/rust-rewrite.md, "VM processes"); this module only builds the
 # system, and the flake hands max its kernel, initrd and command line.
 #
 # Commands run as root; the VM boundary is the isolation, so the guest has a
@@ -296,7 +296,7 @@ in
   # max-units when Max changes them. They run in max-units.slice, which
   # yields to commands and can't take all the memory. max.units=off on the
   # command line leaves them out, for a VM they keep from coming up. See
-  # "常驻程序" in docs/rust-rewrite.md.
+  # "Resident programs" in docs/rust-rewrite.md.
   systemd.services.max-units = {
     wantedBy = [ "multi-user.target" ];
     # It tells Max's service how many there are, through max-mcp.

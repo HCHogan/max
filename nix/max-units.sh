@@ -1,7 +1,7 @@
 # max-units: makes the units in /work/.max/systemd the ones the guest
 # runs, so that what Max keeps running outlives the VM. max-units.service
 # runs it at every boot, and Max runs it after changing the directory. See
-# "常驻程序" in docs/rust-rewrite.md.
+# "Resident programs" in docs/rust-rewrite.md.
 #
 # New and changed files are copied to /run/systemd/system, services with a
 # drop-in that puts them in max-units.slice; those with an [Install]

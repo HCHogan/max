@@ -3,7 +3,7 @@
 //! reads rows in order (see `read`): around a row, or a stretch of the
 //! timeline, a sender's rows in it if asked. A stretch runs from or to a
 //! day, a moment or a row, worked out as row ids once, so that a search
-//! and a read keep to the same rows. See "召回".
+//! and a read keep to the same rows. See "Recall".
 
 mod read;
 mod search;

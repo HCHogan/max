@@ -1,6 +1,6 @@
 //! The conversation table: finds the actor for each message's chat,
 //! starting it the first time, and keeps groups nobody bound out. See
-//! "运行时结构" and step 1 of "运行流程" in docs/rust-rewrite.md.
+//! "Runtime structure" and step 1 of "Processing flow" in docs/rust-rewrite.md.
 //!
 //! A private chat gets a conversation the first time someone writes. A
 //! group needs `/bind`: until then its messages are dropped, all but the

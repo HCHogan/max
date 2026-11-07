@@ -2,7 +2,7 @@
 //! are, among its rows (with their pictures' and stickers' captions), and
 //! what there is near it by meaning, under the read's filters; each result
 //! says how `history` reads it in context. A term is found as written,
-//! ignoring case. See "召回".
+//! ignoring case. See "Recall".
 
 use std::cmp::Ordering;
 use std::collections::HashMap;

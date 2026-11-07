@@ -3,7 +3,8 @@
 // never decodes one. A frame a second, as Gemini samples them, at most
 // 640 pixels a side, the sound in mono: ten minutes come to a few MiB,
 // which every model call left in the turn sends again. The host stores
-// the copy and reads its length. See "多模态结果" in docs/rust-rewrite.md.
+// the copy and reads its length. See "Multimodal results" in
+// docs/rust-rewrite.md.
 "use strict";
 
 const { execFile } = require("node:child_process");

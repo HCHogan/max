@@ -1,6 +1,6 @@
 //! The content store's index: what was downloaded, and for which message.
 //! The download worker records what comes in; a picture Max sends again
-//! is linked to its new row when that is committed. See "媒体".
+//! is linked to its new row when that is committed. See "Media".
 
 use std::collections::BTreeMap;
 

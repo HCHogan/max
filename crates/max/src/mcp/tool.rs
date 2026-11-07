@@ -2,7 +2,7 @@
 //! types, their bounds schemars attributes, and next to them how it is
 //! used and how it runs. The JSON Schemas the MCP service lists, the
 //! checks on a call's arguments and the TypeScript the system prompt
-//! declares it with all come from there. See "工具契约" in
+//! declares it with all come from there. See "Tool contract" in
 //! docs/rust-rewrite.md.
 
 use std::future::Future;
@@ -38,7 +38,7 @@ pub trait Tool: 'static {
     const JOB: bool;
     /// Whether the system prompt declares it. Those it doesn't, `say` and
     /// `wake`, are for the programs Max keeps in the group's VM, and a
-    /// turn's programs that call them call as those. See "常驻程序" in
+    /// turn's programs that call them call as those. See "Resident programs" in
     /// docs/rust-rewrite.md.
     const TURN: bool = true;
 

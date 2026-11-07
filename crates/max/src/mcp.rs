@@ -1,5 +1,5 @@
 //! Max's tools, which programs in a group's VM call through the MCP
-//! service; see "MCP 通道". Each declares itself as a [`tool::Tool`].
+//! service; see "The MCP channel". Each declares itself as a [`tool::Tool`].
 
 mod agent;
 mod chat_file;

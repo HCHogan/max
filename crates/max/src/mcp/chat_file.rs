@@ -1,6 +1,6 @@
 //! `max.file`: a medium of the conversation's record, by its handle,
 //! copied into /work/chat for a program to read. Not one of Max's tools:
-//! the runner's SDK calls it by this name. See "读文件".
+//! the runner's SDK calls it by this name. See "Reading files".
 
 use max_core::ids::MessageId;
 use max_db::media::{self, Stored};

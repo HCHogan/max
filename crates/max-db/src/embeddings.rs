@@ -1,7 +1,7 @@
 //! Vectors of what captions say, for the sticker library: the embedding
 //! worker writes one per sticker caption, and `find_stickers` looks for
 //! the nearest. Each vector keeps the model that made it, and only one
-//! model's are compared. See "发图".
+//! model's are compared. See "Sending images".
 
 use chrono::{DateTime, Utc};
 use max_core::ids::MessageId;

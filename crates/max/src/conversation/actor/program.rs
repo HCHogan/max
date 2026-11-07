@@ -1,5 +1,5 @@
 //! Calls from the programs Max keeps in the group's VM, outside any turn:
-//! Max's tools, run beside the core. See "常驻程序" in
+//! Max's tools, run beside the core. See "Resident programs" in
 //! docs/rust-rewrite.md.
 
 use serde_json::Value;

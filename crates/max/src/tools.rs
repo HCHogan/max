@@ -1,4 +1,4 @@
-//! What the model's tool calls do; see "工具和 codemode". Both run in the
+//! What the model's tool calls do; see "Tools and codemode". Both run in the
 //! group's VM: `shell` a command, `run_code` a program in the guest's
 //! runner. Both call Max's tools through the MCP service as the run, and
 //! can show the model pictures and videos after their result: the runner's
@@ -337,7 +337,7 @@ fn exited(status: Option<u32>) -> String {
 
 /// A `shell` call to run in the background, as its conversation's actor
 /// gets it: the actor runs it with [`background`] and wakes Max when it
-/// ends. See "后台命令" in docs/rust-rewrite.md.
+/// ends. See "Background commands" in docs/rust-rewrite.md.
 #[derive(Debug)]
 pub struct Background {
     pub command: String,

@@ -1,5 +1,5 @@
 //! `mute_member`: mutes someone in the group, or lifts it, as one of its
-//! admins. See "群管理" under "QQ 官方机器人".
+//! admins. See "Group management" under "The official QQ bot".
 //!
 //! What QQ would refuse anyway is refused here, with the reason: a private
 //! chat, Max itself, and the owner and admins as their latest message here

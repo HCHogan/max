@@ -1,5 +1,5 @@
 //! The download worker: each medium a message brings with an address, into
-//! the content store and `message_media`. See "媒体" in
+//! the content store and `message_media`. See "Media" in
 //! docs/rust-rewrite.md.
 
 use std::fmt;

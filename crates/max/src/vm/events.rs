@@ -3,7 +3,7 @@
 //! which read it with `maxx events`. `?after=<id>` first sends the rows
 //! after that one, the latest [`EVENTS_CAUGHT_UP`] of them, from the database. A
 //! line with nothing on it is the heartbeat. Which group it is is the VM's
-//! own socket's to say, as for the programs' calls. See "常驻程序" in
+//! own socket's to say, as for the programs' calls. See "Resident programs" in
 //! docs/rust-rewrite.md.
 
 use std::borrow::Borrow;

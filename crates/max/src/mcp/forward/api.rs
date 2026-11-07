@@ -2,7 +2,7 @@
 //! `/api/<name>/…` with no key, and it goes on to the API's base URL with
 //! the key the host keeps, which never enters the VM. Only the calls the
 //! configuration allows go, at most so many an hour; the answer comes back
-//! as it is, a redirect too. See "宿主带 key 的 API" in docs/rust-rewrite.md.
+//! as it is, a redirect too. See "Host-keyed APIs" in docs/rust-rewrite.md.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex, PoisonError};

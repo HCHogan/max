@@ -1,5 +1,5 @@
 //! A conversation's actor: the one writer of its timeline and the driver
-//! of its core. See "会话 actor" in docs/rust-rewrite.md.
+//! of its core. See "The conversation actor" in docs/rust-rewrite.md.
 
 mod actor;
 pub mod classify;
@@ -115,7 +115,7 @@ impl fmt::Debug for Subscription {
 }
 
 /// What Max says or does that isn't the model's text: committed by the
-/// actor and sent like a segment. See "经 `Post` 发".
+/// actor and sent like a segment. See "Sending via `Post`".
 #[derive(Debug)]
 pub struct Post {
     pub act: Act,

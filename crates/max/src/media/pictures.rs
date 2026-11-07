@@ -1,7 +1,7 @@
 //! The pictures a model call is sent: the versions made for the model,
 //! read from the content store. An item names a row's medium, and this
 //! finds it; a tool result names the file itself, and names videos too.
-//! See "媒体" and "多模态结果".
+//! See "Media" and "Multimodal results".
 
 use std::collections::{BTreeMap, HashSet};
 use std::io;

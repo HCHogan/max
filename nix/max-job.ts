@@ -1,5 +1,5 @@
 // max-job: pi's side of one of Max's background jobs, in the groups' VMs,
-// where max-pi runs pi in print mode (see "和 harness 脱钩" in
+// where max-pi runs pi in print mode (see "Decoupling from the harness" in
 // docs/rust-rewrite.md). It keeps the job's contract with the host, with
 // maxx's client (client.js, at MAX_CLIENT), by the job's token in
 // MAXX_TOKEN, at MAXX_MCP's host as maxx does:

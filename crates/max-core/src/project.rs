@@ -134,7 +134,7 @@ impl Volatile {
 }
 
 /// Max's memory: a file in its VM that it writes itself, shown to every
-/// core. See "记忆" in docs/rust-rewrite.md.
+/// core. See "Memory" in docs/rust-rewrite.md.
 pub const MEMORY_FILE: &str = "/work/.max/memory.md";
 
 const TIDY: &str =

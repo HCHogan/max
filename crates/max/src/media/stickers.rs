@@ -1,7 +1,7 @@
 //! The embedding worker: a vector of each sticker's caption, for the
 //! sticker library that `find_stickers` searches. The caption worker hands
 //! it the captions it writes; its scan finds the rest, and all of them
-//! again after a change of model. See "发图".
+//! again after a change of model. See "Sending images".
 
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex, PoisonError};

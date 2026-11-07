@@ -1,171 +1,171 @@
-# Max Rust 重写
+# The Rust rewrite of Max
 
-> 状态：草案，2026-10-26 起草，边聊边补。标 **待定** 的条目还没有结论。
+> Status: draft, begun 2026-10-26 and extended as decisions are made. Items marked **TBD** are not yet resolved.
 >
-> 代码在这个仓库的 main 上（2026-10-31 起；之前在 `maxx` 分支，2026-10-28 从 `rust` 改名）。重写的起点打了 tag `haskell-base`（`a5de2e1`）；Haskell 版的代码和文档都在那里，文中指向旧文档的链接固定在这个提交上。
+> The code is on the main branch of this repository (since 2026-10-31; before that on the `maxx` branch, which was renamed from `rust` on 2026-10-28). The starting point of the rewrite is tagged `haskell-base` (`a5de2e1`); the Haskell version's code and documentation remain there, and links to the old documentation in this document are pinned to that commit.
 
-## 目标
+## Goals
 
-1. 用 Rust 重写 Max。上线时 Rust 版要能 drop-in 替换 Haskell 版：功能、数据、部署都接得上，有意删掉的功能除外。
-2. 所有代码都要能让人审完。宁可慢一点、少一点，不一次堆上去。
-3. 通用的部分交给成熟的库和外部 agent，包括配置解析、数据库、LLM 接入、MCP 和后台 coding agent。Max 自己只写群聊运行时和领域逻辑。
+1. Rewrite Max in Rust. At go-live, the Rust version must be a drop-in replacement for the Haskell version: its features, data and deployment must carry over, except for features removed on purpose.
+2. Every line of code must be possible for a person to review in full. A slower pace and a smaller feature set are preferable to adding large amounts of code at once.
+3. Delegate the general-purpose parts to mature libraries and external agents, including configuration parsing, the database, LLM access, MCP and the background coding agent. Max itself implements only the group-chat runtime and the domain logic.
 
-不做的事：
+Non-goals:
 
-- 不逐行移植 Haskell 代码，按现在的理解重新设计。
-- 不为 Haskell 版写兼容层。数据一次性导入新 schema（见[上线](#上线drop-in-替换的条件)）。
+- The Haskell code is not ported line by line; the design is redone according to the current understanding.
+- No compatibility layer is written for the Haskell version. Its data is imported once into the new schema (see [Go-live: conditions for a drop-in replacement](#go-live-conditions-for-a-drop-in-replacement)).
 
-## 版本
+## Versions
 
-| 版本 | 内容 | 用途 |
-|---|---|---|
-| v1 | 见 [v1 范围](#v1-范围) | 只做审核和测试，不上线 |
-| v1 之后 | 浏览器、记忆、后台 agent 等，怎么切分 **待定** | 同上 |
-| 上线 | [功能对齐清单](#功能对齐清单)全部完成，数据导入演练通过 | drop-in 替换 Haskell 版 |
+| Version | Content | Purpose |
+| --- | --- | --- |
+| v1 | See [v1 scope](#v1-scope) | Review and testing only; not deployed |
+| After v1 | The browser, memory, background agents and more; how they are divided is **TBD** | As above |
+| Go-live | Everything in the [Feature parity checklist](#feature-parity-checklist) is complete and the data import rehearsal has passed | Drop-in replacement for the Haskell version |
 
-### v1 范围
+### v1 scope
 
-2026-10-28 定：已经设计到细节的都进 v1，不再为了让 v1 小一点而往后推。底线是核心和并发调度这些关键部分的复杂度不失控。
+Decided 2026-10-28: everything already designed in detail goes into v1, and nothing is postponed merely to keep v1 small. The bottom line is that the complexity of the critical parts, such as the core and concurrent scheduling, must stay under control.
 
-包含：
+Included:
 
-- 平台：QQ（腾讯官方机器人接口，2026-10-28 从 NapCat 改过来，见 [QQ 官方机器人](#qq-官方机器人)）。Matrix 先不做（2026-10-29 定），见 [Matrix](#matrix)。
-- 触发：所有入账都经过 [intent](#intent)：@、回复 Max 是它的规则，其它消息由小模型判（2026-10-27 定进 v1，10-28 改成所有消息都经过它）。私聊按白名单触发。命令不是触发，由会话 actor 自己处理。见[运行流程](#运行流程)第 2 步。
-- canonical ledger：入站和出站消息都落 Postgres。
-- 会话 actor、单一核心实例、输入投递、流式回复、取消（`/kill`）、失败时的简短回复。
-- LLM：Responses 和 Chat Completions 两种协议。
-- 自写的 agent loop，带工具（2026-10-27 定）：纯 codemode 加一个 `shell`，都跑在群 VM 里，见[工具和 codemode](#工具和-codemode)。所以 v1 也要带上 VM 沙箱和 MCP 服务。第一个开放的 Max 工具是读全文的 `context_read`（2026-10-30 和 `context_search` 并成 `history`），见[后续输入](#后续输入)；其它开放哪几个 **待定**。
-- 上下文投影：原始尾巴、易变块，见[上下文投影](#上下文投影)。historian 和摘要 10-28 定进 v1，10-30 删了，当天晚上又改回来做成按群的开关，11-02 比完了，再删，见[摘要](#摘要)。
-- 重启：正在跑的 turn 给一段宽限期，到期就中断，回一句话（2026-10-29 改，原来是挂起、重启后接着跑），见[重启](#重启)。
-- 配置、日志、优雅关闭。
+- Platform: QQ, through Tencent's official bot API (switched from NapCat on 2026-10-28; see [The official QQ bot](#the-official-qq-bot)). Matrix is not implemented for now (decided 2026-10-29); see [Matrix](#matrix).
+- Triggering: every inbound message passes through [Intent](#intent). Mentions (@) and replies to Max are its rules; all other messages are judged by a small model (made part of v1 on 2026-10-27; changed on 2026-10-28 so that every message passes through it). Private chats trigger according to an allowlist. Commands are not triggers: the conversation actor handles them itself. See step 2 of [Processing flow](#processing-flow).
+- The canonical ledger: inbound and outbound messages are both persisted to Postgres.
+- The conversation actor, a single core instance, input delivery, streaming replies, cancellation (`/kill`) and a short reply on failure.
+- LLM: two protocols, Responses and Chat Completions.
+- A self-written agent loop with tools (decided 2026-10-27): pure codemode plus one `shell` tool, both running in the group VM; see [Tools and codemode](#tools-and-codemode). v1 therefore also includes the VM sandbox and the MCP service. The first Max tool exposed is `context_read`, which reads full text (merged with `context_search` into `history` on 2026-10-30); see [Follow-up input](#follow-up-input). Which other tools to expose is **TBD**.
+- Context projection: the raw tail and the volatile block; see [Context projection](#context-projection). The historian and summaries were added to v1 on 2026-10-28, removed on 2026-10-30, restored that same evening as a per-group switch, and removed again on 2026-11-02 once the comparison was complete; see [Summaries](#summaries).
+- Restarts: a running turn is given a grace period; when it expires, the turn is interrupted and a one-sentence reply is sent (changed 2026-10-29; previously the turn was suspended and resumed after the restart); see [Restarts](#restarts).
+- Configuration, logging and graceful shutdown.
 
-不包含，但上线前都要做：镜像、浏览器、记忆和召回、后台 agent、自动化、媒体、admin。
+Not included, but all required before go-live: mirroring, the browser, memory and recall, background agents, automations, media and admin.
 
-### 有意删除的功能
+### Features deliberately removed
 
-- iMessage
-- WeChat hook
-- NapCat 和 OneBot（2026-10-28 删）：QQ 改用官方机器人接口，见 [QQ 官方机器人](#qq-官方机器人)。
-- reaction 和戳一戳（2026-10-28 删）：官方接口没有。包括处理中、失败时挂的表情，`[silence:表情名]` 回表情，以及收别人的 reaction 和戳一戳。
-- 把表格和代码块渲染成图片（typst、codesnap，2026-10-29 删）：QQ 的原生 Markdown 能显示代码块、表格和公式。
-- Max 发小黄脸表情（2026-10-29 删）：QQ 官方接口发不出。收到的照样给模型看，见[回复的写法](#回复的写法)。同一天表情包和图片也删过，owner 随即改回来：它们当图片发，见[发图](#发图)。
-- Matrix 和镜像（2026-10-29 定，先不做）：见 [Matrix](#matrix)。镜像本来是 QQ 群和 Matrix 房间之间的，跟着一起搁置。
-- `/uncompact`（2026-10-28 删）：摘要是自动的，手动撤回的部分迟早又被自动压回去，语义别扭。
-- historian、摘要、`/compact` 和 `/historian`（2026-10-30 删，当天晚上改回按群的开关，11-02 再删）：见[摘要](#摘要)。
-- Inbound message hooks：先不做（2026-10-27）。以后要做的话不能放进 VM，因为每条消息都要跑；候选是声明式规则，Rust 的 `regex` 是线性时间的，不怕不可信的正则。
+- iMessage.
+- The WeChat hook.
+- NapCat and OneBot (removed 2026-10-28): QQ now uses the official bot API; see [The official QQ bot](#the-official-qq-bot).
+- Reactions and nudges (removed 2026-10-28): the official API does not offer them. This covers the emoji attached while processing and on failure, replying with an emoji through `[silence:表情名]` ("emoji name"), and receiving other people's reactions and nudges.
+- Rendering tables and code blocks as images (typst, codesnap; removed 2026-10-29): QQ's native Markdown displays code blocks, tables and formulas.
+- Max sending QQ face emoticons (removed 2026-10-29): the official API cannot send them. Received ones are still shown to the model; see [How replies are written](#how-replies-are-written). Stickers and images were removed on the same day, but the owner promptly restored them: they are sent as images; see [Sending images](#sending-images).
+- Matrix and mirroring (decided 2026-10-29; deferred): see [Matrix](#matrix). Mirroring connected QQ groups with Matrix rooms, so it is shelved together with Matrix.
+- `/uncompact` (removed 2026-10-28): summarisation is automatic, so a part restored by hand would sooner or later be compacted again; the semantics are awkward.
+- The historian, summaries, `/compact` and `/historian` (removed 2026-10-30; restored that evening as a per-group switch; removed again 2026-11-02): see [Summaries](#summaries).
+- Inbound message hooks: not implemented for now (2026-10-27). If they are built later, they cannot run in the VM, because they would run on every message. The candidate is declarative rules: Rust's `regex` runs in linear time, so untrusted regular expressions pose no risk.
 
-2026-10-26 讨论时只决定带 QQ 和 Matrix，这两个有人用；10-29 Matrix 也先不做。其余删除项 **待补**。
+The discussion on 2026-10-26 decided only to keep QQ and Matrix, the two platforms in use; on 2026-10-29 Matrix was deferred as well. The remaining removals are **to be completed**.
 
-### 功能对齐清单
+### Feature parity checklist
 
-功能按 [features.md](https://github.com/HCHogan/max/blob/a5de2e1410f5cdfaa4b88c052bd499ee8b676759/docs/features.md) 的条目列。所有没删除的功能，上线前都要完成。v1 一列只是提议，聊的时候再改。
+Features are listed by the entries of [features.md](https://github.com/HCHogan/max/blob/a5de2e1410f5cdfaa4b88c052bd499ee8b676759/docs/features.md). Every feature that has not been removed must be complete before go-live. The v1 column is only a proposal and is revised in discussion.
 
-| 功能 | v1 | 备注 |
-|---|---|---|
-| Conversation lifetime and history | 部分 | 单一核心实例、输入投递、空闲窗口；重启时正在跑的 turn 给一段宽限期，到期中断，崩溃时正在跑的记为 `Lost`，见[重启](#重启) |
-| Automations | — | |
-| Sandbox isolation | 部分 | codemode 的运行环境；v1 要有按需启动、闲置关机、执行命令和 `/work` |
-| Attachment fan-out and QQ best-effort recovery | — | |
-| Persistence | 部分 | ledger 和 turn 记录；新 schema 见 [schema](#schema) |
-| Canonical multi-platform conversations | 部分 | [消息格式](#消息格式)不按平台分支，v1 只有 QQ；Matrix 和镜像先不做，见 [Matrix](#matrix) |
-| Triggering | ✓ | @、回复触发；私聊按白名单 |
-| Proactive triggering | ✓ | [intent](#intent)，2026-10-27 定进 v1。10-29 精简：只留去抖、小模型判定和每小时上限，Haskell 版的闸门、三类判定和 topic 冷却都删了 |
-| Inbound message hooks | — | 先不做，见[有意删除的功能](#有意删除的功能) |
-| QQ group allowlist | ✓ | 改成 `/bind`：平台本身只让创建者拉群，没绑定的群不服务，见 [QQ 官方机器人](#qq-官方机器人) |
-| Private chats | ✓ | 改成白名单：名单上的人私聊才触发，见[运行流程](#运行流程)第 2 步。Haskell 版私聊一律回复 |
-| Agent loop | ✓ | 不再挂处理中和失败的 reaction，失败时回一句话，见[群里看到的](#群里看到的) |
-| Background agents and feedback | 部分 | pi + MCP，见[后台 agent](#后台-agent)。2026-10-30 做了 `agent` 系列工具，job 结果唤醒 Max；job 中途能用 `ask_max` 问 Max |
-| Prompt shape and budget | 部分 | 见[上下文投影](#上下文投影) |
-| Memory | 有 | 换成 Max 自己写的一个文件，每轮注入，见[记忆](#记忆)；Haskell 版的提案、版本、到期都不要了 |
-| Group lingo | — | |
-| Unified recall and vector search | 部分 | `history` 按字面、按意思搜本会话的消息（带图和表情包的 caption），也按发言人、时间读原文，见[召回](#召回)。不搜记忆，它每轮都在上下文里；视频没有 caption |
-| Context operations | — | Haskell 版是 admin 面板里的上下文控制台：覆盖和延迟、重建摘要、重算向量、检索轨迹；跟 Admin JSON API 一起做。模型自己的上下文操作是 `history`，见[召回](#召回) |
-| LLM profiles | ✓ | |
-| Streaming | ✓ | |
-| Share cards | — | |
-| Images | — | 工具结果里的图片见[多模态结果](#多模态结果)；Max 发图和表情包见[发图](#发图) |
-| Group awareness | — | 群名、人数和 maxx 在群里的身份拿得到（`info`、`bot_state`，实测）；成员列表要白名单，群主和管理员只认得出说过话的（消息里带身份），见 [QQ 官方机器人](#qq-官方机器人)的群管理 |
-| Moderation (QQ groups) | — | `recall_message` 和 `mute_member` 2026-10-29 做了，见 [QQ 官方机器人](#qq-官方机器人)的出站和群管理；禁言在测试群实测过，maxx 当管理员撤普通成员的消息没实测 |
-| Browser | — | 群 VM 里常驻的 Chromium，程序里经 CDP 直接写 Playwright（2026-10-29 做完），见[浏览器](#浏览器) |
-| Replies | ✓ | QQ 一律发原生 Markdown，表格和代码块不再渲染成图片，见 [QQ 官方机器人](#qq-官方机器人)；Max 不发小黄脸，表情包和图片当图片发，见[发图](#发图) |
-| Tools | 部分 | 纯 codemode 加 `shell`，见[工具和 codemode](#工具和-codemode)；v1 开放哪几个 **待定** |
-| Skills | — | skill 只是文档，加载时只往上下文后面追加，tools 数组不变，见[纯 codemode](#纯-codemode) |
-| Destiny 2 (opt-in) | 部分 | 2026-11-05：只读的公开数据经[宿主带 key 的 API](#宿主带-key-的-api)（`[api.bungie]`，配置在 nix-config），Max 自己写脚本、缓存 manifest。要玩家登录的（背包、移动和装备物品）没做：要每人的 OAuth，转发器只有一把固定的 key，也分不出 VM 里是谁在调。Haskell 版只有 3 个人登录过 |
-| Commands | 部分 | `/kill` 等运行时命令；由会话 actor 处理，不进核心 |
-| SSH fleet operations | ✓ | 2026-11-05，见[运维网络](#运维网络) |
-| Admin JSON API | — | |
-| Token accounting | 部分 | |
-| Estimated cost | — | |
-| Subscription health | — | |
+| Feature | v1 | Notes |
+| --- | --- | --- |
+| Conversation lifetime and history | Partial | A single core instance, input delivery and the idle window. On restart, a running turn is given a grace period and then interrupted; after a crash, a turn that was running is recorded as `Lost`; see [Restarts](#restarts) |
+| Automations | — |  |
+| Sandbox isolation | Partial | The runtime environment of codemode; v1 needs start on demand, idle shutdown, command execution and `/work` |
+| Attachment fan-out and QQ best-effort recovery | — |  |
+| Persistence | Partial | The ledger and turn records; for the new schema, see [Schema](#schema) |
+| Canonical multi-platform conversations | Partial | The [Message format](#message-format) does not branch by platform; v1 has only QQ. Matrix and mirroring are deferred; see [Matrix](#matrix) |
+| Triggering | ✓ | Triggered by mentions (@) and replies; private chats by allowlist |
+| Proactive triggering | ✓ | [Intent](#intent), made part of v1 on 2026-10-27. Simplified on 2026-10-29: only debouncing, small-model classification and the hourly cap remain; the Haskell version's gates, three verdict categories and topic cooldown were all removed |
+| Inbound message hooks | — | Not implemented for now; see [Features deliberately removed](#features-deliberately-removed) |
+| QQ group allowlist | ✓ | Replaced by `/bind`: the platform itself lets only the bot's creator add it to groups, and unbound groups are not served; see [The official QQ bot](#the-official-qq-bot) |
+| Private chats | ✓ | Replaced by an allowlist: a private chat triggers only for people on the list; see step 2 of [Processing flow](#processing-flow). The Haskell version replied to every private chat |
+| Agent loop | ✓ | Processing and failure reactions are no longer attached; on failure, a one-sentence reply is sent; see [What the group sees](#what-the-group-sees) |
+| Background agents and feedback | Partial | pi + MCP; see [Background agents](#background-agents). The `agent` family of tools was implemented on 2026-10-30, and job results wake Max; during a job, `ask_max` lets it ask Max questions |
+| Prompt shape and budget | Partial | See [Context projection](#context-projection) |
+| Memory | Yes | Replaced by a single file that Max writes itself, injected on every turn; see [Memory](#memory). The Haskell version's proposals, versions and expiry were all dropped |
+| Group lingo | — |  |
+| Unified recall and vector search | Partial | `history` searches the current conversation's messages literally and by meaning (including the captions of images and stickers), and reads original text by speaker and time; see [Recall](#recall). Memory is not searched, since it is in the context on every turn; videos have no captions |
+| Context operations | — | In the Haskell version, the context console in the admin panel: overrides and deferrals, rebuilding summaries, recomputing vectors and retrieval traces. To be built together with the Admin JSON API. The model's own context operation is `history`; see [Recall](#recall) |
+| LLM profiles | ✓ |  |
+| Streaming | ✓ |  |
+| Share cards | — |  |
+| Images | — | For images in tool results, see [Multimodal results](#multimodal-results); for Max sending images and stickers, see [Sending images](#sending-images) |
+| Group awareness | — | The group's name, member count and maxx's role in the group are available (`info`, `bot_state`; verified in testing). The member list requires allowlisting; the group owner and administrators can be recognised only once they have spoken (messages carry the sender's role); see the group management part of [The official QQ bot](#the-official-qq-bot) |
+| Moderation (QQ groups) | — | `recall_message` and `mute_member` were implemented on 2026-10-29; see the outbound and group management parts of [The official QQ bot](#the-official-qq-bot). Muting was verified in the test group; maxx retracting an ordinary member's message as an administrator has not been tested |
+| Browser | — | A resident Chromium in the group VM, driven by programs directly with Playwright over CDP (completed 2026-10-29); see [The browser](#the-browser) |
+| Replies | ✓ | QQ always receives native Markdown, and tables and code blocks are no longer rendered as images; see [The official QQ bot](#the-official-qq-bot). Max does not send QQ face emoticons; stickers and images are sent as images; see [Sending images](#sending-images) |
+| Tools | Partial | Pure codemode plus `shell`; see [Tools and codemode](#tools-and-codemode). Which tools v1 exposes is **TBD** |
+| Skills | — | A skill is only documentation: loading one only appends to the end of the context, and the tools array stays unchanged; see [Pure codemode](#pure-codemode) |
+| Destiny 2 (opt-in) | Partial | 2026-11-05: public read-only data goes through the [Host-keyed APIs](#host-keyed-apis) (`[api.bungie]`, configured in nix-config); Max writes its own scripts and caches the manifest. Features that require a player to log in (inventory, moving and equipping items) are not implemented: they would need per-person OAuth, whereas the forwarder holds one fixed key and cannot tell who in the VM is calling. Only 3 people ever logged in to the Haskell version |
+| Commands | Partial | `/kill` and other runtime commands, handled by the conversation actor rather than the core |
+| SSH fleet operations | ✓ | 2026-11-05; see [The operations network](#the-operations-network) |
+| Admin JSON API | — |  |
+| Token accounting | Partial |  |
+| Estimated cost | — |  |
+| Subscription health | — |  |
 
-## 技术选型
+## Technology choices
 
-v1 用到的：
+Used in v1:
 
-| 用途 | 选择 | 版本 | 备注 |
-|---|---|---|---|
-| 异步运行时 | tokio、tokio-util、futures | 1.54 / 0.7.20 / 0.3 | `CancellationToken` 和 `FramedRead` / `LinesCodec` 在 tokio-util |
-| 序列化 | serde、serde_json | 1 | |
-| 错误处理 | color-eyre；调用方要匹配的错误用 thiserror | 0.6.5 / 2.0 | 输出到 journald 时关掉颜色 |
-| 日志 | tracing、tracing-subscriber | 0.1 / 0.3 | 输出到 stdout，由 journald 收 |
-| 命令行、配置 | clap（derive）、toml | 4.6 / 1.1 | 只有一个来源：TOML 文件；见[配置](#配置) |
-| 数据库 | sqlx（postgres、runtime-tokio、macros、migrate、chrono、json） | 0.9.0 | 编译期检查 SQL；`.sqlx` 离线元数据入库；迁移用 sqlx 自带的。不开 TLS，库在本机 |
-| 时间 | chrono | 0.4 | sqlx 0.9 不支持 jiff |
-| LLM | 自写，reqwest 加 sse-stream | — / 0.13 / 0.2.6 | 只在 `max-llm` 里。线上格式只给读到的十几个字段写小结构，其余存原始 JSON 透传。sse-stream 只把字节流切成事件。2026-10-29 从 async-openai 0.42.2 改：byot 模式下请求和响应类型本来就要自己写，它只剩发请求和解析 SSE；它的流每个都 `tokio::spawn` 一个不归我们管的任务，连接断在半路时流只是结束、不报错，还大约每月一个破坏性小版本 |
-| HTTP 服务 | axum | 0.8.9 | MCP 服务；以后 admin 也挂在这里 |
-| QQ 官方机器人 | 自写，网关用 tokio-tungstenite（rustls），REST 用 reqwest | — / 0.30 / 0.13 | 官方 SDK 只有 Go、Python、Node；见 [QQ 官方机器人](#qq-官方机器人) |
-| agent loop | 自写，sans-I/O | — | 调研结论见[核心](#核心) |
-| MCP | 自写，axum | — / 0.8 | Max 的 MCP 服务，VM 里的程序通过它调 Max 的工具，只做用到的那一页协议，见 [MCP 通道](#mcp-通道)。2026-11-03 从 rmcp 3.8 改 |
-| 工具参数 schema | schemars | 1.2 | 工具契约的 JSON Schema 从参数和返回值的类型生成 |
-| codemode 运行时 | Node 和官方 MCP TypeScript SDK | — | 打进群 VM 的 guest 镜像，版本跟着钉住的 nixpkgs；runner 和 SDK 自写 |
-| VM | microvm.nix、cloud-hypervisor、NixOS guest，命令走 vsock 上的 SSH | — | 沿用 Haskell 版的 guest；不要 broker，VM 是主进程的子进程，运行时不需要 root，见 [VM 进程](#vm-进程) |
-| SSH | russh | 0.65.0 | 调 VM：每个 VM 一条连接，每条命令一个 channel，直接连在 hybrid vsock 的 socket 上 |
-| token 估算 | tiktoken-rs | 0.12 | 只在 `max` 里用；算好的数作为数据传进核心，见[核心](#核心) |
-| 测试 | cargo-nextest、insta、tokio test-util、`#[sqlx::test]` | 0.9.149 / 1.49 | |
-| 构建 | crane | — | 依赖单独缓存 |
-| 工具链 | stable，edition 2024 | `rust-toolchain.toml` 钉具体版本 | 不用 nightly，见[工具链](#工具链) |
+| Purpose | Choice | Version | Notes |
+| --- | --- | --- | --- |
+| Async runtime | tokio, tokio-util, futures | 1.54 / 0.7.20 / 0.3 | `CancellationToken` and `FramedRead` / `LinesCodec` come from tokio-util. |
+| Serialisation | serde, serde_json | 1 |  |
+| Error handling | color-eyre; thiserror for errors that callers need to match on | 0.6.5 / 2.0 | Colour is turned off when output goes to journald. |
+| Logging | tracing, tracing-subscriber | 0.1 / 0.3 | Output goes to stdout and is collected by journald. |
+| Command line, configuration | clap (derive), toml | 4.6 / 1.1 | There is a single source: the TOML file; see [Configuration](#configuration). |
+| Database | sqlx (postgres, runtime-tokio, macros, migrate, chrono, json) | 0.9.0 | SQL is checked at compile time; the `.sqlx` offline metadata is committed to the repository; migrations use sqlx's own mechanism. TLS is not enabled, because the database is on the local machine. |
+| Time | chrono | 0.4 | sqlx 0.9 does not support jiff. |
+| LLM | In-house, reqwest plus sse-stream | — / 0.13 / 0.2.6 | Used only in `max-llm`. For the wire format, small structs are written only for the dozen or so fields that are read; everything else is kept as raw JSON and passed through. sse-stream only splits the byte stream into events. Switched from async-openai 0.42.2 on 2026-10-29: in byot mode the request and response types had to be written by hand anyway, which left it doing nothing but sending requests and parsing SSE; each of its streams starts, via `tokio::spawn`, a task that we do not control; when a connection drops midway, the stream simply ends without reporting an error; and it released a breaking minor version roughly once a month. |
+| HTTP server | axum | 0.8.9 | The MCP service; the admin interface will later be mounted here as well. |
+| Official QQ bot | In-house: tokio-tungstenite (rustls) for the gateway, reqwest for REST | — / 0.30 / 0.13 | Official SDKs exist only for Go, Python and Node; see [The official QQ bot](#the-official-qq-bot). |
+| agent loop | In-house, sans-I/O | — | The research findings are in [The core](#the-core). |
+| MCP | In-house, axum | — / 0.8 | Max's MCP service, through which programs in the VM call Max's tools. Only the part of the protocol that is actually used is implemented; see [The MCP channel](#the-mcp-channel). Switched from rmcp 3.8 on 2026-11-03. |
+| Tool parameter schemas | schemars | 1.2 | The JSON Schema of each tool contract is generated from the types of its parameters and return value. |
+| codemode runtime | Node and the official MCP TypeScript SDK | — | Built into the guest image of the group VMs; the versions follow the pinned nixpkgs. The runner and the SDK are written in-house. |
+| VM | microvm.nix, cloud-hypervisor, a NixOS guest, commands over SSH on vsock | — | The Haskell version's guest is reused. There is no broker: the VM is a child process of the main process, and no root privileges are needed at runtime; see [VM processes](#vm-processes). |
+| SSH | russh | 0.65.0 | Used to call into the VMs: one connection per VM and one channel per command, connected directly to the hybrid vsock socket. |
+| Token estimation | tiktoken-rs | 0.12 | Used only in `max`; the computed counts are passed into the core as data; see [The core](#the-core). |
+| Testing | cargo-nextest, insta, tokio test-util, `#[sqlx::test]` | 0.9.149 / 1.49 |  |
+| Build | crane | — | Dependencies are cached separately. |
+| Toolchain | stable, edition 2024 | The exact version is pinned in `rust-toolchain.toml` | No nightly; see [Toolchain](#toolchain). |
 
-`max-llm` 和 `qqbot` 都用 reqwest 0.13，不会编出两份 reqwest。
+`max-llm` and `qqbot` both use reqwest 0.13, so reqwest is not compiled twice.
 
-v1 之后再加的：
+Added after v1:
 
-| 用途 | 选择 | 备注 |
-|---|---|---|
-| 浏览器 | nixpkgs 的 Chromium（现在 155），playwright-core 1.59.0 | 群 VM 里的常驻服务，程序经 CDP 连，见[浏览器](#浏览器) |
-| 向量 | pgvector 0.4.2 | 支持 sqlx < 0.10 |
-| 自动化 | croner 4 | |
-| 后台 agent | pi（`@earendil-works/pi-coding-agent`），`--print` 加插件 `max-job.ts` | 跑在群 VM 里，在 Nix 里钉住版本 |
-| Matrix | matrix-sdk 0.18.0 | 先不做；0.19 和 sqlx 0.9.0 解析不到一起，见 [Matrix](#matrix) |
+| Purpose | Choice | Notes |
+| --- | --- | --- |
+| Browser | Chromium from nixpkgs (currently 155), playwright-core 1.59.0 | A resident service in the group VM, to which programs connect over CDP; see [The browser](#the-browser). |
+| Vectors | pgvector 0.4.2 | Supports sqlx < 0.10. |
+| Automations | croner 4 |  |
+| Background agents | pi (`@earendil-works/pi-coding-agent`), `--print` plus the plugin `max-job.ts` | Runs in the group VM; its version is pinned in Nix. |
+| Matrix | matrix-sdk 0.18.0 | Not done for now; 0.19 and sqlx 0.9.0 cannot be resolved together; see [Matrix](#matrix). |
 
-## 配置
+## Configuration
 
-2026-10-27 定。Haskell 版的配置是 CLI、环境变量、YAML 三层逐字段合并：环境变量会悄悄覆盖文件，未知键被静默忽略；线上的配置由三处拼成：sops 模板渲染的整份配置、另一个 sops 模板渲染的 env 文件、module 导出的环境变量。这些都不要了。
+Decided 2026-10-27. The Haskell version's configuration was merged field by field from three layers: the CLI, environment variables and YAML. Environment variables silently overrode the file, and unknown keys were silently ignored. The production configuration was assembled from three places: a complete configuration rendered from a sops template, an env file rendered from another sops template, and environment variables exported by the module. All of this is dropped.
 
-### 来源和校验
+### Source and validation
 
-- **只有一个来源：TOML 文件。** CLI 只有子命令和 `--config`；不读 `MAX_*` 环境变量，日志级别也写在文件里；没有优先级规则。
-- **严格解析。** 所有结构体都加 `deny_unknown_fields`；默认值只在代码里写一处；可选功能是 `Option<Section>`，不写就是关闭；启动时做跨字段校验，比如引用的模型必须存在。
-- **秘密和私密值只写文件路径。** 密钥用 `api_key_file`、`access_token_file`。不该进公开仓库的标识也一样，比如房间白名单、镜像群号、owners，用 `rooms_file` 这类字段，一行一个。配置文件本身不含任何敏感内容。启动时读所有秘密文件，缺了就报错退出。
-- **不热加载**，改了就重启。
+- **There is a single source: the TOML file.** The CLI has only subcommands and `--config`. No `MAX_*` environment variables are read, and the log level is also set in the file. There are no precedence rules.
+- **Parsing is strict.** Every struct carries `deny_unknown_fields`. Default values are written in one place only, in the code. Optional features are `Option<Section>`: leaving a section out disables the feature. Cross-field validation runs at startup; for example, a referenced model must exist.
+- **Secrets and private values are given only as file paths.** Keys use `api_key_file` and `access_token_file`. The same applies to identifiers that must not enter the public repository, such as the room allowlist, the group numbers used for mirroring and the owners: these use fields like `rooms_file`, with one entry per line. The configuration file itself contains nothing sensitive. All secret files are read at startup; if one is missing, the program reports an error and exits.
+- **There is no hot reloading.** Any change requires a restart.
 
-### 和 NixOS 的关系
+### Relationship to NixOS
 
-- module 用 freeform 的 `settings`，经 `pkgs.formats.toml` 生成进 nix store。module 自己管的路径（数据库 socket、媒体目录）用 `mkDefault` 写进 `settings`，不导出环境变量，也没有 `environmentFile`。
-- 构建时跑 `max check-config` 校验结构，不读秘密文件。配置写错，`nixos-rebuild build` 就会失败。
-- 配置一改，store 路径就变，systemd 自动重启；秘密轮换由 sops-nix 的 `restartUnits` 触发重启。
-- tank 的 `max.nix` 里 owners 现在是明文，迁过来时一起挪进 sops。
+- The module uses a freeform `settings`, which is generated into the Nix store through `pkgs.formats.toml`. Paths that the module manages itself (the database socket, the media directory) are written into `settings` with `mkDefault`; no environment variables are exported, and there is no `environmentFile`.
+- At build time, `max check-config` validates the structure without reading the secret files. A mistake in the configuration therefore makes `nixos-rebuild build` fail.
+- When the configuration changes, its store path changes and systemd restarts the service automatically; rotating a secret triggers a restart through sops-nix's `restartUnits`.
+- In tank's `max.nix`, the owners are currently in plain text; they move into sops as part of the migration.
 
-### 两层：配置文件和运行时设置
+### Two layers: the configuration file and runtime settings
 
-配置文件管部署时的基础设施和默认值。`/model`、`/effort`、`/persona`、`/proactive` 这类按会话的覆盖存在数据库里。两者不合并成一套"配置"，代码里也用不同的类型。
+The configuration file holds the deployment-time infrastructure and defaults. Per-conversation overrides such as `/model`, `/effort`, `/persona` and `/proactive` are stored in the database. The two are not merged into a single "configuration", and the code uses different types for them.
 
-### LLM：provider、模型、选用
+### LLM: providers, models and selection
 
-和 Codex、pi、Hermes 一样分三层。Haskell 版把三层揉成了一层：tank 上 23 个 profile 只有 7 个不同的地址，还有两对是同一个模型只差推理强度。
+As in Codex, pi and Hermes, this is split into three layers. The Haskell version folded the three layers into one: of the 23 profiles on tank, only 7 had distinct addresses, and two pairs were the same model differing only in reasoning effort.
 
-1. **provider：怎么连。** 地址、协议（`responses` 或 `chat`）、认证、请求头、重试、超时、NInfer 的缓存断点 `cache_breakpoints`、空闲窗口 `idle_window_secs`（默认 300，见[运行流程](#运行流程)）。同一个地址既要 chat 又要 responses，就写成两个 provider。空闲窗口按这家缓存的寿命定（2026-10-27 查）：OpenAI GPT-5.6 起默认至少 30 分钟、每次读续命；Anthropic 默认 5 分钟、可选 1 小时；Gemini 官方不给数，第三方估计 3–5 分钟（2026-10-31 实测：几分钟后只复用上一次请求最后一条消息之前的部分，6 分钟后还在，见[前缀稳定的规则](#前缀稳定的规则)）；DeepSeek 几小时到几天；本地 vLLM、SGLang 只受显存限制。
-2. **模型：是什么。** 挂在 provider 下，表名就是发给 API 的模型 id。写上下文窗口、最大输出、输入模态、是否支持推理、默认采样参数。
-3. **选用：谁用哪个、怎么用。** 默认模型、各个角色（比如 intent）用的模型和推理强度。引用一律写成 `provider/模型`，按第一个 `/` 切开；provider 名里不能有 `/`。
+1. **Provider: how to connect.** The address, the protocol (`responses` or `chat`), authentication, request headers, retries, timeouts, NInfer's cache breakpoints `cache_breakpoints`, and the idle window `idle_window_secs` (default 300; see [Processing flow](#processing-flow)). If the same address is needed for both chat and responses, it is written as two providers. The idle window is set according to the lifetime of that provider's cache (checked 2026-10-27): from OpenAI GPT-5.6 onwards, the default is at least 30 minutes, renewed on every read; Anthropic defaults to 5 minutes, with 1 hour as an option; Gemini publishes no official figure, and third parties estimate 3–5 minutes (tested live on 2026-10-31: after a few minutes, only the part before the last message of the previous request is reused, and that part was still cached after 6 minutes; see [Rules for a stable prefix](#rules-for-a-stable-prefix)); DeepSeek keeps it from several hours to several days; local vLLM and SGLang are limited only by GPU memory.
+2. **Model: what it is.** A model sits under a provider, and its TOML table name is the model id sent to the API. It records the context window, the maximum output, the input modalities, whether reasoning is supported, and the default sampling parameters.
+3. **Selection: who uses which model, and how.** The default model, and the model and reasoning effort used by each role (for example, intent). References are always written as `provider/model` and split at the first `/`; provider names may not contain `/`.
 
 ```toml
 [database]
@@ -175,12 +175,12 @@ url = "postgresql:///max?host=/run/postgresql&user=max"
 app_id_file = "/run/secrets/max/qq-app-id"
 app_secret_file = "/run/secrets/max/qq-app-secret"
 
-# 第 3 层：谁用哪个、怎么用
+# Layer 3: who uses which model, and how
 [llm]
 default = { model = "cliproxy/gpt-5.6-luna", effort = "xhigh" }
 intent = { model = "local/qwen3.5-4b" }
 
-# 第 1 层：怎么连
+# Layer 1: how to connect
 [llm.providers.cliproxy]
 base_url = "https://cliproxy.example/v1"
 protocol = "responses"
@@ -189,7 +189,7 @@ retries = 2
 stream_idle_timeout_secs = 120
 idle_window_secs = 300
 
-# 第 2 层：是什么（数值只是示例）
+# Layer 2: what it is (the values are only examples)
 [llm.providers.cliproxy.models."gpt-5.6-luna"]
 context_window = 400000
 max_output = 128000
@@ -203,270 +203,271 @@ protocol = "chat"
 context_window = 32768
 ```
 
-- 流式请求用空闲超时，不用总时长；重试次数放在 provider 上。Haskell 版是每次尝试最多 1800 秒，晚间网络差时再叠上重试会层层放大。
-- 不做内置模型目录。启动时对照服务端的 `/models` 检查一遍。
-- 模型的 `video = true` 表示它看视频（Gemini 的），`max.video` 只在这样的模型上能用，见[多模态结果](#多模态结果)。
-- `/model` 只选 `provider/模型`，`/effort` 只调强度。不再有 `gpt-5.6-luna-medium` 这种只差强度的 profile。
-- 老会话选过的模型和强度不导（2026-10-29 owner 定，原来打算把 profile 名映射成"模型加强度"）：maxx 的配置里没有那些模型，选了不认识的模型，这个会话的每个 turn 都会失败。都用默认，要换再 `/model`。`llm_usage` 不导。
+- Streaming requests use an idle timeout rather than a total duration, and the retry count is set on the provider. The Haskell version allowed up to 1800 seconds per attempt; when the network was poor in the evenings, retries stacked on top of that and the delays compounded.
+- There is no built-in model catalogue. At startup, the configuration is checked once against the server's `/models`.
+- `video = true` on a model means that it can watch video (Gemini's models do); `max.video` is available only on such models; see [Multimodal results](#multimodal-results).
+- `/model` only selects a `provider/model`, and `/effort` only adjusts the effort. There are no longer profiles such as `gpt-5.6-luna-medium` that differ only in effort.
+- The models and efforts that old conversations had selected are not imported (decided by the owner on 2026-10-29; the original plan was to map profile names to "model plus effort"). maxx's configuration does not contain those models, and once a conversation has selected an unknown model, every turn in that conversation fails. All conversations use the default and can switch with `/model` when needed. `llm_usage` is not imported.
 
-v1 只定义它用得到的几节：database、`platforms.qq`、llm，加上顶层的 `owners_file`、`utc_offset` 和 `log`。intent 没有配置项（2026-10-29 删了 `[intent]` 一节），见 [intent](#intent)。其它节跟着对应功能一起加。
+v1 defines only the sections it uses: database, `platforms.qq` and llm, plus the top-level `owners_file`, `utc_offset` and `log`. Intent has no configuration options (the `[intent]` section was removed on 2026-10-29); see [Intent](#intent). Other sections are added together with their features.
 
-## 运行时结构
+## Runtime structure
 
-任务树、各个 actor 之间的信箱和一次运行的事件顺序见图：<https://claude.ai/artifact/KrciskAXJfMF2qTHF6hDbW>
+The task tree, the mailboxes between the actors and the order of events in a run are shown in [this diagram](https://claude.ai/artifact/KrciskAXJfMF2qTHF6hDbW).
 
-任务之间只有两种关系：父子（谁拥有、谁负责关掉）和信箱（谁给谁发什么）。
+Tasks are related in only two ways: parent and child (who owns a task and who is responsible for shutting it down), and mailboxes (who sends what to whom).
 
-- root scope 下有两个子 scope：
-  - services：常驻任务。平台连接（QQ 的网关连接）、平台 sender、VM 服务、MCP 服务、派生数据 worker，以后的自动化调度器。见[三种角色](#三种角色)。
-  - conversations：会话表，和每个会话一个 actor。会话表按端点找到会话的 actor，没有就建会话、起 actor；没绑定的群直接丢掉，见[运行流程](#运行流程)第 1 步。actor 起来以后一直在，不按空闲退出；出错退出了，下一条消息再起它，见[重启](#重启)。
-- 会话 actor 是这个会话唯一的控制线程，见[会话 actor](#会话-actor)。它的信箱是这个会话所有事件的唯一入口，它自己只 await 数据库。它下面挂三个 scope：
-  - `io`：当前核心在途的模型调用和工具调用（`run_code`、`shell`）。每个核心一个，核心结束时（`/kill`、失败、重启的宽限期到期）整个关掉。
-  - `side`：intent 分类这类不属于核心的调用。
-  - `jobs`：后台 agent，能比发起它的核心活得长。每个 job 一个自己的 scope，丢掉就停了（2026-10-30）。
-- `Scope` 由 `JoinSet` 和 `CancellationToken` 组成（2026-10-27 去掉了 reaper、defer 和 Background）：
-  - `spawn` 给子任务一个子令牌，同一个令牌也返回给调用方，用来单独取消这一个任务。
-  - `close(grace)`：先取消，在宽限期内等子任务自己结束；到期调 `JoinSet::shutdown`，也就是 abort 全部，再等它们真正停下。
-  - 被 drop 时：`JoinSet` 自己的 Drop 会 abort 全部子任务。这是同步发起的，不等。
-  - `close` 到期用 `shutdown` 而不是直接 drop，是为了保证返回时子任务的 future 都已经真正 drop 掉。否则可能服务已经关了，还有残留的 turn 在往它发东西。
+- The root scope has two child scopes:
+  - services: the resident tasks. These are the platform connection (QQ's gateway connection), the platform sender, the VM service, the MCP service, the derived-data workers, and later the automation scheduler. See [The three roles](#the-three-roles).
+  - conversations: the conversation table, plus one actor per conversation. The conversation table finds a conversation's actor by endpoint; if there is none, it creates the conversation and starts the actor. Groups that are not bound are dropped outright; see step 1 of [Processing flow](#processing-flow). Once started, an actor stays up and does not exit when idle; if it exits because of an error, the next message starts it again; see [Restarts](#restarts).
+- The conversation actor is the conversation's only thread of control; see [The conversation actor](#the-conversation-actor). Its mailbox is the single entry point for all of the conversation's events, and the actor itself awaits only the database. Three scopes hang beneath it:
+  - `io`: the model calls and tool calls (`run_code`, `shell`) that the current core has in flight. There is one per core, and it is closed as a whole when the core ends (`/kill`, a failure, or the expiry of the restart grace period).
+  - `side`: calls that do not belong to the core, such as intent classification.
+  - `jobs`: background agents, which can outlive the core that started them. Each job has a scope of its own, and dropping that scope stops the job (2026-10-30).
+- A `Scope` consists of a `JoinSet` and a `CancellationToken` (the reaper, defer and Background were removed on 2026-10-27):
+  - `spawn` gives the child task a child token, and the same token is returned to the caller so that this one task can be cancelled on its own.
+  - `close(grace)` first cancels, then waits within the grace period for the child tasks to finish on their own; when the grace period expires, it calls `JoinSet::shutdown`, which aborts them all, and then waits for them to actually stop.
+  - When a `Scope` is dropped, the `JoinSet`'s own Drop aborts all child tasks. This is initiated synchronously, without waiting.
+  - On expiry, `close` uses `shutdown` rather than simply dropping, to guarantee that by the time it returns the futures of all child tasks have actually been dropped. Otherwise a service might already be shut down while a leftover turn is still sending things to it.
 
-规矩：
+Rules:
 
-1. 禁止裸 `tokio::spawn`，用 clippy 的 `disallowed-methods` 拦住。任务只能经 `Scope` 创建。
-2. 脱离要显式：后台 agent 挂在会话的 `jobs` 下，不挂在核心的 `io` 下。
-3. 副作用交给活得更久的 owner：发送由会话 actor 入账后交给平台 sender；只能靠 API 停下的外部资源，停止命令交给持有那条连接的常驻服务。见[资源怎么结束](#资源怎么结束)。
+1. Bare `tokio::spawn` is forbidden and is blocked with clippy's `disallowed-methods`. Tasks can only be created through a `Scope`.
+2. Detaching must be explicit: background agents hang under the conversation's `jobs`, not under the core's `io`.
+3. Side effects are handed to a longer-lived owner. Sending is handed to the platform sender after the conversation actor has entered the message in the ledger. For external resources that can only be stopped through an API, the stop command is handed to the resident service that holds that connection. See [How resources end](#how-resources-end).
 
-关闭顺序：
+Shutdown order:
 
-1. 停接入，不再产生新消息。QQ 的网关连接这时存下 session id 和序号，见 [QQ 官方机器人](#qq-官方机器人)的"跨重启 Resume"。
-2. 每个会话 actor 收到停止：核心空闲就结束；否则让它在宽限期里接着做完手上的事，到期还没空闲就关掉 `io`、中断这个 turn（见[重启](#重启)）。然后关掉 `side` 和 `jobs`，actor 退出。内层的宽限期要比外层短。
-3. 排空：平台 sender 发完已入账的消息、记完回执，有截止时间。
-4. root scope 结束。运行时用 `shutdown_timeout` 关，不直接 drop，因为 drop 会一直等 `spawn_blocking` 的线程。最外层由 systemd 的 `TimeoutStopSec` 兜底，到期杀掉整个服务的 cgroup。
+1. Stop intake, so that no new messages are produced. At this point QQ's gateway connection saves the session id and sequence number; see "Resume across restarts" in [The official QQ bot](#the-official-qq-bot).
+2. Each conversation actor receives a stop. If the core is idle, the actor ends; otherwise the core is allowed to finish what it is doing within the grace period, and if it is still not idle when the period expires, `io` is closed and the turn is interrupted (see [Restarts](#restarts)). Then `side` and `jobs` are closed, and the actor exits. Inner grace periods must be shorter than outer ones.
+3. Drain: the platform sender finishes sending the messages already entered in the ledger and records the receipts, subject to a deadline.
+4. The root scope ends. The runtime is shut down with `shutdown_timeout` rather than dropped directly, because a drop would wait indefinitely for `spawn_blocking` threads. At the outermost level, systemd's `TimeoutStopSec` is the backstop: when it expires, the whole cgroup of the service is killed.
 
-systemd 要设 `KillMode=mixed`：SIGTERM 只发给主进程，VM 这些子进程由主进程按上面的顺序收拾，最后剩下的才由 systemd 统一 SIGKILL。默认的 `control-group` 一开始就把 SIGTERM 发给 cgroup 里的所有进程，cloud-hypervisor 和 virtiofsd 会立刻退出，第 2 步给工具批次的宽限期就落空了。
+systemd must be set to `KillMode=mixed`: SIGTERM goes only to the main process, child processes such as the VMs are cleaned up by the main process in the order above, and only whatever remains at the end is sent SIGKILL by systemd all at once. The default, `control-group`, sends SIGTERM to every process in the cgroup right away: cloud-hypervisor and virtiofsd would exit immediately, and the grace period that step 2 gives to tool batches would come to nothing.
 
-### 三种角色
+### The three roles
 
-2026-10-27 定。运行时里的任务分三种，按它产出什么分：
+Decided 2026-10-27. The tasks in the runtime fall into three kinds, classified by what they produce:
 
-1. **主体**：会话 actor 和它 spawn 的 I/O 任务。消费请求，产出回复。
-2. **派生数据 worker**：lingo、embedding、caption、召回向量、媒体下载和转发展开。输入是 ledger 或另一张派生表，输出是自己独占的一张表，只有它一个写者；从不碰 ledger 和 turn 记录，结果只在投影时被读。读 ledger 的 cursor 按会话记，见[时间线](#时间线)。触发三种：入账通知、定时器或水位、启动和定期的缺口扫描。一个工作单元一个事务，不留半截；重启不存队列，靠扫描补。Haskell 版 9 月的简化最后也把这几个收敛成了"本地有界队列加缺数据扫描"。
+1. **The main body**: the conversation actor and the I/O tasks it spawns. They consume requests and produce replies.
+2. **Derived-data workers**: lingo, embedding, caption, recall vectors, media download and the expansion of forwarded messages. Each takes as input the ledger or another derived table and writes its output to a table of its own, of which it is the only writer. It never touches the ledger or the turn records, and its results are read only during projection. The cursor for reading the ledger is kept per conversation; see [The timeline](#the-timeline). There are three kinds of trigger: ledger-entry notifications, a timer or watermark, and gap scans at startup and at regular intervals. Each unit of work is one transaction, so nothing is left half-done; no queue is persisted across restarts, and scans fill the gaps instead. The Haskell version's simplification in September also ended up converging these on "a bounded local queue plus a scan for missing data".
 
-   共同的只有约定，不写框架（2026-10-29 owner 定：先写过一个通用驱动器，按 `Throttle`/`Debounce`/`Urgent` 排单元，结果调度策略都堆在驱动器里，完成与否也在驱动器的队列和数据库里各记一份，当天拆回各 worker）：
-   - 输出表独占，只有它一个写者；从不碰 ledger 和 turn 记录，结果只在投影时被读。
-   - 单元可重入：先查输出表，已经有了就不做。做没做完只看数据库，内存里不记完成状态。
-   - 输入是入账通知，或者上游 worker 交来的键（caption 收下载存好的图，embedding 收 caption 写好的表情包）；漏掉的靠扫描按输出表找缺的补：启动时，embedding 和召回向量另外每小时一次。
-   - 并发、重试、超时、什么时候跑，是各 worker 自己的常量和自己的循环：常驻任务一个 `Scope`，一个单元一个任务，`Semaphore` 限并发，重试在单元自己的任务里 `sleep`，重试用完只记日志。caption 和 embedding 另有一个"正在做"的 sha256 集合，同一个文件在做的时候又来，不再起一个；它只防重复调模型，丢了也只是多做一次。
-   - 关机时在跑的直接 drop，事务回滚，下次启动由扫描补。
-   - 入账通知是会话 actor 提交之后同步发的：`Shared` 里一组无界 mpsc，每个 worker 一个（`worker::Rows`），不用 broadcast，它落后了会丢通知。邮箱的类型由 worker 定，从入账的一行转换过来。
+   Only conventions are shared, and no framework is written (decided by the owner on 2026-10-29: a generic driver was written first, which ordered units by `Throttle`/`Debounce`/`Urgent`; as a result, all the scheduling policies piled up in the driver, and whether a unit was done was recorded twice, once in the driver's queue and once in the database. It was taken apart and moved back into the individual workers the same day):
+   - The output table is exclusive, with the worker as its only writer. The worker never touches the ledger or the turn records, and its results are read only during projection.
+   - Units are reentrant: the worker first checks the output table and skips the unit if the result already exists. Whether a unit is done is determined only by the database; no completion state is kept in memory.
+   - The input is a ledger-entry notification or keys handed over by an upstream worker (caption receives the images that the download has stored; embedding receives the stickers that caption has written). Anything missed is filled in by a scan that looks for gaps in the output table: at startup, and additionally once an hour for embedding and recall vectors.
+   - Concurrency, retries, timeouts and when to run are each worker's own constants and its own loop: one `Scope` for the resident task, one task per unit, a `Semaphore` to limit concurrency, retries done with `sleep` inside the unit's own task, and nothing but a log entry once the retries are exhausted. caption and embedding additionally keep a set of sha256 hashes that are "in progress": if the same file arrives again while it is being processed, no second unit is started. This set only prevents duplicate model calls; if it is lost, the only cost is doing the work once more.
+   - At shutdown, units in progress are simply dropped, their transactions roll back, and the scan at the next startup fills the gaps.
+   - Ledger-entry notifications are sent synchronously after the conversation actor commits, through a set of unbounded mpsc channels in `Shared`, one per worker (`worker::Rows`). broadcast is not used, because it drops notifications when a receiver falls behind. The mailbox type is defined by the worker and converted from the ledger row.
 
-   各 worker 现在的策略：下载同时 4 个、重试前等 1 秒和 4 秒，见[媒体](#媒体)；caption 同时 2 个、失败一分钟后再试一次、再失败写空 caption；embedding 同时 2 个、重试前等 10 秒和 60 秒，见[发图](#发图)；召回向量一样，见[召回](#召回)。不像 Haskell 版用 `message_projections` 的标志位当队列。不要：持久化的队列、失败表和重试次数列、租约、`LISTEN/NOTIFY`、配置里的策略旋钮。lingo 来了照这几条写自己的循环。
-3. **触发源**：产出的不是表，是输入，全部进会话 actor 的同一个入口（[运行流程](#运行流程)第 2 步）：有核心在跑就喂给它，没有就起一个核心。差别只在源头：
-   - 跟着消息来的，全部由会话 actor 里的 [intent](#intent) 判：@、回复是它的同步规则，看起来没说完的先去抖几秒；其它消息由小模型在 `side` 里异步判，判定叫醒有每小时上限，判定回到信箱，不阻塞别的消息。叫醒核心的 `Wake` 都按 `seen` 过滤。自动化的 ledger_match 是规则。
-   - 外部来的：cron、HTTP webhook、外部轮询、proactive 的闲置触发。services 下一个调度器，定义在 `automations` 表，到点给对应的会话 actor 发请求。调度器的形状和派生 worker 一样（常驻、定时器、独占写 `automation_fires`、启动时扫一遍），只是 `run` 的结果是发请求。细节等做自动化时补。
+   The current policy of each worker: download runs 4 at a time and waits 1 second and then 4 seconds before retrying; see [Media](#media). caption runs 2 at a time, retries once, a minute after a failure, and writes an empty caption if it fails again. embedding runs 2 at a time and waits 10 seconds and then 60 seconds before retrying; see [Sending images](#sending-images). Recall vectors work the same way; see [Recall](#recall). Unlike in the Haskell version, the flags in `message_projections` are not used as a queue. The following are not wanted: persistent queues, failure tables and retry-count columns, leases, `LISTEN/NOTIFY`, and policy knobs in the configuration. When lingo arrives, it writes its own loop following these points.
+3. **Trigger sources**: what they produce is not a table but input, all of which goes into the same entry point of the conversation actor (step 2 of [Processing flow](#processing-flow)). If a core is running, the input is fed to it; if not, a core is started. The only difference lies in the source:
+   - Everything that arrives with messages is judged by the intent logic inside the conversation actor (see [Intent](#intent)). @ mentions and replies are its synchronous rules, and messages that look unfinished are first debounced for a few seconds. Other messages are classified asynchronously by the small model in `side`; wakes by verdict are subject to an hourly cap, and verdicts come back to the mailbox without blocking other messages. Every `Wake` that wakes the core is filtered by `seen`. The ledger_match of automations is a rule.
+   - Everything that comes from outside: cron, HTTP webhooks, external polling, and proactive idle triggers. A scheduler under services, with its definitions in the `automations` table, sends requests to the corresponding conversation actor when they fall due. The scheduler has the same shape as a derived-data worker (resident, timer-driven, the exclusive writer of `automation_fires`, one scan at startup), except that the result of `run` is a request being sent. The details are to be completed when automations are built.
 
-### 资源怎么结束
+### How resources end
 
-2026-10-27 定。资源有两种结束方式，两种都是正常路径：
+Decided 2026-10-27. A resource can end in two ways, and both are normal paths:
 
-- **收尾**：拥有者把活干完，调 `close().await`。它可以等、可以返回错误，有自己的超时策略。
-- **取消**：拥有者自己被取消了，比如 `/kill`、超时、关机宽限期到期。拥有者的 future 被 drop，资源跟着 drop，执行 `Drop`。每次 `/kill` 都会走这条路，所以要按正常路径设计和测试。
+- **Closing**: the owner finishes its work and calls `close().await`. It can wait, it can return an error, and it has its own timeout policy.
+- **Cancellation**: the owner itself is cancelled, for example by `/kill`, a timeout, or the expiry of the shutdown grace period. The owner's future is dropped, the resource is dropped along with it, and its `Drop` runs. Every `/kill` takes this path, so it must be designed and tested as a normal path.
 
-发起取消全是同步的：drop future、`CancellationToken::cancel()`、关 fd、发 kill 信号、设取消标志。取消真正完成平时没人等，只有关机时由 `Scope::close` 等。
+Initiating a cancellation is always synchronous: dropping a future, `CancellationToken::cancel()`, closing an fd, sending a kill signal, setting a cancellation flag. Normally nobody waits for a cancellation to actually complete; only at shutdown does `Scope::close` wait for it.
 
-规则：
+Rules:
 
-1. **`Drop` 只同步发起，不阻塞，也不 spawn。** 没有 reaper，也没有 Background。
-2. **外部资源优先把生命周期绑在连接或 fd 上。** 连接一断，对端自己收尾；崩溃时内核也会关 fd，所以连崩溃都能覆盖。
-   - LLM 请求：drop 掉流就是断开连接。
-   - pi：跑在 stdio 上，可以直接杀进程。
-   - VM 命令：每条命令是 guest 里的一个 transient unit（`systemd-run --pipe --wait`，`RuntimeMaxSec` 兜底）。SSH channel 关了，guest 不会自己杀它，所以按第 3 条走，见下面的 `VmCommand`。codemode 的 runner 也是一条 VM 命令，它的 MCP 会话在 `Drop` 里同步吊销。
-   - VM 本身：主进程的子进程，drop 就杀，见 [VM 进程](#vm-进程)。
-   - 浏览器：runner 的子进程，经管道连。runner 退出时 Playwright 杀掉它；runner 被杀时它和 runner 在同一个 unit 里，一起被杀。2026-10-29 实测：同一个 VM 里接着跑的下一次运行，看不到上一次的浏览器进程。
-   - 杀进程要杀整棵树，用进程组或 cgroup。只杀直接子进程的话，孙进程还活着，还开着输出管道。
-3. **对端只认 API 调用的**：`Drop` 里 `try_send` 一条停止命令给持有那条连接的常驻服务，由它去调 API。它在 services scope 里，关机时按顺序关。
-4. **崩溃时 `Drop` 不会执行**：VM 是主进程的子进程，systemd 按 cgroup 把它们和主进程一起杀掉，VM 里的命令和 pi 进程跟着消失，不需要清理孤儿。MCP 会话只存在内存里，进程没了就全部失效。
-5. **只有正常结束时要等结果或要报错的类型才有 `close`**，比如要拿退出码、要把待发消息发完、要提交事务。其它类型只有 `Drop`。
-6. **`close` 跟着所有权走。** 谁拥有，谁在自己正常路径的末尾调。拥有需要 close 的字段的结构体，自己也要有 `close`，按创建的反序关字段。`close` 拿 `self`，一个值只会在一个地方被 close。body 里的 `?` 不能跳过 `close`：先拿到结果，再 close，最后才处理结果。
-7. **`close` 自己被 drop 也要安全。** 中途任何一个 `await` 被丢掉，`Drop` 都还能按取消路径收拾。"已关完"的标记放在最后一步。
-8. **不在 `Drop` 里报警，也不用 drop bomb。** 取消就是 drop，报警只会是噪音。忘了调 `close` 由测试来抓：fake 环境记下"因为连接断开而被杀"的资源数，正常路径的测试断言它为 0。
+1. **`Drop` only initiates, synchronously; it neither blocks nor spawns.** There is no reaper and no Background.
+2. **For external resources, the lifecycle is preferably bound to a connection or an fd.** Once the connection drops, the peer winds down on its own; on a crash the kernel also closes the fd, so even crashes are covered.
+   - LLM requests: dropping the stream closes the connection.
+   - pi: it runs over stdio, so the process can simply be killed.
+   - VM commands: each command is a transient unit in the guest (`systemd-run --pipe --wait`, with `RuntimeMaxSec` as the backstop). When the SSH channel closes, the guest does not kill the unit on its own, so rule 3 applies; see `VmCommand` below. The codemode runner is also a VM command, and its MCP session is revoked synchronously in `Drop`.
+   - The VM itself: a child process of the main process, killed when dropped; see [VM processes](#vm-processes).
+   - The browser: a child process of the runner, connected through a pipe. When the runner exits, Playwright kills it; when the runner is killed, the browser is in the same unit as the runner and is killed along with it. Tested live on 2026-10-29: the next run in the same VM does not see the previous run's browser process.
+   - Killing a process means killing the whole tree, using a process group or a cgroup. If only the direct child is killed, the grandchildren stay alive and keep the output pipe open.
+3. **For peers that respond only to API calls**, `Drop` uses `try_send` to pass a stop command to the resident service that holds that connection, and that service calls the API. It lives in the services scope and is shut down in order at shutdown.
+4. **On a crash, `Drop` does not run.** The VMs are child processes of the main process, and systemd kills them together with the main process by cgroup; the commands and pi processes in the VMs disappear with them, so no orphans need to be cleaned up. MCP sessions exist only in memory, so they all become invalid once the process is gone.
+5. **Only types that must wait for a result or report an error on normal completion have a `close`**, for example to obtain an exit code, to finish sending pending messages, or to commit a transaction. All other types have only `Drop`.
+6. **`close` follows ownership.** Whoever owns a value calls it at the end of its own normal path. A struct that owns fields needing `close` must itself have a `close`, which closes those fields in reverse order of creation. `close` takes `self`, so a value can be closed in only one place. A `?` in the body must not skip `close`: first obtain the result, then close, and only then handle the result.
+7. **`close` must itself be safe to drop.** If any `await` along the way is dropped, `Drop` can still clean up through the cancellation path. The "fully closed" marker is set in the very last step.
+8. **No alarms in `Drop`, and no drop bombs.** Cancellation is a drop, so alarms would only be noise. A forgotten `close` is caught by tests: the fake environment counts the resources that were "killed because the connection dropped", and normal-path tests assert that this count is 0.
 
 ```rust
 pub struct VmCommand {
-    channel: Channel,             // russh 的 channel，drop 时关闭
-    unit: Option<UnitName>,       // guest 里的 transient unit；close 正常收尾后置空
-    stop: mpsc::Sender<UnitName>, // 持有这个 VM 的 SSH 连接的任务
+    channel: Channel,             // russh channel, closed on drop
+    unit: Option<UnitName>,       // transient unit in the guest; set to None once close finishes normally
+    stop: mpsc::Sender<UnitName>, // the task that holds this VM's SSH connection
 }
 
 impl VmCommand {
     pub async fn read_output(&mut self, limit: usize) -> Result<Output>;
 
-    /// 收尾：给命令 grace 时间自己退出，到时间就 stop 它的 unit，再等退出码。
-    /// grace 是策略，不是防卡死的保险；卡住时由外层工具调用的超时 drop 掉。
+    /// Closing: give the command `grace` time to exit on its own; when time is up, stop its unit, then wait for the exit code.
+    /// grace is policy, not insurance against hangs; if it hangs, the timeout of the enclosing tool call drops it.
     pub async fn close(self, grace: Duration) -> Result<ExitStatus>;
 }
 
 impl Drop for VmCommand {
-    // 只同步发起：由连接的持有者在同一条连接上发 `systemctl stop`
+    // Only initiates, synchronously: the holder of the connection sends `systemctl stop` over the same connection
     fn drop(&mut self) {
         if let Some(unit) = self.unit.take() {
-            let _ = self.stop.try_send(unit); // 发不出去就靠 RuntimeMaxSec
+            let _ = self.stop.try_send(unit); // if it cannot be sent, RuntimeMaxSec takes care of it
         }
     }
 }
 
 async fn exec(call: ExecCall, vm: &Vm) -> Result<ToolOutput> {
     let mut cmd = vm.spawn(&call.command).await?;
-    let output = cmd.read_output(call.limit).await; // 这里先不用 ?
-    let status = cmd.close(EXIT_GRACE).await;       // 不管 output 成败，都会走到这一行
+    let output = cmd.read_output(call.limit).await; // no ? here yet
+    let status = cmd.close(EXIT_GRACE).await;       // reached whether or not output succeeded
     Ok(ToolOutput::exec(output?, status?))
 }
 ```
 
-语言级的 async drop（`#![feature(async_drop)]`）还是 nightly 上的实验特性，没有稳定时间表。就算稳定了，`select!`、`JoinSet` 和运行时都是同步 drop future 的，取消时执行的仍然只是同步的 `Drop`；它能省掉的只是"记得调 close"这一步。不用。
+Language-level async drop (`#![feature(async_drop)]`) is still an experimental feature on nightly, with no timeline for stabilisation. Even once it is stabilised, `select!`, `JoinSet` and the runtime all drop futures synchronously, so what runs on cancellation would still be only the synchronous `Drop`; the most it could save is the step of "remembering to call close". It is not used.
 
-### cancellation safety
+### Cancellation safety
 
-用 drop 取消，每个 `await` 都可能是终点。被 drop 的 future 自己的局部变量会跟着消失，没人看得到它们停在一半的样子；要管的只是活过这次 drop 的状态。
+With cancellation by drop, every `await` may be the end. The local variables of a dropped future disappear with it, and nobody can observe them stopped halfway; what needs care is only the state that outlives the drop.
 
-会话 actor 自己不会被取消，只在关机时随 conversations scope 结束；平时被取消的是它 spawn 的 I/O 任务。I/O 任务和 actor 之间只有信箱，没有共享的可变状态。所以审查时要看的是：一个 I/O 任务在任意 `await` 处被 abort，外面留下了什么。
+The conversation actor itself is never cancelled; it ends only at shutdown, along with the conversations scope. What is normally cancelled is the I/O tasks it spawns. Between the I/O tasks and the actor there are only mailboxes, with no shared mutable state. What a review must examine, therefore, is this: if an I/O task is aborted at an arbitrary `await`, what does it leave behind outside itself?
 
-| 活下来的状态 | 可能出的问题 | 规则 |
-|---|---|---|
-| 核心 | 停在一次状态转移的中间 | 核心是 actor 的字段，转移是同步的，只在 actor 处理事件时发生；I/O 任务碰不到它 |
-| 说出口的话 | 群里发了，账上没记 | 分段器在模型调用任务里，只产出 `Said`；sender 只从 actor 拿入过账的段。任务在哪里被 abort 都只会少说，不会漏记 |
-| actor 等的结束事件 | 永远不来，核心一直等着 | 回执在 `Drop` 里补发"没有结果"，见 [I/O 任务和协议适配](#io-任务和协议适配) |
-| 平台连接 | 一帧写到一半，整条连接坏掉 | 共享连接只由它自己的任务读写，其他人经 channel 交接 |
-| 数据库 | 写到一半 | 用事务；查询半途被 drop 的连接，sqlx 下次使用前会先读完残留的响应。actor 的数据库 `await` 只在关机时可能被丢掉 |
-| turn 记录 | 关机时结束的写入被打断 | 事务回滚，等同崩溃，启动时记为 `Lost` |
+| Surviving state | What can go wrong | Rule |
+| --- | --- | --- |
+| The core | It stops in the middle of a state transition. | The core is a field of the actor; transitions are synchronous and happen only while the actor is handling an event. I/O tasks cannot touch it. |
+| Words already spoken | A message is sent to the group but not recorded in the ledger. | The segmenter lives in the model-call task and only produces `Said`; the sender takes only segments that the actor has entered in the ledger. Wherever the task is aborted, the result can only be saying less, never something said going unrecorded. |
+| The completion event the actor awaits | It never arrives, and the core waits forever. | The receipt sends a substitute "no result" in `Drop`; see [I/O tasks and protocol adapters](#io-tasks-and-protocol-adapters). |
+| Platform connections | A frame is half-written and the whole connection breaks. | A shared connection is read and written only by its own task; everyone else hands data over through a channel. |
+| The database | A write is left half-done. | Transactions are used. For a connection whose query was dropped midway, sqlx first reads the leftover response before the connection's next use. The actor's database `await`s can be dropped only at shutdown. |
+| Turn records | The final write is interrupted at shutdown. | The transaction rolls back, which is equivalent to a crash, and the turn is recorded as `Lost` at startup. |
 
-`select!` 循环里只放 cancel-safe 的分支：
+Only cancel-safe branches go in a `select!` loop:
 
-- **可以放**：
-  - `mpsc::Receiver::recv`、`CancellationToken::cancelled`、`JoinSet::join_next`；
-  - `FramedRead` 加 `LinesCodec` 的 `next()`：缓冲区在流里，不在 future 里。`LinesCodec` 只按 `\n` 切，满足 pi 的要求，要设最大行长；
-  - `sleep_until(deadline)`，或者在循环外 pin 住、反复使用的 `Sleep`。
-- **不能放**：
-  - `read_line`、`read_exact`、`write_all`；
-  - 每轮新建的 `sleep(dur)`：每次重建都会把计时器重置。
+- **Allowed**:
+  - `mpsc::Receiver::recv`, `CancellationToken::cancelled`, `JoinSet::join_next`;
+  - `next()` on a `FramedRead` with `LinesCodec`: the buffer lives in the stream, not in the future. `LinesCodec` splits only on `\n`, which meets pi's requirement; a maximum line length must be set;
+  - `sleep_until(deadline)`, or a `Sleep` that is pinned outside the loop and reused.
+- **Not allowed**:
+  - `read_line`, `read_exact`, `write_all`;
+  - a `sleep(dur)` created anew on each iteration: every re-creation resets the timer.
 
-不拿着锁跨 `await` 修改不变量，clippy 的 `await_holding_lock` 能查到一部分。
+Invariants are not modified while a lock is held across an `await`; clippy's `await_holding_lock` catches some of these cases.
 
-测试分两层，都用 tokio 的 `start_paused`，结果是确定的：
+Testing has two layers, both of which use tokio's `start_paused`, so the results are deterministic:
 
-1. **actor**：用 fake provider、fake 工具和 fake sender 跑一段剧本，记下 actor 处理的事件序列，长 N。再跑 N 遍，第 k 遍在第 k 个事件之后插一个 `/kill`；停止也这样跑一轮。每次检查：
-   - fake sender 收到的，正好是入过账的 Max 的消息；
-   - 插入之后才到的旧事件都被丢掉了；
-   - 没有泄漏的命令。
-2. **I/O 任务**：在每个 poll 点 drop 一次，检查恰好发出了一个结束事件、fake 连接没有收到半帧、没有泄漏的资源。
+1. **The actor**: run a script with a fake provider, fake tools and a fake sender, and record the sequence of events the actor handles, of length N. Then run it N more times, inserting a `/kill` after the k-th event on the k-th run; do one round the same way for stop. Each run checks that:
+   - what the fake sender received is exactly Max's messages that were entered in the ledger;
+   - old events that arrive after the insertion are all discarded;
+   - no commands leaked.
+2. **I/O tasks**: drop the task once at each poll point, and check that exactly one completion event was sent, that the fake connection received no half-frame, and that no resources leaked.
 
-### 超时
+### Timeouts
 
-上限只设在工作单元的边界上，单元内部的 `await` 不套超时：拥有者一被取消，内部卡住的 future 也跟着被 drop。
+Limits are set only at the boundaries of units of work, and the `await`s inside a unit are not wrapped in timeouts: as soon as the owner is cancelled, any future stuck inside it is dropped along with it.
 
-| 位置 | 写几次 | 性质 |
-|---|---|---|
-| `Scope::close(grace)` | `Scope` 里一次 | 关机时防卡死 |
-| 会话 actor 的到期时间 | actor 主循环里一个 `sleep_until`，到期时间取空闲窗口和停止宽限期里早的那个 | 策略：provider 的 `idle_window_secs`、关机的宽限期。turn 没有墙钟：actor 只等数据库，模型调用和工具各有自己的上限 |
-| 工具调用上限 | 两处：`run_code`、`shell` 一次运行一个（`shell` 默认 120 秒，调用最多要 600 秒，后台跑的默认 30 分钟、最多 2 小时，见[后台命令](#后台命令)；guest 里的 unit 另有晚 30 秒的 `RuntimeMaxSec`，max 这边丢了也停得掉）；程序里每次调 Max 工具，在 MCP 执行器里一个。具体工具里不写 | 防卡死 |
-| VM 开机 | VM 服务里一次：60 秒内要能 SSH 进去，每 100 ms 试一次；等 virtiofsd 建 socket 5 秒；外面再套一层 70 秒 | 防卡死 |
-| VM 闲置 | VM 服务里一次：每分钟扫一遍，闲置超过 `idle_minutes`（默认 120）的关掉，常开的除外（见[常驻程序](#常驻程序)） | 策略 |
-| 网络客户端 | 配置里一次：LLM 的 `stream_idle_timeout_secs`（响应头和之后的每一段都要在这个时间内到，整个调用不设上限）、sqlx 的 `acquire_timeout` 和 Postgres 的 `statement_timeout`、平台连接的心跳；`max-llm` 里写死的连接超时，`qqbot` 里写死的 REST 连接和读超时、网关的连接超时和重连退避；[宿主带 key 的 API](#宿主带-key-的-api) 写死的连接 10 秒、每一段 60 秒；`maxx events` 90 秒没动静（宿主 30 秒一个心跳）就重连，退避 1 秒到 30 秒，见[常驻程序](#常驻程序)的第四步 | 防卡死 |
-| 先等再升级 | 按需 | 策略，比如 `close` 先给命令时间自己退出 |
-| 常驻服务里的等待表 | 每张表一次 | 防泄漏，比如 sender 里等回执的表。常驻服务外面没有取消替它兜底 |
-| 派生数据 worker | 各 worker 自己的一处，数值是它的常量：下载靠 HTTP 客户端的 10 秒连接超时和 60 秒整体超时，重试前等 1 秒和 4 秒；caption 每次调用 2 分钟；embedding 每次请求 30 秒 | 防卡死；重试和重扫是策略 |
-| 回合外的模型调用 | `Chosen::complete` 一处：判定、caption 都经它调，拿全文、记用量（记不上只打日志，结果照用；turn 和 job 也一样，2026-10-30 改，原来 turn 的用量记不上会让整个会话 actor 退出），整个调用的上限由调用方给（判定 60 秒，caption 2 分钟），不重试 | 防卡死 |
-| 模型调用的重试退避 | 模型调用任务里一次：1、2、4、8 秒，只在还没说出任何话的时候重试，次数是 provider 的 `retries` | 策略 |
-| sender 等额度 | QQ sender 里一次：主动消息超了每分钟的额度就等到最早那条满一分钟 | 策略：等，不丢 |
-| 关机的各级宽限期 | `main` 里一处：接入 5 秒（存网关会话）、会话停止 20 秒（让核心做完手上的事，到期中断）、会话表 25 秒、sender 排空 15 秒、运行时 10 秒，合起来在 systemd 的 60 秒以内；派生数据 worker 不等，手上的单元下次启动由扫描补或者放弃 | 防卡死 |
+| Location | How many times it is written | Nature |
+| --- | --- | --- |
+| `Scope::close(grace)` | Once, in `Scope` | Prevents hangs at shutdown |
+| The conversation actor's deadline | One `sleep_until` in the actor's main loop; the deadline is the earlier of the idle window and the stop grace period | Policy: the provider's `idle_window_secs` and the shutdown grace period. A turn has no wall-clock limit: the actor waits only on the database, and model calls and tools each have limits of their own |
+| Tool-call limits | In two places. One per run for `run_code` and `shell` (`shell` defaults to 120 seconds, and a call may request up to 600 seconds; background runs default to 30 minutes, up to 2 hours; see [Background commands](#background-commands). The unit in the guest additionally has a `RuntimeMaxSec` 30 seconds later, so it can still be stopped even if max loses track of it). One in the MCP executor for each call that a program makes to a Max tool. Nothing is written in the individual tools | Prevents hangs |
+| VM boot | Once, in the VM service: SSH must be reachable within 60 seconds, tried every 100 ms; 5 seconds of waiting for virtiofsd to create its socket; an outer limit of 70 seconds around both | Prevents hangs |
+| VM idle | Once, in the VM service: a scan every minute shuts down VMs that have been idle for longer than `idle_minutes` (default 120), except those that are always on (see [Resident programs](#resident-programs)) | Policy |
+| Network clients | Once, in the configuration: the LLM's `stream_idle_timeout_secs` (the response headers and each subsequent chunk must arrive within this time; the call as a whole has no limit), sqlx's `acquire_timeout` and Postgres's `statement_timeout`, and the platform connection's heartbeat. Hard-coded: the connect timeout in `max-llm`; the REST connect and read timeouts, the gateway's connect timeout and the reconnect backoff in `qqbot`; a 10-second connect timeout and a 60-second per-chunk timeout for [Host-keyed APIs](#host-keyed-apis); `maxx events` reconnects after 90 seconds without activity (the host sends a heartbeat every 30 seconds), with a backoff from 1 second to 30 seconds; see step four of [Resident programs](#resident-programs) | Prevents hangs |
+| Wait first, then escalate | As needed | Policy, for example `close` first giving the command time to exit on its own |
+| Waiting tables in resident services | Once per table | Prevents leaks, for example the sender's table of messages awaiting receipts. No cancellation from outside a resident service acts as a backstop for it |
+| Derived-data workers | One place in each worker, with the values as its constants: download relies on the HTTP client's 10-second connect timeout and 60-second overall timeout, and waits 1 second and then 4 seconds before retrying; caption allows 2 minutes per call; embedding allows 30 seconds per request | Prevents hangs; retries and rescans are policy |
+| Model calls outside a turn | One place, `Chosen::complete`. Classification and caption both call through it; it fetches the full text and records usage (if usage cannot be recorded, it only logs this and the result is still used; the same now applies to turns and jobs, changed on 2026-10-30: previously, a failure to record a turn's usage made the whole conversation actor exit). The limit for the whole call is given by the caller (60 seconds for classification, 2 minutes for caption), and there are no retries | Prevents hangs |
+| Retry backoff for model calls | Once, in the model-call task: 1, 2, 4 and 8 seconds. A call is retried only while nothing has been said yet, and the number of retries is the provider's `retries` | Policy |
+| The sender waiting for quota | Once, in the QQ sender: when proactive messages exceed the per-minute quota, it waits until the earliest of them is a full minute old | Policy: wait rather than drop |
+| Grace periods at each level of shutdown | One place, in `main`: intake 5 seconds (to save the gateway session), conversation stop 20 seconds (letting the core finish what it is doing, then interrupting it on expiry), conversation table 25 seconds, sender drain 15 seconds, runtime 10 seconds, which together fit within systemd's 60 seconds. Derived-data workers are not waited for: the units they are working on are either filled in by a scan at the next startup or abandoned | Prevents hangs |
 
-审查规则：`timeout(` 和 `sleep(` 只出现在上表这些地方。
+Review rule: `timeout(` and `sleep(` appear only in the places listed in the table above.
 
-前提：上限只对停在 `await` 上的 future 有效。所以：
-- async 里不阻塞；
-- `spawn_blocking` 配取消标志，因为 abort 对已经开始跑的 blocking 任务无效；有上限的计算可以不配，比如算一个最多 64 MiB 的文件的哈希、在尺寸上限内解一张图；
-- `Drop` 里不阻塞。
+Precondition: a limit only takes effect on a future that is stopped at an `await`. Therefore:
 
-真破了这几条，还有 systemd 的 `TimeoutStopSec` 在最外层兜着。
+- there is no blocking in async code;
+- `spawn_blocking` is paired with a cancellation flag, because abort has no effect on a blocking task that has already started running; bounded computations may go without one, such as hashing a file of at most 64 MiB or decoding an image within the size limit;
+- there is no blocking in `Drop`.
 
-## 数据和运行模型
+If these rules are nevertheless broken, systemd's `TimeoutStopSec` still provides the backstop at the outermost level.
 
-2026-10-26 至 10-28 讨论定下。总览：ledger 记录群里说了什么；turn 记录记下 Max 在幕后做了什么；核心是决定 turn 下一步做什么的规则；会话 actor 负责入账和驱动核心，I/O 都在它 spawn 的任务里。
+## Data and execution model
 
-### 原则
+Settled in discussion from 2026-10-26 to 2026-10-28. In overview: the ledger records what was said in the group; turn records note what Max did behind the scenes; the core is the set of rules that decides what a turn does next; the conversation actor enters messages in the ledger and drives the core, and all I/O takes place in tasks that it spawns.
 
-1. **库里存事实，只追加。** ledger 和 turn 记录都没有 UPDATE，也没有可变的状态列。
-2. **状态由记录推出来，不另存。** turn 处在哪个阶段，看它有哪几种记录就知道。
-3. **核心存它给模型看的。** 一次运行留下的是基础上下文和 transcript：每次模型调用的请求，就是基础上下文加上到那次输出为止的 transcript。喂给核心的输入不存，也不从输入重建核心（2026-10-29 改，owner 提出：原来存输入日志、靠重放还原；重启恢复取消以后，重放只剩测试在用，模型输出却在日志和 transcript 里各存一份，推理 blob 也跟着存两份）。结局另外写下来，见 [turn 记录](#turn-记录)。
-4. **阶段写成一个带数据的枚举。** 要跑的调用、在途的调用、失败的原因都在各自的阶段里，非法的组合写不出来（2026-10-29 改，原来五个字段一起表示，合法组合靠人维护）。
-5. **核心跑的时候不碰库。** 一次运行只写两回：开始时写一个标记；结束时存一份快照，就是上面那份记录。崩溃时正在跑的 turn 记为 `Lost`，见[重启](#重启)。
-6. **上下文只在核心里变。** 基础上下文在创建核心时传入，之后不变；transcript 只追加；裁剪只作用在每次的请求上；协议适配层降级时只删不加。
-7. **别处已有的存引用，只在 turn 里有的存本体。** ledger 消息和媒体文件存引用；推理 blob、工具输出和基础上下文存本体。
-8. **中立格式，原始数据透传，只在边缘降级。** 平台消息和模型条目用同一种做法：中间是中立的类型化结构，平台或 provider 的原始数据原样带着，有损转换只发生在适配器往外发的那一步。见[消息格式](#消息格式)和[条目](#条目)。
-9. **一个会话一条时间线，一个写者。** 会话 actor 逐条入账，其它一切都在时间线的某个位置上读，见[时间线](#时间线)。
+### Principles
 
-### ledger
+1. **The database stores facts, append-only.** Neither the ledger nor the turn records are ever subject to an UPDATE, and neither has a mutable status column.
+2. **State is derived from the records, not stored separately.** Which phase a turn is in can be told from which kinds of records it has.
+3. **The core stores what it shows the model.** What a run leaves behind is the base context and the transcript: the request of each model call is the base context plus the transcript up to that call's output. The inputs fed to the core are not stored, and the core is not rebuilt from its inputs (changed 2026-10-29 at the owner's suggestion: originally an input log was stored and the core was restored by replaying it; once recovery on restart was dropped, replay was used only by tests, while model output was stored twice, once in the log and once in the transcript, and reasoning blobs were stored twice along with it). The outcome is written down separately; see [Turn records](#turn-records).
+4. **A phase is written as an enum that carries data.** The calls to be made, the calls in flight and the reason for a failure each live in their own phase, so illegal combinations cannot be written (changed 2026-10-29; previously five fields represented the phase together, and the legal combinations were maintained by hand).
+5. **The core does not touch the database while it runs.** A run writes only twice: a marker when it starts, and a snapshot when it ends, which is the record described above. A turn that is running when a crash happens is recorded as `Lost`; see [Restarts](#restarts).
+6. **Context changes only inside the core.** The base context is passed in when the core is created and does not change afterwards; the transcript is append-only; trimming applies only to each individual request; when the protocol adapter layer downgrades, it only removes and never adds.
+7. **What already exists elsewhere is stored by reference; what exists only in the turn is stored in full.** Ledger messages and media files are stored by reference; reasoning blobs, tool output and the base context are stored in full.
+8. **A neutral format, raw data passed through, and downgrading only at the edge.** Platform messages and model entries follow the same approach: in the middle is a neutral typed structure, the platform's or provider's raw data is carried along unchanged, and lossy conversion happens only at the step where an adapter sends outward. See [Message format](#message-format) and [Entries](#entries).
+9. **One timeline per conversation, with one writer.** The conversation actor enters messages one at a time, and everything else reads at some position on the timeline; see [The timeline](#the-timeline).
 
-ledger 是会话账本：所有平台上、所有人（包括 Max 自己）说过的每一条消息，统一成同一种[消息格式](#消息格式)，只追加。一个会话的消息按会话 actor 入账的顺序排，就是这个会话的[时间线](#时间线)。它回答"群里发生了什么"。
+### The ledger
 
-- 每条消息：会话、发送者、内容、原始 payload、平台 id、序号、时间。Max 发出的消息的平台 id 不在这里，在 `deliveries`，见[出站](#出站)。
-- Max 发出的每一段消息额外带 turn id 和段号。
+The ledger is the record of conversations: every message said by anyone (Max included) on any platform, unified into the same message format (see [Message format](#message-format)), append-only. A conversation's messages, in the order in which the conversation actor entered them, form that conversation's timeline (see [The timeline](#the-timeline)). The ledger answers the question "what happened in the group".
 
-Max 在幕后做的事（模型怎么想、调了什么工具）不进 ledger。ledger 和 turn 之间只有三处引用：Max 发出的消息指向产生它的 turn；turn 指向触发它的消息；后续输入引用对应的消息。以后 turn 的基础上下文从 ledger（加上记忆）投影出来，不读别的 turn 的 transcript，见[上下文投影](#上下文投影)。
+- Each message holds: conversation, sender, content, raw payload, platform id, sequence number and time. The platform ids of messages that Max sends are not stored here but in `deliveries`; see [Outbound](#outbound).
+- Each segment of a message that Max sends additionally carries a turn id and a segment number.
 
-### 时间线
+What Max does behind the scenes (how the model thinks, which tools it calls) does not go into the ledger. There are only three references between the ledger and turns: a message that Max sends points to the turn that produced it; a turn points to the message that triggered it; and follow-up input references the corresponding messages. The base context of a later turn is projected from the ledger (plus memory) and does not read other turns' transcripts; see [Context projection](#context-projection).
 
-2026-10-28 定。一个会话在 ledger 里的所有行，按 id 排，就是这个会话的时间线。运行模型的顺序问题都靠一条规则解决：**会话 actor 是时间线唯一的写者，其它一切都在时间线的某个位置上读。**
+### The timeline
 
-- actor 逐条入账，每条提交了才处理下一个事件。所以同一个会话里，id 的顺序、提交顺序、actor 处理的顺序三者一致，位置就是消息 id。
-- 写进时间线的：别人的消息和事件（编辑、撤回）、命令消息、Max 说出口的每一段和做的每个动作。全都经 actor：平台连接只归一化，平台 sender 只负责发；别的会话、MCP 工具、调度器要往这个会话发东西，都是给它的 actor 发请求。
-- 不进时间线的：平台回执（在 `deliveries`，见[出站](#出站)）、Max 的幕后过程（在 [turn 记录](#turn-记录)里）。
+Decided 2026-10-28. All of a conversation's rows in the ledger, ordered by id, form that conversation's timeline. Every ordering question in the execution model is settled by a single rule: **the conversation actor is the only writer of the timeline, and everything else reads at some position on it.**
 
-actor 记着三个位置：
+- The actor enters messages one at a time, and each is committed before the next event is processed. Within one conversation, therefore, the order of ids, the order of commits and the order in which the actor processes them are the same, and a position is simply a message id.
+- What is written to the timeline: other people's messages and events (edits, retractions), command messages, and every segment Max says aloud and every action Max takes. All of it goes through the actor: platform connections only normalise, and platform senders only send; when another conversation, an MCP tool or the scheduler wants to send something to this conversation, it sends a request to this conversation's actor.
+- What does not go into the timeline: platform receipts (in `deliveries`; see [Outbound](#outbound)) and Max's behind-the-scenes process (in the turn records; see [Turn records](#turn-records)).
 
-| 位置 | 含义 | 用在哪 |
-|---|---|---|
-| `head` | 时间线的最后一条 | 起核心时取它作快照位置 |
-| `from` | 当前核心的快照位置 | 基础上下文只投影 `id <= from`，之后的每一条都喂给核心 |
-| `seen` | 进过模型请求的最后一条 | intent 的 `Wake` 作不作废 |
+The actor keeps track of three positions:
 
-由此直接得到：
+| Position | Meaning | Used for |
+| --- | --- | --- |
+| `head` | The last entry on the timeline | Taken as the snapshot position when a core starts |
+| `from` | The current core's snapshot position | The base context projects only `id <= from`; every entry after it is fed to the core |
+| `seen` | The last entry that went into a model request | Deciding whether an intent `Wake` is void |
 
-- **核心的输入不重不漏。** 起核心时 `from = head`；之后每入账一条，actor 就喂给核心，本 turn 自己说的话和做的动作除外，它们已经在 transcript 里。核心看到的就是"位置 `from` 的快照，加上之后的每一条"，由定义保证，不靠时序。
-- **`seen` 好维护。** actor 一入账就喂，核心发请求时会带上攒着的全部输入，所以发模型请求那一刻，请求里正好是 `..=head`，这时设 `seen = head`。`/kill` 和启动时也设 `seen = head`。用法见 [intent](#intent) 的"`Wake` 的去处"。
-- **派生 worker 按会话记 cursor。** 一个会话里 id 的顺序就是提交顺序，往前推的 cursor 不会漏掉晚提交的小 id。不同会话之间没有这个保证，所以不用全局 cursor。
+The following results follow directly:
 
-### 消息格式
+- **The core's input has neither duplicates nor gaps.** When a core starts, `from = head`; after that, every time an entry is entered in the ledger, the actor feeds it to the core, except for what the current turn itself has said and done, which is already in the transcript. What the core sees is "the snapshot at position `from`, plus every entry after it"; this is guaranteed by definition, not by timing.
+- **`seen` is easy to maintain.** The actor feeds each entry as soon as it is entered, and the core includes all accumulated input when it sends a request, so at the moment a model request is sent, the request contains exactly `..=head`; `seen = head` is set at that moment. `/kill` and startup also set `seen = head`. For how it is used, see "Where a `Wake` goes" in [Intent](#intent).
+- **Derived workers keep a cursor per conversation.** Within a conversation the order of ids is the order of commits, so a cursor that moves forward cannot miss a smaller id that was committed late. There is no such guarantee across conversations, so no global cursor is used.
 
-2026-10-27 定：保留 [ADR 003](https://github.com/HCHogan/max/blob/a5de2e1410f5cdfaa4b88c052bd499ee8b676759/docs/adr/003-message-ir-capability-rendering.md) 的核心想法，去掉它的类型机制。上下文投影、搜索、记忆和以后的镜像都读同一种格式，不按平台分支。
+### Message format
 
-每条消息存两样东西：
+Decided 2026-10-27: keep the core idea of [ADR 003](https://github.com/HCHogan/max/blob/a5de2e1410f5cdfaa4b88c052bd499ee8b676759/docs/adr/003-message-ir-capability-rendering.md) and drop its type machinery. Context projection, search, memory and future mirroring all read the same format, with no branching by platform.
 
-- **节点**：文本、提及、表情、媒体、卡片、转发、不支持。每个非文本节点入库时就带好文本兜底，比如提及的显示名、媒体的说明、卡片摘要，之后在哪里降级都不用再查库。
-- **原始 payload**：平台发来的原样数据。它是事实源：镜像时原生往返要用，比如把 QQ 表情、转发原样发回 QQ；normalizer 改了，也能从它重建节点。节点相当于所有读者共用的缓存。
+Each message stores two things:
 
-入库时不降级。
+- **Nodes**: text, mention, emote, media, card, forward and unsupported. Every non-text node carries its text fallback from the moment it is stored, such as a mention's display name, a media item's caption or a card's summary, so wherever it is downgraded later, no database lookup is needed.
+- **Raw payload**: the data exactly as the platform sent it. It is the source of truth: mirroring needs it for native round trips, such as sending QQ emotes or forwards back to QQ unchanged; and if the normalizer changes, the nodes can be rebuilt from it. The nodes amount to a cache shared by all readers.
 
-Haskell 版用 5 个 phase 索引同一棵类型树。这里改成几个具体类型，各管一个边界：
+Nothing is downgraded on storage.
+
+The Haskell version indexes a single type tree by 5 phases. Here this becomes several concrete types, each responsible for one boundary:
 
 ```rust
-// 适配器的产出：带平台原生 id，不访问数据库
+// The adapter's output: carries platform-native ids, does not access the database
 struct Inbound { /* ... */ }
 
-// 入库的统一格式，由会话 actor 在入账事务里从 Inbound 转换得到
-struct Message { nodes: Vec<Node>, raw: serde_json::Value, /* 会话、发送者等 */ }
+// The unified stored format, converted from Inbound by the conversation actor inside the ledger-entry transaction
+struct Message { nodes: Vec<Node>, raw: serde_json::Value, /* conversation, sender, etc. */ }
 
 enum Node {
     Text(String),
-    Mention { target: MentionTarget, display: String }, // 某个账号（identity），或者全体
-    Emote(Emote),                                       // 平台表情，带名字作兜底
+    Mention { target: MentionTarget, display: String }, // an account (identity), or everyone
+    Emote(Emote),                                       // a platform emote, with its name as the fallback
     Media { media: Option<MediaRef>, meta: MediaMeta },
     Card(Card),
     Forward(ForwardRef),
     Unsupported(Unsupported),
 }
 
-// 模型能写的部分：文字和提及（2026-10-29 去掉了表情和媒体）
+// The part the model can write: text and mentions (emotes and media removed 2026-10-29)
 struct Draft { reply_to: Option<MessageId>, nodes: Vec<DraftNode> }
 
 enum DraftNode {
@@ -475,275 +476,275 @@ enum DraftNode {
 }
 ```
 
-- 发送时每个适配器写自己的 `fn lower(&Draft) -> 原生消息`，没有通用的降级类型。
-- 给模型看的文本由一个渲染函数从 `Message` 生成，不是单独的类型。
-- 模型用 principal 句柄提及人，发送时再解析成目标平台的账号，沿用 [ADR 004](https://github.com/HCHogan/max/blob/a5de2e1410f5cdfaa4b88c052bd499ee8b676759/docs/adr/004-canonical-handles-for-the-model.md)，见[身份](#身份)。
+- For sending, each adapter writes its own `fn lower(&Draft) -> <native message>`; there is no general-purpose downgraded type.
+- The text shown to the model is generated from a `Message` by a rendering function; it is not a separate type.
+- The model mentions people by principal handle, which is resolved to an account on the target platform at send time, following [ADR 004](https://github.com/HCHogan/max/blob/a5de2e1410f5cdfaa4b88c052bd499ee8b676759/docs/adr/004-canonical-handles-for-the-model.md); see [Identity](#identity).
 
-**镜像**先不做：它本来是 QQ 群和 Matrix 房间之间的，Matrix 先不做了（2026-10-29），见 [Matrix](#matrix)。这些东西都等做镜像时再加：
+**Mirroring** is deferred: it was meant to operate between QQ groups and Matrix rooms, and Matrix has been deferred (2026-10-29); see [Matrix](#matrix). The following will all be added when mirroring is built:
 
-- 能力表：每个端点对每种节点是原生、转文本还是丢弃。
-- 降级记录。
+- A capability table: for each endpoint and each kind of node, whether the node is native, converted to text or dropped.
+- Downgrade records.
 
-v1 的 ledger 已经存了原始 payload 和文本兜底；投递回执（`deliveries`）和丢掉 echo 的做法 v1 就有，镜像时一个端点一行照用，见[出站](#出站)。到时不用迁移数据。
+The v1 ledger already stores the raw payload and the text fallbacks; delivery receipts (`deliveries`) and the practice of dropping echoes already exist in v1, and mirroring will use them as they are, one row per endpoint; see [Outbound](#outbound). No data migration will be needed at that point.
 
-模型那边的[条目](#条目)是同一个做法：`Item` 的 `kind` 对应节点，`opaque` 对应原始 payload，协议适配层的降级对应发送时的 `lower`。
+The model side's entries (see [Entries](#entries)) follow the same approach: the `kind` of an `Item` corresponds to a node, `opaque` corresponds to the raw payload, and downgrading in the protocol adapter layer corresponds to `lower` at send time.
 
-### 回复的写法
+### How replies are written
 
-2026-10-28 定，沿用 Haskell 版（见 features.md 的 Replies）。模型的文本输出由分段器（`max-core`）切成一串 `Draft`：
+Decided 2026-10-28, carried over from the Haskell version (see Replies in features.md). The model's text output is cut into a sequence of `Draft`s by the segmenter (in `max-core`):
 
-- 空行分段，一段一条消息；代码块里的空行不切；`[split]` 强制切开，条数不限。
-- 出现 Markdown 标题（`#` 到 `######` 加空格）以后按节切（2026-10-30 加）：标题开头一条，空行不再切，一节连同表格、列表整个发；标题之前的照旧按空行。分隔线（`---`、`***`、`___`）在哪都是切点，本身不发。起因：群友要 Max 正经问题用 Markdown 写，一个长回答被切成了单独的标题、单独的表格和一条看着是空的 `---`。
-- 行首（缩进不算）的 `[reply#id]` 也开一条新消息，并且结束按节切，回到按空行切（2026-11-04 加）；行中间的不切。起因：11-02 到 11-04 有三次 Max 写完文档，空一行 `[reply#id]` 转头损别人一句，这句留在了最后一节里，整节连同这句成了回复那个人的一条消息。
-- 一条消息可以从一行中间开始（2026-11-06 加）：`[split]` 和图片句柄后面的部分当成新的一行来判断；行首 `[reply#id]` 后面的部分是 QQ 显示出来的开头，围栏、标题、分隔线都按它判断。原来只看行首，`看代码：[split]```bash` 这样的围栏被当成正文：代码在空行处被切开，代码里的 `# 注释` 成了标题，结尾的围栏又被当成开头，后面的全成了一条。
-- 引用后面没有内容时，引用的是下一条（2026-11-07 owner 定）：`[reply#3] ---`、单独一行的 `[reply#3]` 后面跟空行，引用都留着，跟下一条有内容的消息一起发，中间隔着空行、分隔线都行；下一条自己以引用开头就用它自己的，后面什么都没有就丢掉。图片也能带引用。原来分隔线连同前面的引用一起丢，单独一行的引用自成一条，`parse` 从中得不出消息，两种情况下一条都不引用任何消息，Max 回的是谁就看不出来了。切分器的 `cut` 不切只有一个引用的段，以引用开头的行用 `cut_for_quote`，连这样的段也切，新引用替换旧的。
-- 代码里的 `<think>` 原样发（2026-11-07 改）：围栏里和行内代码里的 `<think>` 是 Max 在展示这个标签，不算思考段的开头。原来 `<think>` 在哪都开始一段思考，没有 `</think>` 就到结尾，Max 在代码里写一个 `<think>`，后面的回复全丢。思考段里的围栏是思考的一部分，什么也不开。
-- 占位符只有一种写法 `[类型#id]`，后面可以带 `: 描述` 和紧跟的 `(属性)`，都只认 id（2026-10-28 改，沿用 Haskell 版 2026-08 统一后的写法）。原来的 `[↩#id]`、`[@#N]` 是符号，`[撤回了 #id]` 这类是句子，模型会照着说出来；`[unsend#id]` 不会。
-- 段首的 `[reply#id]`：这一段回复那条消息；一段里有几个时取第一个，全部去掉。号码无效时怎么办见[解析和发送](#解析和发送)。
-- `[mention#N]`：提及一个人，解析规则见[解析和发送](#解析和发送)。
-- Max 写文字、提及，和图片、表情包的句柄（2026-10-29 定，同日改）。QQ 官方接口发不出小黄脸，见 [QQ 官方机器人](#qq-官方机器人)：模型照着历史写出的 `[face#id]`，或者只读的 `[face: 名字]` 这类显示形式，分段器认出来直接去掉，免得原样漏进群里。收到的表情给模型看是 `[face: 名字]`。`[sticker#id.序号]`、`[image#id.序号]` 单独成一条，发出去的是那张图，见[发图](#发图)。
-- 核心醒着时群里每条消息都进它的 `[新消息]`，所以提示词要它只回在跟它说的：@它、回复它、点名叫它的，和 `[判定 …]` 行指的那几条；别人之间的对话、问别人的问题不插嘴，被叫闭嘴就 `[silence]`（2026-10-29 加：一次判定叫醒后它把同一块里问别人的、两个群友之间的话都回了，被叫闭嘴还顶嘴）。
-- 整个输出为空，或者只有 `[silence]`，就什么都不发。段首的引用不影响判断。一段里还有别的内容时，`[silence]` 直接去掉。旧提示词教过的 `[silence:表情名]`（给消息回一个表情）当成 `[silence]`：reaction 不做了，见[有意删除的功能](#有意删除的功能)。
-- 模型偶尔把工具调用写进正文，比如 `[find_stickers query="无语"]`：方括号里是英文标识符、空白，再带 `=` 或引号的，去掉。代码块里的不动。
-- 分段器是唯一把模型文本变成消息的地方，进度旁白也走它。Haskell 版的教训：每一个自己另写"文本转消息"的发送路径，最后都把 `[split]` 或 `[reply#id]` 原样漏进了群里。
-- 切分只看文本，不看流式到达的时机：同一段输出，流式和一次给出切出来的消息完全相同。Haskell 版流式时还会在长段落的句末提前放出一部分，结果取决于时机，这里不做。
+- Blank lines separate segments, and each segment becomes one message; blank lines inside code blocks do not cut; `[split]` forces a cut, with no limit on the number of messages.
+- Once a Markdown heading (`#` to `######` followed by a space) appears, cutting is by section (added 2026-10-30): each heading starts a message, blank lines no longer cut, and a section is sent whole, together with its tables and lists; text before the first heading is still cut at blank lines. A thematic break (`---`, `***`, `___`) is a cut point wherever it appears and is not itself sent. The reason: group members asked Max to write answers to serious questions in Markdown, and one long answer was cut into a lone heading, a lone table and a message holding a `---` that looked empty.
+- A `[reply#id]` at the start of a line (indentation not counted) also starts a new message, and it ends cutting by section, returning to cutting at blank lines (added 2026-11-04); one in the middle of a line does not cut. The reason: three times between 2026-11-02 and 2026-11-04, Max finished writing a document, left a blank line and wrote `[reply#id]` to turn and make a jab at someone; the remark stayed in the last section, and the whole section, remark included, became a single message replying to that person.
+- A message can begin in the middle of a line (added 2026-11-06): what follows `[split]` or an image handle is judged as a new line; what follows a `[reply#id]` at the start of a line is what QQ displays as the beginning of the message, so fences, headings and thematic breaks are judged by it. Previously only the start of a line was examined, and a fence such as the one in ````看代码：[split]```bash```` ("look at the code:") was treated as body text: the code was cut at blank lines, a `# 注释` ("# comment") in the code became a heading, and the closing fence was taken for an opening one, so everything after it became a single message.
+- When a quote has nothing after it, it applies to the next message (decided by the owner 2026-11-07): in `[reply#3] ---`, or with a `[reply#3]` alone on a line followed by a blank line, the quote is kept and sent with the next message that has content, whether a blank line or a thematic break lies in between; if the next message itself begins with a quote, it uses its own, and if nothing follows at all, the quote is dropped. Images can carry a quote as well. Previously a thematic break was dropped together with the quote before it, and a quote alone on a line became a message of its own from which `parse` could produce no message; in both cases the next message quoted nothing, and it was no longer apparent whom Max was replying to. The splitter's `cut` does not cut a segment that holds only a quote; lines that begin with a quote use `cut_for_quote`, which cuts even such a segment, and the new quote replaces the old one.
+- A `<think>` in code is sent as it is (changed 2026-11-07): a `<think>` inside a fence or inline code is Max showing the tag and does not count as the start of a reasoning segment. Previously a `<think>` anywhere started a reasoning segment that ran to the end if no `</think>` followed, so when Max wrote a `<think>` in code, the rest of the reply was lost. A fence inside a reasoning segment is part of the reasoning and opens nothing.
+- Placeholders have a single form, `[type#id]`, optionally followed by `: description` and an immediately following `(attributes)`; in every case only the id is significant (changed 2026-10-28, carrying over the form the Haskell version unified on in 2026-08). The earlier `[↩#id]` and `[@#N]` were symbols, and forms such as `[撤回了 #id]` ("retracted #id") were sentences, which the model would repeat aloud; it does not do so with `[unsend#id]`.
+- A `[reply#id]` at the start of a segment: the segment replies to that message; when a segment contains several, the first is used and all of them are removed. For what happens when the number is invalid, see [Resolution and sending](#resolution-and-sending).
+- `[mention#N]`: mentions a person; for the resolution rules, see [Resolution and sending](#resolution-and-sending).
+- Max writes text, mentions, and handles for images and stickers (decided 2026-10-29, changed the same day). The official QQ API cannot send QQ face emoticons (see [The official QQ bot](#the-official-qq-bot)): a `[face#id]` that the model writes by imitating the history, or a read-only display form such as `[face: name]`, is recognised by the segmenter and removed, so that it does not leak into the group verbatim. Face emoticons received are shown to the model as `[face: name]`. `[sticker#id.index]` and `[image#id.index]` each form a message of their own, and what is sent is that image; see [Sending images](#sending-images).
+- While the core is awake, every message in the group goes into its `[新消息]` ("new messages"), so the prompt tells it to reply only to what is addressed to it: messages that @ it, reply to it or call it by name, and the messages that a `[判定 …]` ("verdict …") line points to. It is not to cut into conversations between other people or answer questions put to others, and when told to be quiet it outputs `[silence]` (added 2026-10-29: after one classification woke it, it replied both to a question put to someone else and to an exchange between two group members in the same block, and when told to be quiet it talked back).
+- If the whole output is empty, or consists only of `[silence]`, nothing is sent. A quote at the start of a segment does not affect this judgement. When a segment has other content as well, `[silence]` is simply removed. The `[silence:emote-name]` form taught by the old prompt (reacting to a message with an emote) is treated as `[silence]`: reactions are no longer implemented; see [Features deliberately removed](#features-deliberately-removed).
+- The model occasionally writes a tool call into its body text, for example `[find_stickers query="无语"]` ("speechless"): a bracketed span consisting of an English identifier and whitespace, followed by `=` or a quotation mark, is removed. Such spans inside code blocks are left alone.
+- The segmenter is the only place where model text becomes messages; progress narration goes through it as well. The lesson from the Haskell version: every send path that wrote its own text-to-message conversion eventually leaked `[split]` or `[reply#id]` into the group verbatim.
+- Cutting looks only at the text, not at when streamed text arrives: the same output yields exactly the same messages whether it is streamed or given all at once. When streaming, the Haskell version also released part of a long paragraph early at the end of a sentence, which made the result depend on timing; that is not done here.
 
-### 出站
+### Outbound
 
-2026-10-28 定。Max 的话**说出口就入账**：模型调用任务里的分段器切出一段，作为 `Said` 交给会话 actor；actor 入账，再交给平台 sender，不等平台回执。工具发的图和文件、撤回这些动作也一样，先入账再发；禁言不入账，见[群管理](#qq-官方机器人)。所以时间线上 Max 的话和别人的消息谁先谁后，按 Max 的视角排，平台上落地的先后可能相反；但新核心的尾巴一定看得到旧核心说过的话。
+Decided 2026-10-28. What Max says is **entered in the ledger as soon as it is said**: the segmenter in the model-call task cuts out a segment and hands it to the conversation actor as `Said`; the actor enters it in the ledger and then hands it to the platform sender, without waiting for the platform's receipt. Images and files sent by tools, and actions such as retractions, work the same way: they are entered first and sent afterwards. Mutes are not entered; see the group management part of [The official QQ bot](#the-official-qq-bot). On the timeline, therefore, the order of Max's words relative to other people's messages follows Max's point of view, and the order in which they land on the platform may be the reverse; but a new core's tail is guaranteed to include what the old core said.
 
-- **平台 sender**：每个平台一个常驻任务。同一个会话的东西按入账顺序串行发，不同会话之间并发。撤回 Max 自己的消息、回复它刚说的话，一定排在那条消息的发送后面，轮到时平台 id 已经有了。
-- **`deliveries` 表**：每次发送的结果一行：消息、端点、平台 id 或错误、时间。sender 是唯一的写者，只追加。镜像时一条消息每个端点一行，用的也是这张表。撤回这类动作没有自己的平台 id，成了就记 sent、不带平台 id（2026-10-29，迁移 0012）。
-- **平台 id 查 `#id`**：入站消息的平台 id 在 `messages`，Max 发出的在 `deliveries`。有人回复或撤回 Max 的消息，actor 入账时查这两处；查不到就按文本兜底。
-- **发不出去**：`deliveries` 记一行错误，投影时这条消息后面标"（没发出去）"，下一个核心的模型看得到。不回报给正在跑的核心：一个 turn 里接连发不出去，通常是平台断了，模型知道了也做不了什么。
-- **崩溃**：入账了但没有回执的消息，sender 启动时先补记成"结果未知"，投影时标"（可能没发出去）"。不重发，免得发两遍。
-- **echo**：平台把 Max 自己发的东西再推回来的，适配器直接丢掉。QQ 的网关不推机器人自己发的消息，没有 echo；以后接的平台要是会推回来，发送时带上 `max-<消息 id>` 这类 id，适配器按它认出来。Max 自己的动作，平台通知如果还会推回来，actor 入账前看时间线上是不是已经有这次动作，有就不记。不是这个进程发的（比如有人拿 Max 的账号手动发），照常入账，发送者是 Max。
-- **经 `Post` 发**：不是模型文本输出的发送，都给目标会话的 actor 发 `Post`，由它入账：程序里调工具发消息或撤回（本群或别的群）、以后的自动化。命令的文字输出不经 `Post`：actor 自己入账，就在命令所在的会话里，不引用那条命令（2026-10-29 改：原来提议发到发令人的私聊，后来引用命令，owner 觉得多余）。QQ 没法从群成员的 `member_openid` 找到这个人私聊的 `user_openid`，私聊也只有体验用户进得来。要知道发没发成的（比如工具），`Post` 带一个回信通道，actor 把它交给 sender，sender 记完 `deliveries` 后回信；actor 自己不等。
-  - `Post` 带来源 turn `origin: Option<TurnId>`（2026-10-28 定）。MCP 服务从会话里取，命令输出和调度器的为空。actor 入账时把它记成这条消息的 `turn_id`。`origin` 是自己当前核心的 turn 就不喂给核心：`run_code` 结果里内部调用的摘要已经有了，再喂一次模型会看到两遍。别的 turn 发来的，比如群 A 的 turn 往群 B 说一句，照常喂给 B 的核心。2026-10-29 先做了本会话核心的工具发的 `Post`（`send_image`、`recall_message`），回信通道是 sender 记完 `deliveries` 后回的消息 id 或错误；别的会话、调度器发来的，和喂给核心，等有了再做。来源 turn 已经结束时（`/kill` 或别的），`Post` 和工具的 job 请求（也带来源 turn）都拒掉，回"这一轮已经结束了"（2026-10-30 加，review 发现：调用在路上时 turn 被 kill，排在后面的 `send_image` 照样发了出去）。
+- **Platform sender**: one resident task per platform. Items for the same conversation are sent serially in ledger order; different conversations are served concurrently. Retracting one of Max's own messages, or replying to something Max has just said, is always queued after that message is sent, so when its turn comes the platform id is already available.
+- **The `deliveries` table**: one row for the result of each send: message, endpoint, platform id or error, and time. The sender is its only writer, and it only appends. With mirroring, a message gets one row per endpoint, in this same table. Actions such as retractions have no platform id of their own; when one succeeds, it is recorded as sent without a platform id (2026-10-29, migration 0012).
+- **Looking up a `#id` from a platform id**: the platform ids of inbound messages are in `messages`, and those of messages Max sends are in `deliveries`. When someone replies to or retracts one of Max's messages, the actor looks in both places as it enters the event; if nothing is found, it falls back to the text.
+- **Failed sends**: a row with the error is recorded in `deliveries`, and in projection the message is followed by the mark "（没发出去）" ("(not sent)"), which the next core's model can see. The failure is not reported to the running core: repeated failures within one turn usually mean the platform connection is down, and the model could do nothing about it even if it knew.
+- **Crashes**: for messages that were entered in the ledger but have no receipt, the sender first records them retroactively at startup as "result unknown", and projection marks them "（可能没发出去）" ("(may not have been sent)"). They are not resent, to avoid sending them twice.
+- **Echoes**: when a platform pushes back something Max itself sent, the adapter simply drops it. The QQ gateway does not push the bot's own messages, so there are no echoes; if a platform connected later does push them back, an id such as `max-<message id>` is attached when sending, and the adapter recognises echoes by it. If platform notifications of Max's own actions are also pushed back, the actor checks, before entering one, whether the timeline already contains that action, and if it does, records nothing. Anything not sent by this process (for example, someone sending manually from Max's account) is entered as usual, with Max as the sender.
+- **Sending via `Post`**: every send that is not the model's text output is a `Post` to the target conversation's actor, which enters it in the ledger: messages sent or retracted by tools called from programs (in this group or another one), and future automations. The text output of commands does not go through `Post`: the actor enters it itself, in the conversation where the command was issued, without quoting the command (changed 2026-10-29: the original proposal was to send it to the issuer's private chat, and a later one was to quote the command, which the owner found superfluous). QQ offers no way to find a person's private-chat `user_openid` from their group `member_openid`, and only trial users can enter private chats in any case. Where the caller needs to know whether the send succeeded (a tool, for example), the `Post` carries a reply channel; the actor hands it to the sender, which replies after recording the `deliveries` row; the actor itself does not wait.
+  - A `Post` carries its originating turn, `origin: Option<TurnId>` (decided 2026-10-28). The MCP service takes it from the MCP session; for command output and the scheduler it is empty. When entering the message, the actor records it as the message's `turn_id`. If `origin` is the turn of the actor's own current core, the message is not fed to the core: the summary of internal calls in the `run_code` result already covers it, and feeding it again would show it to the model twice. A `Post` from another turn, for example a turn in group A saying something in group B, is fed to B's core as usual. On 2026-10-29, `Post`s sent by tools of the conversation's own core (`send_image`, `recall_message`) were implemented first, with the reply channel carrying the message id or the error once the sender has recorded the `deliveries` row; `Post`s from other conversations or from the scheduler, and feeding them to the core, will be built when they are needed. When the originating turn has already ended (through `/kill` or otherwise), both the `Post` and the tool's job requests (which also carry the originating turn) are refused with the reply "这一轮已经结束了" ("this turn has already ended") (added 2026-10-30, found in review: when a turn was killed while a call was in flight, a `send_image` queued behind it was still sent).
 
-### turn 记录
+### Turn records
 
-一次连续的运行是一个 turn：从一个触发起核心开始，到空闲窗口到期、`/kill`、失败或重启为止，中间吸收的触发都是它的输入（2026-10-27 改成单一核心实例，见[会话 actor](#会话-actor)）。turn 在库里有两种记录，全部只追加（2026-10-27 定，10-29 去掉了恢复用的 `TurnResumed`；10-30 把快照并进结局，原来的 `turn_snapshots` 和结局一一对应、同一个事务里写）：
+One continuous run is a turn: it starts when a trigger starts a core and lasts until the idle window expires, a `/kill`, a failure or a restart; the triggers absorbed along the way are all its input (changed 2026-10-27 to a single core instance; see [The conversation actor](#the-conversation-actor)). A turn has two kinds of records in the database, both append-only (decided 2026-10-27; `TurnResumed`, which served recovery, was removed on 2026-10-29; on 2026-10-30 the snapshot was merged into the outcome, since the former `turn_snapshots` corresponded one-to-one with outcomes and were written in the same transaction):
 
 ```rust
-// 触发起核心时。身份、触发和首次开始合在一条里（2026-10-27 合并了原来的 TurnAccepted）
-struct TurnStarted { turn, conversation, ordinal /* t#，给模型引用 */, trigger /* intent 的 Wake，以后还有 job 结果、自动化 */, from /* 快照位置，见“时间线” */, started_at }
-// 结局，连同核心整个存下来；崩溃时丢的 turn（Lost）没有 run
+// When a trigger starts a core. Identity, trigger and first start in a single record (the former TurnAccepted was merged in 2026-10-27)
+struct TurnStarted { turn, conversation, ordinal /* t#, for the model to reference */, trigger /* an intent Wake; later also job results and automations */, from /* snapshot position, see "The timeline" */, started_at }
+// The outcome, stored together with the whole core; a turn lost in a crash (Lost) has no run
 struct TurnFinished { turn, outcome: Outcome, run: Option<RunRecord>, finished_at }
 
-// 一次运行留下的：给模型看的和它说的。2026-10-29 之前的行是输入日志的形状（core_version、first、inputs），没有代码读
+// What a run leaves behind: what the model was shown and what it said. Rows from before 2026-10-29 have the shape of the input log (core_version, first, inputs); no code reads them
 struct RunRecord { spec: RunSpec, base: Context, transcript: Vec<Item> }
 
-// 模型输出、工具结果、打断和失败是核心各自的方法，不是输入（10-29 改，见"核心"）
+// Model output, tool results, interruptions and failures are separate methods of the core, not inputs (changed 2026-10-29, see "The core")
 enum Input {
-    Messages { ids: Vec<MessageId>, item: Item, people: Vec<PrincipalId> }, // 时间线上的新消息和事件，引用 ledger，同时存核心看到的样子；people 是第一次出现的人
+    Messages { ids: Vec<MessageId>, item: Item, people: Vec<PrincipalId> }, // new messages and events on the timeline: references the ledger and also stores what the core saw; people are those appearing for the first time
     Wake(Wake),
-    // 以后：AutomationFire { fire, item }。job 结果没有单独的输入，是一种 Wake，见下
+    // Later: AutomationFire { fire, item }. Job results have no input of their own; they are a kind of Wake, see below
 }
 
 struct Wake {
-    ids: Vec<MessageId>,          // 它涉及的消息，作废的 actor 已经滤掉了；job 结果为空
-    reason: Reason,               // Direct、Judged { note }、Job { job }（2026-10-30 加）
-    item: Option<Item>,           // 给模型看的判定行或 job 的报告；直接触发为空，消息行上已经标着
+    ids: Vec<MessageId>,          // the messages it concerns, with voided ones already filtered out by the actor; empty for job results
+    reason: Reason,               // Direct, Judged { note }, Job { job } (added 2026-10-30)
+    item: Option<Item>,           // the verdict line or job report shown to the model; empty for direct triggers, which are already marked on the message line
 }
 
 enum Outcome { Answered, Silent, Interrupted, Failed(FailReason), Lost }
 enum FailReason { Model { error: String }, ContextExhausted }
 ```
 
-写入时机：
+When each record is written:
 
-| 情况 | 写什么 |
-|---|---|
-| 触发起核心 | `TurnStarted` |
-| turn 结束，包括重启时被中断 | `TurnFinished`，带着 run |
-| 崩溃 | 什么都没写，启动时补一条 `Lost` 结局 |
+| Situation | What is written |
+| --- | --- |
+| A trigger starts a core | `TurnStarted` |
+| The turn ends, including being interrupted at a restart | `TurnFinished`, with the run |
+| A crash | Nothing is written; a `Lost` outcome is added at startup |
 
-- **trigger 记在 `TurnStarted` 里**：直接触发可以从消息本身重新判断，但判定、去抖合并了哪几条、自动化触发都不行。单一核心实例之后，触发来了就立刻起核心，"接受了但没起"这个状态不存在，所以不再单独记一条。
-- **一个 turn 一份快照**：结束时和结局写在同一行里。核心不在运行中途写库，所以也没有"库里一份、内存里一份"的问题。
-- **状态**：有 `TurnFinished` 就是已结束；没有就是在当前进程里跑着，启动时看到这种，就是崩溃时正在跑。
-- **结局**：唯一存下来的派生结果。`Answered` 和 `Silent` 只说这次运行有没有发过话。查"哪些 turn 没结束"要靠它，所以写下来。`Lost` 例外，它由启动流程直接写，表示崩溃时它正在跑，没有快照。
-- Max 回复的正文在 ledger 里，不在结局里。
+- **The trigger is recorded in `TurnStarted`**: a direct trigger could be re-derived from the message itself, but a classification, the set of messages a debounce merged, and an automation trigger could not. With a single core instance, a core starts as soon as a trigger arrives, and an "accepted but not started" state does not exist, so it is no longer recorded separately.
+- **One snapshot per turn**: it is written at the end, in the same row as the outcome. The core does not write to the database midway through a run, so the problem of "one copy in the database and another in memory" does not arise either.
+- **Status**: a turn with a `TurnFinished` has ended; a turn without one is running in the current process, and such a turn seen at startup was running at the time of a crash.
+- **Outcome**: the only derived result that is stored. `Answered` and `Silent` say only whether the run said anything. Finding "which turns have not ended" depends on it, so it is written down. `Lost` is the exception: it is written directly by the startup procedure and means that the turn was running at the time of a crash and has no snapshot.
+- The text of Max's reply is in the ledger, not in the outcome.
 
-### 条目
+### Entries
 
-基础上下文、transcript 和请求都由条目组成：
+The base context, the transcript and requests all consist of entries:
 
 ```rust
 struct Item {
     kind: ItemKind,
-    source: Option<ModelTag>,          // 模型产生的条目，记下协议和模型
-    opaque: Option<serde_json::Value>, // provider 附带的不透明字段，核心只搬运不解读
-    tokens: u32,                       // max 估算好传进来；模型输出的条目取 provider 的用量
+    source: Option<ModelTag>,          // for entries produced by a model, records the protocol and the model
+    opaque: Option<serde_json::Value>, // opaque fields supplied by the provider; the core only carries them and never interprets them
+    tokens: u32,                       // estimated by max and passed in; for model-output entries, taken from the provider's usage
 }
 
 enum ItemKind {
     Text(String),
     ToolCall(ToolCall),
     ToolResult(ToolResult),
-    Reasoning { text: Option<String> }, // 可读部分：摘要或明文推理
+    Reasoning { text: Option<String> }, // the readable part: a summary or plaintext reasoning
     // ...
 }
 
 struct ModelOutput {
     items: Vec<Item>,
-    usage: Usage, // 含推理 token 数
+    usage: Usage, // includes the reasoning token count
 }
 ```
 
-推理内容这样处理：
+Reasoning content is handled as follows:
 
-- **Responses**：请求带 `store: false` 和 `include: ["reasoning.encrypted_content"]`，不依赖 provider 端的 `previous_response_id`。每个 `reasoning` 条目对应一个 `Reasoning`：`opaque` 存整个原始条目（含 `encrypted_content`），`text` 存摘要。
-- **Chat**：`reasoning_content`（或 `reasoning`）对应一个 `Reasoning`。挂在工具调用上的签名（比如经 cliproxy 转发的 Gemini）放进那个 `ToolCall` 的 `opaque`。
-- **把思考写进正文**：正文开头的 `<think>…</think>` 拆成 `Reasoning`。正文要是以"Thinking Process:""**Thought Process**""思考过程："这种独占一行的标题开头，就一个字都不说，这次调用算 `Error::Aloud` 失败，可重试，由模型调用任务重发。2026-10-29 Gemini 4 Argon 在群里连着三次这样：那三次调用 0 个思考 token，它把编号的分析步骤当回复写了出来，被分段发进群里；第一次漏出去以后，上下文里的"自己的上一条"就是这个样子，后两次跟着照写。标题后面有没有真正的回复分不出来，所以不拆，整条重来。
-- **推理只属于本 turn**：它在核心的 transcript 里，随 transcript 进快照；不进 ledger，不进以后 turn 的基础上下文，不发到群里，也不让 `history` 这类工具读到。
-- 流到一半被打断的推理不存，不完整的 blob 没用。
+- **Responses**: requests carry `store: false` and `include: ["reasoning.encrypted_content"]` and do not rely on the provider-side `previous_response_id`. Each `reasoning` item corresponds to one `Reasoning`: `opaque` stores the entire raw item (including `encrypted_content`), and `text` stores the summary.
+- **Chat**: `reasoning_content` (or `reasoning`) corresponds to one `Reasoning`. Signatures attached to tool calls (for example from Gemini forwarded through cliproxy) go into the `opaque` of that `ToolCall`.
+- **Reasoning written into the body text**: a `<think>…</think>` at the start of the body is split off into a `Reasoning`. If the body begins with a heading on a line of its own, such as "Thinking Process:", "**Thought Process**" or "思考过程：" ("thought process:"), not a word of it is said: the call counts as an `Error::Aloud` failure, which is retryable, and the model-call task resends it. On 2026-10-29 Gemini 4 Argon did this three times in a row in a group: those three calls had 0 reasoning tokens, and it wrote numbered analysis steps out as its reply, which were segmented and sent into the group; after the first one leaked out, "its own previous message" in the context looked like that, and the next two followed the pattern. Whether a real reply follows the heading cannot be determined, so nothing is split off and the whole call is redone.
+- **Reasoning belongs only to its own turn**: it is in the core's transcript and goes into the snapshot with the transcript; it does not go into the ledger or into the base context of later turns, is not sent to the group, and cannot be read by tools such as `history`.
+- Reasoning interrupted midway through streaming is not stored; an incomplete blob is of no use.
 
-### 核心
+### The core
 
-自写，sans-I/O（2026-10-26 定）。2026-10 调研过 rig、yoagent、adk-rust、autoagents、swiftide-agents、aisdk、genai，以及 pi-agent（第三方的 Rust 移植，官方仓库里没有这份代码）。它们的共同问题是自带 provider 层或 session 层，和我们自己的协议适配、ledger 冲突；体量也远大于我们要用的部分：rig-core 加 rig-agent 约 13 万行，yoagent 约 3.9 万行。自写预计 1.2k–1.5k 行，包含两种协议的适配。借鉴两处：rig-agent 的 `AgentRun`，把 loop 写成 sans-I/O 状态机；pi 和 yoagent 的 steer 语义。
+Written in-house, sans-I/O (decided 2026-10-26). In 2026-10, rig, yoagent, adk-rust, autoagents, swiftide-agents, aisdk and genai were evaluated, as was pi-agent (a third-party Rust port; the official repository does not contain this code). Their common problem is that each brings its own provider layer or session layer, which conflicts with our own protocol adapters and ledger; they are also far larger than the part we would use: rig-core plus rig-agent come to about 130,000 lines, and yoagent to about 39,000. Writing our own is estimated at 1.2k–1.5k lines, including the adapters for both protocols. Two things are borrowed: rig-agent's `AgentRun`, which writes the loop as a sans-I/O state machine, and the steer semantics of pi and yoagent.
 
-核心是纯状态机：方法都是同步的，每次调用是一次完整的状态转移；不 `await`、不 spawn、不读时钟、不碰网络。草图，签名 **待定**：
+The core is a pure state machine: all its methods are synchronous, and each call is one complete state transition; it does not `await`, does not spawn, does not read the clock and does not touch the network. A sketch, with signatures **TBD**:
 
 ```rust
 struct Run {
-    spec: RunSpec,            // 不变：模型档、窗口、输出上限、这个 turn 能用的 Max 工具
-    base: Context,            // 不变：基础上下文的条目和名册，第一批输入在它的易变块里
-    transcript: Vec<Item>,    // 本 turn 产生的条目，只追加
-    pending: Vec<Input>,      // 攒下的消息和 Wake，下一次调模型时渲染成一个 [新消息] 块
-    phase: Phase,             // 在哪个阶段，阶段自己的数据在阶段里，见下
-    measured: Option<(u32, usize)>, // provider 报的上一次请求加输出的 token 数，以及它覆盖到 transcript 的哪里
-    unhandled: Vec<Wake>,     // 上次空闲以来的 Wake，第一批的也算：模型还没处理完的
-    roster: BTreeSet<PrincipalId>, // base 的名册，加上之后给模型看过的新人
-    // 以及 round
+    spec: RunSpec,            // immutable: model profile, window, output limit, the Max tools available to this turn
+    base: Context,            // immutable: the base context's entries and roster; the first batch of input is in its volatile block
+    transcript: Vec<Item>,    // entries produced in this turn, append-only
+    pending: Vec<Input>,      // accumulated messages and Wakes, rendered as one [新消息] ("new messages") block at the next model call
+    phase: Phase,             // which phase it is in; each phase's own data lives in the phase, see below
+    measured: Option<(u32, usize)>, // the provider-reported token count of the previous request plus its output, and how far into the transcript it covers
+    unhandled: Vec<Wake>,     // Wakes since the last idle, the first batch's included: those the model has not finished handling
+    roster: BTreeSet<PrincipalId>, // the base's roster, plus newcomers shown to the model since
+    // plus round
 }
 
-// 2026-10-29 改：原来是 in_flight、due、outstanding、model_due、ended 五个字段一起表示阶段，
-// 合法的组合靠人维护（owner 指出）；现在一个枚举，非法组合写不出来
+// Changed 2026-10-29: previously five fields, in_flight, due, outstanding, model_due and ended, represented the phase together,
+// and the legal combinations were maintained by hand (pointed out by the owner); now it is one enum, and illegal combinations cannot be written
 enum Phase {
-    ModelDue,                 // 下一步调模型：开始时、工具结果回齐后、调用被打断后、有格式不对的调用、来了触发
-    Calling,                  // 模型调用在途
-    ToolsDue(Vec<Call>),      // 上一次输出里格式正确、还没开始的工具调用
-    Running(Vec<CallId>),     // 工具批次在途：还没回结果的，不为空
-    Waiting,                  // 没有在途的，也没有该做的：现在结束不丢东西
+    ModelDue,                 // the next step is a model call: at the start, after all tool results are back, after a call is interrupted, when there are malformed calls, when a trigger arrives
+    Calling,                  // a model call is in flight
+    ToolsDue(Vec<Call>),      // well-formed tool calls from the previous output that have not started yet
+    Running(Vec<CallId>),     // a tool batch is in flight: the calls that have not returned yet, never empty
+    Waiting,                  // nothing in flight and nothing due: ending now loses nothing
     Interrupted,
     Failed(FailReason),
 }
 
 enum Step {
-    CallModel(Request),       // 请求由核心完整构造，之后不再改动：条目、两个工具、输出上限、名册
-    RunTools(Vec<Call>),      // 已经解析成 run_code 或 shell 的调用
-    Idle,                     // 没有在途的，也没有该做的；等还是结束由 actor 定
+    CallModel(Request),       // the request is built in full by the core and not modified afterwards: entries, the two tools, output limit, roster
+    RunTools(Vec<Call>),      // calls already parsed into run_code or shell
+    Idle,                     // nothing in flight and nothing due; the actor decides whether to wait or to end
 }
 
 impl Run {
     fn new(spec: RunSpec, base: Context, first: Vec<Input>) -> Self;
-    fn record(&self) -> RunRecord<'_>;              // 借着核心的数据序列化，不复制
-    fn busy(&self) -> bool;                         // 有模型调用或工具在途；actor 只在它为假时问 next_step
-    fn next_step(&mut self) -> Step;                // 开始调用或批次，阶段跟着变
+    fn record(&self) -> RunRecord<'_>;              // serialises by borrowing the core's data, without copying
+    fn busy(&self) -> bool;                         // a model call or tool is in flight; the actor asks for next_step only when this is false
+    fn next_step(&mut self) -> Step;                // starts a call or a batch, and the phase changes accordingly
     fn model_output(&mut self, out: ModelOutput) -> Result<(), Rejected>;
     fn partial_output(&mut self, text: String, tokens: u32) -> Result<(), Rejected>;
     fn tool_result(&mut self, call: CallId, out: ToolOutput) -> Result<(), Rejected>;
-    fn input(&mut self, input: Input) -> Result<(), Rejected>; // 只收 Messages 和 Wake，随时可塞，核心决定何时生效
-    fn interrupt(&mut self) -> Result<(), Rejected>; // 谁 /kill 的记在日志里
+    fn input(&mut self, input: Input) -> Result<(), Rejected>; // accepts only Messages and Wake, at any time; the core decides when they take effect
+    fn interrupt(&mut self) -> Result<(), Rejected>; // who issued the /kill is recorded in the log
     fn fail(&mut self, reason: FailReason) -> Result<(), Rejected>;
-    fn at_limit(&self) -> bool;                     // transcript 加上攒着的输入超过上限，actor 在边界上结束核心
-    fn unhandled(&self) -> Vec<Wake>;               // 没处理完的触发，失败或中断时找要回一句话的那条
-    fn idle(&self) -> bool;                         // 没有在途的、没有该做的：现在结束不丢东西
-    fn outcome(&self) -> Outcome;                   // 结束时由 actor 读取
+    fn at_limit(&self) -> bool;                     // the transcript plus accumulated input exceeds the limit; the actor ends the core at a boundary
+    fn unhandled(&self) -> Vec<Wake>;               // triggers not fully handled; on failure or interruption, used to find the one that gets a one-line reply
+    fn idle(&self) -> bool;                         // nothing in flight and nothing due: ending now loses nothing
+    fn outcome(&self) -> Outcome;                   // read by the actor at the end
 }
 ```
 
-- 和状态对不上的（没有模型调用在途时来的 `ModelOutput`、不认识的调用的结果、结束之后的任何输入）返回 `Rejected`，什么都不改。
-- 模型调用在途时到的消息不属于这次请求，等下一次（2026-10-28 定）。原来为了重放分得清，开始调用和工具批次各记一条输入；不重放以后（10-29）就只是 `next_step` 里的阶段转移。
+- Anything inconsistent with the state (a `ModelOutput` that arrives when no model call is in flight, the result of an unknown call, any input after the end) returns `Rejected` and changes nothing.
+- Messages that arrive while a model call is in flight do not belong to that request; they wait for the next one (decided 2026-10-28). Originally, so that replay could tell them apart, starting a call and starting a tool batch were each recorded as an input; since replay was dropped (2026-10-29), these are simply phase transitions inside `next_step`.
 
-核心负责的规则：
+Rules for which the core is responsible:
 
-- **构造请求**：请求由基础上下文、transcript 和固定的两个工具组成，不裁剪（2026-10-28 定）。单条输入和工具结果各有上限（见[后续输入](#后续输入)），整体大小由下面的上限控制，撞上限就结束这次运行，请求不会超出窗口。唯一的例外是图片，超出视觉预算时省略较早的，见[多模态结果](#多模态结果)。
-- **工具**：`run_code` 和 `shell`，固定不变。程序能调哪些 Max 工具由 spec 定，整个 turn 不变，加载 skill 也不改变它，见[纯 codemode](#纯-codemode)。格式不对的调用直接回错误结果，不交给 actor 执行。
-- **token 数是数据**（2026-10-28 定）：核心不估算 token。基础上下文、每条输入、每个工具结果，都带着 `max` 估算好的 token 数进来；模型输出用 provider 返回的用量。算大小时以上一次请求 provider 报的输入 token 为准，再加上之后新增的条目，估算误差只落在这段增量上。数随条目存进快照。provider 没报用量（输入是 0）时不当成实测，接着用前一次实测或估算累加（2026-10-30 改，review 发现：原来会把之前的全部当成 0，核心永远撞不到上限）。
-- **轮数和 token 上限**（2026-10-28 改）：
+- **Building requests**: a request consists of the base context, the transcript and the two fixed tools, and is not trimmed (decided 2026-10-28). Individual inputs and tool results each have a cap (see [Follow-up input](#follow-up-input)); the overall size is governed by the limit below, and hitting the limit ends the run, so a request never exceeds the window. The only exception is images: when they exceed the vision budget, the earlier ones are omitted; see [Multimodal results](#multimodal-results).
+- **Tools**: `run_code` and `shell`, which never change. Which Max tools programs can call is determined by the spec and stays the same for the whole turn; loading a skill does not change it either; see [Pure codemode](#pure-codemode). A malformed call gets an error result straight away and is not handed to the actor for execution.
+- **Token counts are data** (decided 2026-10-28): the core does not estimate tokens. The base context, each input and each tool result come in carrying token counts already estimated by `max`; model output uses the usage returned by the provider. Size is calculated from the input tokens the provider reported for the previous request, plus the entries added since, so estimation error falls only on that increment. The counts are stored in the snapshot along with the entries. When the provider reports no usage (input is 0), this is not taken as a measurement, and accumulation continues from the previous measurement or estimate (changed 2026-10-30, found in review: previously everything before was treated as 0, and the core could never reach the limit).
+- **Round and token limits** (changed 2026-10-28):
 
   ```
-  可用     = C − 输出预留 − 余量
-  核心上限 = min(可用 − 基础上下文, C / 2)
+  available  = C − output reserve − margin
+  core limit = min(available − base context, C / 2)
   ```
 
-  C 是模型窗口；输出预留是模型配置的 `max_output`，没配就取 C / 8（Haskell 版的做法）；余量吸收估算误差，提议 C 的 5%。transcript 加上攒着的输入超过核心上限、模型也看过下面的快满提醒后，`at_limit` 为真，actor 在下一个边界结束这次运行：核心空闲就算正常结束；否则记 `Failed(ContextExhausted)`，没处理完的直接触发回一句话（2026-10-29 改，原来是把没处理完的触发交给一个新核心，见[运行流程](#运行流程)第 4 步）。基础上下文本身就占满了可用空间时，上限是 0，同样算撞上限。上限把攒着的输入算进去，所以请求不会被撑爆。例子：400k 窗口、`max_output` 128k 的模型，可用约 252k，基础上下文 100k 时核心上限 152k；只按 C / 2 算会给到 200k，请求就会超出 provider 允许的 272k 输入。
-- **处理完的定义**：模型看到一个输入之后，走到一次不调工具的输出、核心变空闲，这个输入就处理完了，回没回话都算。看过快满提醒的模型说了话，它看过的也算处理完了，见下面。标记在核心变空闲的那一刻打，不等 actor 下一次问 `next_step`。`unhandled` 返回第一批和之后交进来的输入里还没处理完的触发（`Wake`，以后还有 job 结果、自动化）；消息不取，它们在 ledger 里。核心失败或被中断时，actor 用它找出要回一句话的直接触发，见[群里看到的](#群里看到的)。
-- **输入的时机**：等这一批工具结果都回来之后、下一次调模型之前。一批输入里有触发（`Wake`、job 结果、自动化）才会引起调模型。消息本身不是触发，什么时候叫醒由 [intent](#intent) 定；只有消息就留着，到下一次调模型时一起进去。
-- **埋头太久的提醒**（2026-10-31）：模型连着调了 12 次工具、群里一句话没说（分段器切不出消息的不算，`[silence]` 也不算），这一批工具的最后一个结果后面加一段 `[maxx 提醒]`：先在群里说一句在做什么、还要多久，剩下的活还多就交给后台 agent，有人等着的先回答。说了话就重新数，提醒过也重新数，所以再过 12 次还会提醒。起因：10-31 会话 9 的一个 turn 被要求把前一晚的修改提成 PR，在 turn 里直接装依赖、跑测试、改代码，调了 49 次工具、41 分钟才说第一句，中间有两个人 @ 它都没回。
-- **快满的提醒**（2026-11-01，owner 提出）：transcript 加上攒着的输入过了核心上限的九成（`near_limit`），下一次调模型前在末尾加一条 `[maxx 提醒]`，一个 run 只加一次：上下文快用完了，现在收尾，在群里说清楚做到哪了、查到了什么、还剩什么；下一轮看不到这一轮的工具结果，只看得到群里的话；剩下的要接着做就交给后台 agent，别的工具别再调。
-  - 提醒过以后，超过上限才算 `at_limit`。没提醒过的，一批工具结果从九成以下直接跳过上限，也先给这一次带提醒的调用：窗口小的模型上九成到上限只有几千 token，一个结果最多就有 C 的 15%。这次调用用的是余量，输出预留加 C 的 5%。
-  - 提醒过的模型说了话，它看过的触发就算处理完了，哪怕同一次输出里还调了工具（交给 agent）。这样它说完进度、交出去以后再撞上限，不会再补一句 context 满了的报错。
-  - 核心空闲时过了九成就直接结束，不等空闲窗口；下一个触发起新核心，从 ledger 重新投影。
-  - 起因：撞上限的 turn 只回一句"读不完"，工具查到的全丢了，下一轮只看得到群里的话。到 11-01 为止 392 个 turn 一个也没撞过：1M 窗口上核心上限约 524k，涨得最多的 turn 涨了 176k。主要防窗口小的模型，和以后很长的活。
-- **中断**：给还没回结果的工具调用补一条"已取消"的结果，保证历史合法。Responses 要求每个 `function_call` 都有对应的 output。
-- **空闲判断**：模型这一轮只输出文本、没有工具调用，攒着的输入里又没有触发，`next_step` 就返回 `Idle`。结束由 actor 定：空闲窗口到期、撞上限、`/kill`、失败、重启。整次运行没发过话，结局就是 `Silent`；发没发过话用分段器看模型写的文本，切出消息就算。
+  C is the model's window; the output reserve is the model's configured `max_output`, or C / 8 if it is not set (the Haskell version's approach); the margin absorbs estimation error and is proposed at 5% of C. When the transcript plus accumulated input exceeds the core limit and the model has also seen the nearly-full reminder described below, `at_limit` becomes true, and the actor ends the run at the next boundary: if the core is idle, this counts as a normal end; otherwise `Failed(ContextExhausted)` is recorded, and the unhandled direct triggers get a one-line reply (changed 2026-10-29; previously the unhandled triggers were handed to a new core; see step 4 of [Processing flow](#processing-flow)). When the base context alone fills the available space, the limit is 0, which likewise counts as hitting the limit. The limit takes accumulated input into account, so a request cannot overflow. Example: for a model with a 400k window and a 128k `max_output`, about 252k is available, and with a 100k base context the core limit is 152k; calculating by C / 2 alone would give 200k, and the request would exceed the 272k of input that the provider allows.
+- **Definition of handled**: once the model has seen an input, that input is handled when the model reaches an output with no tool calls and the core becomes idle, whether or not it replied. When a model that has seen the nearly-full reminder says something, what it has seen also counts as handled; see below. The mark is set at the moment the core becomes idle, without waiting for the actor's next `next_step` call. `unhandled` returns the triggers among the first batch and the inputs passed in later that are not yet handled (`Wake`, and later job results and automations); messages are not included, since they are in the ledger. When the core fails or is interrupted, the actor uses it to find the direct triggers that get a one-line reply; see [What the group sees](#what-the-group-sees).
+- **Timing of input**: after all results of the current tool batch are back, and before the next model call. A batch of input causes a model call only if it contains a trigger (`Wake`, job result, automation). Messages themselves are not triggers; when to wake is decided by [Intent](#intent); when there are only messages, they are kept and go in with the next model call.
+- **Reminder after working heads-down for too long** (2026-10-31): when the model has called tools 12 times in a row without saying a word in the group (output from which the segmenter cuts no message does not count, nor does `[silence]`), a `[maxx 提醒]` ("maxx reminder") section is appended after the last result of that tool batch: first say in the group what it is doing and how much longer it will take; if much work remains, hand it to a background agent; answer anyone who is waiting first. Saying something resets the count, and so does a reminder, so another reminder comes after a further 12 calls. The reason: on 2026-10-31, a turn in conversation 9 was asked to turn the previous night's changes into a PR; it installed dependencies, ran tests and changed code directly within the turn, made 49 tool calls and took 41 minutes before saying its first word, and did not answer two people who @-mentioned it in the meantime.
+- **Nearly-full reminder** (2026-11-01, proposed by the owner): when the transcript plus accumulated input passes 90% of the core limit (`near_limit`), a `[maxx 提醒]` is appended at the end before the next model call, at most once per run: the context is nearly used up; wrap up now, and say clearly in the group how far it got, what it found and what remains; the next turn cannot see this turn's tool results, only what was said in the group; if the remaining work is to continue, hand it to a background agent, and call no other tools.
+  - After the reminder has been given, `at_limit` holds only once the limit is exceeded. If no reminder has been given and a batch of tool results jumps straight from below 90% to beyond the limit, this one call carrying the reminder is still made first: on a model with a small window, the gap between 90% and the limit is only a few thousand tokens, while a single result can be up to 15% of C. This call uses the headroom: the output reserve plus 5% of C.
+  - When a reminded model says something, the triggers it has seen count as handled, even if the same output also calls tools (to hand over to an agent). That way, if it hits the limit after reporting progress and handing the work over, it does not add an error message saying that the context is full.
+  - If the core passes 90% while idle, it ends at once, without waiting for the idle window; the next trigger starts a new core, projected afresh from the ledger.
+  - The reason: a turn that hit the limit replied only with a single line, "读不完" ("too much to get through"), everything its tools had found was lost, and the next turn could see only what was said in the group. Up to 2026-11-01, not one of 392 turns had hit the limit: on a 1M window the core limit is about 524k, and the turn that grew the most grew by 176k. The reminder mainly guards against models with small windows, and against very long tasks in future.
+- **Interruption**: tool calls that have not returned get a "已取消" ("cancelled") result filled in, so that the history stays valid. Responses requires every `function_call` to have a corresponding output.
+- **Idle detection**: when the model's output in this round is text only, with no tool calls, and the accumulated input contains no trigger, `next_step` returns `Idle`. Ending is decided by the actor: expiry of the idle window, hitting the limit, `/kill`, failure, restart. If the whole run never said anything, the outcome is `Silent`; whether something was said is determined by running the model's text through the segmenter: if a message is cut out, it counts.
 
-### I/O 任务和协议适配
+### I/O tasks and protocol adapters
 
-会话 actor 把核心要做的 I/O spawn 成任务，挂在这个核心的 `io` scope 里，结果作为事件回到 actor 的信箱（2026-10-28 定，见[会话 actor](#会话-actor)）。任务之间、任务和 actor 之间不共享可变状态。
+The conversation actor spawns the I/O that the core needs as tasks, attached to that core's `io` scope, and their results return to the actor's mailbox as events (decided 2026-10-28; see [The conversation actor](#the-conversation-actor)). Tasks share no mutable state with one another or with the actor.
 
-- **模型调用**：一次 `CallModel` 一个任务。它持有模型客户端和分段器：把请求交给协议适配层降级成线上格式，发出去、读流；流式文本切出一段就发 `Said`，流结束发 `ModelDone`。可重试的错误在任务里重试，前提是还没发过 `Said`；发过就不重试，直接报错，已入账的文本由 actor 记成 `partial_output`（2026-10-28 定）。否则重试会把发过的段落从头再发一遍，晚间丢包时最容易碰上。流里一出现 `run_code` 或 `shell` 调用，就通知 VM 服务启动群 VM。
-- **`run_code`、`shell`**：一个调用一个任务，在群 VM 里跑，结束发 `ToolDone`。同一批的几个并发跑，先跑完的先喂给核心。
-- **intent 分类**：挂在 `side` 里，结束发 `Verdict`，见 [intent](#intent)。
-- **回执**：每个任务拿着一个回执（`Report`），正常结束时用它发结束事件；被 abort 或 panic 时，它在 `Drop` 里补发一条"没有结果"。所以每个任务恰好一个结束事件，和 `Said` 走同一个信箱，排在它们后面。
-- **过期事件**：每个任务有一个会话内递增、不复用的编号，事件都带着它。不是当前核心在途的任务发来的（核心结束之后才到的）直接丢掉。
+- **Model calls**: one task per `CallModel`. It holds the model client and the segmenter: it hands the request to the protocol adapter layer to be downgraded into the wire format, sends it and reads the stream; each time a segment is cut from the streamed text it sends `Said`, and when the stream ends it sends `ModelDone`. Retryable errors are retried within the task, provided that no `Said` has been sent yet; once one has been sent, there is no retry and the error is reported straight away, and the text already entered in the ledger is recorded by the actor as `partial_output` (decided 2026-10-28). Otherwise a retry would send the paragraphs already sent all over again from the beginning, which is most likely to happen during evening packet loss. As soon as a `run_code` or `shell` call appears in the stream, the VM service is notified to start the group VM.
+- **`run_code` and `shell`**: one task per call, run in the group VM, sending `ToolDone` when finished. Several calls in the same batch run concurrently, and whichever finishes first is fed to the core first.
+- **Intent classification**: attached to `side`, sending `Verdict` when finished; see [Intent](#intent).
+- **Receipts**: each task holds a receipt (`Report`); on normal completion it uses it to send its completion event, and if the task is aborted or panics, the receipt sends a "no result" event from its `Drop`. Every task therefore has exactly one completion event, which goes through the same mailbox as its `Said` events and is queued after them.
+- **Stale events**: each task has a number that increases within the conversation and is never reused, and all its events carry it. Events from a task that is not in flight for the current core (events arriving after the core has ended) are simply dropped.
 
-协议适配层是无状态的，两次调用之间什么也不保留。降级只删条目或调整形状，不添加内容：
+The protocol adapter layer is stateless and retains nothing between calls. Downgrading only removes entries or adjusts their shape; it never adds content:
 
-- `source` 和当前模型对不上的 `opaque` 直接丢掉。turn 内的模型由 spec 固定，正常情况下总能对上，这条只是兜底。
-- **Responses**：本 turn 内的推理条目全部回传。
-- **Chat**：同一轮的几个条目拼回一条 assistant 消息；`reasoning_content` 在本 turn 的工具调用循环里回传。
-- 工具结果里的图片和视频怎么降级，见[多模态结果](#多模态结果)。
+- An `opaque` whose `source` does not match the current model is simply dropped. The model within a turn is fixed by the spec, so the two always match under normal circumstances; this rule is only a safety net.
+- **Responses**: all reasoning entries from the current turn are sent back.
+- **Chat**: several entries from the same round are joined back into one assistant message; `reasoning_content` is sent back within the current turn's tool-call loop.
+- For how images and videos in tool results are downgraded, see [Multimodal results](#multimodal-results).
 
-### 会话 actor
+### The conversation actor
 
-会话 actor 是一个会话唯一的控制线程：既是[时间线](#时间线)唯一的写者，也是核心的驱动者。2026-10-26 定为普通 async 代码、状态不持久化；10-27 改成单一核心实例，一个会话同一时刻至多一个核心，没有请求队列；10-28 改成由 actor 直接驱动核心。
+The conversation actor is a conversation's only thread of control: it is both the only writer of the timeline (see [The timeline](#the-timeline)) and the driver of the core. On 2026-10-26 it was decided to be ordinary async code with no persisted state; on 2026-10-27 it changed to a single core instance, with at most one core per conversation at any moment and no request queue; on 2026-10-28 it changed so that the actor drives the core directly.
 
-核心是 actor 的一个字段。模型调用、工具调用、intent 分类都 spawn 成 I/O 任务（见 [I/O 任务和协议适配](#io-任务和协议适配)），结果作为事件回到同一个信箱。actor 自己只 await 数据库，从不等模型、工具和网络，所以 `/kill` 总能立刻处理。一个会话只有这一个控制线程，也就没有两份状态要互相对齐。
+The core is a field of the actor. Model calls, tool calls and intent classification are all spawned as I/O tasks (see [I/O tasks and protocol adapters](#io-tasks-and-protocol-adapters)), and their results return to the same mailbox as events. The actor itself awaits only the database and never waits on models, tools or the network, so a `/kill` can always be handled immediately. A conversation has only this one thread of control, so there are never two copies of state to keep in agreement.
 
 ```rust
 struct Conversation {
-    head: MessageId,           // 见“时间线”
+    head: MessageId,           // see "The timeline"
     seen: MessageId,
     core: Option<Active>,
-    intent: Intent,            // 纯状态机，见“intent”：hold、攒着的消息、在途的分类、计数
-    side: Scope,               // intent 分类
-    stopping: Option<Instant>, // 停止宽限期的到期时间
-    // 共享的句柄：数据库、sender、会话表、模型；自己信箱的发送端，交给 I/O 任务
+    intent: Intent,            // a pure state machine, see "Intent": hold, accumulated messages, the classification in flight, counters
+    side: Scope,               // intent classification
+    stopping: Option<Instant>, // when the stop grace period expires
+    // shared handles: database, sender, conversation table, models; the sending end of its own mailbox, handed to I/O tasks
 }
 
 struct Active {
     turn: TurnId,
-    run: Run,                  // 核心，接口见“核心”
-    from: MessageId,           // 快照位置
-    io: Scope,                 // 在途的模型调用和工具调用
-    live: HashSet<TaskId>,     // 在途任务的编号；不在这里的事件都过期了
-    said: String,              // 这次模型调用已经入账的文本，被打断时就是 partial_output
-    idle_since: Instant,       // 上一次模型输出结束的时刻，空闲窗口从这里算
-    started: Instant,          // 给 /status 看
+    run: Run,                  // the core; for its interface see "The core"
+    from: MessageId,           // snapshot position
+    io: Scope,                 // model calls and tool calls in flight
+    live: HashSet<TaskId>,     // numbers of the tasks in flight; events from tasks not listed here are stale
+    said: String,              // text from this model call already entered in the ledger; on interruption, this is the partial_output
+    idle_since: Instant,       // when the last model output ended; the idle window is counted from here
+    started: Instant,          // for /status
 }
 
 enum Event {
-    Inbound(Inbound),                                  // 平台连接，经会话表
-    Bound(Inbound),                                    // 刚绑上这个群的 `/bind <码>`，见“QQ 官方机器人”
-    Said { task: TaskId, segment: Segment },           // 模型调用任务里的分段器切出一段
+    Inbound(Inbound),                                  // from a platform connection, via the conversation table
+    Bound(Inbound),                                    // the `/bind <code>` that has just bound this group, see "The official QQ bot"
+    Said { task: TaskId, segment: Segment },           // a segment cut out by the segmenter in the model-call task
     ModelDone { task: TaskId, out: Result<ModelOutput, String> },
     ToolDone { task: TaskId, call: CallId, out: ToolOutput },
-    Verdict(Option<Verdict>),                          // 在途那一批的判定，失败是 None
-    Stop,                                              // 正常重启
-    // 以后：Post（别的会话、MCP 工具、调度器要往这里发，带来源 turn），JobDone、Fire
+    Verdict(Option<Verdict>),                          // the verdict for the batch in flight; None on failure
+    Stop,                                              // a normal restart
+    // Later: Post (another conversation, an MCP tool or the scheduler sending here, carrying the originating turn), JobDone, Fire
 }
 
 impl Conversation {
     async fn run(mut self, mut mailbox: UnboundedReceiver<Event>) -> Result<()> {
         loop {
-            let deadline = self.deadline(); // 空闲窗口、去抖、停止宽限期里最早的
+            let deadline = self.deadline(); // the earliest of the idle window, the debounce and the stop grace period
             tokio::select! {
                 event = mailbox.recv() => match event {
-                    Some(event) => self.handle(event).await?, // 只 await 数据库
+                    Some(event) => self.handle(event).await?, // awaits only the database
                     None => self.stop(),
                 },
                 () = sleep_until(deadline.unwrap_or_else(Instant::now)), if deadline.is_some() => {
@@ -757,23 +758,23 @@ impl Conversation {
         }
     }
 
-    /// 每个事件之后调一次：核心没有在途的 I/O 时，决定下一步
+    /// Called once after every event: when the core has no I/O in flight, decides the next step
     async fn advance(&mut self) -> Result<()> {
         let Some(a) = self.core.as_mut() else { return Ok(()) };
         if a.run.busy() {
-            return Ok(()); // 等在途任务的事件
+            return Ok(()); // wait for events from the tasks in flight
         }
         if self.stopping.is_some() && a.run.idle() {
-            return self.end(End::Idle).await; // 正在停：手上没事的核心直接结束，不等空闲窗口
+            return self.end(End::Idle).await; // stopping: a core with nothing on hand ends at once, without waiting for the idle window
         }
         if a.run.at_limit() || (a.run.idle() && a.run.near_limit()) {
-            // 撞上限就认输，快满又没事做就结束；下一个触发从 ledger 重新投影，起新核心
+            // at the limit, give up; nearly full with nothing to do, end; the next trigger projects afresh from the ledger and starts a new core
             let how = if a.run.idle() { End::Idle } else { End::Failed(FailReason::ContextExhausted) };
             return self.end(how).await;
         }
         match a.run.next_step() {
             Step::CallModel(req) => {
-                self.seen = self.head; // 请求带上了攒着的全部输入，正好是 ..=head
+                self.seen = self.head; // the request includes all accumulated input, which is exactly ..=head
                 a.spawn_model(req);
             }
             Step::RunTools(calls) => {
@@ -781,870 +782,870 @@ impl Conversation {
                     a.spawn_tool(call);
                 }
             }
-            Step::Idle => {} // deadline() 从 idle_since 算空闲窗口
+            Step::Idle => {} // deadline() computes the idle window from idle_since
         }
         Ok(())
     }
 }
 ```
 
-`handle` 依次做两件事，第三件是上面的 `advance`：
+`handle` does two things in order, and the third is the `advance` above:
 
-1. **入账**：平台来的消息和事件、`Post`、Max 说出口的一段，先在一个事务里入账，`head` 前进，再发入账通知给[派生数据 worker](#三种角色)。`Said` 入账后交给平台 sender，不等回执，见[出站](#出站)。
-2. **路由**：
-   - 命令：一律由 actor 自己处理，从不进核心（2026-10-28 定）。所以 `/model` 不会变成模型的输入，`/kill` 也不用排在工具批次后面。命令消息本身照样入账，下一个核心的尾巴里看得到。intent 也看得到它。
-   - 有核心：喂给它；本 turn 自己说的话和做的动作除外，它们已经在 transcript 里。经工具做的动作靠 `Post` 的 `origin` 认出来，见[出站](#出站)。job 结果、自动化也一样。
-   - [intent](#intent)：每条入账都交给 `intent.observe`，判定交给 `intent.verdict`，到期时间到了调 `intent.tick`。返回的 `Wake` 先过 `seen`，涉及的消息都不超过 `seen` 就丢掉；否则有核心就喂一个 `Input::Wake`，没有就起一个（[运行流程](#运行流程)第 3 步）。`Classify` 在 `side` 里 spawn 小模型。没有核心也没有 `Wake` 时什么都不做，消息在时间线上，下一个核心的基础上下文里有。
-   - `ModelDone`、`ToolDone` 喂给核心；任务编号不在 `live` 里的丢掉。
+1. **Entering in the ledger**: messages and events from platforms, `Post`s, and segments that Max has said are first entered in a single transaction, `head` advances, and then an entry notification is sent to the derived-data workers (see [The three roles](#the-three-roles)). After a `Said` is entered, it is handed to the platform sender without waiting for a receipt; see [Outbound](#outbound).
+2. **Routing**:
+   - Commands: always handled by the actor itself and never passed into the core (decided 2026-10-28). So `/model` does not become input to the model, and `/kill` need not queue behind a tool batch. The command message itself is still entered in the ledger and is visible in the next core's tail. Intent sees it too.
+   - If there is a core: the entry is fed to it, except for what the current turn itself has said and done, which is already in the transcript. Actions taken through tools are recognised by the `origin` of their `Post`; see [Outbound](#outbound). The same applies to job results and automations.
+   - [Intent](#intent): every entry is passed to `intent.observe`, verdicts are passed to `intent.verdict`, and `intent.tick` is called when a deadline is reached. A returned `Wake` is first checked against `seen`: if none of the messages it concerns lies beyond `seen`, it is dropped; otherwise, if there is a core, it is fed an `Input::Wake`, and if there is not, a core is started (step 3 of [Processing flow](#processing-flow)). `Classify` spawns the small model in `side`. When there is neither a core nor a `Wake`, nothing is done: the messages are on the timeline and will be in the next core's base context.
+   - `ModelDone` and `ToolDone` are fed to the core; those whose task number is not in `live` are dropped.
 
-`Stop` 只记下停止宽限期的到期时间（20 秒），核心照常往下跑。到期时间到了：停止宽限期到期就 `end(End::Stopped)`，空闲窗口到期就 `end(End::Idle)`，见[取消](#取消)；去抖到期由 `intent.tick` 处理。
+`Stop` only records when the stop grace period expires (20 seconds), and the core carries on as usual. When a deadline is reached: if it is the stop grace period that has expired, `end(End::Stopped)` follows, and if it is the idle window, `end(End::Idle)`; see [Cancellation](#cancellation). Expiry of a debounce is handled by `intent.tick`.
 
-另外两条：
+Two further points:
 
-- 信箱是无界的。往信箱里写的有共享的平台连接和别的 actor：在有界信箱上等，一个卡住的会话会拖住所有会话，两个会话互相 `Post` 还会死锁。actor 自己也从不在有界通道上 await。
-- 核心结束不需要交接通道。结束之后入账的东西由 actor 直接处理，有触发就起下一个核心，和"没有核心时来了触发"是同一个函数。
+- The mailbox is unbounded. The writers to a mailbox include the shared platform connections and other actors: if they had to wait on a bounded mailbox, one stuck conversation would hold up every conversation, and two conversations sending `Post`s to each other could deadlock. The actor itself never awaits on a bounded channel either.
+- Ending a core needs no handover channel. Whatever is entered in the ledger after the end is handled directly by the actor; if there is a trigger, the actor starts the next core, using the same function as for "a trigger arrives when there is no core".
 
-这样多人同时 @ 由模型在同一批输入里一起回应，不会答两遍；也没有排队顺序、每人上限、过期、"反馈还是新请求"这些问题。Claude Code 的对应关系：群里的新消息是 steer，job 结果是后台任务完成通知，自动化是定时触发。重启会丢掉这些：
+In this way, when several people @ Max at the same time, the model responds to all of them together within the same batch of input and does not answer twice; nor do problems arise of queue order, per-person limits, expiry, or "feedback or a new request". The correspondence with Claude Code: new messages in the group are steers, job results are background-task completion notifications, and automations are scheduled triggers. A restart loses the following:
 
-- 正在跑的核心：正常重启时给一段宽限期，到期中断；崩溃时直接丢。见[重启](#重启)。
-- 后台 job。pi 的会话文件还留在 VM 里，但不会自动接上。
-- intent 的全部状态：每小时的计数清零，等着分类的闲聊不再分类；还在去抖的直接触发丢掉，没人回（2026-10-28 接受）。
+- The running core: on a normal restart it is given a grace period and is interrupted when that expires; on a crash it is simply lost. See [Restarts](#restarts).
+- Background jobs. pi's session files remain in the VM, but they are not picked up again automatically.
+- All of intent's state: the hourly counts are reset to zero, chatter awaiting classification is no longer classified, and direct triggers still being debounced are dropped and go unanswered (accepted 2026-10-28).
 
-### 运行流程
+### Processing flow
 
-每一步都是会话 actor 处理一个事件。
+Each step is the conversation actor handling one event.
 
-1. **消息进来**：平台连接把消息或事件归一化成 `Inbound`，经会话表交给会话 actor；actor 在一个事务里把它转换成 `Message` 入账。平台连接不碰数据库。
-   - 群白名单（2026-10-28 定）在会话表这一步拦：没用 `/bind` 绑定的 QQ 群（见 [QQ 官方机器人](#qq-官方机器人)）直接丢掉，不建会话、不起 actor、不入账，只记 debug 日志。命令和 owner 的消息也一样丢，只有 `/bind <码>` 例外。别的会话或工具往没绑定的群发 `Post`，也在这里拒掉，带回信通道的回一个错误。私聊不过这一道，见第 2 步。
-2. **判定**（2026-10-28 改）：每条入账都交给 [intent](#intent)，由它决定什么时候叫醒核心：@、回复 Max 立刻叫醒，看起来没说完的先等几秒；其它消息由小模型判。job 结果和自动化不经过 intent，本身就是触发。触发源见[三种角色](#三种角色)。命令由 actor 自己处理，见[会话 actor](#会话-actor)。
-   - 有核心在跑：消息照样立刻喂给它，但只有触发才让它调模型。
-   - 没有核心：来了触发就进第 3 步；否则什么都不做。
-   - 私聊（2026-10-28 定）：私聊里的消息都算直接触发，等同群里的 @。QQ 上能私聊 Max 的只有管理端里加的体验用户，这份名单就是私聊白名单，见 [QQ 官方机器人](#qq-官方机器人)。以后接的平台要是谁都能私聊，再加一份白名单，为空就是谁都不服务，和 Haskell 版"为空就全服务"相反。
-3. **开始 turn**：快照位置 `from = head`。从 ledger（只读 `id <= from`）加上记忆，投影出基础上下文，裁到预算内，见[上下文投影](#上下文投影)；第一批输入在易变块里：叫醒它的触发，`Wake` 带着它涉及的消息（去抖时是同一个人的几条）。其它消息都在尾巴里。写 `TurnStarted`（带 trigger 和 `from`），调 `Run::new(spec, base, first)`。第一批就超过核心的上限（见[核心](#核心)的"轮数和 token 上限"），核心一起来就撞上限，记 `Failed(ContextExhausted)`，引用触发回一句（2026-10-29 改，原来是不起核心，单独记 `InputTooLarge`）。
-4. **推进**：actor 每处理完一个事件，核心没有在途的 I/O，就问 `next_step`。中途不写 turn 记录：
-   - `CallModel`：`seen = head`，spawn 模型调用任务。每个 `Said` 入账、交给 sender；`ModelDone` 时调 `model_output`。攒着的输入渲染成一个 `[新消息]` 块追加在请求末尾，见[后续输入](#后续输入)。
-   - `RunTools`：这一批工具调用各 spawn 一个任务，在群 VM 里并发跑，每个 `ToolDone` 调一次 `tool_result`。
-   - `Idle`：什么都不做，之后入账的照样喂进去；只有闲聊的话 `next_step` 还是 `Idle`，窗口不重置。上一次模型输出结束后空闲满一个窗口（provider 的 `idle_window_secs`，默认 300 秒，2026-10-27 定）就结束。窗口内来了触发，模型还带着刚才的工具结果，追问不用重查。到期和触发同时到时，actor 总有一个先处理：先到期就结束，那条触发接着起新核心；先来触发就接着跑。两种结果都对。
-   - **撞上限**：核心 `at_limit`，就在这个边界结束：空闲就算正常结束，否则记 `Failed(ContextExhausted)`，没处理完的直接触发回一句话（2026-10-29 改）。过了九成先提醒模型收尾，空闲时过了九成也结束，见[核心](#核心)的快满的提醒（2026-11-01）。下一个触发照常从 ledger 重新投影、起新核心，这就是我们的 compaction：不压 transcript，重新投影。
+1. **A message comes in**: the platform connection normalises the message or event into an `Inbound` and hands it, via the conversation table, to the conversation actor; the actor converts it into a `Message` and enters it in the ledger in a single transaction. The platform connection does not touch the database.
+   - The group allowlist (decided 2026-10-28) is enforced at the conversation-table step: messages from a QQ group that has not been bound with `/bind` (see [The official QQ bot](#the-official-qq-bot)) are simply dropped: no conversation is created, no actor is started and nothing is entered; only a debug log line is written. Commands and the owner's messages are dropped in the same way, the only exception being `/bind <code>`. A `Post` from another conversation or a tool to an unbound group is also refused here, and if it carries a reply channel, an error is sent back. Private chats do not pass through this check; see step 2.
+2. **Classification** (changed 2026-10-28): every entry is passed to [Intent](#intent), which decides when to wake the core: an @ or a reply to Max wakes it immediately, though a message that looks unfinished waits a few seconds first; other messages are judged by the small model. Job results and automations do not go through intent; they are triggers in themselves. For trigger sources, see [The three roles](#the-three-roles). Commands are handled by the actor itself; see [The conversation actor](#the-conversation-actor).
+   - If a core is running: messages are still fed to it immediately, but only triggers make it call the model.
+   - If there is no core: a trigger proceeds to step 3; otherwise nothing is done.
+   - Private chats (decided 2026-10-28): every message in a private chat counts as a direct trigger, equivalent to an @ in a group. On QQ, the only people who can chat privately with Max are the trial users added in the management console, and that list is the private-chat allowlist; see [The official QQ bot](#the-official-qq-bot). If a platform connected later lets anyone chat privately, a separate allowlist will be added, and an empty allowlist will mean serving no one, the opposite of the Haskell version's "empty means serve everyone".
+3. **Starting a turn**: the snapshot position is set, `from = head`. The base context is projected from the ledger (reading only `id <= from`) plus memory and trimmed to the budget; see [Context projection](#context-projection). The first batch of input is in the volatile block: the trigger that woke the core, with the `Wake` carrying the messages it concerns (several messages from the same person, when debounced). All other messages are in the tail. `TurnStarted` is written (with the trigger and `from`), and `Run::new(spec, base, first)` is called. If the first batch alone exceeds the core's limit (see "Round and token limits" in [The core](#the-core)), the core hits the limit as soon as it starts: `Failed(ContextExhausted)` is recorded and a one-line reply quoting the trigger is sent (changed 2026-10-29; previously no core was started, and a separate `InputTooLarge` was recorded).
+4. **Advancing**: each time the actor has finished handling an event and the core has no I/O in flight, the actor asks for `next_step`. No turn records are written midway:
+   - `CallModel`: `seen = head`, and a model-call task is spawned. Each `Said` is entered in the ledger and handed to the sender; on `ModelDone`, `model_output` is called. Accumulated input is rendered as one `[新消息]` ("new messages") block appended to the end of the request; see [Follow-up input](#follow-up-input).
+   - `RunTools`: one task is spawned for each tool call in the batch, and they run concurrently in the group VM; `tool_result` is called once for each `ToolDone`.
+   - `Idle`: nothing is done, and whatever is entered afterwards is still fed in; if it is only chatter, `next_step` remains `Idle` and the window is not reset. The run ends after a full window of idleness since the last model output ended (the provider's `idle_window_secs`, 300 seconds by default, decided 2026-10-27). If a trigger arrives within the window, the model still holds the tool results from just before, so follow-up questions need no repeated lookups. When expiry and a trigger arrive at the same time, the actor always handles one of them first: if expiry comes first, the run ends and the trigger then starts a new core; if the trigger comes first, the run continues. Both outcomes are correct.
+   - **Hitting the limit**: when the core reports `at_limit`, the run ends at this boundary: if the core is idle, this counts as a normal end; otherwise `Failed(ContextExhausted)` is recorded, and the unhandled direct triggers get a one-line reply (changed 2026-10-29). Past 90%, the model is first reminded to wrap up, and an idle core past 90% also ends; see the nearly-full reminder in [The core](#the-core) (2026-11-01). The next trigger projects afresh from the ledger and starts a new core as usual; this is our compaction: rather than compressing the transcript, we project again.
 
-     原来（10-27 定）是在这里换核心：没处理完的触发交给新核心，带一行交接说明，列出旧核心做过的有副作用的调用，免得再做一遍；每个触发最多交接一次；还有 30 分钟的墙钟。撞上限几乎不会发生，认输的代价只是让人再问一次，这些机制不值得（2026-10-29 删）。
-   - **失败**：`ModelDone` 带着错误。这次调用已经入账的文本记成 `partial_output`，调 `fail`，写快照和结局。
-5. **取消（`/kill`）**：见[取消](#取消)。攒着的输入作废。
-6. **正常重启和启动**：见[重启](#重启)。
+     Originally (decided 2026-10-27) the core was replaced at this point: the unhandled triggers were handed to a new core together with a one-line handover note listing the calls with side effects that the old core had made, so that they would not be made again; each trigger could be handed over at most once; and there was a 30-minute wall clock. Hitting the limit almost never happens, and the cost of giving up is only that someone has to ask again, so these mechanisms were not worth having (removed 2026-10-29).
+   - **Failure**: `ModelDone` carries an error. The text from this call already entered in the ledger is recorded as `partial_output`, `fail` is called, and the snapshot and outcome are written.
+5. **Cancellation (`/kill`)**: see [Cancellation](#cancellation). Accumulated input is discarded.
+6. **Normal restart and startup**: see [Restarts](#restarts).
 
-### 群里看到的
+### What the group sees
 
-2026-10-28 改：处理中不显示任何状态。Haskell 版给触发消息挂托腮、失败时换成裂开，QQ 官方接口没有 reaction。
+Changed 2026-10-28: no status is shown during processing. The Haskell version put a "托腮" (chin in hand) face on the triggering message and replaced it with "裂开" (cracking apart) on failure; the official QQ API has no reactions.
 
-- turn 失败或被重启中断时，还没处理完（见[核心](#核心)的"处理完的定义"）的直接触发里最新的一条，引用它回一行报错。没有挂表情可换，不回的话 @ 了 Max 的人什么也看不到。判定叫醒的不回：Max 本来就可以不接话。
-- 报错像日志（2026-11-06 owner 改）：放在 `text` 代码块里，`error: 出了什么事: 原因`，原因照原样给，换行和连续空白压成一个空格，超过 300 字截断加 `…`，和命令的回答一样一眼看得出是系统发的。原来是"出错了，这条没回上。"、"我要重启一下，这条没回上，等会儿再问一次吧。"这样的人话，看不出到底错在哪。几种：
-  - provider 出错：`error: the model call failed: the provider answered 429: …`，原因就是 max-llm 的错误。
-  - `ContextExhausted`：`error: the context is full: 530000 tokens, limit 524288`，换个说法、少贴点东西重发就能解决。
-  - 重启：`error: interrupted: Max is shutting down, and the turn outlasted the 20s grace`。
-  - 会话 actor 出错：`error: the conversation failed: 错误链`，见[重启](#重启)。
-- `/kill` 不回，是有人主动停的。
-- 这句话照常入账，不进核心。它不是 Max 写的：`raw` 是 `{"said_by": "host"}`，渲染时头部多一个 ` 系统发的`（`Mark::Host`）：`[12:00 maxx #45 系统发的]: error: the model call failed: …`。命令的回答、停掉的 job 那句也一样（2026-11-04 加）。之前这些行和 Max 自己的话一样，下一个核心会把它们当成自己说过的，跟着用同样的口气说话。提示词里讲了这个标记。`maxx events` 的 `by` 还是 `max`：是 Max 的账号发的，程序别回它就行。
+- When a turn fails or is interrupted by a restart, a one-line error is sent, quoting the newest of the direct triggers that have not yet been handled (see "Definition of handled" in [The core](#the-core)). There is no reaction to swap, and without a reply the person who @-mentioned Max would see nothing. Triggers woken by classification get no reply: Max is free not to join in anyway.
+- The error looks like a log line (changed by the owner 2026-11-06): it is placed in a `text` code block as `error: <what happened>: <cause>`, with the cause given as it is, newlines and runs of whitespace collapsed into a single space, and anything beyond 300 characters truncated with `…`, so that, as with command responses, it is obvious at a glance that the system sent it. Previously it was plain human language such as "出错了，这条没回上。" ("something went wrong, this one didn't get a reply") or "我要重启一下，这条没回上，等会儿再问一次吧。" ("I need to restart, this one didn't get a reply, please ask again in a while"), which gave no indication of what had actually gone wrong. The kinds of error:
+  - Provider error: `error: the model call failed: the provider answered 429: …`; the cause is the error from max-llm.
+  - `ContextExhausted`: `error: the context is full: 530000 tokens, limit 524288`; it can be resolved by rephrasing, pasting less and sending again.
+  - Restart: `error: interrupted: Max is shutting down, and the turn outlasted the 20s grace`.
+  - Conversation actor error: `error: the conversation failed: <error chain>`; see [Restarts](#restarts).
+- `/kill` gets no reply: someone stopped the turn deliberately.
+- This line is entered in the ledger as usual and does not go into the core. It was not written by Max: its `raw` is `{"said_by": "host"}`, and when rendered, its header carries an extra `  系统发的 ` ("sent by the system") (`Mark::Host`): `[12:00 maxx #45 系统发的]: error: the model call failed: …`. Command responses and the line reporting a stopped job are treated the same way (added 2026-11-04). Previously these lines looked just like Max's own words, and the next core would take them as things it had said itself and carry on in the same tone. The prompt explains this mark. In `maxx events`, `by` is still `max`: the message was sent from Max's account, and programs simply should not reply to it.
 
-### 取消
+### Cancellation
 
-`/kill` 就是 actor 处理的一个事件，不需要单独的信号，也不用在 `select!` 里等：`seen = head`，有核心就 `end(End::Kill)`。核心的其它结束方式走同一个函数，区别只在中间一步：
+`/kill` is simply an event that the actor handles; it needs no separate signal and no waiting inside `select!`: `seen = head`, and if there is a core, `end(End::Kill)`. The core's other ways of ending go through the same function and differ only in the middle step:
 
 ```rust
 enum End {
     Kill(String), // /kill
     Failed(FailReason),
-    Idle,         // 空闲：窗口到期，或者 Max 在停
-    Stopped,      // Max 在停，宽限期到了还没空闲
+    Idle,         // idle: the window expired, or Max is stopping
+    Stopped,      // Max is stopping, and the core was still not idle when the grace period ran out
 }
 
 async fn end(&mut self, how: End) -> Result<()> {
     let Some(mut a) = self.core.take() else { return Ok(()) };
-    drop(a.io); // abort 在途的模型流和工具调用：同步发起，不等
+    drop(a.io); // aborts the model stream and tool calls in flight: initiated synchronously, without waiting
     if !a.said.is_empty() {
-        a.run.partial_output(a.said.join("\n\n"), tokens); // 被打断的那次模型调用已经入账的文本
+        a.run.partial_output(a.said.join("\n\n"), tokens); // text from the interrupted model call already entered in the ledger
     }
     match &how {
-        End::Kill(reason) => a.run.interrupt(reason.clone()), // 给没回结果的工具调用补“已取消”
-        End::Stopped => a.run.interrupt("Max 在重启".into()),
+        End::Kill(reason) => a.run.interrupt(reason.clone()), // fills in "已取消" ("cancelled") for tool calls that have not returned
+        End::Stopped => a.run.interrupt("Max 在重启".into()), // "Max is restarting"
         End::Failed(reason) => a.run.fail(reason.clone()),
         End::Idle => Ok(()),
     };
-    turns::finish(&mut conn, a.turn, &a.run.record(), &a.run.outcome(), now).await?; // 快照加结局，一个事务
-    self.report_unanswered(&a.run, &how).await // 没处理完的直接触发回一句话，见“群里看到的”
+    turns::finish(&mut conn, a.turn, &a.run.record(), &a.run.outcome(), now).await?; // snapshot plus outcome, in one transaction
+    self.report_unanswered(&a.run, &how).await // unhandled direct triggers get a one-line reply, see "What the group sees"
 }
 ```
 
-- `io` 里的任务已经发出、还没处理的事件，任务编号不在 `live` 里了，到了就丢掉。"说出口"以入账为准：已经进了信箱、还没入账的 `Said` 被丢掉，就算没说，sender 也从没拿到过它。
-- 空闲窗口到期和撞上限都发生在边界上，没有在途的 I/O，`drop(a.io)` 什么都不做。
-- 写 turn 记录这一步要 await 数据库，期间来的事件在信箱里排着，写完再处理。
+- Events that tasks in `io` have already sent but that have not yet been processed are dropped when they arrive, since their task numbers are no longer in `live`. Whether something was "said" is determined by its entry in the ledger: a `Said` that is already in the mailbox but not yet entered is dropped and counts as not said; the sender never received it either.
+- Expiry of the idle window and hitting the limit both happen at boundaries, with no I/O in flight, so there `drop(a.io)` does nothing.
+- Writing the turn record awaits the database; events that arrive in the meantime queue in the mailbox and are processed once the write is complete.
 
-只靠 drop 不够、需要多做一步的地方：
+Places where drop alone is not enough and an extra step is needed:
 
-- **每个拥有 scope 的任务的最外层**：一处 `run_until_cancelled` 或 `select!`。会话 actor 的就是它的主循环。
-- **有外部副作用、drop 不会自动停下的**：比如 VM 里的命令、pi 进程。生命周期绑在连接上，`Drop` 里只同步发起，见[资源怎么结束](#资源怎么结束)。
-- **不能只做一半的**：发消息先入账再交给平台 sender；数据库写入用事务，sqlx 的事务没提交就被 drop 会回滚。其余见 [cancellation safety](#cancellation-safety)。
-- **没有 `await` 点的长时间 CPU 计算**：drop 不掉。放进 scope 的 `spawn_blocking`，配一个取消标志。
+- **The outermost level of every task that owns a scope**: a single `run_until_cancelled` or `select!`. For the conversation actor, this is its main loop.
+- **Things with external side effects that drop does not stop automatically**: for example, commands in the VM and pi processes. Their lifetime is bound to a connection, and `Drop` only initiates the shutdown synchronously; see [How resources end](#how-resources-end).
+- **Things that must not be done halfway**: sending a message enters it in the ledger first and then hands it to the platform sender; database writes use transactions, and an sqlx transaction that is dropped before it commits rolls back. For the rest, see [Cancellation safety](#cancellation-safety).
+- **Long CPU computations without an `await` point**: these cannot be dropped. They go into the scope's `spawn_blocking`, paired with a cancellation flag.
 
-### 重启
+### Restarts
 
-2026-10-29 定：正常重启时，正在跑的 turn 给一段宽限期，到期就中断，不再挂起、重启后接着跑。Haskell 版也是重启中断 turn。
+Decided 2026-10-29: on a normal restart, a running turn is given a grace period and is interrupted when it expires; it is no longer suspended and continued after the restart. The Haskell version also interrupts turns on restart.
 
-原来（10-26 定，10-28 进 v1）是在下一个边界挂起、存快照，重启后在窗口内 `resume`，给没跑完的工具补"进程重启，结果未知"接着跑。为此要有 attempt、一个 turn 多份快照、`TurnResumed`、`Expired`、恢复时重新校验权限。部署时正好有 turn 在跑的情况不多，被中断的人再问一次就行，不值得。
+Originally (decided 2026-10-26, brought into v1 on 2026-10-28), the turn was suspended at the next boundary and a snapshot was stored; after the restart it was resumed (`resume`) within a window, with unfinished tools given the result "进程重启，结果未知" ("process restarted, result unknown") before continuing. This required attempts, several snapshots per turn, `TurnResumed`, `Expired`, and re-checking permissions on resumption. It is rare for a turn to be running at the moment of a deploy, and the person who was interrupted can simply ask again, so this was not worth it.
 
-- **正常重启（部署、SIGTERM）**：会话 actor 收到停止事件，记下宽限期的到期时间（20 秒）。核心空闲就直接结束，不等空闲窗口。不空闲就让它接着跑，模型调用、工具批次和之后的模型调用都照常；宽限期内变空闲就正常结束。到期还没空闲就 `End::Stopped`（见[取消](#取消)）：
-  - 关掉 `io`，已经入账的文本记成 `PartialOutput`；
-  - 同一批里已经跑完的工具照常记结果，没跑完的补"已取消"；
-  - 结局是 `Interrupted`，快照和结局一起写；
-  - 还没处理完的直接触发，引用它回 `error: interrupted: …`（见[群里看到的](#群里看到的)），这句照常交给 sender，关机时 sender 排空了才退出。
-- **崩溃**：什么都不写。
-- **会话 actor 出错**（2026-10-30 加）：actor 处理事件时出错（多半是库的错），就放弃这个会话。核心和 job 都停掉；这个会话没有结局的 turn 记 `Lost`，跟崩溃一样，免得它们看着还在跑；没处理完的直接触发回一行 `error: the conversation failed: 错误链`（像 `{:#}` 那样用 `: ` 接起来；sqlx 的库错误末尾已经带着它的 source，这种重复的不再接），停掉的 job 也说一句，同样的报错下面加一行 `stopped: job#3, job#4`。库连不上就只记日志，这些 turn 留给下次启动去记。之后会话表收到这个会话的下一条消息时重新起 actor；actor 退出前那一刻进来的消息跟着丢掉。不按事件隔离错误、让 actor 接着跑，因为出错以后，内存里的 `head`、`seen` 不一定和库一致。
+- **Normal restart (deploy, SIGTERM)**: the conversation actor receives a stop event and records when the grace period expires (20 seconds). If the core is idle, it ends immediately, without waiting for the idle window. If it is not, it keeps running: model calls, tool batches and subsequent model calls all proceed as usual, and if it becomes idle within the grace period, it ends normally. If it is still not idle when the period expires, it ends with `End::Stopped` (see [Cancellation](#cancellation)):
+  - `io` is closed, and the text already entered in the ledger is recorded as `PartialOutput`;
+  - tools in the same batch that have finished record their results as usual, and unfinished ones are given "已取消" ("cancelled");
+  - the outcome is `Interrupted`, and the snapshot and outcome are written together;
+  - a direct trigger that has not yet been handled gets a reply quoting it, `error: interrupted: …` (see [What the group sees](#what-the-group-sees)); this line is handed to the sender as usual, and at shutdown the sender exits only after its queue has drained.
+- **Crash**: nothing is written.
+- **Conversation actor error** (added 2026-10-30): if the actor hits an error while handling an event (most likely a database error), it gives up on that conversation. The core and the jobs are stopped; the conversation's turns that have no outcome are recorded as `Lost`, as with a crash, so that they do not appear to be still running; unhandled direct triggers get a one-line reply, `error: the conversation failed: <error chain>` (joined with ` :  ` as `{:#}` does; sqlx database errors already end with their source, and such duplicates are not appended again); stopped jobs are reported too, with a line `stopped: job#3, job#4` added below the same error. If the database cannot be reached, only a log entry is written, and those turns are left for the next startup to record. Afterwards, the conversation table starts the actor again when it receives the next message for that conversation; messages that arrive at the very moment the actor exits are lost with it. Errors are not isolated per event with the actor left to continue, because after an error the in-memory `head` and `seen` may no longer match the database.
 
-启动时，每个没有结局的 turn 都记 `Lost`：正常重启不会留下没有结局的 turn，剩下的只能是崩溃时正在跑的。它已经发出去的消息还在 ledger 里，靠 turn id 能找到。每个会话的 `seen` 从当时的 `head` 开始，intent 的状态从空开始。
+At startup, every turn without an outcome is recorded as `Lost`: a normal restart leaves no turn without an outcome, so any that remain can only be turns that were running at a crash. The messages such a turn had already sent are still in the ledger and can be found by turn id. Each conversation's `seen` starts from the `head` at that moment, and intent's state starts empty.
 
-QQ 的网关跨重启 Resume：重启那段时间群里说的话由服务端补发，照常入账、照常经过 intent，所以停机期间 @ Max 的人照样有人回，见 [QQ 官方机器人](#qq-官方机器人)。要再问一次的只有停机那一刻正在回的那条。
+The QQ gateway resumes (Resume) across restarts: what was said in groups during the restart is redelivered by the server, and is entered in the ledger and passed through intent as usual, so people who @ Max while it is down still get replies; see [The official QQ bot](#the-official-qq-bot). The only message that has to be asked again is the one being answered at the moment of shutdown.
 
-崩溃时丢掉的 turn 要不要在群里说一声 **待定**：可以在启动后根据 `Lost` 补发。
+Whether to announce in the group a turn that was lost in a crash is **TBD**: a notice could be sent after startup on the basis of `Lost`.
 
-### 体积和保留期
+### Size and retention
 
-- **体积**：推理 blob 每条几 KB 到几十 KB，而且压不小；一个 turn 跑几十轮，大约几百 KB 到几 MB，核心上限给它封了顶。v1 都存在快照的 JSONB 里，交给 Postgres 的 TOAST。以后体积成问题，再把超过阈值的内容统一挪到一张按 sha256 寻址的 blob 表，工具输出和基础上下文同样适用。
-- **保留期**：turn 结束 N 天后，清掉快照里的 `opaque` 和基础上下文，保留可读文本和 token 数。之后这个 turn 还能查看，但不能再原样重发它的请求。N **待定**。
+- **Size**: reasoning blobs are a few KB to a few tens of KB each and do not compress well; a turn running dozens of rounds comes to roughly a few hundred KB to a few MB, capped by the core limit. In v1 everything is stored in the snapshot's JSONB and left to Postgres's TOAST. If size becomes a problem later, content above a threshold will be moved, uniformly, to a blob table addressed by sha256; the same applies to tool output and the base context.
+- **Retention**: N days after a turn ends, the `opaque` fields and the base context are cleared from its snapshot, and the readable text and token counts are kept. The turn can still be viewed afterwards, but its requests can no longer be resent exactly as they were. N is **TBD**.
 
-### 核心和 actor 的测试
+### Testing the core and the actor
 
-- 核心和 intent 用同步单元测试，按剧本喂输入、检查输出，不需要 tokio 和 fake provider；intent 的时间由测试传入。intent 至少覆盖：直接触发立刻叫醒、去抖合并同一个人的几条、攒批、每小时上限和 `/proactive`。核心至少覆盖：输入的送达时机、只有闲聊不调模型、中断时补齐结果、格式不对的工具调用、轮数和 transcript 上限、失败时哪些触发算没处理完。
-- 会话 actor 用真的数据库（`#[sqlx::test]`）、剧本模型和只记录的 sender，测取消、停止和它的宽限期、空闲窗口、撞上限、过期事件和 `seen` 对 `Wake` 的过滤；在任意两个事件之间插 `/kill` 的遍历见 [cancellation safety](#cancellation-safety)。2026-10-29 改：actor 测试用真实时间，不用 `start_paused`。actor 在等 Postgres 的时候，暂停的时钟会自动跳到下一个到期时间，空闲窗口和去抖就提前到了。所以测试里的等待都很短，而且有上限；纯时间的逻辑（intent、sender 的额度）照样用 `start_paused`。
-- 协议适配层用录下来的 Responses 和 Chat 响应做 fixture，测推理条目和不透明字段原样往返。
-- 快照里是每次请求的内容，线上任何一次模型调用都能离线原样重发。
-- 分段器的切分（`segment/chunk.rs`）用 Aeneas 能翻译的 Rust 子集来写（2026-11-06 定）：`verify/extract` 用 Charon 和 Aeneas 把它翻成 Lean，翻出来的代码提交在 `verify/MaxCore/`，`verify/` 在它上面证明性质。实现还是只有 Rust 这一份。目前证明了：文本分几次推进去，和一次推完是同一个计算；按 `segment.rs` 的用法（每次 push 给一个新的 `out`），切出来的段也一样；除了最后一段，每段都闭合它的围栏（按 `closes_fences` 判断）。最后这条靠的是 `cut` 里的检查，只发闭合的段；这个检查在围栏外从不拦下一段，由 `chunk.rs` 的测试检查。UTF-8 的文本不管怎么分段推进，哪怕把字符劈开，切出来的每段都是 UTF-8（2026-11-06 加），所以 `segment.rs` 转成 `String` 时的有损回退用不上；为此 `trim` 改成只看 `s[from..to]`，`space_at` 的边界检查改成不会溢出的写法。分段器总会返回（2026-11-06 加）：不越界、不溢出、不死循环，只要文本短于 `usize::MAX` 的一半左右，每个 `Vec` 就都放得下；它持有和发出的东西不超过文本的两倍。为此 `is_break` 的计数从推断出的 `i32` 改成 `usize`，否则一行超过 2³¹ 个非空白字节就会溢出。除了 `<think>` 段、空白、`[split]` 和分隔线，文本里什么也不丢（2026-11-07 加）：不管怎么分段推进，不算换行，切出来的段连起来就是文本在 `<think>` 段外的各行，在 `[split]` 和图片句柄处切开，去掉分隔线，再去掉一些空白，顺序不变。为了说得简单，证明的比实际宽一点：换行两边都不算，代码里的 `[split]` 也当成可以丢，`<think>` 不管在哪，都可以算一段的开头，也可以不算。`chunk.rs` 或 `verify/` 改了时，CI 的 Verify 工作流（`.github/workflows/verify.yml`）重新翻译一遍，和提交的 `verify/MaxCore/` 比对，并构建证明；平时不跑，因为 Charon 和 Aeneas 不在任何二进制缓存里，要下载十几 GB 的 Rust 工具链。手写的字符级模型和对拍它的 `verify/diff/` 删了（2026-11-06 定）：要证明的性质都在翻出来的代码上证明了，模型只是第二份实现，每次改 Rust 都得跟着改。
+- The core and intent are tested with synchronous unit tests that feed inputs from a script and check the outputs, needing neither tokio nor a fake provider; intent's time is passed in by the test. Intent tests cover at least: direct triggers waking at once, debouncing merging several messages from the same person, batching, the hourly cap and `/proactive`. Core tests cover at least: when input is delivered, no model call when there is only chatter, completing the results on interruption, malformed tool calls, the round and transcript limits, and which triggers count as unhandled on failure.
+- The conversation actor is tested with a real database (`#[sqlx::test]`), a scripted model and a sender that only records, covering cancellation, stopping and its grace period, the idle window, hitting the limit, stale events, and the filtering of `Wake`s by `seen`; for the exhaustive insertion of `/kill` between any two events, see [Cancellation safety](#cancellation-safety). Changed 2026-10-29: actor tests use real time, not `start_paused`. While the actor is waiting on Postgres, a paused clock automatically jumps to the next deadline, so the idle window and the debounce would arrive early. The waits in the tests are therefore all short, and bounded; purely time-based logic (intent, the sender's quota) still uses `start_paused`.
+- The protocol adapter layer uses recorded Responses and Chat responses as fixtures, testing that reasoning entries and opaque fields make the round trip unchanged.
+- The snapshot holds the content of every request, so any model call made in production can be resent exactly, offline.
+- The segmenter's cutting (`segment/chunk.rs`) is written in the subset of Rust that Aeneas can translate (decided 2026-11-06): `verify/extract` uses Charon and Aeneas to translate it into Lean, the translated code is committed in `verify/MaxCore/`, and `verify/` proves properties on top of it. The Rust code remains the only implementation. Proved so far: pushing the text in in several pieces is the same computation as pushing it all at once; used as `segment.rs` uses it (with a fresh `out` for each push), it also cuts out the same segments; and every segment except the last closes its fences (as judged by `closes_fences`). The last property relies on a check in `cut` that emits only closed segments; that this check never holds back a segment outside a fence is checked by the tests in `chunk.rs`. However UTF-8 text is split into pushes, even when characters are split apart, every segment cut out is UTF-8 (added 2026-11-06), so the lossy fallback in `segment.rs`'s conversion to `String` is never used; for this, `trim` was changed to look only at `s[from..to]`, and the bounds check in `space_at` was rewritten in a form that cannot overflow. The segmenter always returns (added 2026-11-06): it never goes out of bounds, never overflows and never loops forever, and as long as the text is shorter than roughly half of `usize::MAX`, every `Vec` fits; what it holds and emits never exceeds twice the size of the text. For this, the counter in `is_break` was changed from an inferred `i32` to `usize`; otherwise a line with more than 2³¹ non-whitespace bytes would overflow it. Apart from `<think>` segments, whitespace, `[split]` and thematic breaks, nothing in the text is lost (added 2026-11-07): however the text is split into pushes, and not counting newlines, the segments cut out, concatenated, are the lines of the text outside `<think>` segments, cut at `[split]` and at image handles, with thematic breaks removed and some whitespace removed, in the original order. To keep the statement simple, what is proved is slightly broader than what actually happens: newlines are disregarded on both sides, a `[split]` inside code is also treated as droppable, and a `<think>`, wherever it appears, may or may not count as the start of a segment. When `chunk.rs` or `verify/` changes, CI's Verify workflow (`.github/workflows/verify.yml`) translates the code again, compares the result with the committed `verify/MaxCore/` and builds the proofs; it does not run otherwise, because Charon and Aeneas are not in any binary cache and require downloading a Rust toolchain of more than ten GB. The hand-written character-level model and `verify/diff/`, which cross-checked the code against it, were removed (decided 2026-11-06): the properties to be proved are all proved on the translated code, and the model was merely a second implementation that had to be changed whenever the Rust changed.
 
-### 同一模式的其它地方
+### Other uses of the same pattern
 
-判断标准：有协议状态、规则复杂、需要精确测试。符合的有：
+The criteria are protocol state, complex rules and a need for precise testing. The following meet them:
 
-- 流式分段器：喂入文本增量，吐出可以发送的段落。
-- job 的驱动（`job::drive`）：steer 队列、在等的问题、到点叫停、报告和进程结束谁先谁后。原来是 pi RPC 适配器，2026-11-07 换成和 harness 的约定。
-- QQ 网关的会话：心跳、Resume、重连。
-- 镜像投递（v1 不做）：回执和 echo 对账。
+- The streaming segmenter: fed increments of text, it emits paragraphs ready to be sent.
+- The job driver (`job::drive`): the steer queue, pending questions, stopping on time, and which comes first, the report or the end of the process. Originally a pi RPC adapter; on 2026-11-07 it was replaced by the contract with the harness.
+- The QQ gateway session: heartbeat, Resume and reconnection.
+- Mirrored delivery (not in v1): reconciling receipts and echoes.
 
-会话 actor 是普通的 async 代码：规则都在核心和分段器里，它只负责入账、路由和按核心说的 spawn。
+The conversation actor is ordinary async code: the rules all live in the core and the segmenter, and the actor is responsible only for entering messages in the ledger, routing, and spawning tasks as the core directs.
 
-### 待定
+### Open questions
 
-- ~~基础上下文怎么存~~：已定（2026-10-27），存渲染结果，见[上下文投影](#上下文投影)。
-- 保留期 N。
-- 核心上限的余量（提议 C 的 5%）。
-- ~~`/kill` 的权限~~：已定（2026-10-29），群主、管理员和 owner，见[权限](#权限)。
-- ~~裁剪规则~~：已定（2026-10-28），不裁剪，见[核心](#核心)的"构造请求"。
-- ~~恢复窗口多长~~：不恢复了（2026-10-29），见[重启](#重启)。崩溃时丢掉的 turn 和 job 要不要在群里说一声。
+- ~~How the base context is stored~~: decided (2026-10-27): the rendered result is stored; see [Context projection](#context-projection).
+- The retention period N.
+- The margin in the core limit (proposed: 5% of C).
+- ~~Permissions for `/kill`~~: decided (2026-10-29): the group owner, administrators and the owners; see [Permissions](#permissions).
+- ~~Trimming rules~~: decided (2026-10-28): no trimming; see "Building requests" in [The core](#the-core).
+- ~~How long the recovery window should be~~: there is no longer any recovery (2026-10-29); see [Restarts](#restarts). Whether turns and jobs lost in a crash should be announced in the group.
 
-## 上下文投影
+## Context projection
 
-2026-10-27 定，10-30 改。起初参考 [magic-context](https://github.com/cortexkit/magic-context) 做了 historian 和会衰减的摘要，10-30 删了，当天晚上又做成按群的开关，11-02 再删，见[摘要](#摘要)。上下文只有原始尾巴，加上每轮都带的[记忆](#记忆)，更早的靠模型自己搜。工具输出只活在一个 turn 的 transcript 里，下一个 turn 从 ledger 重新投影，不会跨 turn 堆积。
+Decided 2026-10-27, revised 2026-10-30. Initially, following [magic-context](https://github.com/cortexkit/magic-context), a historian and decaying summaries were implemented; they were removed on 2026-10-30, reinstated that same evening as a per-group switch, and removed again on 2026-11-02 (see [Summaries](#summaries)). The context consists only of the raw tail plus the memory carried in every turn (see [Memory](#memory)); anything older the model searches for itself. Tool output lives only in the transcript of a single turn; the next turn is projected afresh from the ledger, so tool output does not accumulate across turns.
 
-Haskell 版的教训：原始尾巴是按 token 的滑动窗口，填满后每来一条消息就从头挤掉一条；摘要层级每轮按距今天数重算；caption 到了回头改旧行。三件事都让前缀缓存几乎每轮失效。historian 按 token 切段、一段一个摘要，不按话题。"上一轮做了什么"有四套机制（`[recent turns]`、续接摘要、`context_resume`、turn 内压缩），同一行消息有三种 token 算法。
+Lessons from the Haskell version: the raw tail was a token-based sliding window which, once full, pushed out the oldest message for every new one that arrived; summary levels were recomputed every turn according to their age in days; and captions, when they arrived, went back and rewrote old lines. All three invalidated the prefix cache on almost every turn. The historian cut segments by token count, one summary per segment, rather than by topic. There were four mechanisms for "what happened in the previous turn" (`[recent turns]`, continuation summaries, `context_resume` and in-turn compaction), and three different token-counting algorithms for the same message line.
 
-### 请求布局
+### Request layout
 
-按变化频率排，每一块都在前一块之后：
+The blocks are ordered by frequency of change, each coming after the previous one:
 
-1. system：人设、规则、Max 工具的 TypeScript 声明、skill 索引。按会话固定。
-2. 工具：`run_code` 和 `shell`，固定不变。
-3. 原始尾巴：尾巴的标记之后、到快照位置 `from` 为止的所有消息（第一批里的除外），`[HH:MM 名字 #id]: 文本` 一行一条；换日插日期，间隔久了插间隔标记。按之前各个 turn 的尾巴在哪里结束，分成几条 user 消息，见[前缀稳定的规则](#前缀稳定的规则)。Max 自己的消息和别人的一样是一行，发不出去的带标记，见[出站](#出站)。
-4. 易变块：现在时间、[名册](#模型看到的)、[记忆](#记忆)、引用的消息和转发、第一批输入（触发；闲聊不在这里，在尾巴里）、附图。
+1. System: the persona, the rules, the TypeScript declarations of Max's tools and the skill index. Fixed per conversation.
+2. Tools: `run_code` and `shell`, which never change.
+3. Raw tail: all messages after the tail's marker up to the snapshot position `from` (excluding those in the first batch), one per line as `[HH:MM name #id]: text`. A date line is inserted when the day changes, and a gap marker after a long interval. The tail is split into several user messages according to where the tails of earlier turns ended (see [Rules for a stable prefix](#rules-for-a-stable-prefix)). Max's own messages are a line like anyone else's; those that could not be sent carry a marker (see [Outbound](#outbound)).
+4. Volatile block: the current time, the roster (see [What the model sees](#what-the-model-sees)), the memory (see [Memory](#memory)), quoted messages and forwards, the first batch of input (the triggers; small talk is not here but in the tail) and attached images.
 
-基础上下文就是这几块，由会话 actor 在创建核心前投影一次（[运行流程](#运行流程)第 3 步），之后不变；transcript 接在后面。比尾巴早的原文不在上下文里，模型用 `history` 查，见[召回](#召回)。
+The base context consists of exactly these blocks. The conversation actor projects it once before creating the core (step 3 of [Processing flow](#processing-flow)), and it does not change afterwards; the transcript follows it. Original text older than the tail is not in the context; the model looks it up with `history` (see [Recall](#recall)).
 
-### 后续输入
+### Follow-up input
 
-核心活着的时候，后来的输入在下一次调模型前渲染成一个 `[新消息]` 块，追加在 transcript 末尾，不动前缀：
+While the core is alive, later input is rendered into a `[新消息]` ("new messages") block before the next model call and appended to the end of the transcript, leaving the prefix untouched:
 
-- 消息行和尾巴同一种格式，触发的行标上"@你""回复你的 #123"，其它不标。私聊里每条都是跟 Max 说的，一行也不标；系统提示词私聊和群聊是同一份，规则里说明这一点（2026-11-03 owner 定，原来只写了"也可能是私聊"，按规则私聊的消息没有一条在叫它）。同一天规则里加了一段私聊：私聊是对方的，VM、/work 和浏览器只有对方在用，所以放宽群里为了顾及别人的规矩：对方给了自己的账号密码就可以替对方登录（不记进记忆、不外传），不用每段都引用，回答可以更长更细；红线照旧。起因：有人在私聊里给了自己学校账号的密码让 Max 登录，Max 照规则"只登录你自己的小号"本该拒绝，实际时登时拒；owner 说私聊只有 owner 和几个朋友在用，放开。第一次出现的人补一行名册。
-- job 结果是 `[job#3 完成] …`，自动化是 `[自动化 m#2 触发] …`。
-- **单条上限**（2026-10-27 定）：消息、job 结果、自动化结果共用一个上限，`min(C × 15%, 25k)` token，最低 2k；尾巴和第一批里的消息同样适用。超过的只渲染开头约 2,000 字，加一行"全文见 `#123`"，模型用 `history` 取（`{ around, before: 0, after: 0 }`；原来是读全文的 `context_read`，所以它是 v1 第一个开放的工具）。它按页取，一页不超过单条上限，读一条超长消息不会一下把核心撑到上限。原文本来就在 ledger 或 job 记录里，不另存。VM 起不来时没有工具，模型只能看到摘录。`run_code` 和 `shell` 的结果也按这个上限截，全文写成 VM 里的文件，结果里给路径，下一次调用自己读。现在两个都先按字节截：超过 16 KiB 只留头尾各 8 KiB，全文在 `/work/.max/out/<unit>.txt`；`run_code` 的 console 输出另外截，全文在 `<unit>.log`。
-- 参考（2026-10-27 查）：Claude Code 的 Bash 输出约 3 万字符、Read 每次 2.5 万 token；Codex 的工具输出 1 万 token；OpenCode 和 pi 2,000 行或 50 KiB；Gemini CLI 4 万字符；Hermes 每条 10 万字符，按窗口缩到 15%。超出时它们都把全文留着，给模型路径或句柄。用户自己发的内容基本都不截。
-- **放不下就认输**：不按条数折叠。攒着的输入连同 transcript 过了核心上限的九成，先提醒模型收尾；超过上限，就在这个边界结束这次运行，记 `ContextExhausted`，见[核心](#核心)和[运行流程](#运行流程)。
-- 系统提示里说清：一批里可能有几件要回应，也可能都不用，不用就什么都不输出；回应多个人时各自 reply。
+- Message lines use the same format as the tail. Trigger lines are marked "@你" ("@you") or "回复你的 #123" ("replying to your #123"); other lines are not marked. In a private chat every message is addressed to Max, so no line is marked; the system prompt is the same for private and group chats, and the rules explain this (decided by the owner 2026-11-03; previously the prompt said only "也可能是私聊" ("it may also be a private chat"), and under the rules no message in a private chat was calling Max). On the same day a passage on private chats was added to the rules: a private chat belongs to the other party, and only that person uses the VM, /work and the browser, so the conventions that exist in groups out of consideration for others are relaxed. If the other party provides their own account and password, Max may log in on their behalf (without recording it in memory or disclosing it); Max need not quote a message in every segment; answers may be longer and more detailed; the red lines remain unchanged. The cause: in a private chat, someone gave Max the password of their own school account and asked it to log in. Under the rule "只登录你自己的小号" ("only log in to your own secondary accounts") Max should have refused, but in practice it alternately logged in and refused. The owner noted that private chats are used only by the owner and a few friends, and opened this up. When a person appears for the first time, a line is added to the roster.
+- Job results appear as `[job#3 完成] …` ("job#3 done"), and automations as `[自动化 m#2 触发] …` ("automation m#2 triggered").
+- **Per-item cap** (decided 2026-10-27): messages, job results and automation results share one cap of `min(C × 15%, 25k)` tokens, with a minimum of 2k; it applies equally to messages in the tail and in the first batch. For an item over the cap, only the first \~2,000 characters are rendered, followed by a line "全文见 `#123`" ("full text at `#123`"), and the model fetches the rest with `history` (`{ around, before: 0, after: 0 }`; this was originally `context_read`, which read the full text, and that is why it was the first tool opened in v1). It fetches page by page, each page no larger than the per-item cap, so reading one overlong message does not push the core to its limit in one go. The original text is already in the ledger or the job record and is not stored separately. When the VM cannot start there are no tools, and the model sees only the excerpt. Results of `run_code` and `shell` are also truncated to this cap: the full text is written to a file in the VM, the result gives its path, and the model reads it with its next call. At present both are first truncated by bytes: beyond 16 KiB only the first and last 8 KiB are kept, with the full text in `/work/.max/out/<unit>.txt`; the console output of `run_code` is truncated separately, with the full text in `<unit>.log`.
+- For reference (checked 2026-10-27): Claude Code's Bash output is limited to about 30,000 characters and Read to 25,000 tokens per call; Codex's tool output to 10,000 tokens; OpenCode and pi to 2,000 lines or 50 KiB; Gemini CLI to 40,000 characters; Hermes to 100,000 characters per item, scaled down to 15% of the window. When the limit is exceeded, all of them keep the full text and give the model a path or handle. Content sent by users themselves is generally not truncated.
+- **Give up when it does not fit**: input is not folded by item count. When the accumulated input together with the transcript exceeds 90% of the core's limit, the model is first reminded to wrap up; once the limit is exceeded, the run ends at that boundary and `ContextExhausted` is recorded (see [The core](#the-core) and [Processing flow](#processing-flow)).
+- The system prompt makes clear that a batch may contain several things that need a response, or none at all; when nothing needs a response, Max outputs nothing; when responding to several people, it uses a separate reply for each.
 
-### 前缀稳定的规则
+### Rules for a stable prefix
 
-目标：两次截断之间，易变块之前的逐字节相同；一个 turn 的第一次调用，以上一个 turn 第一次调用除了易变块的全部开头，连消息的分法都一样。
+Goal: between two truncations, everything before the volatile block is byte-for-byte identical; the first call of a turn begins with everything in the first call of the previous turn except the volatile block, down to the way the messages are split.
 
-- **尾巴按 turn 分成几条消息**（2026-10-31）。之前尾巴是一条越长越长的 user 消息。Gemini 的隐式缓存在几秒内能按 token 复用任何相同的前缀，过了几分钟就只认整条的消息：只留每个请求最后一条消息之前的部分，后来的请求要原样以这些消息开头才命中。用 cliproxy 实测（Flash 和 Argon 一样，6 分钟后）：上一个请求原样接着往后加，复用约九成；同一条消息里接着加行，复用 0；上一个请求最后一条之前的消息原样、后面另起一条，复用约九成；更早的边界（比如系统提示之后、倒数第三条之后）复用 0。新 turn 至少隔一个空闲窗口（300 秒），所以 Argon 99 个 turn 的第一次调用只命中 2%，未缓存的约 570 万 token，是 Argon 输入费用的大头；一个 turn 里后面的调用命中八九成。10-30 当成"Gemini 缓存过期太快"，不对：前缀逐字节相同，turn 之间隔不到 2 分钟也不命中。
-  - 做法：投影时，标记之后的每个 turn（`turns.from_id`、叫醒它的消息）都在尾巴里切一刀，切在它的尾巴结束处：快照位置之前、叫醒它的第一条之前。每段单独渲染，日期行按上一段最后一行算，做成一条 user 消息。上一个 turn 第一次调用的尾巴分段，这次原样都在，只多出最后一段。不用新表。
-  - 一个 turn 的尾巴是"快照位置之前、除了叫醒它的"。叫醒它的消息后面还有人说话（去抖、判定的那几秒），它的尾巴在那条前后各有一截，下一个 turn 合不上，这一次不命中，再下一个又对上。截断、caption 到了改了某一行，也都失效一次。
-  - 段数是标记之后的 turn 数，忙的群截断前有几十上百条 user 消息。不合并：合并会改掉上一个请求的分法，整段都不命中。OpenAI 的缓存按 token 前缀，分不分段一样。
-
-- **尾巴的起点只在截断时移动**（2026-10-28 定，10-30 改成自己记标记）。尾巴从 `conversations.tail_after` 之后开始（迁移 0018），和 `/clear --all` 的水位取大的；平时只增长。投影时尾巴超过高水位，就从标记往后按固定的长度（高水位减低水位）一段一段截，截到剩下低水位到高水位之间，把新标记写回去；不一条一条往外挤，否则又成了每来一条消息缓存就失效一次的滑动窗口。切点从标记往后数，不从末尾往前数，所以起点在新消息进来时不动。还没有标记的会话从第一行数起，部署后第一次投影要读一遍整个会话，只这一次。先截尾巴，再算引用的消息和名册，截掉的人不进名册，引用了截掉那段的行照常带上被引用的消息。
-- **不等 caption。** 有什么渲染什么；caption 到了那一行就变，接受这一次失效。不阻塞。Haskell 版会轮询等媒体 worker，图片最多 30 秒、视频 60 秒。
-- **一个会话同时只有一个 turn**，不需要藏起在途的触发消息。
-- 变的东西都在易变块里。
-
-### 预算
-
-默认值按窗口 C 推，封顶；配置可改，数值在 v1 里调：
-
-| 块 | 默认 |
-|---|---|
-| 尾巴高水位 | `min(C / 8, 64k)`（2026-10-30 owner 从 32k 调到 128k：1M 的窗口上尾巴只有 16k–32k，约 270–540 条，比 Haskell 版短得多，群友觉得 Max 健忘。当天晚上降到 64k：128k 时输入翻倍，Max 说话风格也变了，见[摘要](#摘要)）。超过就截 |
-| 尾巴低水位 | 高水位的一半。截完剩下低水位到高水位之间 |
-| 记忆块 | 3k，见[记忆](#记忆) |
-
-Haskell 版尾巴是 W/2，26 万的窗口上约 10 万 token 原始群聊，每轮都付。token 估算只有一个函数（tiktoken-rs，在 `max` 里），所有地方共用；核心只拿算好的数，见[核心](#核心)。
-
-### 摘要
-
-2026-10-27 照 magic-context 做了 historian 和三层摘要，2026-10-30 owner 定全部删掉，只靠原始尾巴、[记忆](#记忆)和[召回](#召回)。原因：
-
-- **贵**：过去一天 historian 调了 49 次，输出 40.6 万 token，比所有 turn 的输出（30.4 万）还多，输出是最贵的部分。
-- **二手的错**：摘要会记错，原话不会。10-30 Max 自己在群里说被一条摘要坑过：把"13 块搓完整个原型"记成了"修一轮 bug 花 13 块"。
-- **复杂**：historian 的排程、校验、重试、discard-last，衰减曲线，水位和发布时机，`/compact`，摘要的向量和搜索，加起来三千多行。
-- **方向**：模型够强时，原始记录加自己搜，比预先加工的好（MemoryTax，见[记忆](#记忆)）。摘要最有用的是"那几天聊过什么"这个索引，换成了 `history` 按时间读原文、按发言人筛。
-
-删掉的：historian worker 和 `[llm] historian` 配置、摘要块和衰减、`/compact`、`context_search` 的摘要结果、`context_read` 的 `{ summary }`、摘要的向量。`summaries`、`summary_runs`、`summary_embeddings` 三张表和里面的数据留着。
-
-当天晚上 owner 改了主意：删掉以后 Max 说话的风格变了，自动的 historian 其实也不差，想长期一个群开、一个群关地比。于是 historian、摘要块、衰减和 `/compact` 原样恢复，做成按群的开关 `/historian on|off`（只有 owner 能改，默认关；`conversation_settings.historian`，迁移 0021）。开着的群上下文里带摘要块，尾巴从最新一条摘要之后开始；关着的 historian 不碰。
-
-2026-11-02 owner 定：比完了，historian 不要了，再删一次，这次不留开关。最后只有会话 12 开着。删掉的：historian worker（`max/src/historian`、`max-core/src/historian.rs`）、`[llm] historian` 配置（tank 的 `hosts/tank/maxx.nix` 同时去掉，配置不认识的键起不来）、摘要块、衰减（`project/decay.rs`）、`/historian` 和 `/compact`（现在是普通消息）、`/status` 的 historian 一行、`max-db` 的摘要查询、`llm_usage` 的 historian 用途（旧行留着，约束不改）。迁移 0023 删掉 `conversation_settings.historian`。`summaries`、`summary_runs`、`summary_embeddings` 三张表和里面的数据照旧留着，不读不写；`max-import` 导摘要的代码也没动。原来开着的群，下一个核心的尾巴从尾巴的标记开始，超过高水位就照常截。historian 和衰减的设计见 `672f74ee` 里的这份文档。
-
-### 命令
-
-- `/clear --all`：只是消息 id 水位，之前的消息不进提示；`history` 照样查得到，见[召回](#召回)。回复里带上怎么恢复。
-- `/unclear`（2026-10-29 owner 要的，群主、管理员）：撤掉水位，之前的消息回到上下文，最远到尾巴的标记。只有一个水位，清过几次也一次撤完；没清过回"跳过：没有清空过"。
-
-### 记忆
-
-2026-10-30 定，owner 提出：记忆是 Max 自己写的一个文件，不是 historian 抽出来的条目。
-
-- **为什么**：
-  - Haskell 版的记忆是 historian 预先抽的条目。733 条里 85% 是自动写的；标成群规的大半是技术知识，该常驻的反而没记，比如群友对 Max 的称呼。101 条有日期的承诺里 88 条过期了没人管。注入按"最近改过的 12 条"挑，和重要不重要无关。
-  - maxx 上线时没有记忆。10-30 群友叫"小鲨鲨"，Max 不认得；被说了"不记得了"才去搜，一搜就找到了。
-  - [MemoryTax](https://arxiv.org/html/2610.29823)（2026-10）：模型够强时，留着原始记录让模型自己搜，比预先抽取的记忆（Mem0、Zep）好、也更省。原始记录和搜索我们已经有了（ledger、`history`）。但那篇的问题都在提示"去查"，群聊里要用记忆的时候往往没人提示，模型不知道自己忘了什么。所以还要一份每轮都带上的东西，由主模型自己判断记什么，照 Claude Code 的 auto memory 做。
-- **文件**：每个会话一个 `/work/.max/memory.md`，在会话 VM 的 `/work` 里，宿主上是 `<vm.dir>/<会话 id>/work/.max/memory.md`。Max 用 shell 改；没配 VM 就没有记忆，VM 起不来时只能读不能写。
-- **注入**：起核心投影时，宿主像 `send_image` 那样不跟符号链接地读这个文件，放进易变块的 `[记忆]`，在名册之后。不放 system，原因有三：改了不会让前面的缓存失效；群友能影响它写什么，不该当系统指令；靠后，模型更容易注意到。代价是每个 turn 多付最多 3k 不走缓存的 token。turn 里改的，下一个 turn 才看到；本 turn 改了什么，transcript 里本来就有。
-- **上限** 3000 token（`max_core::limits::MEMORY_TOKENS`）：
-  - 到 80% 在末尾加一句，提醒整理；
-  - 超了只注入放得下的那些行，说明后面的没加载、要整理；
-  - 文件超过 256 KiB 整个不读，只说一句。
-
-  和 Claude Code 对 MEMORY.md 的做法一样：它是 200 行或 25 KB，超了截掉、提醒重写。只是它在写的时候查，我们在下一次投影时查，因为文件是在 VM 里写的，宿主看不到这一次写入。
-- **怎么写**，在系统提示里：
-  - 记长期成立、影响以后怎么说话做事的：称呼、约定和梗；某个人的身份、长期在做的事、偏好；有日期的安排，写明到哪天。
-  - 什么时候当场记，列成具体的几种：被纠正、有人让记、起了称呼、定了规矩；发现自己忘了或认错了人；有人说起自己的身份、近况、喜好。
-  - 加一条就 `echo '- 名字：内容（日期 #消息编号）' >> memory.md` 追加到末尾，归节交给 dreamer。（10-30 加，owner 提出。上线当天 90 个 turn 里 Max 只写过 1 次：原来要它按节、按人插进文件中间，用 shell 很费事；"每多跑一次 run_code 群友就多等一轮"也会让它不愿多调一次工具。）
-  - 先记再回话：记一笔不常有，群友多等一轮没关系，提示里明说。（10-31 改，owner 提出。10-30 起提示要它回复和记的 shell 写在同一次输出里、回复先发、记完只写 `[silence]`，这一天里一次也没这么做过：唯一一次写是群友让删一条，它先 grep、改完才回话；owner 问它最近记没记，它答没有，搬出规矩说没什么可记。）
-  - 不记技术知识，也不记哪天聊了什么：那些在记录里，靠搜索。
-  - 格式：分「## 群里」「## 人」两节，人按「### 名字」分，一行一条。结尾写（日期 #消息编号），编号是能作证的原话，`history` 能查（owner 加的）。
-  - 细节放进 `/work/.max/memory/` 下的别的文件，这里留一行指过去。
-  - 有人让记的不一定对，Max 自己判断。
-- **整理：dreamer**（2026-10-30 加，owner 提出：模型只会往里加，不整理）：
-  - 每天本地 5 点跑一次。只看这一天里 Max 写过的文件（看文件的修改时间），一个文件调一次模型（`[llm] dreamer`，不配就不整理），让它整体重写：Max 追加在末尾的行归进该去的节，说同一件事的合成一条，矛盾的留新的，写明到哪天、已经过了的删掉，超了上限删最不要紧的；不改写意思、不新增。
-  - 写回前再读一次，Max 刚好改过就不写，留到下一晚。写回的文件保留 Max 写它的时间，所以第二晚不会再整理一遍；整理前的版本留在旁边的 `memory.prev.md`，坏了能拿回来。模型写出来的不像这份文件（没有标题，或者比原来短了三分之二以上）就不写，记一条日志。
-  - 不另做机制：不重试，错过的一晚由下一次 Max 改文件后补上。用量记在 `llm_usage`，purpose 是 `dreamer`。
-- **没有的**：记忆表、分类、到期、historian 的记忆提案、注入时的挑选。`history` 不搜记忆，它每轮都在上下文里。
-- **迁移**（10-30）：旧库的记忆由一个子 agent 手工离线迁成每个群的初始文件，没用的全删。同一天又从旧摘要里迁了一批长期成立的事（梗、称呼、群规、人），摘要删掉后 Max 对群里的老梗接不上。
-
-### 召回
-
-2026-10-29 做了 `context_search`（按字面和按意思搜）和 `context_read` 的几种读法，2026-10-30 并成一个工具 `history`（owner 定）：两个分开时，"小明前天说的那个"要先想好用哪个、参数怎么拼；搜和读本来就是同一组筛选（谁、什么时候），只差有没有词。Haskell 版也是一个入口统一召回（features.md 的 Unified recall），这里沿用，只是不搜记忆。
-
-- **范围**：只搜这个会话的消息（2026-10-30 起；之前还搜摘要，见[摘要](#摘要)）。
-  - 搜的只看 kind 是 chat 的行，命令和事件不搜，撤回了的不搜。词在 `messages.text`（渲染后的文本）里，或者在这条消息里图和表情包的 caption 里，都算。表情包的也搜（2026-10-29 owner 定："永远是全部能搜"；原先提议不搜，因为它写的是表情包是什么、什么时候用）。读的和尾巴一样，什么行都有。
-- **`/clear --all`**：不管它，水位之前的消息照样搜、照样读（2026-10-29 owner 定，同上；和 Haskell 版一样）。`/clear --all` 只管上下文里显示什么。
-- **参数**：都能一起用，除了 `around`。
-  - `query`：给了就是搜，回结果列表；没给就是读，回原文。
-  - `who`：发言人名字里的几个字，和词一样转小写当子串比 `messages.sender_name`，也就是当时的群名片（2026-10-30 加）。按名字不按 `[mention#N]`：旧平台和新 bot 上同一个人是两个 principal，名字多半一样。
-  - `from`、`to`：本地的 `YYYY-MM-DD`、`YYYY-MM-DD HH:MM`，或者 `#id`。先换成行的 id 再查（`from` 是那时或之后的第一行，含；`to` 是之后的第一行，不含；日期的 `to` 算到第二天零点，所以两头都含当天），搜和读用同一个 id 区间。按 `sent_at` 找第一行，迁移 0017 加了 `(conversation_id, sent_at)` 的索引。`from` 之后没有行就是空区间。
-  - `around`、`before`、`after`：读这条和它前后的行，默认各 10，最多 50，多了按 50 算；两个都是 0 就是这一条的全文（"全文见 `#123`"用的就是它）。不和别的筛选、`limit` 一起用；`before`、`after` 也只跟 `around` 用。
-  - `limit`、`page`：见下面。什么筛选都没有回 `bad_arguments`。
-- **搜**：
-  - **匹配**：query 按空白切词，最多 8 个、每个 50 字，重复的去掉，逐字转小写，和 Postgres 的 `lower` 一个字对一个字，片段的位置不会错开。每个词在小写的文本里当子串找（`lower(text) like '%词%'`，转义 `% _ \`），不分词。有一个词就算候选。
-  - **索引**：迁移 0011 装 pg_trgm，在 `lower(messages.text)` 和 `lower(media_captions.text)` 上建 `gin_trgm_ops`。三个字以上的词走索引；一两个字的没有三元组，在这个会话里一行一行比。ctype 是 C 的库（dev shell 的就是）不给中文切三元组，中文的词都是逐行比，结果一样；tank 的 `maxx` 是 en_US.UTF-8，有。查询在事务里设 `plan_cache_mode = force_custom_plan`：sqlx 的预备语句跑几次后换成通用计划，看不到词有多长，会为两个字的词读整个索引。
-  - **排序**：分数 0 到 1，字面的是有几个词除以总词数，按意思的是余弦相似度，两样都找到的取高的；同分的新的在前。消息按正文去重，复读只留最新的一条。`limit` 默认 10，最多 30。不分页。
-  - **结果**：`{ results: [{ ref, time, text, read }] }`。`ref` 是 `#id`；`time` 像 `2026-10-03 周六 14:02`；`text` 是"名字：正文"，正文和尾巴里一样，图带 caption，超过 160 字就截命中处前 40 字起的一段（只按意思找到的从头截），截掉的地方加"…"；`read` 是 `{ around: id }`，原样交回 `history` 就是读这条前后各 10 行。
-- **读**：和尾巴一样的格式：日期行，一条一行，超长的只有开头。按整行分页，一页不超过单条上限，`page` 选第几页；一条的全文按字平均切页。
-  - 有 `from`：从区间开头往后读 `limit` 行；没有：读区间里最新的 `limit` 行，照时间顺序排。`limit` 默认 50，最多 100。为的是"前天聊的那个"这种没有关键词的问法：翻那天的原文，代替原来摘要的那一行；也能只看一个人说过的话。
-  - 还有更多时回 `next`，原样交回就接着读：从 `from` 读的，`from` 换成最后一行的下一个 id，往后接；读最新的，`to` 换成第一行，往前接。`who`、`limit` 带上。区间里没有行回一行"（没有这样的消息）"。
-- **限制**：每次运行最多调 60 次（原来搜 20 次、读不限，合在一起放宽）；所有群合计同时最多 4 个搜索，短词要比一个会话的每一行，读的不占。系统提示里原始记录那一行说了：更早的不在上下文里，要找以前的事用 `history` 查，能按内容搜，也能按人、按时间读原文。
-- **实测**（2026-10-29）：tank 的 `maxx` 上只读跑，还没有这两个索引，所以都是逐行比。最大的会话 6.2 万行：消息 1 个词约 85 ms，2 个约 97 ms，8 个约 145 ms。摘要（848 条的会话）2 个词约 36 ms，8 个约 61 ms。走索引的情况用 tank 上旧的 Haskell 库测（29 万行，`rendered_text` 上有一样的三元组索引）：3 个字的词 19 ms，4 个字 2 ms，两个 3 字的词 13 ms；两个字的词定制计划不碰索引，逐行 182 ms，通用计划读整个索引要 496 ms。`ilike` 比 `lower() like` 慢三倍多（50 ms 对 178 ms），所以不用它。三元组索引在旧库是 88 MB。
-- **按意思**：整个 query 算一个向量，模型和[表情包库](#发图)共用（bge-m3，1024 维），等 5 秒；没配模型、出错、超时，就只按字面搜，不报错。`max_db::recall` 按余弦距离取最近的消息，过滤和字面的一样（chat、没撤回、时间、发言人），只比同一个模型的向量；条数和字面的一样（3·limit）。相似度至少 0.5 才算候选（提议，是估的，没在真数据上调过）。和字面的候选按 id 合在一起，同一个 `ref` 取高的分；之后的去重、排序、结果形状都不变。
-- **向量**：一条 chat 消息一个（迁移 0013，`message_embeddings`；10-30 前摘要也有，在 `summary_embeddings`，留着不读）。按行不按窗口：结果本来就是一行（`#id`），上下文由 `history` 的 `around` 给；ledger 只追加，一行的向量永远不过期，窗口的会随后来的消息变；旧库的向量也是按行的，按 id 直接导。消息的文本是 `text` 去掉不带字的句柄（`[mention#3]`、`[reply#12]`、`[image]` 这类，SQL 函数 `recall_text`），剩下不到 4 个字的不算（"在吗""好的"按意思搜不出什么，字面照样搜得到；Haskell 版也是 4），只取前 2000 字。表情包和图的 caption 不单独算向量，字面照样搜。
-- **精度**：`halfvec(1024)`，不像表情包库用 `vector`：22.5 万条时表和 HNSW 索引一共约 1.2 GB，`vector` 要 3 GB。最近的还是那些：2 万条随机向量（彼此的距离最挤，最难分）里搜 50 次，前十都一样，49 次顺序也一样，距离最多差 0.00004。HNSW（`halfvec_cosine_ops`）之外还有 `conversation_id` 的 btree：查询在事务里设 `hnsw.iterative_scan = relaxed_order`，HNSW 先取的 40 个被会话、时间过滤掉了会接着往下找；小会话里规划器直接按会话取出来精确排序，所以和字面的一样用定制计划。
-- **召回向量 worker**（`max::recall`）：入账的每一行都交给它，没有当前模型向量的才算，同时 2 个请求，失败重试两次（10 秒、60 秒）就放弃。启动时和之后每小时扫一遍：新的在前，16 条一个请求，不重试，下一次扫描就是重试；一页失败了就一条条再试一次，免得一条服务不收的文本挡住比它旧的全部，一条都不成就是服务挂了，等下一次。换了模型会全部重算。只有它写这张表；用量不记 `llm_usage`。没配 embedding 模型就没有它。
-- **实测**（2026-10-29，dev 的 Postgres 17，Mac，`maintenance_work_mem` 64 MB，22.5 万条随机的单位向量）：在有数据的表上建 HNSW，`vector` 9 分 30 秒、索引 1.76 GB，`halfvec` 6 分钟、586 MB；迁移是在空表上建，几毫秒。往建好索引的空表里插（导入就是这样）：22.5 万条 `halfvec` 17 分钟（同时在编译，偏慢）；2 万条 `vector` 50 秒，`halfvec` 38 秒。查询（`halfvec`，limit 90）：5.6 万行的会话走 HNSW 36 ms，2,250 行的走 btree 加排序 16 ms。
-- **导入**：旧库 22.5 万条消息、3.2 千段摘要的 bge-m3 向量由 `max-import vectors` 按 id 导，见[导入](#导入)；摘要的现在不用了。
-
-### 砍掉的
-
-- `[recent turns]` 摘要、续接摘要、`context_resume` 和 turn 内的定位符压缩。turn 内也不裁旧工具输出，太大就结束这次运行，见[核心](#核心)。以后要看上一轮做了什么，加一个读 turn 快照的 `turn_read(t#N)` 工具。
-- 自动注入检索结果。每轮只带上 Max 自己的记忆文件，见[记忆](#记忆)，其它靠模型调 `history`。
-
-## 媒体
-
-2026-10-29 定，在 v1 之后第一个做（owner 选的）。参考了 Haskell 版，它的教训写在各条后面。
-
-- **节点和句柄**：入站时 QQ 附件的下载地址写进节点，`Media { media: Some(Remote(url)) }`。ledger 只追加，下载的结果记在 `message_media`（消息、序号、sha256）。序号是这条消息里第几个媒体，从 0 数；给模型的句柄是 `image#消息id.序号`，`video#`、`audio#`、`file#` 同理。Haskell 版的 `[image#id]` 指的是消息，不是哪张图，一条消息最多 20 个媒体，后来才改成两段（ADR 004）。
-- **内容库**：`/var/lib/maxx/media/objects/<sha256 前两位>/<sha256>`，只读权限，先写临时文件再 rename，已有的不再写。和 Haskell 版同一种布局，导入时直接搬。不做 GC。
-- **下载**：一个[派生数据 worker](#三种角色)，入账通知触发，同时最多 4 个下载，每个 60 秒超时，单个超过 64 MiB 的只记元数据、不下。失败重试两次（1 秒、4 秒）就放弃，只记日志，不留失败表。启动时只补最近 1 小时没下完的：QQ 的地址会过期，Haskell 版每次重启都把几百个过期链接重排一遍，刷半小时警告（9f27fa7）。图、表情包、视频、语音、文件都下，[读文件](#读文件)和以后的工具要用。头 16 字节看出是图（PNG、JPEG、GIF、WebP）的整个读进内存，算尺寸、做给模型的副本；别的边下边算哈希边写进内容库的临时文件，几十 MiB 的视频不整个进内存（2026-11-06）。
-- **给模型的版本**：下载时做一次，`media` 里记它的 sha256。长边超过 1568 像素或者超过 1 MiB 的图，重编码成长边 1568 的 JPEG；GIF 取第一帧；其它用原图。Haskell 版一开始发多 MB 的原图，base64 纯属浪费（0a2addb）。
-- **caption**：配置 `[llm] caption`，没配就不写；这个模型要能看图。存在它自己的 `media_captions` 表里，`media` 是下载 worker 的。下载 worker 存好一张图（有给模型的版本）就交给它；启动时的扫描只补 14 天内第一次见到、还没写的。按 sha256 一张一个，表情包重发不重写（975eb59）。每次调用 2 分钟超时，同时最多 2 个，用量记成 `caption`。一到两句中文，截图说明是什么、关键文字原样摘录，存 300 字以内。失败两次就放弃，记成空 caption，不再试。视频、文件不写；语音用腾讯给的识别文本。表情包另用一个提示词（2026-10-29 加，沿用 Haskell 版）：写它是什么、适合什么时候用，比如"翻白眼的猫，表示无语"；不像表情包的（私人照片、截图）判 SKIP，不进[表情包库](#发图)。同一个 sha256 只写一次，提示词按第一次见到时的种类选。
-- **模型看到的**：
-  - 尾巴里只有文字：`[image#123.0: caption]`，还没有 caption 就是 `[image#123.0]`。历史里的图不发图：Haskell 版的教训是它们抢注意力（0ec5752）。caption 到了，那一行就变，接受这一次缓存失效，见[前缀稳定的规则](#前缀稳定的规则)。
-  - 附图：第一批输入和它们引用的消息里的图和表情包，作为真正的图片输入放在易变块里；后续输入里的图放在它们的 `[新消息]` 块里。每张跟在它那条消息的行后面，前面写句柄；找不到那一行的放在块末尾。一个 turn 里看过的图全部留着，不设上限：请求只往后长，前面的一直命中缓存；下一个 turn 的尾巴里它们只是 `[image#123.0: caption]`。每张先按 1200 token 估，之后以 provider 报的用量为准。2026-11-04 改（owner 定）：原来图都跟在块末尾，只标句柄，几个人都发了图时模型要自己拿句柄去对行，才知道是谁发的；原来一次运行最多 8 张，多的只留文字。
-  - 不支持看不了图的模型（2026-10-29 owner 定）：Max 用的模型都当作能看图，不设 `input` 配置，也不做纯文字的降级。意图分类只读文字，不受影响。
-  - 想看历史里的图，在程序里调 `max.image('image#123.0')`（还没做，现在只收 `/work` 下的文件），见[多模态结果](#多模态结果)。
-- **请求里**：条目只存引用（原则 7）。`User` 条目带一个 `images` 列表，每项是"哪条消息的第几个媒体"，不是 sha256：消息一入账就要展示，那时图通常还没下完。每次调模型前，`max` 查 `message_media` 和 `media` 找到给模型的版本，从内容库读出来交给 `max-llm`；它写请求体的时候才把文件编成 base64 的 data URL，直接写进请求体，不另存一份（2026-11-05）。Responses 降成 `input_image`，Chat 降成 `image_url`，每张前面一段文字写句柄。入账不到 10 秒、还没下完的图就等它，在调模型的任务里等，不卡会话 actor；更早的、下不来的、读不出的直接不发，只记警告，句柄还在文字里。不传 QQ 的地址，它会过期，provider 也未必访问得到。
-- **`/chat`**：原打算在 VM 里只读挂一个这个会话的媒体视图，硬链接到内容库；2026-10-29 改成程序按句柄拷进 `/work/chat`，见[读文件](#读文件)。
-
-分六小步做（2026-10-29 加了第 4、5 步）：
-
-1. 内容库、`media` 和 `message_media`、下载 worker；入站节点带上地址。
-2. 模型的 `input`、条目里的图、两种协议的降级、附图和句柄。
-3. caption worker，表情包另用一个提示词；导入老的图片描述和表情包。2026-10-29 上线：模型是经 cliproxy 的 GPT-5.6 Luna，effort low；老描述在新 maxx 启动前导好（图 21,040、表情包 3,421，其中 94 个 SKIP），启动扫描补了最近 14 天漏掉的 10 张。
-4. 发图：qqbot 的上传，sender 发图和 `file_info` 缓存，分段器留下句柄、入账时解析，`send_image`。2026-10-29 上线，群里实测：回复里写句柄发出了 JPEG 和 GIF 表情包（GIF 会动），`send_image` 发出了 VM 里画的 PNG，带说明文字。
-5. 表情包库：embedding 和 `find_stickers`。2026-10-29 做完，见[发图](#发图)的 `max.find_stickers`。
-6. 读记录里的媒体和 `max.image()`。`max.image()` 收 `/work` 下的图，2026-10-29 做完；`/chat` 换成了 `max.file()`，同一天做完，见[读文件](#读文件)。`max.image()` 收消息句柄还没做，先 `max.file()` 拷出来再交路径。
-
-### 发图
-
-2026-10-29 定。同一天先删了，owner 随即改回来；表情包库跨群共享也是 owner 定的。QQ 那边怎么发、实测结果见 [QQ 官方机器人](#qq-官方机器人)的出站。
-
-Max 发的图都走同一条[出站](#出站)：先入账成 Max 的一条消息，节点是指向内容库的媒体（`Blob(sha256)`），`message_media` 同时记上，再交给 sender。所以 Max 发的图在时间线上也有句柄，和群友发的一样能引用、能再发。
-
-- **回复里的句柄**：模型在回复里写 `[sticker#123.0]` 或 `[image#123.0]`，发出去的就是那张图。表情包主要靠这个发：它是说话的一部分，先后要和文字对得上，也省一次工具调用。分段器把句柄单独切成一条，同一段里前后的文字各成一条，顺序照写的；照着显示形式抄来的 `: 描述` 去掉。会话 actor 入账时查 `message_media`，和查 `[reply#id]` 一样（见[解析和发送](#解析和发送)）：本会话的图和表情包都能发；别的会话的只能发表情包，图不出会话。种类按那条消息里节点的种类算。查不到的、没下载好的、不让发的，去掉，记 warn。
-- **`max.send_image({ path, caption? })`**：发 VM 里做出来的图，比如图表、截图、从网上下的图。在宿主上从这个群的 `/work` 读，不跟符号链接，出不了 `/work`。按文件头只认 PNG、JPEG、GIF，WebP 转成 PNG；最大 10 MiB。存进内容库、写 `media`，经 `Post`（带 `origin`）入账，等 sender 回信，返回新消息的句柄。`caption` 是图下面的说明文字，和图在同一条消息里。每次运行最多 5 次。有副作用，后台 job 不开放。
-- **`max.find_stickers({ query, limit? })`**：在表情包库里按意思搜，只搜不发，返回 `{ stickers: { handle, description }[] }`，`limit` 1 到 10，默认 5，模型挑一个把句柄写进回复。库是所有会话见过的表情包（节点种类是 sticker），按 sha256 去重，句柄给最近一次以表情包出现的那条，哪个会话的都算；caption 判了 SKIP 的、空的不进库，按图的提示词写的 caption（第一次是当图见到的）也不进。搜描述的向量，embedding 和 `history` 共用。2026-10-29 做完：
-  - 模型沿用 Haskell 版的 bge-m3（1024 维），线上是 h610 上的 Ollama，tank 连它（10-29 从 tank 试过，回 1024 维、归一化的向量；老库的向量和它算的一样，距离 0）。配置 `[embedding]`：`base_url`（OpenAI 兼容，`/v1` 结尾）、`model`、可选的 `api_key_file`。不配就没有 embedding worker，`find_stickers` 回 `unavailable`。维数跟着表，不是配置项：模型给的长度不是 1024 就当出错。
-  - 向量存在 `caption_embeddings`，一个文件一行，记着模型；搜的时候只比当前模型的。
-  - embedding worker：caption worker 写了表情包的 caption（不是 SKIP、不空）就交给它；启动时和之后每小时扫一遍没有当前模型向量的，所以换了模型会全部重算。一个文件一个单元，同时 2 个，每次请求 30 秒，失败重试两次（10 秒、60 秒）就放弃，等下一次扫描。tank 到 h610 晚上丢包，不做别的补救。用量不记 `llm_usage`。
-  - 老表情包的向量由 `max-import vectors` 导，见[导入](#导入)。
-  - 查询：query 算成向量，按余弦距离取最近的，失败回 `unavailable`，不重试。不设距离门槛（Haskell 版是 0.65）：10-29 在老库的 3,328 个向量上试了十几个查询，相关和无关的距离重叠（相关的多在 0.31–0.45，"吃瓜看戏"最近的 0.45，"今天天气怎么样"最近的也有 0.44），门槛分不开，交给模型看描述挑。
-- **sender**：上传拿 `file_info`（5 MiB 以内 base64 直传，再大分片，见 [QQ 官方机器人](#qq-官方机器人)），再发 `msg_type = 7`，只有 `send_image` 带 `content`，文件不带。`file_info` 按（端点、sha256、文件名）缓存在内存里，提前一小时作废，所以同一张表情包一天里再发不用重新上传；重启就丢，重新传。上传失败和别的发送失败一样记进 `deliveries`。每张图算一条主动消息，占群的额度。
-- **提示词**：表情包偶尔用，一次回答最多一张，别句句都配；记录里没有合适的，用 `find_stickers` 找。
-
-### 发文件
-
-2026-10-29 加（owner 要的）。QQ 那边怎么传、实测结果见 [QQ 官方机器人](#qq-官方机器人)的出站。
-
-- **`max.send_file({ path, name? })`**：发 VM 里的文件，比如生成的文档、表格、PDF、压缩包。和 `send_image` 一样在宿主上从这个群的 `/work` 读，不跟符号链接；空文件不发；最大 64 MiB，和下载的上限一样：QQ 收到 200 MiB，但一次调用只有 60 秒，10-29 从 tank 传 32 MiB 用了 14 秒。`name` 是群里显示的文件名，默认用路径里的；去掉首尾空白，不能有 `/`、`\` 和控制字符，最长 100 字。存进内容库、写 `media`（不记 mime），经 `Post` 入账成 Max 的一条消息，节点是带名字的文件媒体（`DraftNode::File`），等 sender 回信，返回 `file#id.0`。每次运行最多 5 个。有副作用，后台 job 不开放。
-- **sender**：按名字上传成 `file_type = 4`，消息不带 `content`。
-- 记录里已有的文件不能写句柄再发，分段器只认图和表情包的句柄；要再发，先 `max.file` 拷进 `/work` 再 `send_file`，见[读文件](#读文件)，用得多再说。
-- 私聊里也能发：10-29 用 qqbot 的 `send` 例子给 owner 的私聊发了一个 txt，收到了。
-
-### 读文件
-
-2026-10-29 加（owner 要的）。原计划是在 VM 里只读挂一个 `/chat`，硬链接到内容库。改成按需拷：不用再起一个 virtiofsd、不用改 guest；硬链接还有个坑，guest 的 root 在 virtiofs 上就是 `maxx`，挂成可写的话能 chmod、改写内容库里同一个 inode。
-
-- **`await max.file(handle)`**：SDK 函数，和 `max.image` 一样不是 Max 的工具，不算进"调了 Max 的工具"，也不限次数。runner 发 MCP 调用 `max.file`，宿主按句柄查 `message_media`。句柄写 `file#123.0`，记录里显示的 `[file#123.0: 名字]` 也认；图、表情包、视频、语音的句柄也行。只认本会话的、下载下来了的（64 MiB 以内），拷到 `/work/chat/`，返回 `{ path, name, size }`。
-  - 有文件名的叫 `<消息id>.<序号>-<文件名>`：文件名是群友起的，`/`、`\`、控制字符换成 `_`，最多留 150 字节。
-  - 别的叫 `<消息id>.<序号>.<扩展名>`，扩展名按 mime 取，`image/jpeg` 是 `jpg`，短的子类型照用，别的不加。
-- **写进 /work**：guest 能在 `/work` 里放符号链接，宿主写的时候不能跟。不跟链接地打开 `/work`，建或打开 `chat`，在里面先写临时文件，再 rename 到位。`chat` 是链接、目标是目录，都报 `bad_path`；目标位置原来是链接，换掉的是链接本身。同一个文件再拿一次就再拷一次。
-- **宿主碰 /work 都走一处**（2026-10-30，review 发现的）：`max::mcp::work` 读、写、建目录，目录一段一段建、一段一段打开，哪段都不跟链接。`run_code` 和 `shell` 的完整输出（`.max/out`）、job 报告（`.max/jobs`）、dreamer 也经它；原来前两个用普通文件 API，guest 把 `/work/.max/out` 换成链接，宿主就会以 maxx 用户把输出写到 `/work` 外面。完整输出边跑边写，只新建，那个名字上已经有东西（链接也算）就不写。
-- 不清理：`/work/chat` 里是普通文件，程序自己删。
-
-## schema
-
-2026-10-27 定：不沿用 Haskell 版的 schema，重新设计，上线时用导入程序一次性迁移。Haskell 版经过 135 个迁移，留下两套会话键（`conversation_id` 和 QQ 群号 `legacy_group_id`，后者没有外键，却被约 25 个模块当主键用）、三套消息 id、四份正文、31 张没有代码读的表，和互相撤销的迁移。只能从头来。
-
-### 约定
-
-- **一个实体一个键。** 会话只有 `conversation_id`，QQ 群号只出现在 `endpoints.native_id`。消息只有 `id`，同一个会话里就是入账顺序（见[时间线](#时间线)），模型句柄 `#id` 用它；平台原生 id 是属性，`(endpoint_id, native_id)` 唯一，入站的在 `messages`，Max 发出的在 `deliveries`。人只有 `principal_id`，平台账号在 `identities`。
-- **JSONB 只放三种**：`nodes`、`raw`，和按设计整体存取的 blob（turn 快照、`opaque`、工具输出）。其它结构都是列。
-- ledger 和 turn 记录只追加（[原则](#原则) 1）。
-- 命名：PK 叫 `id`，外键 `<表>_id`，时间列用 `timestamptz`、叫 `*_at`。
-- 迁移从 1 号开始，上线前随意合并，上线后只追加。
-- 不做 source hash，不做 CAS cursor。Haskell 版的 `conversation_source_hash` 对 IR 做 sha256，IR 格式一改就要全库重打。
-- id 列都是 `generated by default as identity`，导入程序可以写旧 id。
-- 查询都在 `max-db` 里，接受 `&mut PgConnection`，由调用方决定哪些写在同一个事务里；要几条语句一致的查询自己开事务，调用方已经在事务里时就是 savepoint。
-- `.sqlx` 离线元数据在 `crates/max-db/.sqlx`，Nix 构建设 `SQLX_OFFLINE=true`。改了迁移或查询，跑 `scripts/prepare-queries`：按迁移重建开发库，重新生成这份元数据。
-- 向量用 pgvector。它不是 trusted 扩展，`maxx` 不是超级用户，迁移建不了：NixOS module 在 `postgresql-setup` 里以 postgres 建好，迁移里的 `create extension if not exists vector` 就什么都不做（10-29 在开发库上用非超级用户的角色试过）。库删了重建，要再建一次扩展，重启 `postgresql-setup` 就行。
-
-### v1 的表
-
-| 区域 | 表 | 说明 |
-|---|---|---|
-| 平台 | `conversations` | kind（group、direct）、标题 |
-| | `endpoints` | 会话、平台、`self_identity_id`（Max 用哪个账号）、`native_id`。v1 一个会话一个端点；镜像时一个会话多个。现在就分开（2026-10-27 定），免得再迁移。`native_id` 是适配器自己的字符串：QQ 是 `group:<group_openid>` 或 `c2c:<user_openid>`，导入的老 QQ 端点（平台 `qq_legacy`）是 `group:<群号>` 或 `private:<QQ 号>` |
-| | `principals`、`identities` | 人，和他在各平台的账号。多个写者：各会话 actor 入账时建，见[身份](#身份)的"写者" |
-| | `conversation_settings` | `/model`、`/effort`、`/persona`、`/proactive`、`/clear --all` 的消息 id 水位。可变 |
-| ledger | `messages` | 会话、端点、`sender_identity_id` 和发送者名字、角色的快照（见[身份](#身份)）、`native_id`、`sent_at`、`received_at`、kind（chat、command、event）、`reply_to`、`nodes`、`raw`、`text`（渲染后的文本，给搜索和全文索引；`lower(text)` 上有三元组索引，见[召回](#召回)）；Max 自己的消息带 `turn_id` 和段号。`raw` 是平台的原始载荷，只为留档：读回来的行只带它的 `said_by`（谁替 Max 的账号说的，见下），入账时内存里的消息也一样（2026-11-05）。撤回、编辑是 `kind = event` 的行，`event` 列说是哪种（edit、unsend），带 `target_id` 和文本兜底；编辑的新内容在 `nodes`。只有会话 actor 写 |
-| | `deliveries` | 出站回执：消息、端点、平台 id 或错误、状态（sent、failed、unknown）、时间。平台 sender 是唯一的写者，只追加。镜像时一个端点一行，见[出站](#出站) |
-| 媒体 | `media` | 按 sha256 寻址：mime、大小、宽高、第一次见到的时间、给模型的版本的 sha256。种类在消息的节点里：同样的字节可能这条是图、那条是表情包。见[媒体](#媒体) |
-| caption | `media_captions` | 按 sha256 一行，只写一次：用哪个提示词（图或表情包）、文字（模型放弃时为空）、`skip`（不像表情包的，不进表情包库）、哪个模型写的（导入的为空）。caption worker 是唯一的写者；读行的查询给没有描述的媒体节点填上它，所以哪里读到的行都带着 caption。见[媒体](#媒体) |
-| | `media_captions` | sha256、caption（放弃了就是空的）、写它的模型、时间。caption worker 是唯一的写者 |
-| | `caption_embeddings` | 按 sha256 一行：表情包 caption 的向量（`vector(1024)`）、哪个模型算的、时间。embedding worker 是唯一的写者；换了模型，它的扫描按新模型全部重算，搜索只比同一个模型的向量。见[发图](#发图) |
-| | `message_embeddings` | 按消息 id 一行：会话、`halfvec(1024)` 的向量、哪个模型算的、时间。召回向量 worker 是唯一的写者，换了模型全部重算。见[召回](#召回)。`summary_embeddings` 是摘要的，10-30 起不读不写 |
-| | `message_media` | 消息、序号、sha256。入站节点里是下载地址，下载完记在这里；程序交的图（`max.image()`）节点里直接是 sha256 |
-| turn | `turns`、`turn_outcomes` | 见 [turn 记录](#turn-记录)。`t#N` 是 `turns.ordinal`，每个会话从 1 数 |
-| | `llm_usage` | turn（可空）、用途（turn、intent、caption、job、dreamer；historian 只在 11-02 之前的行里）、provider、模型、强度、token（含缓存命中数，按 provider 看命中率、调空闲窗口；还有其中的推理 token）、费用。token 用 bigint；费用 `cost_micros` 是百万分之一美元，用整数，不要 decimal，价格未知时为空。还有三个毫秒数（2026-10-30 加）：`first_ms` 是发出请求到模型第一次输出（正文、推理或工具调用都算），`took_ms` 是到回答结束，`quiet_ms` 是流里最长一段什么都没到的时间，也就是 `stream_idle_timeout_secs` 掐的那个。turn 和走 `complete` 的调用（intent、historian、dreamer、caption）都记；job 的调用原来为空，2026-11-07 起由 `/llm` 的转发器量（见[后台 agent](#后台-agent)的**用量**）。要降空闲超时，先看 `quiet_ms` 正常情况下有多长 |
-| 上下文 | `summaries` | historian 写的摘要：首尾消息 id、时间、标题、kind、importance、p1、p2、p3、status（active、superseded）。活跃的范围不重叠，用排他约束。11-02 起不读不写，数据留着，见[摘要](#摘要) |
-| | `summary_runs` | historian 的每次模型调用：范围、原因（quiet、pressure、compact）、模型、原始输出、错误。11-02 起不写 |
-
-以后随功能加：`automations`、`lingo_*`、`bungie_*`、`destiny_*`。
-
-### 旧表的去向
-
-- `platform_events`：原始 payload 进 `messages.raw`。
-- `message_deliveries`、`message_delivery_parts`：换成 `deliveries`。
-- `message_projections`、`message_hook_*`、`agent_messages` 视图：hook 不做了。
-- `execution_journal`、`llm_calls`：turn 快照里就是模型的全部输入和输出。
-- `platform_ids`：没有兼容 id。
-- `conversation_cursors`：没有 cursor，尾巴从 `conversations.tail_after` 之后开始，见[前缀稳定的规则](#前缀稳定的规则)。
-- `compartment_evidence`：搜索直接搜正文。
-- `memories` 和它的 `memory_*`、`episode_memory_*` 表：记忆换成文件，旧的记忆 2026-10-30 手工迁成了文件，见[记忆](#记忆)。
-- `skills`、`skill_versions`：skill 是文档，放文件。
-- `sandboxes`：VM 的生命周期在进程里。
-- `admin_timeline_revisions` 和那几个 NOTIFY 触发器：admin 以后再说。
-- 31 张死表（durable task、plan、workflow、browser workspace 等）：不导。
-
-### 导入
-
-- **消息 id 沿用旧的 `canonical_message_id`**（2026-10-27 定），新消息从最大值加一接着编。旧摘要和记忆正文里的 `#123`、`[image#123.0]` 句柄因此还有效。导入时校验它和 `ingest_seq` 的顺序一致；不一致就另加一列记顺序。
-- **全部消息都导**（2026-10-27 定），包括被 hook 忽略过的（`message_projections.context_visible = false`）。库里忠实保留群里的所有事实。
-- `canonical_content` 的 v2 nodes 转成新 `Node`；`raw` 从 QQ 的 `segments` 列取，Matrix 从 `platform_events.raw_payload` 取；`text` 重新渲染。老的 Matrix 消息导成哪个平台 **待定**：Matrix 先不做，代码里的 `Platform` 暂时没有它，库的约束还认 `matrix`。
-- 老 QQ 的账号和端点导成平台 `qq_legacy`：官方接口给的是 openid，和 QQ 号、群号不在一个命名空间，对不上。新群用 `/bind <老群号>` 接到老会话上，时间线连续，见 [QQ 官方机器人](#qq-官方机器人)。
-- 老 QQ 号的人怎么接上见[身份](#身份)。旧库按 QQ 号存人：583 个 QQ 身份，一人一个，`native_user_id` 就是 QQ 号。官方接口只给 openid，同一个人在每个群、在私聊里的 openid 都不同，`union_openid` 是空的，所以一个人在几个群要在每个群各接一次。不做昵称匹配：旧数据里同群最新昵称撞名的有 4 人，45 个昵称只有一个字，自动认人总会认错。没接上的人算新人；合并是别名，之前的行渲染出来跟着变。
-- 老的 reaction、戳一戳事件不导。Max 的 `debug` 行（工具回显，4.7k 条）不导。微信、iMessage、Matrix 的行（约 2.6k 条，那些群接不到新 bot 上）不导。
-- Max 自己的消息不写 `deliveries`：sender 启动时只补记 `qq` 端点上结果未知的，`qq_legacy` 的不管。旧 `agent_turns` 不导，只有 3 段摘要引用了 `t#`；`turn_id` 留空。
-- `conversation_compartments` 只导 `active` 的（3,249 段）。它们按群号（`legacy_group_id`）挂，不是按 `conversation_id`，导入时经群号找会话。范围从 `ingest_seq` 换成首尾消息 id；importance 0..1 换成 1..100；单摘要时期的 40 段只有 `summary`，放进 p1，其它层空着。旧摘要没有标题，标题留空，渲染时不留多余的空格。句柄从 `episode:<uuid>` 换成 `summary#<id>`。
-- `principals` 和 `principal_identities` 直接搬，id 不变，旧摘要和记忆里的 `[mention#N]` 因此还有效；改名之前写的 `[@#N]` 导入时改写成 `[mention#N]`。旧表按 Max 的账号（`platform_account_id`）区分 identity，每个平台一个账号，直接换成平台：QQ 的换成 `qq_legacy`。`sender_name` 从旧 `messages` 的 `sender_card`、`sender_nickname` 取，群名片优先：2026-08-04 起 `sender_nickname` 存的就是有名片时的名片（`QQ.hs:94`）。`sender_role` 从 `platform_events` 原始 payload 的 `sender.role` 取，08-04 之前的为空。没有身份、没有消息的 611 个空 principal 不导。`endpoint_known_identities` 不导。
-- `sessions` 只导人设、`/proactive` 和 `/clear --all`，模型和强度不导，见[配置](#配置)。旧记忆不经过导入工具，见[记忆](#记忆)。
-- 媒体：内容库的文件和旧库在同一个 bcachefs 上，用 `cp --reflink` 拷到 `/var/lib/maxx/media`，属主改成 `maxx`。`media` 和 `message_media` 从 `message_images`、`message_videos`、`group_files` 建；旧的 `seg_index` 是第几个节点，不是第几个媒体，要按节点重算序号；没有表记着的，按节点里写的 blob 补上（多是 Max 发的图）。文件要先拷好，导入时每个都要在。给模型的版本和图片尺寸由 `max-import pictures` 生成，和下载时一样。caption 等第 3 小步有了 `media_captions` 再导：老库 21,519 张图的描述，和表情包库（3,397 张；3,328 张有描述和 bge-m3 向量，94 张 banned 的记成 SKIP）。由 `max-import captions` 导，maxx 照常跑着也行；它先跑迁移，所以要在带 caption worker 的 maxx 启动之前导，否则 worker 启动时的扫描会把最近 14 天导入的图重新写一遍：只导 maxx 有的文件，同一个文件表情包的描述优先，maxx 自己已经写了的不动，所以能重复跑。表情包的向量由 `max-import vectors` 导（第 5 小步）：老 `stickers` 表的 bge-m3 向量，只导老表记的文本哈希（`embedding_content_hash`，描述的 sha256）和 maxx 的 caption 文字对得上的，模型名照抄（`bge-m3`，所以 `[embedding] model` 要写成这个），已经有向量的不动，所以能重复跑、maxx 跑着也行；它也先跑迁移。10-29 在 tank 上只读地对过：maxx 有 3,334 条该有向量的表情包 caption，3,319 条能导；8 条老描述有换行或首尾空白，导 caption 时理成了一行，文字不同；7 条是 maxx 自己写的 caption，老库没有向量；这 15 条由 embedding worker 补。消息和摘要的向量也由它导，按 id：maxx 的召回向量 worker 要算的（够 4 个字的 chat 消息、活跃的摘要）、还没有向量的，从旧 `messages`（`canonical_message_id`）和 `conversation_compartments` 拿 1024 维的，模型名照抄；旧向量是从旧的渲染文本算的，句柄写法不同，意思一样。2000 条一批，已经有的不动。要在带召回向量 worker 的 maxx 启动之前导，否则 worker 会先花几个小时重算。
-- 转发：旧库把转发里的每条消息存成单独的行，导入时折进转发那条消息的节点，一条一行（嵌套的缩进），和现在官方接口给的转发一样；里面的图算在那条消息上。
-- Max 是一个 principal：旧 QQ 号的 Max，加上 bot 的 openid 作 `qq` 身份，旧行渲染出来是"（你）"。Max 的旧行没有平台 id，它们本该在不导的 `deliveries` 里。
-- owner 的旧私聊接到 owner 新的 c2c 私聊上；别人的旧私聊不接。owner 的 openid 接在 owner 旧 QQ 号的 principal 上。
-- 各群 VM 的 `/work` 也迁（2026-10-27 定）：按群号找到对应的会话，把这个群当前沙箱卷里的 `work` 拷到新卷，属主改成 `maxx`（见 [VM 进程](#vm-进程)）。`nix.img`（guest 里可写的 Nix store，存的是装过的包）提议不迁，用到时重新装。旧卷在 root 所有的目录下，读它要 root。
-- 自动化、lingo、Destiny 等各自功能做到时再导；表情包随 caption 一起导。
-- 导入写了旧 id 的表，最后要把它们的 identity 序列调到最大值之后（`setval`），否则新行会撞旧 id。
-- 规模：2026-10-28 有 293,848 条消息、605 个有身份的人；库 3.3 GB，内容库 3.4 万个文件、26 GB。导入是分钟级的事。向量都导，见上面的媒体一条。
-- maxx 自己的库（测试群的 113 条消息、3 段摘要）导入时整个重建，不留（2026-10-29 owner 定）：它的 id 和要保留的旧 id 撞。测试群导入后重新 `/bind`，导入前 `/link` 过的人导入后再发一次。
-- 工具是单独的 crate `max-import`：`import` 在一个事务里导进空库，连旧库只读；`pictures` 再补给模型的图，跑过的跳过。演练就是导进一个临时库。上线跑一段时间后删掉：2026-11-05 删了，`import`、`pictures`、`captions`、`vectors` 都跑过了，按头像接人不用它；要看它，在 `7b5d83d8` 及以前的提交里。以后导自动化、lingo、Destiny 时另写。旧库和 `/var/lib/max` 等 owner 说了再删。`qq_legacy` 的行和合并是数据，留着。
-- 上线步骤（2026-10-29 定）：
-  1. 记下 bot 的 openid（现在的库里 Max 端点的 `self_identity_id`），停 maxx。
-  2. root 把旧表和节点用到的文件从 `/var/lib/max/media/objects` 用 `cp --reflink` 拷进 `/var/lib/maxx/media/objects`，属主 `maxx`，只读。
-  3. 删掉 `maxx` 库，建一个空的，属主 `maxx`。以 `maxx` 用户跑 `max-import import`（旧库用 postgres 角色连，只读），再跑 `max-import pictures`。
-  4. 起 maxx。主人在私聊里给每个老群发 `/bind <老群号>`，把码发到新群。
-
-## 身份
-
-2026-10-27 定。沿用 [ADR 004](https://github.com/HCHogan/max/blob/a5de2e1410f5cdfaa4b88c052bd499ee8b676759/docs/adr/004-canonical-handles-for-the-model.md) 的三条判断：
-
-- **模型面对人，ledger 存账号。** 人是 principal，平台账号是 identity。消息的发送者和提及节点存 identity，因为平台认证的是那个账号；渲染给模型时再查到 principal。合并因此不碰 ledger。
-- **principal 只是"这几个账号是同一个人"的断言**：QQ 的 `/bind` 合并 owner 自己的账号。老群的人按头像接到老 QQ 号上做过一阵，2026-11-06 删了，接上的也拆了，见下面的[按头像接上](#按头像接上)；要接、接错了都是 owner 改库。不从名字推断，也不信用户自己说的。
-- **合并是别名，不改写。** `principals.merged_into` 指向保留的那个，被合并的行留作墓碑；读的时候用 `coalesce(merged_into, id)`，链深固定为 1，可以撤销。
-
-### 表
-
-| 表 | 列 | 说明 |
-|---|---|---|
-| `principals` | `display_name`、`merged_into`（可空） | 人。`display_name` 建行时取第一次见到的名字，只在这个人在当前端点没有发言快照时用 |
-| `identities` | `principal_id`、platform、`native_user_id` | 账号，`(platform, native_user_id)` 唯一。Max 自己也是一个 principal，它在各平台的账号是 identity，不另设账号表 |
-| `endpoints` | `self_identity_id` | 这个端点用 Max 的哪个账号收发。"是不是 Max 说的"就是 `sender_identity_id = self_identity_id` |
-| `messages` | `sender_identity_id`、`sender_name`、`sender_role` | 发送时的快照。名字 QQ 取事件里的 `username`，为空时写"某人"（导入的老消息群名片优先，空则取昵称）。角色是 owner、admin、member，QQ 取事件里的 `member_role`；私聊为空 |
-
-没有成员表。Haskell 版的 `endpoint_known_identities` 记谁在哪个端点出现过，这里由 ledger 推出来。名字和角色都是消息自带的快照，不向平台查，也不缓存。
-
-**写者**（2026-10-28 定）：别的表都只有一个写者（见[运行时结构](#运行时结构)的图），`principals` 和 `identities` 是例外。会话 actor 入账时遇到没见过的账号（发送者，或者被提及的人）就建 identity 和它的 principal；同一个新人同时在两个群说话，两个 actor 会一起建。启动时解析 owners、`/bind` 合并 owner 的账号也写这两张表（按头像接上也写过，11-06 删了）。规则：
-
-- 只插不改，`merged_into` 除外。
-- 建之前先不加锁查一次，查到就用。查不到，就在入账事务里按（平台，账号）取 `pg_advisory_xact_lock`，再查一次，还没有才建。同一个新账号因此只会建出一个 principal；见过的账号不用锁，所以平时各会话的入账互不等待。
-
-### 按头像接上
-
-2026-11-06 删了（owner 定），接上的也拆了，不留痕迹（迁移 0024）：tank 上它接上的 134 个账号各自又是一个人（`principals.merged_into` 清掉），提到它们的 802 行的 `text`（入账时渲染的，搜索读它）改回它们自己的 `[mention#id]`，`legacy_avatars` 和 `avatar_checks` 删掉。owner 手改过的合并不动，当时一条也没有。召回向量不用重算：`recall_text` 去掉了句柄；Max 的记忆文件里也没有老号的句柄。turn 记录里的 transcript 是当时模型看到的，不改。之后老群的人在新群里都算新人，要接由 owner 改库。代码在 `12d420cb` 及以前的提交里。下面是它当时的做法。
-
-2026-10-29 owner 定，取代当天去掉的 `/link`（见[权限](#权限)）。官方接口只给 openid，同一个人在每个群里的都不同；老群的人按 QQ 号存着。maxx 拿账号的头像和老 QQ 号的头像比，对得上谁就接到谁身上，不用谁来申请，也就没法替别人申请。
-
-- **头像**：官方 bot 能按 openid 取账号头像（`q.qlogo.cn/qqapp/<AppID>/<openid>/640`），公开接口能按 QQ 号取（`q1.qlogo.cn/g?b=qq&nk=<号>&s=640`）。两张都缩成 16×16 灰度（印记，256 字节），均方根差在 5% 以内算同一张。2026-10-29 实测：同一个人的两张差 0.03%，别人的差 36–60%。没设头像的账号拿到的都是同一张默认图；QQ 对不存在的 openid 也给这张（1512 字节），maxx 就这样取它的印记。
-- **比谁**：只在接着老群往下聊的群里（会话同时有 `qq` 和 `qq_legacy` 端点），拿这个群里还没比过、没并进别人的 `qq` 账号，和在这个会话的老记录里说过话的老号比。主人和 Max 的账号不比。老号的印记存在 `legacy_avatars`，超过 7 天的用到时重取，取不到的用旧的，从没取到过的不参与。
-- **接不接**：账号是默认图，不接（`default`）；没有老号像它（`none`）；不止一个老号像它（`ambiguous`）；像的是主人或 Max 的老号（`barred`），不接，记 warn，多半是冒充；这一批里还有别的账号也像这个老号，或者这个群里已经有账号接在它上面（`taken`），都不接，记 warn：冒充者和本人都在群里时两个都不接，由 owner 查。只有一个老号像它，而且没人跟它抢，才把它的 principal 并进那个老号的人（`linked`）。每个账号只比一次，结果和比中的老号记在 `avatar_checks`；账号头像取不到的不记，下次说话、过 10 分钟再试。
-- **什么时候**：启动时把每个这样的群里没比过的账号比一遍；之后每个账号第一次说话时比，把那个群里没比过的都带上。worker 订阅入账的行，和别的派生数据 worker 一样，见[运行时结构](#运行时结构)。
-- **错了怎么办**：owner 直接改库：`principals.merged_into` 改掉或清掉；要它重新比，删掉它在 `avatar_checks` 的那行。冒充的风险还在，头像谁都能换：换成一个不在群里的老成员的头像，就会被接成那个人。owner 接受，看日志兜底。
-- 10-29 去掉 `/link` 时清掉了它接上的 18 条，这些账号随后按上面的规则重新比。
-
-### 模型看到的
-
-- 人的句柄是 `[mention#12]`，和 `#123`、`[image#123.0]`、`t#42` 同一套语法，见[回复的写法](#回复的写法)。ADR 004 推迟的带类型前缀写法这次也不做，没观察到不同命名空间的号码被混用。
-- 尾巴每行 `[HH:MM 名字 #id]`，名字用 `sender_name` 快照，所以有人改名，旧行也不变，前缀不受影响。正文里的提及渲染成 `[mention#12]`。
-- **名册**在创建核心时随基础上下文一起投影，放在易变块（2026-10-27 定）。范围是上下文里出现的人：截过的尾巴里的发送者和被提及的人、第一批输入的发送者。一人一行，如 `[mention#12] 名字（管理员）`；名字和角色取这个人在本端点最新一条消息的快照，没发过言的取 `principals.display_name`。一次 `DISTINCT ON` 查询，走 `messages (endpoint_id, sender_identity_id, id)` 索引。
-- 核心活着时第一次出现的人，在那一批 `[新消息]` 块里补一行名册，`Input::Messages` 带上这些人。核心在把这一批给模型看的时候把他们加进名册集合，之后的输出可以 @ 他们。
-- 模型看不到平台号码。
-
-### 解析和发送
-
-- 核心持有名册里的 principal 集合，随基础上下文存进快照，模型调用任务的分段器拿着它。`[mention#N]` 不在集合里的不变成提及，模型编出来的号码不会变成真 @：带了名字（`[mention#N: 名字]`）的发成 `@名字` 文本，没带的去掉。
-- 引用（2026-10-28 定）：会话 actor 入账 `Said` 时检查 `[reply#id]`：它必须是这个会话时间线上的一条消息，而且不是事件行（撤回、编辑）。不是的话，比如编出来的号码、别的会话的消息，就去掉引用，正文照发，记一条 warn。这一步不像提及那样在核心里查：模型可以合法地引用它用工具查到、不在上下文里的旧消息，只有数据库知道这个号码在不在这个会话里。发送时引用的消息没有平台 id（比如它自己就没发出去），`lower` 就不带引用。
-- 发送时，`DraftNode::Mention(principal)` 由适配器的 `lower` 解析成目标端点平台上这个人的 identity，发原生 @；有多个时取在这个端点最近发过言的那个；没有就降成 `@名字` 文本。
-- 镜像时这套规则不用改：两边都有账号的人两边都是原生 @，只有一边有账号的，另一边是文本。
-
-### 权限
-
-- owners 写在 sops 文件里，一行一个 `平台:原生号`，启动时解析成 identity（没见过就建），按 principal 判权限。一个 owner 并进来的所有账号都有权限。QQ 只写私聊的 `user_openid`，群里的账号由 `/bind` 并进来，见 [QQ 官方机器人](#qq-官方机器人)。
-- 平台角色只看消息自带的 `sender_role`：命令消息本身就带着发送者当时的角色，不另外查平台。
-- **命令以 `/` 开头**（2026-10-29 定，owner 的意思）：`/` 或全角 `／` 后面跟命令名；`!` 不再是命令前缀，`/nix/store` 这类也不是命令。群里的命令还得 @Max（同一天 owner 定：群里有别的机器人，也认 `/` 命令），不带 @ 的就是普通消息；私聊里不用。回复 Max 不算。提示怎么用命令的话（`/bind` 的码、`/clear`）在群里都写成 `@maxx /…`。QQ 官方机器人的指令面板（`/v2/panels` 或管理端的「高级设置」）只把指令填进输入框，用户自己按发送，bot 收到的是普通消息，所以面板和手打走同一条路。面板写不了参数提示，而且全群可见。面板就是命令列表，所以没有 `/help`（2026-10-29 定）。2026-10-29 用 `POST /v2/panels` 登记了一个群面板（`scope: group`、`target_type: all`），同日按 owner 的意思改过一次：`status`（查看当前状态）所有人能点，`compact`（压缩上下文）、`kill`（停止当前会话）`only_admin`；原来所有人能点的 `link` 随命令一起去掉了。`persona` 不在面板上，命令照样能用。名字不带 `/`，QQ 填进输入框时自己加。名字最多 7 个汉字，说明最多 15 个；每个面板最多 20 项，一个 bot 最多 20 个面板。改面板用 `PUT /v2/panels/{panel_id}`，不写进代码。以后做 Matrix 时再看：Element 会拦截 `/` 开头的消息。
-- **命令的回复像日志**（2026-10-29 owner 定）：放在 `text` 代码块里，第一行是 `/命令 → 结果`，多的行接在下面；口吻简短、机械，"已切换：…"、"错误：…"、"拒绝：仅限主人"，和 Max 在 turn 里说的话一眼分得开。内容里有三个以上连续反引号时（比如人设）围栏加长。命令和回复照样进上下文，回复就是 Max 说的话：owner 觉得模型不会因此学着用日志口吻聊天。
-- **`/status`** 是 Haskell 版 `!version` 那样的小名片，`!version` 并进来，不显示版本号（2026-10-29 定）：第一行 maxx 和构建它的 commit（flake 在 `max` 包上设 `MAX_COMMIT`，cargo 自己构建的写 dev），下面一行一个键值，键对齐：系统和架构、下一次回复用的模型和推理强度（10-29 owner 要的；在跑的 turn 用的和它不同时，turn 那行另标）、主动接话、在跑的 turn、清过的话加上下文水位、maxx 和主机的运行时长。全用英文。放进代码块以后去掉了原来每行前面的 emoji。模型和人设不放（owner 定），看 `/model`、`/persona`。
-- **什么时候生效**：换模型、`/effort`、`/persona` 存进设置，在跑的 turn 还用它开始时的（模型和人设在 turn 开始时定：上下文按模型的窗口投影，人设在系统提示里）。所以回答分两种（2026-11-04 改）：没有在跑的 turn 回"下次回复生效"；有的话回"这一轮对话结束后生效（闲下来 5 分钟后）"，分钟数是这个模型的空闲窗口。原来一律说"下次回复生效"，群里接着聊的话，后面几条还是旧模型回的。
-- 命令的权限沿用 Haskell 版（2026-10-29 定）：查看类（`/status`、不带参数的 `/model` 等、`/model list`）谁都能用；只影响这个会话的（`/kill`、改人设、`/clear --all`、`/unclear`）要群主、管理员或 owner；花钱或影响全局的（换模型、`/effort`、`/proactive`、`/bind`）只有 owner。没权限的回"拒绝：仅限主人"或"拒绝：仅限群主、管理员"。`/kill` 不回话。私聊是对方的（2026-11-03 owner 定：私聊只有 owner 和几个朋友在用）：私聊对象除了 `/bind` 什么命令都能用，换模型、`/effort`、`/proactive` 也行，因为只改这个私聊；`/bind` 仍然只有 owner（代码里是 `Rank::ChatOwner`，在群主、管理员和 owner 之间）。
-- **`/persona`**：不带参数看当前的，`clear`、`reset`、`default` 回到默认（`default` 2026-10-30 加：Haskell 版只认 `clear`，`/persona default` 存成了一个只写着 default 的人设，一个群从 07-31 起一直用着它；迁移 0019 清掉这种）。默认人设和规则里的"不要怎样"同一天去掉了（owner 定），能正着说的改成正着说：列出来不让做的事，反倒把那件事放进了模型眼前。只留一段红线（同一天 owner 加）：中国政治、翻墙、色情赌博毒品邪教，QQ 上谈了会封群封号；有人提起就装傻岔开或者 `[silence]`。它在规则里不在人设里，换了人设也在。
-
-### v1 不做、位置留好的
-
-- ~~`/link <QQ号>`~~（2026-10-29 加，同一天去掉）：凭头像验证，把发令人的账号接到老 QQ 号的人上。头像是公开的，当天就有人换上别人的头像接到了别人身上。owner 定：命令和催人接的提醒都去掉，已有的 18 条关联清掉；老群的人由 maxx 自己按头像接，见[身份](#身份)，有冲突、对不上的只记日志，有问题 owner 直接改库，不信用户自己说的。按头像接 11-06 也删了。
-- 跨平台的权限跟着 principal 的合并走，不单独做；记忆是会话的文件，换平台接上同一个会话就还在。
-
-## intent
-
-2026-10-27 定进 v1，原来只判没有 @ Max 的消息。10-28 改：**所有入账都经过 intent**，@、回复这些也不绕过，由它决定什么时候叫醒核心。这样它看得到全部信息，规则和小模型判定在一处，去抖也自然放在这里。
-
-10-29 精简：只留"没说完"的去抖和小模型判定，外加一个每小时上限当保险。删掉的有 Haskell 版的闸门、三类判定（called、followup、topic）和 topic 冷却，以及 10-28 新加的"本群情况"、接住率和被嫌烦。先看小模型自己判得怎么样，要加规则再加。Haskell 版的行为见它的 `docs/features.md` 的 Proactive triggering。
-
-intent 和[核心](#核心)一样是 `max-core` 里的纯状态机，是会话 actor 的一个字段：
+- **The tail is split into messages by turn** (2026-10-31). Previously the tail was a single user message that kept growing. Gemini's implicit cache can reuse any identical prefix at token granularity within a few seconds, but after a few minutes it recognises only whole messages: it retains only the part of each request before its last message, and a later request hits only if it begins with exactly those messages. Tested live through cliproxy (Flash and Argon alike, after 6 minutes): appending to the previous request left unchanged reused about 90%; appending lines within the same message reused 0; keeping the messages before the previous request's last message unchanged and starting a new message after them reused about 90%; earlier boundaries (for example after the system prompt, or after the third-to-last message) reused 0. New turns are at least one idle window (300 seconds) apart, so the first calls of Argon's 99 turns hit only 2%, leaving about 5.7 million uncached tokens, the bulk of Argon's input cost; later calls within a turn hit 80–90%. On 2026-10-30 this was taken to mean "Gemini's cache expires too quickly", which was wrong: with a byte-identical prefix there was no hit even when turns were less than 2 minutes apart.
+  - Method: during projection, every turn after the marker (`turns.from_id`, the message that woke it) makes a cut in the tail where its own tail ended: before the snapshot position and before the first message that woke it. Each segment is rendered separately, with date lines computed from the last line of the previous segment, and becomes one user message. All the tail segments of the previous turn's first call are present unchanged; there is only one more segment at the end. No new table is needed.
+  - A turn's tail is "everything before the snapshot position, excluding the messages that woke it". If someone spoke after the waking message (during the seconds of debounce and classification), the turn's tail has a piece on each side of that message, which the next turn cannot match; that call misses, and the one after it lines up again. A truncation, or a caption arriving and changing a line, also invalidates the cache once.
+  - The number of segments equals the number of turns after the marker; a busy group has dozens to a hundred or more user messages before truncation. They are not merged: merging would change the previous request's split, and the whole thing would miss. OpenAI's cache works on token prefixes, so splitting makes no difference there.
+- **The tail's starting point moves only on truncation** (decided 2026-10-28; changed 2026-10-30 to keep its own marker). The tail starts after `conversations.tail_after` (migration 0018), or after the `/clear --all` watermark if that is later; normally it only grows. When the tail exceeds the high watermark during projection, it is truncated from the marker onwards in chunks of fixed length (the high watermark minus the low watermark) until what remains lies between the low and high watermarks, and the new marker is written back. Messages are not pushed out one at a time; otherwise this would again be a sliding window that invalidates the cache with every message. Cut points are counted forward from the marker, not backward from the end, so the starting point does not move as new messages arrive. Conversations that have no marker yet are counted from their first line, so the first projection after deployment has to read the whole conversation, but only that once. The tail is truncated first, and quoted messages and the roster are computed afterwards, so people in the truncated part do not enter the roster, and lines that quote the truncated part still carry the quoted message as usual.
+- **No waiting for captions.** Whatever exists is rendered; when a caption arrives, its line changes, and that one invalidation is accepted. Nothing blocks. The Haskell version polled and waited for the media worker, for up to 30 seconds for images and 60 seconds for videos.
+- **Only one turn per conversation at a time**, so in-flight trigger messages do not need to be hidden.
+- Everything that changes is in the volatile block.
+
+### Budget
+
+Defaults are derived from the window C and capped; they can be changed in the configuration, and the values are tuned during v1:
+
+| Block | Default |
+| --- | --- |
+| Tail high watermark | `min(C / 8, 64k)` (on 2026-10-30 the owner raised it from 32k to 128k: on a 1M window the tail was only 16k–32k, about 270–540 messages, much shorter than in the Haskell version, and group members found Max forgetful. That evening it was lowered to 64k: at 128k the input doubled and Max's speaking style changed as well; see [Summaries](#summaries)). The tail is truncated when it exceeds this |
+| Tail low watermark | Half the high watermark. After truncation, what remains lies between the low and high watermarks |
+| Memory block | 3k; see [Memory](#memory) |
+
+In the Haskell version the tail was W/2: on a 260,000-token window, about 100,000 tokens of raw group chat, paid for on every turn. There is only one token-estimation function (tiktoken-rs, in `max`), shared by every caller; the core receives only precomputed numbers (see [The core](#the-core)).
+
+### Summaries
+
+On 2026-10-27 a historian and three-level summaries were implemented following magic-context; on 2026-10-30 the owner decided to remove all of it and rely only on the raw tail, memory (see [Memory](#memory)) and recall (see [Recall](#recall)). The reasons:
+
+- **Cost**: over the preceding day the historian was called 49 times and produced 406,000 output tokens, more than the output of all turns (304,000), and output is the most expensive part.
+- **Second-hand errors**: summaries can misremember; the original words cannot. On 2026-10-30 Max itself said in the group that it had been misled by a summary, which had recorded "13 块搓完整个原型" ("built the whole prototype for 13 yuan") as "修一轮 bug 花 13 块" ("spent 13 yuan on one round of bug fixes").
+- **Complexity**: the historian's scheduling, validation, retries and discard-last, the decay curve, the watermarks and publication timing, `/compact`, and the summary vectors and search added up to more than 3,000 lines.
+- **Direction**: when the model is strong enough, raw records plus its own searching work better than pre-processed material (MemoryTax; see [Memory](#memory)). The most useful thing summaries provided was an index of "what was discussed on those days", which has been replaced by `history` reading the original text by time and filtering by speaker.
+
+Removed: the historian worker and the `[llm] historian` configuration, the summary block and decay, `/compact`, summary results in `context_search`, `{ summary }` in `context_read`, and the summary vectors. The three tables `summaries`, `summary_runs` and `summary_embeddings`, together with their data, are kept.
+
+That evening the owner changed course: after the removal Max's speaking style had changed, the automatic historian was not so bad after all, and the owner wanted a long-term comparison with it switched on in one group and off in another. The historian, the summary block, decay and `/compact` were therefore restored unchanged, behind a per-group switch `/historian on|off` (only owners can change it; off by default; `conversation_settings.historian`, migration 0021). Groups with it on carried a summary block in their context, and their tail started after the latest summary; the historian did not touch groups with it off.
+
+On 2026-11-02 the owner decided that the comparison was over and the historian was no longer wanted; it was removed again, this time without keeping a switch. By then only conversation 12 had it on. Removed: the historian worker (`max/src/historian`, `max-core/src/historian.rs`), the `[llm] historian` configuration (removed at the same time from tank's `hosts/tank/maxx.nix`, since the service does not start with configuration keys it does not recognise), the summary block, decay (`project/decay.rs`), `/historian` and `/compact` (now ordinary messages), the historian line in `/status`, the summary queries in `max-db`, and the historian purpose in `llm_usage` (old rows are kept and the constraint is unchanged). Migration 0023 drops `conversation_settings.historian`. The three tables `summaries`, `summary_runs` and `summary_embeddings`, together with their data, are still kept, and are neither read nor written; the code in `max-import` that imports summaries is also untouched. For the group that had it on, the next core's tail starts from the tail's marker and is truncated as usual when it exceeds the high watermark. The design of the historian and of decay is in the version of this document at `672f74ee`.
+
+### Commands
+
+- `/clear --all`: only a message-id watermark; messages before it are no longer included in the prompt, but `history` can still find them (see [Recall](#recall)). The reply says how to undo it.
+- `/unclear` (requested by the owner 2026-10-29; for the group owner and administrators): removes the watermark, so that messages before it return to the context, back as far as the tail's marker. There is only one watermark, so however many times the conversation has been cleared, a single undo removes all of it; if it was never cleared, the reply is "跳过：没有清空过" ("skipped: never cleared").
+
+### Memory
+
+Decided 2026-10-30, proposed by the owner: memory is a file that Max writes itself, not entries extracted by the historian.
+
+- **Why**:
+  - In the Haskell version, memory consisted of entries pre-extracted by the historian. Of 733 entries, 85% were written automatically; most of those labelled as group rules were technical knowledge, while things that should have been permanent were not recorded, such as what group members call Max. Of 101 dated commitments, 88 had expired with nobody attending to them. Injection picked "the 12 most recently modified", which had nothing to do with importance.
+  - maxx had no memory at go-live. On 2026-10-30 group members called Max "小鲨鲨" ("Little Shark"), and Max did not recognise the name; only after being told "不记得了" ("so you don't remember") did it search, and it found the answer at once.
+  - [MemoryTax](https://arxiv.org/html/2610.29823) (2026-10): when the model is strong enough, keeping raw records and letting the model search them works better than pre-extracted memory (Mem0, Zep) and is also cheaper. We already have raw records and search (the ledger and `history`). However, the questions in that paper all prompt the model to "go and look it up"; in a group chat, when memory is needed there is often no such prompt, and the model does not know what it has forgotten. Something carried in every turn is therefore also needed, with the main model judging for itself what to record, modelled on Claude Code's auto memory.
+- **File**: one `/work/.max/memory.md` per conversation, in the `/work` of the conversation's VM; on the host it is `<vm.dir>/<conversation id>/work/.max/memory.md`. Max edits it with shell. With no VM configured there is no memory; when the VM cannot start, the memory can be read but not written.
+- **Injection**: when projecting for a new core, the host reads this file without following symlinks, as `send_image` does, and places it in the volatile block as `[记忆]` ("memory"), after the roster. It is not placed in system, for three reasons: changing it does not invalidate the cache of what precedes it; group members can influence what is written in it, so it should not be treated as system instructions; and, coming later, it is more likely to receive the model's attention. The cost is up to 3k extra uncached tokens per turn. Changes made during a turn are seen only by the next turn; what was changed in the current turn is already in the transcript.
+- **Cap** of 3,000 tokens (`max_core::limits::MEMORY_TOKENS`):
+  - at 80%, a sentence is appended at the end as a reminder to tidy;
+  - over the cap, only the lines that fit are injected, with a note that the rest were not loaded and the file needs tidying;
+  - a file over 256 KiB is not read at all, and a single sentence says so.
+
+  This matches Claude Code's handling of MEMORY.md, whose limit is 200 lines or 25 KB, beyond which the file is truncated and a rewrite is suggested. The difference is that Claude Code checks at write time, whereas we check at the next projection, because the file is written in the VM and the host does not see the write as it happens.
+- **How to write it**, as stated in the system prompt:
+  - Record what holds in the long term and affects how Max will speak and act later: forms of address, agreements and running jokes; a person's identity, long-running projects and preferences; dated arrangements, stating the date until which they apply.
+  - When to record on the spot, listed as specific cases: being corrected, being asked to remember something, a nickname being coined, a rule being set; discovering that Max has forgotten something or mistaken someone for someone else; someone mentioning their own identity, recent circumstances or tastes.
+  - To add an entry, append it to the end with `echo '- 名字：内容（日期 #消息编号）' >> memory.md` ("- name: content (date #message-number)"), leaving placement into sections to the dreamer. (Added 2026-10-30, proposed by the owner. On go-live day Max wrote to the file only once in 90 turns: it had been asked to insert entries in the middle of the file by section and by person, which is laborious with shell; and the prompt's line "每多跑一次 run_code 群友就多等一轮" ("every extra run_code makes group members wait one more round") also made it reluctant to make an extra tool call.)
+  - Record first, then reply: recording is infrequent, and group members waiting one more round is acceptable; the prompt says so explicitly. (Changed 2026-10-31, proposed by the owner. From 2026-10-30 the prompt had asked Max to put the reply and the recording shell command in the same output, send the reply first and write only `[silence]` after recording; during that day it never once did so. The only write came when a group member asked it to delete an entry, and it ran grep and made the change before replying; when the owner asked whether it had recorded anything recently, it said no, citing the rules to argue that there had been nothing worth recording.)
+  - Do not record technical knowledge, nor what was discussed on which day: those are in the records and are found by search.
+  - Format: two sections, 「## 群里」 ("in the group") and 「## 人」 ("people"), with people under 「### 名字」 ("### name"), one entry per line. Each entry ends with (date #message-number), the number pointing to the original words that bear it out, which `history` can look up (added by the owner).
+  - Details go into other files under `/work/.max/memory/`, with a line here pointing to them.
+  - What someone asks Max to remember is not necessarily correct; Max judges for itself.
+- **Tidying: the dreamer** (added 2026-10-30, proposed by the owner, because the model only ever adds and never tidies):
+  - It runs once a day at 05:00 local time. It looks only at files Max wrote during that day (by file modification time) and calls the model once per file (`[llm] dreamer`; with none configured there is no tidying), asking it to rewrite the whole file: lines Max appended at the end go into their proper sections; entries saying the same thing are merged into one; of contradictory entries, the newer is kept; entries whose stated end date has passed are deleted; and if the file is over the cap, the least important entries are deleted. It does not change meaning or add anything.
+  - Before writing back, it reads the file again; if Max has just changed it, nothing is written and the file waits for the next night. The written-back file keeps the time at which Max wrote it, so the next night does not tidy it again; the pre-tidy version is kept alongside as `memory.prev.md`, to be recovered if something goes wrong. If what the model produces does not look like this file (no headings, or more than two-thirds shorter than the original), nothing is written and a log entry is recorded.
+  - No further machinery is built: there are no retries, and a missed night is made up after Max next changes the file. Usage is recorded in `llm_usage` with the purpose `dreamer`.
+- **Not present**: a memory table, categories, expiry, memory proposals from the historian, and selection at injection time. `history` does not search memory, since memory is in the context on every turn.
+- **Migration** (2026-10-30): memories from the old database were migrated offline by hand, by a sub-agent, into an initial file for each group, and everything of no use was deleted. On the same day a batch of long-standing facts (running jokes, forms of address, group rules, people) was also migrated from the old summaries: after the summaries were removed, Max could no longer follow the group's old running jokes.
+
+### Recall
+
+On 2026-10-29 `context_search` (literal and semantic search) and several read modes of `context_read` were implemented; on 2026-10-30 they were merged into a single tool, `history` (decided by the owner). With two separate tools, a request such as "that thing Xiaoming said the day before yesterday" required first deciding which tool to use and how to assemble its arguments; searching and reading apply the same set of filters (who, when) and differ only in whether there is a search term. The Haskell version also had a single entry point for recall (Unified recall in features.md); this is carried over, except that memory is not searched.
+
+- **Scope**: only this conversation's messages are searched (since 2026-10-30; before that, summaries were searched as well; see [Summaries](#summaries)).
+  - Search looks only at rows whose kind is chat; commands and events are not searched, and neither are retracted messages. A term matches if it occurs in `messages.text` (the rendered text) or in the caption of an image or sticker in that message. Stickers are searched too (decided by the owner 2026-10-29: "永远是全部能搜" ("everything is always searchable"); the original proposal was not to search them, because their captions describe what the sticker is and when to use it). Reading, like the tail, covers every kind of row.
+- **`/clear --all`**: ignored; messages before the watermark are still searched and read (decided by the owner 2026-10-29, as above; the same as the Haskell version). `/clear --all` governs only what is shown in the context.
+- **Parameters**: all of them can be combined, except `around`.
+  - `query`: if given, the call is a search and returns a list of results; if not, it is a read and returns the original text.
+  - `who`: a few characters of the speaker's name, lowercased like the terms and compared as a substring against `messages.sender_name`, that is, the speaker's group card name at the time (added 2026-10-30). Matching is by name rather than by `[mention#N]`: the same person is two principals on the old platform and on the new bot, but the name is most likely the same.
+  - `from`, `to`: a local `YYYY-MM-DD`, `YYYY-MM-DD HH:MM`, or `#id`. They are first converted to row ids and the query then uses those (`from` is the first row at or after that time, inclusive; `to` is the first row after it, exclusive; a date given as `to` extends to midnight of the following day, so both ends include the whole day), and search and read use the same id range. The first row is found by `sent_at`; migration 0017 added an index on `(conversation_id, sent_at)`. If there is no row after `from`, the range is empty.
+  - `around`, `before`, `after`: read this row and the rows before and after it, 10 on each side by default and at most 50, larger values being treated as 50; if both are 0, the result is the full text of this single row (this is what "全文见 `#123`" ("full text at `#123`") relies on). `around` is not combined with other filters or with `limit`, and `before` and `after` are used only with `around`.
+  - `limit`, `page`: see below. With no filter at all, `bad_arguments` is returned.
+- **Search**:
+  - **Matching**: the query is split into terms on whitespace, at most 8 terms of up to 50 characters each, with duplicates removed, and lowercased character by character, mapping each character to exactly one character as Postgres's `lower` does, so snippet positions do not shift. Each term is looked up as a substring of the lowercased text (`lower(text) like '%term%'`, escaping `% _ \`), without word segmentation. A row containing any one term is a candidate.
+  - **Indexes**: migration 0011 installs pg_trgm and builds `gin_trgm_ops` indexes on `lower(messages.text)` and `lower(media_captions.text)`. Terms of three or more characters use the index; terms of one or two characters have no trigrams and are compared row by row within this conversation. A database whose ctype is C (as the dev shell's is) does not produce trigrams for Chinese, so Chinese terms are always compared row by row, with the same results; tank's `maxx` database is en_US.UTF-8 and does produce them. Queries set `plan_cache_mode = force_custom_plan` within the transaction: after a few executions, sqlx's prepared statements switch to a generic plan, which cannot see how long the terms are and would read the whole index for a two-character term.
+  - **Ranking**: scores range from 0 to 1. The literal score is the number of matching terms divided by the total number of terms, the semantic score is the cosine similarity, and a row found both ways takes the higher of the two; ties are broken newest first. Messages are deduplicated by body, so of repeated messages only the latest is kept. `limit` defaults to 10, with a maximum of 30. There is no paging.
+  - **Results**: `{ results: [{ ref, time, text, read }] }`. `ref` is `#id`; `time` looks like `2026-10-03 周六 14:02` (周六 = Saturday); `text` is "name: body", the body being the same as in the tail, with images carrying their captions. A body longer than 160 characters is cut to a span starting 40 characters before the match (rows found only semantically are cut from the start), with "…" where text was removed. `read` is `{ around: id }`, which, passed back to `history` unchanged, reads 10 rows on either side of this one.
+- **Read**: the same format as the tail: date lines and one message per line, overlong messages showing only their beginning. Results are paged by whole lines, each page no larger than the per-item cap, and `page` selects the page; the full text of a single message is split evenly into pages by characters.
+  - With `from`, it reads `limit` rows forward from the start of the range; without it, it reads the latest `limit` rows in the range, in chronological order. `limit` defaults to 50, with a maximum of 100. This serves questions with no keyword, such as "that thing we discussed the day before yesterday": paging through that day's original text replaces the line that summaries used to provide. It can also show only what one person has said.
+  - When there is more, `next` is returned, and passing it back unchanged continues the read: for a read from `from`, `from` becomes the id after the last row, continuing forward; for a read of the latest rows, `to` becomes the first row, continuing backward. `who` and `limit` are carried along. If the range contains no rows, a single line "（没有这样的消息）" ("no such messages") is returned.
+- **Limits**: at most 60 calls per run (previously 20 searches and unlimited reads, now combined and relaxed); at most 4 concurrent searches across all groups, since short terms are compared against every row of a conversation; reads do not count towards this. The system prompt's line on raw records says that older material is not in the context, and that to find past events Max should use `history`, which can search by content and can also read the original text by person and by time.
+- **Tested live** (2026-10-29): run read-only on tank's `maxx`, which did not yet have these two indexes, so everything was compared row by row. On the largest conversation, 62,000 rows, searching messages took about 85 ms with 1 term, about 97 ms with 2 and about 145 ms with 8. Searching summaries (a conversation with 848 of them) took about 36 ms with 2 terms and about 61 ms with 8. The indexed case was measured on the old Haskell database on tank (290,000 rows, with the same trigram index on `rendered_text`): a 3-character term took 19 ms, a 4-character term 2 ms, and two 3-character terms 13 ms; for a two-character term the custom plan does not touch the index and scans row by row in 182 ms, whereas the generic plan reads the whole index in 496 ms. `ilike` is more than three times slower than `lower() like` (178 ms against 50 ms), so it is not used. The trigram index takes 88 MB on the old database.
+- **Semantic search**: the whole query is turned into one vector, using the model shared with the sticker library (see [Sending images](#sending-images)) (bge-m3, 1024 dimensions), with a 5-second wait; if no model is configured, or on error or timeout, only literal search is performed and no error is reported. `max_db::recall` takes the nearest messages by cosine distance, with the same filters as literal search (chat, not retracted, time, speaker), comparing only vectors produced by the same model; the number of rows fetched is the same as for literal search (3·limit). A similarity of at least 0.5 is required to become a candidate (a proposal: an estimate, not tuned on real data). These candidates are merged with the literal ones by id, the same `ref` taking the higher score; the subsequent deduplication, ranking and result shape are unchanged.
+- **Vectors**: one per chat message (migration 0013, `message_embeddings`; before 2026-10-30 summaries had them too, in `summary_embeddings`, which is kept but not read). They are per row rather than per window: a result is a single row anyway (`#id`), and surrounding context is provided by `history`'s `around`; the ledger is append-only, so a row's vector never goes stale, whereas a window's would change with later messages; and the old database's vectors are also per row and are imported directly by id. A message's text is its `text` with textless handles removed (`[mention#3]`, `[reply#12]`, `[image]` and the like; SQL function `recall_text`); if fewer than 4 characters remain, the message is skipped ("在吗" ("are you there?") and "好的" ("OK") yield nothing useful in semantic search, and literal search still finds them; the Haskell version also used 4), and only the first 2,000 characters are used. Captions of stickers and images do not get their own vectors; literal search still covers them.
+- **Precision**: `halfvec(1024)`, rather than `vector` as in the sticker library: at 225,000 rows the table and HNSW index together take about 1.2 GB, whereas `vector` would take 3 GB. The nearest neighbours remain the same: in 50 searches over 20,000 random vectors (where distances are most crowded and hardest to separate), the top ten were identical every time and in the same order in 49 cases, with distances differing by at most 0.00004. Besides HNSW (`halfvec_cosine_ops`) there is a btree on `conversation_id`. Queries set `hnsw.iterative_scan = relaxed_order` within the transaction, so that if the first 40 rows HNSW fetches are filtered out by conversation or time, it keeps searching further; for small conversations the planner fetches directly by conversation and sorts exactly, which is why, as with literal search, a custom plan is used.
+- **Recall vector worker** (`max::recall`): every row entered in the ledger is handed to it, and only rows without a vector from the current model are computed, 2 requests at a time, retried twice on failure (after 10 seconds and 60 seconds) and then abandoned. At startup and hourly thereafter it sweeps the table: newest first, 16 rows per request, without retries, the next sweep serving as the retry. If a page fails, each of its rows is retried once individually, so that one text the service rejects does not block everything older than it; if none of them succeeds, the service is down and the worker waits for the next sweep. Changing the model recomputes everything. The worker is the only writer to this table; its usage is not recorded in `llm_usage`. With no embedding model configured, the worker does not exist.
+- **Tested live** (2026-10-29, dev Postgres 17 on the Mac, `maintenance_work_mem` 64 MB, 225,000 random unit vectors): building HNSW on a populated table took 9 min 30 s with `vector` (index 1.76 GB) and 6 min with `halfvec` (586 MB); the migration builds it on an empty table, in milliseconds. Inserting into an empty table with the index already built (which is what import does) took 17 minutes for 225,000 `halfvec` rows (somewhat slow, with a compilation running at the same time); for 20,000 rows, `vector` took 50 seconds and `halfvec` 38 seconds. Queries (`halfvec`, limit 90): a 56,000-row conversation took 36 ms via HNSW, and a 2,250-row conversation 16 ms via the btree plus a sort.
+- **Import**: the bge-m3 vectors of the old database's 225,000 messages and 3,200 summary segments are imported by id with `max-import vectors` (see [Import](#import)); the summary vectors are no longer used.
+
+### What was cut
+
+- `[recent turns]` summaries, continuation summaries, `context_resume` and in-turn locator compaction. Old tool output is not trimmed within a turn either; if the context grows too large, the run ends (see [The core](#the-core)). If it later becomes necessary to see what the previous turn did, a `turn_read(t#N)` tool that reads turn snapshots will be added.
+- Automatic injection of retrieval results. Each turn carries only Max's own memory file (see [Memory](#memory)); everything else relies on the model calling `history`.
+
+## Media
+
+Decided 2026-10-29, and the first thing built after v1 (chosen by the owner). The Haskell version served as a reference; its lessons are noted after the relevant items.
+
+- **Nodes and handles**: on inbound, the download URL of a QQ attachment is written into the node, `Media { media: Some(Remote(url)) }`. The ledger is append-only, so download results are recorded in `message_media` (message, index, sha256). The index is the media item's position within the message, counted from 0; the handle given to the model is `image#<message id>.<index>`, and likewise `video#`, `audio#` and `file#`. In the Haskell version `[image#id]` referred to the message rather than to a particular image, with up to 20 media items per message; only later was it changed to two parts (ADR 004).
+- **Content store**: `/var/lib/maxx/media/objects/<first two characters of sha256>/<sha256>`, with read-only permissions, written to a temporary file first and then renamed; objects that already exist are not written again. It uses the same layout as the Haskell version, so import moves the files across directly. There is no GC.
+- **Download**: a derived-data worker (see [The three roles](#the-three-roles)), triggered by the ledger-entry notification, with at most 4 concurrent downloads, each with a 60-second timeout; for any single item over 64 MiB only the metadata is recorded and nothing is downloaded. Failures are retried twice (after 1 second and 4 seconds) and then abandoned, with only a log entry and no failure table. At startup the worker catches up only on downloads from the last hour that did not complete: QQ URLs expire, and the Haskell version requeued hundreds of expired links on every restart, flooding the logs with warnings for half an hour (9f27fa7). Images, stickers, videos, voice messages and files are all downloaded, since reading files (see [Reading files](#reading-files)) and future tools need them. Anything whose first 16 bytes identify it as an image (PNG, JPEG, GIF, WebP) is read entirely into memory to compute its dimensions and produce the model's copy; everything else is hashed and written to a temporary file in the content store as it downloads, so videos of tens of MiB are never held entirely in memory (2026-11-06).
+- **The model's version**: produced once at download time, with its sha256 recorded in `media`. Images whose long side exceeds 1568 pixels, or whose size exceeds 1 MiB, are re-encoded as JPEG with a long side of 1568; for GIFs the first frame is taken; other images are used as they are. The Haskell version initially sent multi-MB originals, which was pure waste in base64 (0a2addb).
+- **Captions**: configured with `[llm] caption`; if none is configured, nothing is written. This model must be able to see images. Captions are stored in their own `media_captions` table, since `media` belongs to the download worker. Once the download worker has stored an image (with a version for the model), it hands the image over; the startup sweep only fills in images first seen within the last 14 days that have no caption yet. There is one caption per image, keyed by sha256, so a re-sent sticker is not captioned again (975eb59). Each call has a 2-minute timeout, with at most 2 concurrently, and usage is recorded as `caption`. A caption is one or two sentences in Chinese; for a screenshot it says what the screenshot shows and quotes the key text verbatim; it is stored at no more than 300 characters. After two failures the worker gives up, records an empty caption and does not try again. Videos and files are not captioned; voice messages use the recognised text that Tencent provides. Stickers use a separate prompt (added 2026-10-29, carried over from the Haskell version), which says what the sticker is and when it is appropriate, for example "翻白眼的猫，表示无语" ("a cat rolling its eyes, meaning speechless"); anything that does not look like a sticker (private photos, screenshots) is judged SKIP and does not enter the sticker library (see [Sending images](#sending-images)). Each sha256 is captioned only once, with the prompt chosen according to the kind under which it was first seen.
+- **What the model sees**:
+  - The tail contains text only: `[image#123.0: caption]`, or `[image#123.0]` if there is no caption yet. Images in the history are not sent as images: the Haskell version's lesson was that they compete for attention (0ec5752). When a caption arrives, its line changes, and that one cache invalidation is accepted (see [Rules for a stable prefix](#rules-for-a-stable-prefix)).
+  - Attached images: images and stickers in the first batch of input and in the messages it quotes are placed in the volatile block as real image input; images in follow-up input are placed in their `[新消息]` ("new messages") block. Each image follows the line of its message, preceded by its handle; images whose line cannot be found go at the end of the block. All images seen within a turn are kept, with no cap: the request only grows at the end, so its front keeps hitting the cache, and in the next turn's tail these images are merely `[image#123.0: caption]`. Each image is first estimated at 1,200 tokens, after which the usage reported by the provider is authoritative. Changed 2026-11-04 (decided by the owner): previously all images followed at the end of the block, labelled only with their handles, so when several people had sent images the model had to match handles to lines itself to know who had sent what; previously a run was also limited to 8 images, with any further images kept as text only.
+  - Models that cannot see images are not supported (decided by the owner 2026-10-29): every model Max uses is treated as able to see images; there is no `input` configuration and no text-only fallback. Intent classification reads only text and is unaffected.
+  - To look at an image from the history, a program calls `max.image('image#123.0')` (not yet implemented; it currently accepts only files under `/work`); see [Multimodal results](#multimodal-results).
+- **In the request**: entries store only references (principle 7). A `User` entry carries an `images` list in which each item identifies "which media item of which message", not a sha256: a message must be displayed as soon as it is entered in the ledger, and at that point the image has usually not finished downloading. Before each model call, `max` looks up `message_media` and `media` to find the model's version, reads it from the content store and hands it to `max-llm`; only when writing the request body does `max-llm` encode the file as a base64 data URL, written directly into the request body without keeping a separate copy (2026-11-05). For Responses it is lowered to `input_image`, and for Chat to `image_url`, each image preceded by a text part giving its handle. An image entered less than 10 seconds earlier that has not finished downloading is waited for, inside the task that calls the model, without blocking the conversation actor; older images, images that cannot be downloaded and images that cannot be read are simply not sent, with only a warning logged, and the handle remains in the text. QQ URLs are not passed on: they expire, and the provider may not be able to reach them.
+- **`/chat`**: the original plan was a read-only mount in the VM of a media view for this conversation, hard-linked into the content store; on 2026-10-29 this was changed to programs copying files into `/work/chat` by handle (see [Reading files](#reading-files)).
+
+The work was done in six small steps (steps 4 and 5 were added 2026-10-29):
+
+1. The content store, `media` and `message_media`, and the download worker; inbound nodes carry the URL.
+2. The model's `input`, images in entries, lowering for both protocols, attached images and handles.
+3. The caption worker, with a separate prompt for stickers; import of the old image descriptions and stickers. Went live 2026-10-29: the model is GPT-5.6 Luna via cliproxy, at effort low; the old descriptions were imported before the new maxx started (21,040 images and 3,421 stickers, 94 of them SKIP), and the startup sweep filled in 10 images missed in the last 14 days.
+4. Sending images: qqbot's upload, image sending and the `file_info` cache in the sender, the segmenter keeping handles and their resolution at ledger entry, and `send_image`. Went live 2026-10-29 and tested live in the group: handles written in replies sent a JPEG and a GIF sticker (the GIF animates), and `send_image` sent a PNG drawn in the VM, with a caption.
+5. The sticker library: embeddings and `find_stickers`. Done 2026-10-29; see `max.find_stickers` under [Sending images](#sending-images).
+6. Reading media in the records, and `max.image()`. `max.image()` accepting images under `/work` was done 2026-10-29; `/chat` was replaced by `max.file()`, done the same day (see [Reading files](#reading-files)). `max.image()` accepting message handles is not yet done; for now, a file is first copied out with `max.file()` and then its path is passed.
+
+### Sending images
+
+Decided 2026-10-29. The feature was removed earlier the same day, and the owner promptly restored it; sharing the sticker library across groups was also the owner's decision. How images are sent on the QQ side, and the live test results, are described under outbound in [The official QQ bot](#the-official-qq-bot).
+
+All images Max sends take the same outbound path (see [Outbound](#outbound)): each is first entered in the ledger as a message from Max whose node is media pointing into the content store (`Blob(sha256)`), with `message_media` recorded at the same time, and is then handed to the sender. Images Max sends therefore also have handles on the timeline and, like those sent by group members, can be quoted and re-sent.
+
+- **Handles in replies**: when the model writes `[sticker#123.0]` or `[image#123.0]` in a reply, that image is sent. This is the main way stickers are sent: a sticker is part of what is being said, its position must line up with the text, and it saves a tool call. The segmenter cuts a handle out into a message of its own, and the text before and after it in the same segment each becomes a separate message, in the order written; a `: description` copied from the display form is removed. When entering the message in the ledger, the conversation actor looks the handle up in `message_media`, as it does for `[reply#id]` (see [Resolution and sending](#resolution-and-sending)): images and stickers from this conversation can all be sent; from other conversations only stickers can be sent, since images do not leave their conversation. The kind is determined by the kind of the node in that message. Handles that cannot be found, whose media has not been downloaded, or that are not permitted are dropped, and a warn is logged.
+- **`max.send_image({ path, caption? })`**: sends images produced in the VM, such as charts, screenshots and images downloaded from the web. The file is read on the host from this group's `/work` without following symlinks, so it cannot escape `/work`. Only PNG, JPEG and GIF are accepted, judged by file header; WebP is converted to PNG; the maximum size is 10 MiB. The image is stored in the content store, written to `media` and entered in the ledger via `Post` (with `origin`); once the sender reports back, the new message's handle is returned. `caption` is the text shown below the image, in the same message as the image. At most 5 calls per run. It has side effects and is not available to background jobs.
+- **`max.find_stickers({ query, limit? })`**: semantic search over the sticker library; it only searches and does not send, returning `{ stickers: { handle, description }[] }`, with `limit` from 1 to 10, default 5; the model picks one and writes its handle into the reply. The library consists of all stickers seen in any conversation (node kind sticker), deduplicated by sha256, the handle being that of the most recent message in which the sticker appeared as a sticker, in any conversation. Stickers whose caption was judged SKIP or is empty are excluded, as are those captioned with the image prompt (because they were first seen as an image). The search runs over vectors of the descriptions, with the embedding shared with `history`. Done 2026-10-29:
+  - The model is the Haskell version's bge-m3 (1024 dimensions), served in production by Ollama on h610, to which tank connects (tested from tank on 2026-10-29: it returns normalised 1024-dimension vectors, and the old database's vectors match what it computes, at distance 0). Configuration `[embedding]`: `base_url` (OpenAI-compatible, ending in `/v1`), `model`, and an optional `api_key_file`. If it is not configured, there is no embedding worker and `find_stickers` returns `unavailable`. The dimension follows the table and is not a configuration option: a vector from the model whose length is not 1024 is treated as an error.
+  - Vectors are stored in `caption_embeddings`, one row per file, recording the model; searches compare only against vectors from the current model.
+  - Embedding worker: whenever the caption worker writes a sticker caption (not SKIP and not empty), it hands it to this worker; at startup and hourly thereafter the worker sweeps for captions without a vector from the current model, so changing the model recomputes everything. One file is one unit of work, with 2 concurrently and 30 seconds per request; failures are retried twice (after 10 seconds and 60 seconds) and then abandoned until the next sweep. Packet loss between tank and h610 in the evenings receives no further remedy. Usage is not recorded in `llm_usage`.
+  - Vectors for the old stickers are imported with `max-import vectors` (see [Import](#import)).
+  - Query: the query is turned into a vector and the nearest stickers are taken by cosine distance; on failure `unavailable` is returned, without retry. There is no distance threshold (the Haskell version used 0.65): on 2026-10-29 a dozen or so queries were tried against the 3,328 vectors in the old database, and the distances of relevant and irrelevant results overlapped (relevant ones mostly at 0.31–0.45; the nearest result for "吃瓜看戏" ("eating melon and watching the show", i.e. watching drama unfold from the sidelines) was at 0.45, while even the nearest for "今天天气怎么样" ("how's the weather today") was at 0.44). No threshold separates them, so the model is left to choose by reading the descriptions.
+- **Sender**: it uploads the file to obtain `file_info` (directly in base64 up to 5 MiB, in chunks beyond that; see [The official QQ bot](#the-official-qq-bot)), then sends `msg_type = 7`; only `send_image` carries `content`, files do not. `file_info` is cached in memory by (endpoint, sha256, filename) and invalidated an hour before it expires, so re-sending the same sticker within a day needs no new upload; the cache is lost on restart, and files are uploaded again. Upload failures are recorded in `deliveries` like any other send failure. Each image counts as one proactive message against the group's quota.
+- **Prompt**: stickers are for occasional use, at most one per answer, and not to accompany every sentence; if nothing suitable is in the records, Max uses `find_stickers` to find one.
+
+### Sending files
+
+Added 2026-10-29 (requested by the owner). How files are uploaded on the QQ side, and the live test results, are described under outbound in [The official QQ bot](#the-official-qq-bot).
+
+- **`max.send_file({ path, name? })`**: sends files from the VM, such as generated documents, spreadsheets, PDFs and archives. Like `send_image`, it reads the file on the host from this group's `/work` without following symlinks. Empty files are not sent. The maximum size is 64 MiB, the same as the download limit: QQ accepts 200 MiB, but a call has only 60 seconds, and on 2026-10-29 uploading 32 MiB from tank took 14 seconds. `name` is the filename shown in the group, defaulting to the one in the path; leading and trailing whitespace is stripped, it must not contain `/`, `\` or control characters, and it is limited to 100 characters. The file is stored in the content store, written to `media` (without recording a mime type) and entered in the ledger via `Post` as a message from Max whose node is named file media (`DraftNode::File`); once the sender reports back, `file#id.0` is returned. At most 5 per run. It has side effects and is not available to background jobs.
+- **Sender**: uploads the file by name as `file_type = 4`; the message carries no `content`.
+- Files already in the records cannot be re-sent by writing their handle, because the segmenter recognises only image and sticker handles. To re-send one, Max first copies it into `/work` with `max.file` and then uses `send_file` (see [Reading files](#reading-files)); this will be reconsidered if it turns out to be used often.
+- Files can be sent in private chats as well: on 2026-10-29 a txt file was sent to the owner's private chat using qqbot's `send` example, and it arrived.
+
+### Reading files
+
+Added 2026-10-29 (requested by the owner). The original plan was a read-only `/chat` mount in the VM, hard-linked into the content store. This was changed to copying on demand, which needs no additional virtiofsd and no changes to the guest. Hard links also had a pitfall: the guest's root is `maxx` on virtiofs, so if the view were mounted writable, the guest could chmod and rewrite the same inode in the content store.
+
+- **`await max.file(handle)`**: an SDK function which, like `max.image`, is not one of Max's tools; it does not count as "calling a Max tool" and has no call limit. The runner sends the MCP call `max.file`, and the host looks up the handle in `message_media`. The handle is written as `file#123.0`; the form `[file#123.0: name]` shown in the records is also accepted, as are handles of images, stickers, videos and voice messages. Only media from this conversation that have been downloaded (up to 64 MiB) are accepted; they are copied to `/work/chat/`, and `{ path, name, size }` is returned.
+  - Files that have a filename are named `<message id>.<index>-<filename>`: since the filename was chosen by a group member, `/`, `\` and control characters are replaced with `_`, and at most 150 bytes are kept.
+  - Others are named `<message id>.<index>.<extension>`, with the extension derived from the mime type: `image/jpeg` gives `jpg`, short subtypes are used as they are, and in other cases no extension is added.
+- **Writing into /work**: the guest can place symlinks in `/work`, and the host must not follow them when writing. The host opens `/work` without following links, creates or opens `chat`, writes a temporary file inside it, and then renames it into place. If `chat` is a link, or the target is a directory, `bad_path` is reported; if the target location was previously a link, it is the link itself that gets replaced. Fetching the same file again copies it again.
+- **All host access to /work goes through one place** (2026-10-30, found in review): `max::mcp::work` reads, writes and creates directories, creating and opening directories one path component at a time and following links at no component. The full output of `run_code` and `shell` (`.max/out`), job reports (`.max/jobs`) and the dreamer also go through it. Previously the first two used the ordinary file API, so if the guest replaced `/work/.max/out` with a link, the host would write output outside `/work` as the maxx user. Full output is written while the run proceeds, and only to newly created files: if anything already exists under that name (a link included), nothing is written.
+- No cleanup: `/work/chat` holds ordinary files, and programs delete them themselves.
+
+## Schema
+
+Decided 2026-10-27: the Rust version does not carry over the Haskell version's schema. The schema is redesigned, and at go-live an import program migrates the data in a single pass. After 135 migrations, the Haskell version was left with two conversation keys (`conversation_id` and the QQ group number `legacy_group_id`; the latter has no foreign key, yet about 25 modules use it as a primary key), three kinds of message id, four copies of the message body, 31 tables that no code reads, and migrations that undo one another. The only option is to start from scratch.
+
+### Conventions
+
+- **One key per entity.** A conversation has only `conversation_id`; the QQ group number appears only in `endpoints.native_id`. A message has only `id`, which within a conversation is the order in which messages were entered in the ledger (see [The timeline](#the-timeline)); the model's handle `#id` uses it. The platform's native id is an attribute, unique per `(endpoint_id, native_id)`: those of inbound messages are in `messages`, and those of messages Max sends are in `deliveries`. A person has only `principal_id`; platform accounts are in `identities`.
+- **JSONB holds only three kinds of data**: `nodes`, `raw`, and blobs that are by design stored and loaded as a whole (turn snapshots, `opaque`, tool output). Every other structure is made of columns.
+- The ledger and the turn records are append-only ([Principles](#principles), item 1).
+- Naming: the primary key is called `id`, foreign keys are `<table>_id`, and time columns use `timestamptz` and are named `*_at`.
+- Migrations start at number 1. Before go-live they may be merged freely; after go-live they are append-only.
+- There is no source hash and no CAS cursor. The Haskell version's `conversation_source_hash` took a sha256 of the IR, so every change to the IR format required rehashing the entire database.
+- All id columns are `generated by default as identity`, so that the import program can write the old ids.
+- All queries live in `max-db` and take a `&mut PgConnection`; the caller decides which writes share a transaction. A query that needs several statements to be consistent opens its own transaction, which becomes a savepoint when the caller is already inside a transaction.
+- The `.sqlx` offline metadata is in `crates/max-db/.sqlx`, and the Nix build sets `SQLX_OFFLINE=true`. After changing a migration or a query, run `scripts/prepare-queries`: it rebuilds the development database from the migrations and regenerates this metadata.
+- Vectors use pgvector. It is not a trusted extension and `maxx` is not a superuser, so a migration cannot create it: the NixOS module creates it as postgres in `postgresql-setup`, and the migration's `create extension if not exists vector` then does nothing (tested on 2026-10-29 on the development database with a non-superuser role). If the database is dropped and recreated, the extension must be created again; restarting `postgresql-setup` is enough.
+
+### The v1 tables
+
+| Area | Table | Description |
+| --- | --- | --- |
+| Platform | `conversations` | Kind (group, direct), title |
+|  | `endpoints` | Conversation, platform, `self_identity_id` (which account Max uses), `native_id`. In v1 a conversation has one endpoint; with mirroring, a conversation has several. The two are separated now (decided 2026-10-27) to avoid another migration later. `native_id` is the adapter's own string: for QQ it is `group:<group_openid>` or `c2c:<user_openid>`; imported old QQ endpoints (platform `qq_legacy`) are `group:<group number>` or `private:<QQ number>` |
+|  | `principals`, `identities` | People, and their accounts on each platform. There are several writers: each conversation actor creates them when it enters messages in the ledger; see "Writers" under [Identity](#identity) |
+|  | `conversation_settings` | `/model`, `/effort`, `/persona`, `/proactive`, and the message-id watermark of `/clear --all`. Mutable |
+| Ledger | `messages` | Conversation, endpoint, `sender_identity_id` and snapshots of the sender's name and role (see [Identity](#identity)), `native_id`, `sent_at`, `received_at`, kind (chat, command, event), `reply_to`, `nodes`, `raw`, and `text` (the rendered text, for search and the full-text index; there is a trigram index on `lower(text)`, see [Recall](#recall)). Max's own messages carry `turn_id` and a segment number. `raw` is the platform's original payload, kept only for the record: rows read back carry only its `said_by` (who spoke on behalf of Max's account; see below), and the same holds for the in-memory message at the time it is entered in the ledger (2026-11-05). Retractions and edits are rows with `kind = event`; the `event` column says which kind (edit, unsend), and such rows carry `target_id` and a text fallback. The new content of an edit is in `nodes`. Only the conversation actor writes this table |
+|  | `deliveries` | Outbound receipts: message, endpoint, platform id or error, status (sent, failed, unknown), time. The platform sender is the only writer, and it only appends. With mirroring there is one row per endpoint; see [Outbound](#outbound) |
+| Media | `media` | Addressed by sha256: MIME type, size, width and height, the time it was first seen, and the sha256 of the version for the model. The kind is recorded in the message's node, because the same bytes may be an image in one message and a sticker in another. See [Media](#media) |
+| Caption | `media_captions` | One row per sha256, written only once: which prompt was used (image or sticker), the text (empty when the model gave up), `skip` (for images that do not look like stickers, which stay out of the sticker library), and which model wrote it (empty for imported captions). The caption worker is the only writer. The queries that read rows fill the caption into media nodes that have no description, so rows read anywhere carry the caption. See [Media](#media) |
+|  | `media_captions` | sha256, caption (empty if the model gave up), the model that wrote it, time. The caption worker is the only writer |
+|  | `caption_embeddings` | One row per sha256: the vector of a sticker caption (`vector(1024)`), which model computed it, time. The embedding worker is the only writer. When the model changes, the worker's scan recomputes everything with the new model, and search compares only vectors from the same model. See [Sending images](#sending-images) |
+|  | `message_embeddings` | One row per message id: conversation, a `halfvec(1024)` vector, which model computed it, time. The recall vector worker is the only writer, and everything is recomputed when the model changes. See [Recall](#recall). `summary_embeddings` holds the vectors of summaries and has been neither read nor written since 2026-10-30 |
+|  | `message_media` | Message, ordinal, sha256. An inbound node holds a download URL, and the media is recorded here once downloaded; for images handed over by a program (`max.image()`), the node holds the sha256 directly |
+| Turn | `turns`, `turn_outcomes` | See [Turn records](#turn-records). `t#N` is `turns.ordinal`, counted from 1 in each conversation |
+|  | `llm_usage` | Turn (nullable), purpose (turn, intent, caption, job, dreamer; historian appears only in rows from before 2026-11-02), provider, model, effort, tokens (including the number of cache hits, used to see each provider's hit rate and to tune the idle window, and the reasoning tokens among them), cost. Tokens use bigint. The cost, `cost_micros`, is in millionths of a US dollar and stored as an integer, not a decimal; it is null when the price is unknown. There are also three millisecond figures (added 2026-10-30): `first_ms` is the time from sending the request to the model's first output (body text, reasoning or a tool call all count), `took_ms` is the time until the answer ends, and `quiet_ms` is the longest stretch of the stream during which nothing arrived, which is exactly what `stream_idle_timeout_secs` cuts off. Turns and calls that go through `complete` (intent, historian, dreamer, caption) are all recorded. Job calls were previously missing; since 2026-11-07 they are measured by the `/llm` forwarder (see **Usage** under [Background agents](#background-agents)). Before lowering the idle timeout, first check how long `quiet_ms` normally is |
+| Context | `summaries` | Summaries written by the historian: first and last message ids, time, title, kind, importance, p1, p2, p3, status (active, superseded). Active ranges do not overlap, which an exclusion constraint enforces. Neither read nor written since 2026-11-02; the data is kept. See [Summaries](#summaries) |
+|  | `summary_runs` | Each model call made by the historian: range, reason (quiet, pressure, compact), model, raw output, error. Not written since 2026-11-02 |
+
+Further tables are added later together with their features: `automations`, `lingo_*`, `bungie_*`, `destiny_*`.
+
+### What became of the old tables
+
+- `platform_events`: the raw payload goes into `messages.raw`.
+- `message_deliveries`, `message_delivery_parts`: replaced by `deliveries`.
+- `message_projections`, `message_hook_*`, the `agent_messages` view: hooks are no longer implemented.
+- `execution_journal`, `llm_calls`: the turn snapshot already is the model's complete input and output.
+- `platform_ids`: there are no compatibility ids.
+- `conversation_cursors`: there is no cursor; the tail starts after `conversations.tail_after`. See [Rules for a stable prefix](#rules-for-a-stable-prefix).
+- `compartment_evidence`: search searches message bodies directly.
+- `memories` and its `memory_*` and `episode_memory_*` tables: memory has been replaced by files, and the old memories were migrated to files by hand on 2026-10-30. See [Memory](#memory).
+- `skills`, `skill_versions`: a skill is a document and lives in a file.
+- `sandboxes`: the VM's lifecycle is held in the process.
+- `admin_timeline_revisions` and its NOTIFY triggers: admin is deferred.
+- 31 dead tables (durable task, plan, workflow, browser workspace and so on): not imported.
+
+### Import
+
+- **Message ids carry over the old `canonical_message_id`** (decided 2026-10-27); new messages are numbered on from the maximum plus one. The `#123` and `[image#123.0]` handles in the bodies of old summaries and memories therefore remain valid. The import checks that this order agrees with `ingest_seq`; if it does not, a separate column is added to record the order.
+- **All messages are imported** (decided 2026-10-27), including those the hook ignored (`message_projections.context_visible = false`). The database faithfully keeps every fact of the group.
+- The v2 nodes of `canonical_content` are converted into the new `Node`; `raw` is taken from QQ's `segments` column, and for Matrix from `platform_events.raw_payload`; `text` is re-rendered. Which platform the old Matrix messages are imported as is **TBD**: Matrix is not implemented yet, the code's `Platform` does not include it for now, and the database's constraint still accepts `matrix`.
+- Old QQ accounts and endpoints are imported as platform `qq_legacy`: the official API provides openids, which are not in the same namespace as QQ numbers and group numbers and cannot be matched to them. A new group is joined to its old conversation with `/bind <old group number>`, which keeps the timeline continuous; see [The official QQ bot](#the-official-qq-bot).
+- For how people with old QQ numbers are linked, see [Identity](#identity). The old database stores people by QQ number: 583 QQ identities, one per person, whose `native_user_id` is the QQ number. The official API provides only openids: the same person has a different openid in each group and in private chat, and `union_openid` is empty, so a person who is in several groups has to be linked once in each group. There is no nickname matching: in the old data, 4 people share their latest nickname with someone else in the same group, and 45 nicknames are a single character, so automatic identification would inevitably get some people wrong. People who are not linked count as new people; a merge is an alias, and earlier rows render accordingly.
+- Old reaction and nudge events are not imported. Max's `debug` rows (tool echoes, 4.7k of them) are not imported. Rows from WeChat, iMessage and Matrix (about 2.6k; those groups cannot be connected to the new bot) are not imported.
+- Max's own messages are not written to `deliveries`: on startup the sender only backfills those on the `qq` endpoint whose outcome is unknown, and ignores `qq_legacy`. The old `agent_turns` are not imported; only 3 summaries reference a `t#`, and `turn_id` is left empty.
+- Only the `active` entries of `conversation_compartments` are imported (3,249 of them). They are attached by group number (`legacy_group_id`), not by `conversation_id`, so the import finds the conversation through the group number. Ranges are converted from `ingest_seq` to first and last message ids; importance is converted from 0..1 to 1..100; the 40 entries from the single-summary period have only `summary`, which goes into p1, with the other levels left empty. Old summaries have no title, so the title is left empty, and rendering leaves no extra space for it. Handles change from `episode:<uuid>` to `summary#<id>`.
+- `principals` and `principal_identities` are moved over directly with unchanged ids, so the `[mention#N]` references in old summaries and memories remain valid; `[@#N]`, written before the rename, is rewritten to `[mention#N]` during import. The old table distinguished identities by Max's account (`platform_account_id`), with one account per platform, so each account maps directly to a platform: the QQ one becomes `qq_legacy`. `sender_name` is taken from `sender_card` and `sender_nickname` in the old `messages`, preferring the group card: since 2026-08-04, `sender_nickname` has stored the group card whenever there is one (`QQ.hs:94`). `sender_role` is taken from `sender.role` in the raw payload in `platform_events`, and is null before 2026-08-04. The 611 empty principals with no identity and no messages are not imported. `endpoint_known_identities` is not imported.
+- From `sessions`, only the persona, `/proactive` and `/clear --all` are imported; the model and effort are not (see [Configuration](#configuration)). Old memories do not go through the import tool; see [Memory](#memory).
+- Media: the content store's files and the old database are on the same bcachefs, so the files are copied to `/var/lib/maxx/media` with `cp --reflink` and their owner is changed to `maxx`. `media` and `message_media` are built from `message_images`, `message_videos` and `group_files`. The old `seg_index` is the node's position, not the media's position, so ordinals have to be recomputed by node; media that no table records are filled in from the blobs written in the nodes (mostly images Max sent). The files must be copied first, because each of them must be present at import time. The versions for the model and the image dimensions are generated by `max-import pictures`, the same way as at download. Captions are imported in substep 3, once `media_captions` exists: the descriptions of 21,519 images in the old database, and the sticker library (3,397 stickers; 3,328 with descriptions and bge-m3 vectors, and the 94 banned ones recorded as SKIP). They are imported by `max-import captions`, which can also run while maxx is running as usual. It runs the migrations first, so it must be run before a maxx that includes the caption worker starts; otherwise the worker's startup scan would rewrite the images imported in the last 14 days. It imports only files that maxx has, prefers the sticker description for the same file, and leaves alone captions that maxx has already written, so it can be rerun. Sticker vectors are imported by `max-import vectors` (substep 5): the bge-m3 vectors of the old `stickers` table. It imports only those whose text hash recorded in the old table (`embedding_content_hash`, the sha256 of the description) matches maxx's caption text; the model name is copied as is (`bge-m3`, so `[embedding] model` must be set to that), and existing vectors are left alone, so it can be rerun and can also run while maxx is running. It too runs the migrations first. On 2026-10-29 this was checked read-only on tank: maxx had 3,334 sticker captions that should have vectors, of which 3,319 could be imported. 8 old descriptions contained line breaks or leading or trailing whitespace and were normalised to a single line when the captions were imported, so their text differs; 7 are captions maxx wrote itself, for which the old database has no vectors. These 15 are filled in by the embedding worker. The same tool also imports the vectors of messages and summaries, by id: those that maxx's recall vector worker would compute (chat messages of at least 4 characters, and active summaries) and that have no vector yet are taken as 1024-dimensional vectors from the old `messages` (`canonical_message_id`) and `conversation_compartments`, with the model name copied as is. The old vectors were computed from the old rendered text; the handles are written differently, but the meaning is the same. It works in batches of 2000 and leaves existing vectors alone. It must be run before a maxx that includes the recall vector worker starts; otherwise the worker would first spend several hours recomputing.
+- Forwards: the old database stores each message inside a forward as a separate row. The import folds them into the nodes of the forwarding message, one line per message (nested ones indented), in the same form as the forwards the official API now provides; the images inside count toward that message.
+- Max is a single principal: the Max of the old QQ number, plus the bot's openid as a `qq` identity. Old rows render as "（你）" ("(you)"). Max's old rows have no platform id; those ids belong in `deliveries`, which is not imported.
+- The owner's old private chat is joined to the owner's new c2c private chat; other people's old private chats are not. The owner's openid is attached to the principal of the owner's old QQ number.
+- The `/work` of each group VM is migrated as well (decided 2026-10-27): the import finds the corresponding conversation by group number, copies `work` from that group's current sandbox volume to the new volume, and changes its owner to `maxx` (see [VM processes](#vm-processes)). The proposal is not to migrate `nix.img` (the writable Nix store in the guest, which holds the installed packages); packages are reinstalled when they are needed. The old volumes are in a directory owned by root, so reading them requires root.
+- Automations, lingo, Destiny and the like are each imported when their feature is built; stickers are imported together with captions.
+- For the tables into which the import writes old ids, the identity sequences must be advanced past the maximum at the end (`setval`); otherwise new rows collide with old ids.
+- Scale: on 2026-10-28 there were 293,848 messages and 605 people with identities; the database was 3.3 GB, and the content store held 34,000 files totalling 26 GB. The import takes minutes. All vectors are imported; see the media item above.
+- maxx's own database (113 messages and 3 summaries from the test group) is rebuilt entirely on import and not kept (decided by the owner 2026-10-29), because its ids collide with the old ids that must be kept. After the import, the test group runs `/bind` again, and people who ran `/link` before the import send it again.
+- The tool is a separate crate, `max-import`: `import` imports into an empty database in a single transaction and connects to the old database read-only; `pictures` then fills in the images for the model, skipping those already processed. A rehearsal is simply an import into a temporary database. The crate is deleted once the Rust version has been live for a while: it was deleted on 2026-11-05, after `import`, `pictures`, `captions` and `vectors` had all been run; matching people by avatar does not need it. To look at it, see commit `7b5d83d8` and earlier. Importing automations, lingo and Destiny later will be written separately. The old database and `/var/lib/max` will be deleted when the owner says so. The `qq_legacy` rows and the merges are data and are kept.
+- Go-live steps (decided 2026-10-29):
+  1. Note the bot's openid (the `self_identity_id` of Max's endpoint in the current database), and stop maxx.
+  2. As root, copy the files used by the old tables and nodes from `/var/lib/max/media/objects` into `/var/lib/maxx/media/objects` with `cp --reflink`, owned by `maxx` and read-only.
+  3. Drop the `maxx` database and create an empty one owned by `maxx`. As the `maxx` user, run `max-import import` (connecting to the old database read-only with the postgres role), then run `max-import pictures`.
+  4. Start maxx. In private chat, the owner sends `/bind <old group number>` for each old group, and sends the resulting code to the new group.
+
+## Identity
+
+Decided 2026-10-27. The Rust version keeps the three judgements of [ADR 004](https://github.com/HCHogan/max/blob/a5de2e1410f5cdfaa4b88c052bd499ee8b676759/docs/adr/004-canonical-handles-for-the-model.md):
+
+- **The model faces people; the ledger stores accounts.** A person is a principal; a platform account is an identity. The sender and the mention nodes of a message store identities, because the platform authenticates that account; the principal is looked up only when rendering for the model. Merges therefore do not touch the ledger.
+- **A principal is only an assertion that "these accounts are the same person"**: on QQ, `/bind` merges the owner's own accounts. For a while, people from old groups were linked to their old QQ numbers by avatar; this was removed on 2026-11-06 and the links it had made were undone (see [Matching by avatar](#matching-by-avatar) below). Making a link, or fixing a wrong one, is done by the owner editing the database. Identity is not inferred from names, and users' own claims are not trusted.
+- **A merge is an alias, not a rewrite.** `principals.merged_into` points to the principal that is kept, and the merged row remains as a tombstone. Reads use `coalesce(merged_into, id)`; the chain depth is fixed at 1, and a merge can be undone.
+
+### Tables
+
+| Table | Columns | Description |
+| --- | --- | --- |
+| `principals` | `display_name`, `merged_into` (nullable) | People. `display_name` takes the first name seen when the row is created, and is used only when this person has no message snapshot on the current endpoint |
+| `identities` | `principal_id`, platform, `native_user_id` | Accounts, unique per `(platform, native_user_id)`. Max itself is also a principal, and its accounts on each platform are identities; there is no separate account table |
+| `endpoints` | `self_identity_id` | Which of Max's accounts this endpoint sends and receives with. "Did Max say this?" is simply `sender_identity_id = self_identity_id` |
+| `messages` | `sender_identity_id`, `sender_name`, `sender_role` | A snapshot taken at the time of sending. On QQ the name is the event's `username`, and "某人" ("someone") is written when it is empty (for imported old messages the group card is preferred, falling back to the nickname). The role is owner, admin or member; on QQ it is the event's `member_role`. It is null in private chats |
+
+There is no member table. The Haskell version's `endpoint_known_identities` recorded who had appeared on which endpoint; here that is derived from the ledger. Names and roles are snapshots carried by the messages themselves; they are neither queried from the platform nor cached.
+
+**Writers** (decided 2026-10-28): every other table has a single writer (see the diagram in [Runtime structure](#runtime-structure)); `principals` and `identities` are the exception. When a conversation actor, entering a message in the ledger, encounters an account it has not seen before (the sender, or a mentioned person), it creates the identity and its principal; if the same new person speaks in two groups at once, both actors create them concurrently. Resolving the owners at startup and merging the owner's accounts with `/bind` also write these two tables (matching by avatar did too, until it was removed on 2026-11-06). The rules:
+
+- Rows are only inserted, never updated, except for `merged_into`.
+- Before creating a row, look it up once without a lock, and use it if found. If it is not found, take `pg_advisory_xact_lock` on (platform, account) within the ledger transaction, look it up again, and create it only if it still does not exist. The same new account therefore yields only one principal. Accounts already seen need no lock, so ledger writes in different conversations normally do not wait for one another.
+
+### Matching by avatar
+
+Removed on 2026-11-06 (decided by the owner), and the links it had made were undone without a trace (migration 0024): on tank, each of the 134 accounts it had linked became a person of its own again (`principals.merged_into` cleared); the `text` of the 802 rows that mention them (rendered when the rows were entered in the ledger, and read by search) was changed back to their own `[mention#id]`; and `legacy_avatars` and `avatar_checks` were dropped. Merges the owner had made by hand were to be left untouched; at the time there were none. Recall vectors did not need recomputing: `recall_text` strips handles, and Max's memory files contain no handles of old numbers either. The transcripts in turn records are what the model saw at the time and are not changed. From then on, people from old groups count as new people in the new groups, and linking them is done by the owner editing the database. The code is in commit `12d420cb` and earlier. What follows is how it worked at the time.
+
+Decided by the owner on 2026-10-29, replacing `/link`, which was removed the same day (see [Permissions](#permissions)). The official API provides only openids, and the same person has a different one in each group, while people from old groups are stored by QQ number. maxx compared an account's avatar with the avatars of old QQ numbers and linked the account to whichever one matched. No one had to request a link, so no one could request one on someone else's behalf.
+
+- **Avatars**: the official bot can fetch an account's avatar by openid (`q.qlogo.cn/qqapp/<AppID>/<openid>/640`), and a public endpoint can fetch one by QQ number (`q1.qlogo.cn/g?b=qq&nk=<number>&s=640`). Both images were scaled down to 16×16 greyscale (a fingerprint of 256 bytes), and a root-mean-square difference within 5% counted as the same image. Tested live on 2026-10-29: two images of the same person differed by 0.03%, while those of different people differed by 36–60%. Accounts without an avatar all return the same default image; QQ also returns this image (1512 bytes) for nonexistent openids, which is how maxx obtained its fingerprint.
+- **Whom to compare**: only in groups that continue an old group (the conversation has both a `qq` and a `qq_legacy` endpoint). The `qq` accounts in such a group that had not yet been compared and had not been merged into someone else were compared with the old numbers that had spoken in this conversation's old records. The owner's and Max's accounts were not compared. The fingerprints of old numbers were stored in `legacy_avatars`; those older than 7 days were refetched when needed, the old fingerprint was used if a refetch failed, and numbers whose avatar had never been fetched did not take part.
+- **Whether to link**: an account was not linked if it had the default image (`default`), if no old number resembled it (`none`), or if more than one did (`ambiguous`). If the number it resembled was the owner's or Max's old number (`barred`), it was not linked and a warning was logged, since this was most likely impersonation. If another account in the same batch also resembled that old number, or an account in this group was already linked to it (`taken`), it was not linked and a warning was logged: when both an impersonator and the real person were in the group, neither was linked, and the owner investigated. Only when exactly one old number resembled it and no other account competed for that number was its principal merged into that old number's person (`linked`). Each account was compared only once, and the result and the matched old number were recorded in `avatar_checks`. If the account's avatar could not be fetched, nothing was recorded, and it was retried the next time the account spoke, once 10 minutes had passed.
+- **When**: at startup, every account not yet compared in each such group was compared; after that, each account was compared when it first spoke, together with all the other accounts in that group not yet compared. The worker subscribed to rows entered in the ledger, like the other derived-data workers; see [Runtime structure](#runtime-structure).
+- **What to do when it was wrong**: the owner edited the database directly, changing or clearing `principals.merged_into`; to have an account compared again, the owner deleted its row in `avatar_checks`. The risk of impersonation remained, since anyone can change their avatar: an account that switched to the avatar of an old member who was not in the group would be linked as that person. The owner accepted this, relying on the logs as a safeguard.
+- When `/link` was removed on 2026-10-29, the 18 links it had made were cleared, and those accounts were then compared again under the rules above.
+
+### What the model sees
+
+- A person's handle is `[mention#12]`, in the same syntax as `#123`, `[image#123.0]` and `t#42`; see [How replies are written](#how-replies-are-written). The typed-prefix notation that ADR 004 deferred is not implemented this time either: numbers from different namespaces have not been observed being confused.
+- Each line of the tail is `[HH:MM name #id]`. The name is the `sender_name` snapshot, so when someone changes their name, old lines stay the same and the prefix is unaffected. Mentions in the body render as `[mention#12]`.
+- The **roster** is projected together with the base context when the core is created, and is placed in the volatile block (decided 2026-10-27). It covers the people who appear in the context: the senders and the mentioned people in the truncated tail, and the senders of the first batch of input. There is one line per person, such as `[mention#12] 名字（管理员）` ("name (administrator)"); the name and role come from the snapshot of this person's latest message on this endpoint, and for people who have never spoken, from `principals.display_name`. It is a single `DISTINCT ON` query that uses the `messages (endpoint_id, sender_identity_id, id)` index.
+- For a person who first appears while the core is alive, a roster line is added to that batch's `[新消息]` ("new messages") block, and `Input::Messages` carries these people. When the core shows the batch to the model, it adds them to the roster set, so that later output can @ them.
+- The model does not see platform numbers.
+
+### Resolution and sending
+
+- The core holds the set of principals in the roster and saves it into the snapshot together with the base context; the segmenter of the model-call task holds it as well. A `[mention#N]` whose principal is not in the set does not become a mention, so a number the model made up never becomes a real @: if it carries a name (`[mention#N: name]`), it is sent as the text `@name`; if not, it is removed.
+- Quotes (decided 2026-10-28): when the conversation actor enters a `Said` in the ledger, it checks `[reply#id]`, which must be a message on this conversation's timeline and not an event row (a retraction or an edit). If it is not, for example a made-up number or a message from another conversation, the quote is removed, the body is sent as is, and a warning is logged. Unlike mentions, this check is not done in the core: the model may legitimately quote an old message that it found with a tool and that is not in its context, and only the database knows whether that number belongs to this conversation. If, at send time, the quoted message has no platform id (for example, because it was itself never sent), `lower` omits the quote.
+- At send time, the adapter's `lower` resolves `DraftNode::Mention(principal)` to this person's identity on the target endpoint's platform and sends a native @. If the person has several there, it takes the one that most recently spoke on this endpoint; if there is none, it falls back to the text `@name`.
+- With mirroring, these rules need no change: a person with accounts on both sides gets a native @ on both sides, and a person with an account on only one side gets text on the other.
+
+### Permissions
+
+- Owners are listed in the sops file, one `platform:native_id` per line. They are resolved to identities at startup (created if not yet seen), and permissions are decided by principal, so every account merged into an owner has the owner's permissions. For QQ, only the private-chat `user_openid` is listed; the owner's accounts in groups are merged in by `/bind` (see [The official QQ bot](#the-official-qq-bot)).
+- Platform roles are taken only from the `sender_role` carried by the message: a command message itself carries the sender's role at that moment, so the platform is not queried separately.
+- **Commands start with `/`** (decided 2026-10-29, at the owner's wish): a `/` or a full-width `／` followed by the command name. `!` is no longer a command prefix, and things like `/nix/store` are not commands. In a group, a command must also @Max (decided by the owner the same day: there are other bots in the group that also recognise `/` commands); without the @ it is an ordinary message. In private chat the @ is not needed. Replying to Max does not count as an @. Messages that explain how to use commands (the `/bind` code, `/clear`) are all written as `@maxx /…` in groups. The command panel of the official QQ bot (`/v2/panels`, or 「高级设置」 ("Advanced settings") in the management console) only fills the command into the input box; the user presses send, and the bot receives an ordinary message, so the panel and typing by hand take the same path. The panel cannot show parameter hints, and it is visible to the whole group. The panel is the command list, so there is no `/help` (decided 2026-10-29). On 2026-10-29 a group panel was registered with `POST /v2/panels` (`scope: group`, `target_type: all`), and it was changed once the same day at the owner's wish: `status` ("查看当前状态", view current status) can be tapped by everyone, while `compact` ("压缩上下文", compress the context) and `kill` ("停止当前会话", stop the current session) are `only_admin`; `link`, which everyone could tap, was removed together with its command. `persona` is not on the panel, but the command still works. Names do not include the `/`; QQ adds it when filling the input box. A name is at most 7 Chinese characters and a description at most 15; each panel has at most 20 items, and a bot at most 20 panels. The panel is changed with `PUT /v2/panels/{panel_id}`, not in code. To be revisited when Matrix is built: Element intercepts messages that start with `/`.
+- **Command replies look like logs** (decided by the owner 2026-10-29): they go in a `text` code block whose first line is `/command → result`, with any further lines below it. The tone is brief and mechanical, such as "已切换：…" ("switched: …"), "错误：…" ("error: …") and "拒绝：仅限主人" ("denied: owner only"), so that they are distinguishable at a glance from what Max says in a turn. When the content contains three or more consecutive backticks (a persona, for example), the fence is lengthened. Commands and their replies enter the context like everything else, and a reply counts as something Max said: the owner believes this will not lead the model to chat in the log tone.
+- **`/status`** is a small business card like the Haskell version's `!version`, which is folded into it; it does not show a version number (decided 2026-10-29). The first line is maxx and the commit it was built from (the flake sets `MAX_COMMIT` on the `max` package; a build by cargo itself writes dev). Below it come key-value lines, one per line, with the keys aligned: system and architecture; the model and reasoning effort for the next reply (requested by the owner 2026-10-29; when the running turn uses a different one, the turn's is shown on a separately marked line); proactive replies; the running turn; the context watermark, if the context has been cleared; and the uptime of maxx and of the host. Everything is in English. Once the card was put in a code block, the emoji formerly at the start of each line were removed. The model and persona are not shown (decided by the owner); see `/model` and `/persona`.
+- **When changes take effect**: a model change, `/effort` and `/persona` are stored in settings, and a running turn keeps using what it started with (the model and persona are fixed when a turn starts: the context is projected according to the model's window, and the persona is in the system prompt). The reply therefore comes in two forms (changed 2026-11-04): with no running turn, it is "下次回复生效" ("takes effect from the next reply"); with one, it is "这一轮对话结束后生效（闲下来 5 分钟后）" ("takes effect when this round of conversation ends (after 5 idle minutes)"), where the number of minutes is this model's idle window. Previously the reply was always "takes effect from the next reply", and if the group kept chatting, the next few messages were still answered by the old model.
+- Command permissions follow the Haskell version (decided 2026-10-29). Viewing commands (`/status`, `/model` and the like without arguments, `/model list`) can be used by anyone. Those that affect only this conversation (`/kill`, changing the persona, `/clear --all`, `/unclear`) require the group owner, an administrator or an owner. Those that cost money or have a global effect (changing the model, `/effort`, `/proactive`, `/bind`) are owner-only. Without permission, the reply is "拒绝：仅限主人" ("denied: owner only") or "拒绝：仅限群主、管理员" ("denied: group owner and administrators only"). `/kill` sends no reply. A private chat belongs to the other party (decided by the owner 2026-11-03: only the owner and a few friends use private chat): the other party in a private chat can use every command except `/bind`, including changing the model, `/effort` and `/proactive`, because these change only that private chat. `/bind` remains owner-only (in code the other party's rank is `Rank::ChatOwner`, which sits between the group owner and administrators on one side and the owner on the other).
+- **`/persona`**: without arguments it shows the current persona; `clear`, `reset` and `default` return to the default (`default` was added 2026-10-30: the Haskell version recognised only `clear`, so `/persona default` was stored as a persona consisting of nothing but the word default, which one group had been using since 2026-07-31; migration 0019 clears such personas). On the same day, the "do not ..." statements in the default persona and in the rules were removed (decided by the owner), and whatever could be phrased positively was rephrased that way: listing what not to do actually puts that very thing in front of the model. Only one red-line paragraph remains (added by the owner the same day): Chinese politics, circumventing the Great Firewall, pornography, gambling, drugs and cults, discussion of which on QQ gets groups and accounts banned; when someone raises them, Max plays dumb and changes the subject, or uses `[silence]`. The paragraph is in the rules, not in the persona, so it remains when the persona is changed.
+
+### Deferred from v1, with room reserved
+
+- ~~`/link <QQ number>`~~ (added 2026-10-29, removed the same day): verified by avatar, it linked the sender's account to the person of an old QQ number. Avatars are public, and on that same day someone switched to another person's avatar and got linked to that person. The owner decided: remove both the command and the reminders urging people to link, and clear the 18 existing links. maxx links people from old groups by avatar on its own (see [Identity](#identity)); conflicts and mismatches are only logged, problems are fixed by the owner editing the database directly, and users' own claims are not trusted. Matching by avatar was removed as well on 2026-11-06.
+- Cross-platform permissions follow principal merges and are not implemented separately. Memory is a conversation's files, so it remains when a different platform is joined to the same conversation.
+
+## Intent
+
+Decided 2026-10-27 to include intent in v1; originally it classified only messages that did not @ Max. Changed 2026-10-28: **every inbound message goes through intent**, and @s, replies and the like do not bypass it; intent decides when to wake the core. This way it sees all the information, the rules and the small-model classification are in one place, and debouncing naturally belongs here as well.
+
+Simplified 2026-10-29: only the debounce for messages that are "not finished yet" and the small-model classification remain, plus an hourly cap as a safeguard. Removed were the Haskell version's gate, its three verdict categories (called, followup, topic) and the topic cooldown, as well as the "state of this group", uptake rate and "found annoying" signals added on 2026-10-28. The plan is to see first how well the small model judges on its own, and to add rules only if they turn out to be needed. For the Haskell version's behaviour, see Proactive triggering in its `docs/features.md`.
+
+Like [The core](#the-core), intent is a pure state machine in `max-core`, and it is a field of the conversation actor:
 
 ```rust
-// 同步、不碰 I/O、不读时钟，时间由 actor 传入
+// Synchronous, no I/O, no clock reads; time is passed in by the actor
 impl Intent {
-    fn observe(&mut self, entry: &Entry, now: Instant) -> Vec<Decision>; // 每条入账的别人的消息、事件和命令
-    fn verdict(&mut self, v: Option<Verdict>, now: Instant) -> Vec<Decision>; // 在途那一批的结果，失败是 None
-    fn tick(&mut self, now: Instant) -> Vec<Decision>; // 去抖到期
-    fn deadline(&self) -> Option<Instant>;              // 并进 actor 的 deadline()
+    fn observe(&mut self, entry: &Entry, now: Instant) -> Vec<Decision>; // every entered message, event and command from others
+    fn verdict(&mut self, v: Option<Verdict>, now: Instant) -> Vec<Decision>; // result for the in-flight batch; None on failure
+    fn tick(&mut self, now: Instant) -> Vec<Decision>; // a debounce has expired
+    fn deadline(&self) -> Option<Instant>;              // merged into the actor's deadline()
     fn set_proactive(&mut self, on: bool);              // /proactive
 }
 
-enum EntryKind { Direct /* @、回复 Max、私聊 */, Command, Chatter /* 其它，事件也算 */ }
+enum EntryKind { Direct /* @, reply to Max, private chat */, Command, Chatter /* everything else, events included */ }
 
 enum Decision {
-    Wake { ids: Vec<MessageId>, reason: Reason }, // 叫醒核心：有就喂一个 Input::Wake，没有就起一个
-    Classify { batch: Vec<MessageId> },           // actor 在 side 里 spawn 小模型
+    Wake { ids: Vec<MessageId>, reason: Reason }, // wake the core: feed it an Input::Wake if there is one, otherwise start one
+    Classify { batch: Vec<MessageId> },           // the actor spawns the small model in side
 }
 
 enum Reason { Direct, Judged { note: String } }
 struct Verdict { trigger: bool, reason: String }
 ```
 
-数值都是 `max-core` 里的常量，没有配置项（10-29 删了 `[intent]` 一节），在 v1 里调。
+All values are constants in `max-core`; there are no configuration options (the `[intent]` section was removed on 2026-10-29). They are tuned during v1.
 
-### 直接触发和去抖
+### Direct triggers and debouncing
 
-- **直接触发**：@ Max、回复 Max，以及私聊里的消息（见[运行流程](#运行流程)第 2 步）。不调小模型，不受上限影响，默认立刻 `Wake`。
-- **去抖**（2026-10-28 定，来自 [DSH 调研](#调研dsh-和-qq-bridge)）：直接触发看起来没说完就先 hold，等这个人停下 10 秒再 `Wake`，最多等 20 秒。这期间他的后续消息（命令除外）并进同一个 `Wake`，一起作为核心的第一批；否则触发在易变块里、它的后半句却在尾巴里，顺序反了。"看起来没说完"是纯函数：
-  - 去掉 @ 之后什么都没有；
-  - 以"，、；：…"这类标点结尾；
-  - 以"但是、然后、我跟你讲、对了、就是、所以、而且、还有、那个、因为"结尾；
-  - 同一个人 5 秒内的第三条。
-- **后半句让模型调用重来**（2026-11-04 加，owner 提出）：看起来说完了的 @ 立刻叫醒；这个人接着发的下一条要是到得早，模型调用还没说话，就把这次调用撤回重发，新请求带上这一条。条件：发的人 60 秒内 @、回复过 Max 或者在私聊里跟它说过话，那之后核心还没说过话；这条不 @ 别人、不回复别人（回复自己的可以）；在途的调用一段都还没说出口（actor 处理过的 `Said` 才发出去，撤回的调用后到的 `Said`、`ModelDone` 按过期丢掉；工具在调用结束后才跑）。一次调用最多重来 3 次。撤回是核心的 `retract`：回到"该调模型"，期间来的输入照常在下一次请求里，前缀不变，provider 有缓存；被打断的调用读不到用量，不记账。只有这个人自己的话能让调用重来：job 结果、`max-wake`、判定、别人的 @ 都等下一次调用，它们不改正在等回答的那个人该得的回答，重来只会让他多等，热闹的群里还可能一直重来。判定叫醒的 turn 一般没人在等：60 秒内没人跟 Max 说过话，也就不会重来。
-  - 起因：11-04 查 7 天的 554 个直接触发的 turn：99 个里这个人 60 秒内又发了一条，61 条到在 Max 第一句之前；其中约 20 条落在最后给出回答的那次调用里，Max 先回了前半句（"这是什么"没等到后面的图，"推荐用哪个？"没等到"如果我要给nix用的话"）。后半句一般在 @ 之后 3 到 38 秒到，等这么久的去抖会让每个 @ 都慢半分钟；那次调用的首个输出 p50 10 秒、p90 22 秒，大多数后半句都落在这段里。上面的去抖仍然留着：@ 后面什么都没有时，打完后半句常常比首个输出还慢，先等着更好。
-- **命令**不是触发，由 actor 执行。
+- **Direct triggers**: an @ to Max, a reply to Max, and messages in private chat (see step 2 of [Processing flow](#processing-flow)). They do not call the small model, are not subject to the cap, and by default `Wake` immediately.
+- **Debouncing** (decided 2026-10-28, from [Research: DSH and qq-bridge](#research-dsh-and-qq-bridge)): if a direct trigger looks unfinished, it is held first, and the `Wake` happens once the person has stopped for 10 seconds, after at most 20 seconds of waiting. Their follow-up messages in the meantime (except commands) are merged into the same `Wake` and go to the core together as its first batch; otherwise the trigger would be in the volatile block while the second half of the sentence was in the tail, in reverse order. "Looks unfinished" is a pure function, true when:
+  - nothing remains after removing the @;
+  - the message ends with punctuation such as "，、；：…";
+  - the message ends with "但是、然后、我跟你讲、对了、就是、所以、而且、还有、那个、因为" ("but", "then", "let me tell you", "oh right", "I mean", "so", "and also", "plus", "um, that", "because");
+  - it is the same person's third message within 5 seconds.
+- **A second half restarts the model call** (added 2026-11-04, proposed by the owner): an @ that looks finished wakes the core immediately; if the person's next message arrives early, while the model call has not yet said anything, the call is retracted and resent, and the new request includes that message. The conditions: the sender has @ed or replied to Max, or talked to it in private chat, within the last 60 seconds, and the core has not said anything since; the message does not @ or reply to anyone else (replying to oneself is fine); and the in-flight call has not yet uttered a single segment (a `Said` goes out only once the actor has processed it; a `Said` or `ModelDone` that arrives late from a retracted call is discarded as stale; tools run only after the call ends). A call is restarted at most 3 times. Retraction is the core's `retract`: the core returns to "should call the model", input that arrived in the meantime goes into the next request as usual, the prefix is unchanged, and the provider has it cached. Usage cannot be read from an interrupted call, so it is not recorded. Only the person's own words can restart a call: job results, `max-wake`, verdicts and other people's @s all wait for the next call. They do not change the answer owed to the person who is waiting for it; restarting would only make that person wait longer, and in a busy group the call might keep restarting. A turn woken by a verdict usually has no one waiting: if no one has talked to Max within 60 seconds, there is no restart.
+  - Background: on 2026-11-04, the 554 directly triggered turns of the previous 7 days were examined. In 99 of them the person sent another message within 60 seconds, and 61 of those messages arrived before Max's first sentence. About 20 of these landed during the call that ended up giving the answer, and Max answered the first half on its own ("这是什么" ("what is this") did not wait for the image that followed; "推荐用哪个？" ("which one do you recommend?") did not wait for "如果我要给nix用的话" ("if I want it for nix")). The second half usually arrives 3 to 38 seconds after the @, and a debounce that waited that long would make every @ half a minute slower. The first output of such a call has a p50 of 10 seconds and a p90 of 22 seconds, and most second halves fall within this window. The debounce above is still kept: when nothing follows the @, typing the second half often takes longer than the first output, so waiting first is better.
+- **Commands** are not triggers; the actor executes them.
 
-### 小模型判定
+### Small-model classification
 
-- **什么时候分类**：`/proactive` 开着时，所有闲聊都分类（2026-10-29 改，原来沿用 Haskell 版的闸门：文本里有"max"或者 Max 3 分钟内说过话才分，其它闲聊每 15 分钟最多分一次）。手打的"@max"是纯文本，也走这条路（2026-10-20 定，不解析成提及）。
-- **攒批**：每个会话同时最多一个分类在途；在途时来的闲聊攒着，等它回来再一起分，取最新的 30 条。所以分类的频率跟着小模型的速度走：热聊时一批接一批，不会每条一次。不用 Haskell 版 2 秒的去抖计时器。
-- **输入和输出**：人设的前 500 字、最近 15 条消息作上下文（和尾巴同一种行格式）、待判的消息。行里的 `[mention#N]` 换成 `@名字`，@ Max 的是 `@maxx`：小模型没有核心那样的名单，从名字看出话是对谁说的（2026-10-29 改：之前它看不出 @ 的是谁，把 @ 别人的话当成在 @ Max）。输出一行 JSON：`trigger` 和不超过 20 字的 `reason`。提示词里写了该接话的两种情形（没打 @ 的点名、它能给出具体有用东西的话题）和不该接的（成员之间的对话，包括 @ 别人、回复别人；叫别人去用 AI；只是提到 Max；嫌 Max 烦；别的机器人和贴进来的代码、通知），拿不准就不接。原来还有一种"Max 参与的对话有了后续"，2026-10-29 删掉：4B 的小模型只要看到 Max 刚说过话，后面谁说什么都判成后续，判定叫醒连成一串；对 Max 的回应本来就是回复或 @，直接叫醒。分类任务自己读库拼输入；拼提示词和解析输出都是 `max-core` 里的纯函数。
-- **`Wake` 的去处**：判定回到信箱，actor 交给 `intent.verdict`。同时只有一个在途，intent 记着这一批，所以不用带任务 id；分类任务失败或 panic 也要回一个 `None`，否则这个会话再也不分类。要接话的变成 `Wake { reason: Judged }`，ids 是这一批的消息。所有 `Wake`，包括去抖到期的直接触发，都过同一条规则：涉及的消息都不超过 `seen` 就作废。这些消息已经在某次模型请求里，模型自己决定过了；`/kill` 之前的也都这样作废。其余的作为一个输入（`Input::Wake`）进核心：没有核心就起一个，trigger 记成这个 `Wake`；有核心就喂给它。所以核心空闲、闲聊还没进过请求时，判定会叫醒核心；核心因为空闲窗口结束了，判定会起一个新核心。判定在 `[新消息]` 块里是一行，如 `[判定：在追问你刚才的回答]`；直接触发不加行，消息行上本来就标着"@你""回复你的 #123"。`seen` 见[时间线](#时间线)。
-- **上限**：判定叫醒每个会话每小时最多 8 次，是防小模型失控的保险，直接触发不算。超了的判定直接丢掉。每个会话用 `/proactive` 开关，`/status` 看得到开没开。
-- **输出上限**：1000 token（`classify.rs` 的 `MAX_OUTPUT`）。原来是 300，够一行 JSON；2026-11-04 intent 换成 `deepseek-v4.1-flash`（low）以后，它先想 100 来个 token，最多到 280，当天八次里有一次被 300 截断（`length`），按失败算就是没叫醒。
-- **失败**：不重试，记日志后丢掉。intent 只是建议，消息都在 ledger 里；瞬时错误由 provider 自己的重试兜住，不再叠一层。Haskell 版在 provider 重试之外又重试最多 3 次。
-- **模型**：`[llm] intent` 选一个小模型。判定之后起的 turn 用会话自己的模型，和 @ 触发的一样，不按触发类型换模型或推理强度。
-- 每次分类记一条 `llm_usage`，用途是 intent。
+- **When to classify**: while `/proactive` is on, all chatter is classified (changed 2026-10-29; previously the Haskell version's gate was kept: chatter was classified only if the text contained "max" or Max had spoken within the last 3 minutes, and other chatter at most once every 15 minutes). A hand-typed "@max" is plain text and also takes this path (decided 2026-10-20; it is not parsed as a mention).
+- **Batching**: each conversation has at most one classification in flight at a time. Chatter that arrives meanwhile is accumulated and classified together when the in-flight classification returns, taking the latest 30 messages. Classification frequency therefore follows the small model's speed: in a lively chat, one batch follows another, rather than one classification per message. The Haskell version's 2-second debounce timer is not used.
+- **Input and output**: the input is the first 500 characters of the persona, the latest 15 messages as context (in the same line format as the tail), and the messages to be classified. `[mention#N]` in these lines is replaced with `@name`, and an @ to Max becomes `@maxx`: the small model has no roster like the core's, so it tells from names whom a message is addressed to (changed 2026-10-29: before, it could not tell whom an @ was for and took @s of other people as @s of Max). The output is one line of JSON: `trigger` and a `reason` of at most 20 characters. The prompt describes the two situations in which Max should chime in (being addressed by name without an @, and topics on which Max can offer something concrete and useful) and those in which it should not (conversations between members, including @ing or replying to others; telling someone to go and use an AI; merely mentioning Max; finding Max annoying; other bots, and pasted code or notifications); when in doubt, Max does not chime in. There used to be one more situation, "a conversation Max took part in has a follow-up", which was removed on 2026-10-29: whenever the 4B small model saw that Max had just spoken, it classified whatever anyone said next as a follow-up, so verdict wakes chained one after another. Responses to Max are replies or @s anyway, and those wake the core directly. The classification task reads the database itself to assemble its input; building the prompt and parsing the output are both pure functions in `max-core`.
+- **Where a `Wake` goes**: the verdict comes back to the mailbox, and the actor passes it to `intent.verdict`. Since only one classification is in flight at a time and intent remembers the batch, no task id needs to be carried; if the classification task fails or panics, it must still return a `None`, or this conversation would never classify again. A positive verdict becomes `Wake { reason: Judged }`, whose ids are the messages of this batch. Every `Wake`, including a direct trigger whose debounce has expired, goes through the same rule: if every message involved is at or below `seen`, the `Wake` is void. Those messages have already been in some model request, and the model has already made its own decision about them; messages from before a `/kill` are all voided the same way. A `Wake` that is not void enters the core as one input (`Input::Wake`): if there is no core, one is started with this `Wake` recorded as its trigger; if there is a core, the input is fed to it. So when the core is idle and the chatter has not yet been in a request, a verdict wakes the core; when the core has ended because its idle window ran out, a verdict starts a new core. A verdict appears as one line in the `[新消息]` ("new messages") block, such as `[判定：在追问你刚才的回答]` ("[verdict: following up on your previous answer]"); direct triggers add no line, since the message lines are already marked "@你" ("@ you") or "回复你的 #123" ("reply to your #123"). For `seen`, see [The timeline](#the-timeline).
+- **Cap**: verdict wakes are limited to 8 per conversation per hour, as a safeguard against a runaway small model; direct triggers do not count. Verdicts beyond the cap are simply dropped. Each conversation switches proactive replies on and off with `/proactive`, and `/status` shows whether they are on.
+- **Output limit**: 1000 tokens (`MAX_OUTPUT` in `classify.rs`). It used to be 300, enough for one line of JSON. After intent switched to `deepseek-v4.1-flash` (low) on 2026-11-04, the model first thinks for about 100 tokens, and up to 280; on that day one call in eight was cut off at 300 (`length`), which, counted as a failure, meant no wake.
+- **Failure**: there is no retry; the failure is logged and the batch dropped. Intent is only advisory, and the messages are all in the ledger. Transient errors are covered by the provider's own retries, and no further layer is added on top. The Haskell version retried up to 3 more times on top of the provider's retries.
+- **Model**: `[llm] intent` selects a small model. A turn started after a verdict uses the conversation's own model, just like an @-triggered turn; the model and reasoning effort are not switched by trigger type.
+- Each classification records one `llm_usage` row with purpose intent.
 
-### 状态只在内存里
+### State held only in memory
 
-2026-10-28 定：hold 着的触发、攒着的闲聊、在途的那一批、每小时的计数都在 actor 的内存里，重启清零，不建表。代价是关机或崩溃时还在 hold 的直接触发会丢，没人回；接受。
+Decided 2026-10-28: held triggers, accumulated chatter, the in-flight batch and the hourly counts all live in the actor's memory and are reset on restart; no table is created for them. The cost is that a direct trigger still being held at shutdown or at a crash is lost and gets no reply. This is accepted.
 
-## QQ 官方机器人
+## The official QQ bot
 
-2026-10-28 定：QQ 改用腾讯官方的机器人接口（QQ 开放平台，个人认证，机器人叫 maxx），不再用 NapCat 和 OneBot。原来的 QQ 号当天被腾讯封了；官方接口封的是机器人，不是账号，也不用再维护 NapCat 和扫码登录。老消息照样导入，见[导入](#导入)。下面是 2026-10-28 查文档和用凭证实测的结果，标了"实测"的等适配器能收发后在测试群里验证。
+Decided 2026-10-28: QQ moves to Tencent's official bot API (the QQ Open Platform, with individual verification; the bot is named maxx), and NapCat and OneBot are no longer used. The original QQ account was banned by Tencent that day. With the official API, a ban falls on the bot rather than on an account, and there is no longer any need to maintain NapCat and QR-code login. Old messages are imported as before; see [Import](#import). What follows are the results of reading the documentation and testing with the credentials on 2026-10-28; items marked "tested live" were to be verified in the test group once the adapter could send and receive.
 
-- **连接**：AppID 和 AppSecret 换 access token（`bots.qq.com/app/getAppAccessToken`，有效约两小时；旧 token 最后一分钟才换得到新的，旧的再多活一分钟，所以到期前 50 秒换）。REST 走 `api.bot.qq.com`（2026-08 起的新域名，老的 `api.sgroup.qq.com` 也还通），调用带 `Authorization: QQBot <token>`；有的错误回 200，所以看 body 里的 `err_code`。事件走 WebSocket 网关，Max 主动连出去，tank 不需要公网入口。网关和 Discord 是一套：Hello 给心跳间隔，Identify 带 token 和 intents，断线后用 session id 和最后的序号 Resume；每天能新建 1500 次会话。不用 Webhook：它要公网 HTTPS 入口，而且和 WebSocket 二选一。2026-10-29 实测：`qqbot` 的 `listen` 例子从 Mac 连上网关，Identify 拿到 READY，心跳正常。
-- **跨重启 Resume**（2026-10-29 定）：关机时把网关的 session id 和最后的序号存进库，启动时先拿它们 Resume，不新建会话，这样重启那几秒里群里发的消息由服务端补发。新建会话不会补发（实测丢过一条）。实测（2026-10-29）：停 2 分钟和停 10 分钟都 Resume 上了，期间的消息都补发了；更长的没测。超出窗口就只能新建会话，那段消息丢掉。实现（2026-10-29）：`qqbot` 把事件送进无界通道，丢掉连接的 future 时不会有已经计入序号、却还没送出的事件，所以接入停下后读完通道里剩下的，`Session::resumable` 的序号就是该接着的地方。补发的消息可能和停机前已经入账的重复，actor 按平台 id 丢掉已经入账的。为这个拆出一个常驻的平台进程、或者加 Redis 这类队列，都不划算：拆进程能换来的只有连接不断，Resume 做到了同样的事。
-- **进哪些群**：个人主体的机器人只能由创建者拉进他当群主或管理员的群。2026-10-28 定：只进这样的群，而且群主要在群设置里打开两个开关：
-  - "接收群内全部消息"：所有消息都走 `GROUP_MESSAGE_CREATE`，@ Max 的也是，是不是 @ 看 `mentions`。不开只收 @。
-  - "机器人主动发言"：Max 随时能发。Max 的消息全是主动消息，不开就一条也发不出去，QQ 回 40034105"主动消息失败, 无权限"（实测）。
-- **私聊**：个人主体的机器人暂时只能和管理端"开发设置"里加的体验用户私聊（实测）。这份名单就是私聊白名单，QQ 不用 `private_file`。私聊也只发主动消息，额度还没实测。
-- **身份**：没有 QQ 号和群号，只有按机器人分配的 openid。群是 `group_openid`；群成员是 `member_openid`，同一个人在不同群里不一样；私聊是 `user_openid`，又是另一个。所以 QQ 上一个 identity 是一个群里的一个人，或者一个私聊对象。跨群认人本来就不做，记忆也按会话隔离；能跨群的 `union_openid` 要单独申请，不申请。只有 owner 要认出来，靠 `/bind`。
-- **端点**：`native_id` 是 `group:<group_openid>` 或 `c2c:<user_openid>`。老库的 QQ 端点和账号导成另一个平台 `qq_legacy`，两边的号码不在一个命名空间，`qq_legacy` 也没有适配器。
-- **`/bind`**：新群一开始没绑定，消息直接丢掉，不建会话，和名单外的群一样（见[运行流程](#运行流程)第 1 步）。绑定分两步：
-  1. owner 私聊 Max 发 `/bind <老群号>`，或者不带群号的 `/bind`（新开一个会话）。Max 回一个 6 位码，10 分钟有效。
-  2. owner 在新群里发 `/bind <码>`。这个群的端点挂到老群号对应的会话上（`qq_legacy` 端点所在的会话），时间线接着老消息往下走；同时把发令人在这个群的 identity 并进 owner 的 principal（设 `merged_into`），之后在这个群里认得出 owner。
+- **Connection**: the AppID and AppSecret are exchanged for an access token (`bots.qq.com/app/getAppAccessToken`, valid for about two hours; a new token can be obtained only during the old token's last minute, and the old one stays valid for one more minute, so the token is exchanged 50 seconds before expiry). REST goes to `api.bot.qq.com` (the new domain since 2026-08; the old `api.sgroup.qq.com` still works), and calls carry `Authorization: QQBot <token>`. Some errors return 200, so the `err_code` in the body is checked. Events arrive over a WebSocket gateway to which Max connects outward, so tank needs no public ingress. The gateway works the same way as Discord's: Hello gives the heartbeat interval, Identify carries the token and intents, and after a disconnect the session id and the last sequence number are used to Resume; 1500 new sessions can be created per day. Webhooks are not used: they require a public HTTPS ingress and are mutually exclusive with the WebSocket. Tested live on 2026-10-29: `qqbot`'s `listen` example connected to the gateway from the Mac, Identify received READY, and heartbeats worked normally.
+- **Resume across restarts** (decided 2026-10-29): at shutdown, the gateway's session id and last sequence number are stored in the database, and at startup they are used first to Resume rather than to create a new session, so that messages sent in groups during the few seconds of a restart are redelivered by the server. A new session does not redeliver (one message was lost in testing). Tested live (2026-10-29): stops of both 2 minutes and 10 minutes resumed successfully, and all messages from the interval were redelivered; longer stops were not tested. Beyond the window, only a new session is possible, and the messages of that interval are lost. Implementation (2026-10-29): `qqbot` sends events into an unbounded channel, so when the connection's future is dropped, there are no events that have been counted in the sequence number but not yet delivered. Therefore, after intake stops, the events remaining in the channel are read, and the sequence number in `Session::resumable` is exactly where to continue. Redelivered messages may duplicate ones already entered in the ledger before the stop; the actor drops those already entered, by platform id. Neither splitting out a resident platform process nor adding a queue such as Redis for this purpose is worth it: the only thing a separate process would buy is an unbroken connection, and Resume achieves the same.
+- **Which groups**: a bot owned by an individual can be added only by its creator, and only to groups in which the creator is the group owner or an administrator. Decided 2026-10-28: the bot joins only such groups, and the group owner must turn on two switches in the group settings:
+  - "接收群内全部消息" ("receive all messages in the group"): all messages arrive as `GROUP_MESSAGE_CREATE`, including those that @ Max; whether a message is an @ is seen in `mentions`. Without this switch, only @s are received.
+  - "机器人主动发言" ("bot may speak proactively"): Max can send at any time. All of Max's messages are proactive messages, so without this switch it cannot send a single one; QQ returns 40034105 "主动消息失败, 无权限" ("proactive message failed, no permission") (tested live).
+- **Private chat**: for now, a bot owned by an individual can chat privately only with the trial users added under "开发设置" ("Development settings") in the management console (tested live). That list is the private-chat allowlist; QQ does not use `private_file`. Private chat also sends only proactive messages; the quota has not yet been tested.
+- **Identity**: there are no QQ numbers or group numbers, only openids assigned per bot. A group is a `group_openid`; a group member is a `member_openid`, which differs for the same person from group to group; a private chat is a `user_openid`, which is different again. So on QQ an identity is one person in one group, or one private-chat partner. Recognising people across groups was never planned, and memory is isolated per conversation as well; the cross-group `union_openid` requires a separate application, which will not be made. Only the owner needs to be recognised, and `/bind` handles that.
+- **Endpoints**: `native_id` is `group:<group_openid>` or `c2c:<user_openid>`. The old database's QQ endpoints and accounts are imported as a separate platform, `qq_legacy`, because the numbers on the two sides are not in the same namespace; `qq_legacy` has no adapter.
+- **`/bind`**: a new group starts out unbound; its messages are dropped and no conversation is created, just as for groups not on the list (see step 1 of [Processing flow](#processing-flow)). Binding takes two steps:
+  1. The owner sends Max `/bind <old group number>` in private chat, or `/bind` without a group number (to open a new conversation). Max replies with a 6-digit code, valid for 10 minutes.
+  2. The owner sends `/bind <code>` in the new group. This group's endpoint is attached to the conversation of the old group number (the conversation that holds the `qq_legacy` endpoint), and the timeline continues on from the old messages. At the same time, the sender's identity in this group is merged into the owner's principal (by setting `merged_into`), so that the owner is recognised in this group from then on.
 
-  码在内存里，重启就失效。一个群只绑一次，不支持改绑。没绑定的群里只认 `@Max /bind <码>` 这一条命令；码不对就丢掉，只记日志，因为没有端点可以回话。绑上的那条 `/bind` 由会话表交给 actor（`Event::Bound`），照常入账，回一句"绑好了"，不当命令执行。一段老记录只能接到一个群上（2026-10-29 定）：一个会话只能有一个适配器在服务的端点，否则会有两个 actor 写同一条时间线。所以发码时查一次，用码时再查一次（同一个老群发过两个码的情况）。owners 文件里 QQ 只写私聊的 `user_openid`：第一次私聊 Max 后从库里的 `c2c:` 端点取。
-- **入站**：
-  - 群消息和私聊共用一个消息类型，`group_openid` 可空（2026-10-29）；群事件缺 `group_openid` 算格式不对，记 warn。别的事件（进群、退群、开关主动消息这些）不入账，只按 info 记下事件名和原始内容。
-  - 发送者：`username` 是 QQ 昵称，不是群名片（2026-10-29 实测），群名片拿不到。QQ 客户端里引用和 @ 显示的却是群名片，所以 Max 叫人用的名字可能和群里看到的不一样。2026-10-29 定：接受，只用昵称。`member_role` 是 owner、admin、member。
-  - @：正文里写成 `<@member_openid>`，`mentions` 里也有，@ Max 的那一项带 `is_you: true`。开了全量消息，@ Max 的消息也走 `GROUP_MESSAGE_CREATE`（实测）。
-  - 引用：这条消息的 `message_type` 是 103，被引用的消息在 `msg_elements` 里（只有原文和引用号，实测不带作者），引用号也在 `message_scene.ext` 的 `ref_msg_idx`。
-  - 媒体：图片、语音、文件在 `attachments`，带下载地址；语音还有转好的 wav 和腾讯的识别文本。实测图片带宽高和大小；文件的 `content_type` 是 `file`，带文件名，当文件发的视频也是；原生视频是 `video/mp4`，带宽高和大小，没有时长和封面；语音是 `.amr`；这些地址都不用鉴权就能下。
-  - QQ 表情（实测）：正文里写成 `<faceType=1,faceId="306",ext="<base64>">`，`ext` 解开是 `{"text":"牛气冲天"}`，名字直接带着，不用查表。`faceType=3` 是超级表情；`6` 是收藏的表情包，名字为空，图在 `attachments`。给模型看是 `[face: 名字]`。
-  - 合并转发（实测）：`message_type = 102`，正文是 QQ 拼好的文字记录，每条有内容和发送者昵称，没有结构化的子消息。转发里的图片也写在文字里，带文件名、尺寸、大小和下载地址。
-  - 卡片（实测）：`message_type = 3`，`ark_data` 里有标题、来源和预览图，正文是文字摘要。B 站、知乎这类小程序卡片不带原链接，Max 只看得到标题。
-  - 一条消息有两个 id：事件的 `id` 用来被动回复和撤回，`msg_idx` 用来引用。`native_id` 存前者。Max 发出的消息，发送接口返回 `id` 和 `ext_info.ref_idx`。实测（2026-10-29）：用户的消息被引用时，`ref_msg_idx` 和原消息的 `msg_idx` 一字不差；Max 的消息被引用时引用号也稳定，但和发送时拿到的 `ref_idx` 不一样，两个都能用来引用。提议：入站消息的 `msg_idx` 存一列加索引，引用按它精确查；查不到的是 Max 的消息，按 `msg_elements` 里的原文在 Max 最近发的消息里找。Max 自己发引用时用存下的 `ref_idx` 或 `msg_idx`。
-  - 网关不推机器人自己发的消息，没有 echo 要丢。
-- **出站**：
-  - 全是主动消息（2026-10-29 定）：不发被动回复，假定 Max 在的群都开了"机器人主动发言"。原来是被动优先：回复的消息发出不到 5 分钟、还没回满 5 次，就带它的 `id` 和递增的 `msg_seq` 发被动回复，否则发主动消息（实测第 6 次回 40034128；5 分钟按消息自己的发送时间算，停机后补发的消息按收到的时间算会回 40034005"回复消息msg_id已过期"）。在没开主动发言的测试群里，一个回答的第 6 段就发不出去了。被动回复要数窗口和次数，又和"所有群都开主动发言"的前提重复，所以删掉。
-  - 额度：主动消息整个机器人每分钟 60 条，每个群每分钟 20 条、每天 1000 条。sender 按群排队，超了就等，不丢。
-  - 格式：纯文本，或者原生 Markdown（`msg_type = 2`，2026-04-23 起群聊和私聊都开放，不用申请模板）。2026-10-29 实测：标题、粗体、斜体、删除线、行内代码、嵌套列表、有序列表、引用块、代码块（带语法高亮和复制按钮）、表格都能渲染，`<` 和 `&` 不用转义。单个换行就断行，行尾两个空格会多空一行；粗体后面的空格会被吃掉。LaTeX 的 `$…$`、`\(…\)`、`$$…$$` 和 `math` 代码块能渲染，`\[…\]` 不行，发之前换成 `$$…$$`。Markdown 链接和裸链接都能点；纯文本里的网址也没被拒，同样能点（文档说的 40054010 没碰到）。Markdown 里的图片只显示 QQ 自己域名上的，外站的图裂开。长度上限还没测。2026-10-29 定：一律发 Markdown，省掉判断，Markdown 被拒时退回纯文本。2026-10-30 改（review 发现）：只有 QQ 明确回了错误、或者根本没连上，才算被拒、改发纯文本；请求发出去以后超时、回包解析不了，平台可能已经收下了，不再发，这一条记成 `unknown`，模型看到"（可能没发出去）"，等着的工具被告知不知道发没发出去。原来什么错都再发一遍纯文本，最后一律记成失败，可能发两条。
-  - @：`<qqbot-at-user id="<member_openid>" />`，实测在 Markdown 里显示成 @群名片。
-  - 表情（实测）：发不出去，`<faceType=…>` 和 `<emoji:id>` 都原样显示。2026-10-29 定：Max 不发表情，见[回复的写法](#回复的写法)。
-  - 引用：`message_reference.message_id` 填被引用消息的 `msg_idx` 或 `ref_idx`，实测可行。
-  - 撤回：`DELETE /v2/groups/{group_openid}/messages/{id}`，私聊是 `/v2/users/{user_openid}/messages/{id}`，成功回 200，没有 body。文档（2026-08 更新）：谁的消息发出超过 2 分钟都撤不了（40064004）；机器人是群管理员时能撤自己的和普通成员的（成员的用事件的 `id`），不是管理员只能撤自己的，否则回 40062003"无操作权限"；50065001 是稍后重试。私聊只能撤机器人自己发的。实测（2026-10-29，测试群，maxx 是普通成员）：发一条马上撤，成了；同一个 id 再撤一次也回成功；编的 id 回 40061001"请求参数无效"。超过 2 分钟的、别人的没实测。
-  - **`recall_message({ id })`**（2026-10-29 做了）：Max 的工具，按 `#id` 撤回本群的一条消息，撤不撤由 Max 判断，沿用 Haskell 版。回复的每一段本来就是一行、一条 QQ 消息，各有 `#id`，所以一个 id 只撤一条，整个回复要一段段撤，不像 Haskell 版一个 id 撤几条。QQ 一定会拒的先在宿主上拒掉、说明原因，不入账：超过 2 分钟的（Max 的按回执时间算，别人的按消息时间）、群主和管理员的（看消息里的身份快照，2 分钟里基本不会变）、私聊里别人的、Max 没发出去或不知道发没发出去的、已经撤回的。Max 是不是管理员要另问 QQ（`bot_state`，见下面的群管理），这里不问：别人的消息照样去撤，被拒就把原因告诉程序。撤回经 `Post` 入账成 Max 的一行 unsend，带 turn；sender 按入账顺序撤，所以撤 Max 刚说的话也排在那条的发送后面。成了 `deliveries` 记 sent，被拒记 failed，投影里那行是 `[unsend#id]（没发出去）`。每次运行最多 10 次。
-  - 媒体要先上传拿 `file_info`，再发 `msg_type = 7`。实测可以直接传 base64，`file_info` 一天有效；`content` 是图片下面的说明文字，和图在同一条消息里。2026-10-29 实测：GIF 能发，也会动，134 帧、1.9 MB 的也行；`content` 可以不带，不带时群里只有图，和群友发的表情包一样；上传返回的 `raw_url` 是空的，图嵌不进 Markdown。怎么用见[发图](#发图)和[发文件](#发文件)。
-  - 发文件（`file_type = 4`，2026-10-29 实测）：上传要带 `file_name`，群里显示成这个名字的文件，能下载；txt、PDF 都发过。测试群起先回 50015014"系统繁忙"，`upload_prepare` 才说出原因：40093003"群文件超过上限"，那个群的群文件满了，同样的请求在别的群就能过。
-  - 大小：base64 直传 6 MiB 能过，8 MiB 回 850012，所以 sender 超过 5 MiB 就分片，图和文件都是。分片：`upload_prepare` 带 `file_type`、`file_name`、`file_size`、`md5`、`sha1`、`md5_10m`（前 10,002,432 字节的 MD5），少了摘要回 850012；回 `upload_id`、`block_size` 和每片的 `index`（从 1 数）、预签名地址、`block_size`（都是字符串）。每片 PUT 到它的地址，再 `upload_part_finish` 报上 `upload_id`、`part_index`、`block_size` 和这片的 MD5；最后对 `files` 发 `upload_id`、`file_type`、`file_name`，回 `file_info`。文件 10 MiB 一片，图整张一片；同一个文件再传不会"秒传"，照样走一遍。12 MiB 的文件、9 MiB 的 PNG 都传上了，5.5 MiB 的 txt 分片发进了群。
-  - 平台审核：内容违规会被拒（40034006），记成 `deliveries` 里的失败。机器人被封"暂不支持解封"。
-- **没有的**：reaction、戳一戳、编辑、群名片、发表情；也没找到"有人撤回了消息"的事件，别人撤回的消息时间线上看不出来。群管理的接口见下一条。
-- **群管理**：接口是 2026-08-10 和 09-03 加的，下面是 2026-10-29 查文档、在测试群实测的结果；禁言是 owner 当天把 maxx 设成测试群管理员以后测的，别的是 maxx 还是普通成员时测的。路径都在 `/v2/groups/{group_openid}/` 下。
-  - 不用是管理员，实测能用：`info`（群名、简介、分类、标签、人数）和 `bot_state`（maxx 在这个群的 `member_openid`、入群时间、身份 owner/admin/member、开没开主动消息、收全部消息还是只收 @）。文档说这两个只给白名单，实测 maxx 都拿得到。各 30 次/分钟。
-  - 要 maxx 是群管理员：禁言 `POST restrict_chat_setting`，body 是 `members: [{op, member_openid, mute_expire_at}]`，`op` 是 add、update、del，到期时间用 RFC3339，最长 30 天，一次最多 20 人；add、update 只能对普通成员，del 传空串就立刻解除。`GET restrict_chat_setting` 查全员禁言的规则和正在禁言的人。还有入群申请的列表 `join_request_list` 和审批 `approval_join_request/{member_openid}`，申请事件 `GROUP_JOIN_REQUEST` 也只有管理员收得到；`<qqbot-at-everyone />` @全体（2026-10-26 加），每个群一天一次。实测：都不是 11253；maxx 不是管理员，回 11703"机器人不是群管理员"（err_code 40011030），查禁言、查入群申请、对一个没被禁言的普通成员 del 一次，都是这样。
-  - 禁言实测（maxx 是管理员，`bot_state` 回 `member_role: admin`，对一个普通成员）：add、到期时间是 60 秒后的 `+08:00` 时间，回 200 和 `{}`；马上 `GET` 看得到这个人，到期时间比给的早 1 秒；del 带空串，回 200 和 `{}`，再 `GET` 没人了。到期时间给空串的 add 回 40103009"请求参数mute_expire_at无效"；对没被禁言的人 del 回 200。没实测：update、对禁着的人 add、禁群主或管理员、超过 30 天。
-  - 白名单（文档写"内邀接入中"）：成员列表 `members`、单个成员 `members/{member_openid}`、批量踢人 `batch_remove_members`（可以顺便拉黑）、黑名单的查询和增删 `member_blacklist`。实测成员列表和单个成员回 11253"应用无接口访问权限"（err_code 40012010），maxx 不在白名单上，所以拿不到不说话的人的 openid。
-  - 事件：`GROUP_MEMBER_ADD`、`GROUP_MEMBER_REMOVE`（intent `GROUP_MEMBER_EVENT`，`1<<24`），只带 `member_openid`，没有昵称。
-  - **`mute_member({ member, seconds })`**（2026-10-29 做了）：Max 的工具，在本群禁言一个人或者解除，禁不禁、禁多久由 Max 判断，禁完在群里简短说一声。`member` 是 `[mention#N]` 的编号，按这个人在本群最近说话的账号找 `member_openid`，没在本群说过话的找不到，禁不了。`seconds` 为 0 是解除（del），最长 2592000 秒（30 天）；不是 0 的先 `GET` 看这人是不是正禁着，禁着就 update、没有就 add，到期时间按 `+08:00` 写。QQ 一定会拒的先在宿主上拒掉：私聊、Max 自己、群主和管理员（看这人最近一条消息里的身份快照）。Max 是不是管理员不问，QQ 拒了（40011030）照实说原因。不经 actor 和 sender、不入账：禁言不是时间线上的一条消息，没有要和 Max 的话排先后的；重复禁一次也没坏处，所以不知道成没成时再禁一次就行。工具直接调 QQ 客户端（`qq::admin`），只留一行日志；下一个核心只能从 Max 在群里说的话知道禁过谁。每次运行最多 5 次。
+  The code is held in memory and becomes invalid on restart. A group is bound only once; rebinding is not supported. In an unbound group, `@Max /bind <code>` is the only command recognised; a wrong code is dropped and only logged, because there is no endpoint to reply through. The `/bind` that succeeds is handed by the conversation table to the actor (`Event::Bound`), entered in the ledger as usual, and answered with "绑好了" ("bound"); it is not executed as a command. A stretch of old records can be joined to only one group (decided 2026-10-29): a conversation can have only one endpoint served by an adapter, otherwise two actors would write the same timeline. This is therefore checked once when the code is issued and again when it is used (for the case where two codes have been issued for the same old group). In the owners file, only the private-chat `user_openid` is listed for QQ; it is taken from the `c2c:` endpoint in the database after the owner first chats privately with Max.
+- **Inbound**:
+  - Group messages and private messages share one message type, in which `group_openid` is nullable (2026-10-29); a group event missing `group_openid` counts as malformed and logs a warning. Other events (joining or leaving a group, switching proactive messages on or off, and so on) are not entered in the ledger; only the event name and raw content are logged at info level.
+  - Sender: `username` is the QQ nickname, not the group card (tested live 2026-10-29), and the group card is not available. Yet the QQ client shows the group card in quotes and @s, so the name Max calls people by may differ from what is seen in the group. Decided 2026-10-29: this is accepted, and only the nickname is used. `member_role` is owner, admin or member.
+  - @: written in the body as `<@member_openid>`, and also present in `mentions`, where the entry for Max carries `is_you: true`. With all messages enabled, messages that @ Max also arrive as `GROUP_MESSAGE_CREATE` (tested live).
+  - Quotes: the quoting message's `message_type` is 103, the quoted message is in `msg_elements` (only the original text and the quote index; in testing, it carried no author), and the quote index is also in `ref_msg_idx` in `message_scene.ext`.
+  - Media: images, voice messages and files are in `attachments`, with download URLs; voice messages also come with a converted wav and Tencent's transcription. Tested live: images carry width, height and size; files have `content_type` `file` and carry the filename, as do videos sent as files; native videos are `video/mp4` with width, height and size but no duration or cover; voice messages are `.amr`. All of these URLs can be downloaded without authentication.
+  - QQ emoticons (tested live): written in the body as `<faceType=1,faceId="306",ext="<base64>">`; `ext` decodes to `{"text":"牛气冲天"}`, so the name comes with it and no lookup table is needed. `faceType=3` is a super emoticon; `6` is a saved sticker, whose name is empty and whose image is in `attachments`. The model sees `[face: name]`.
+  - Merged forwards (tested live): `message_type = 102`; the body is a text transcript assembled by QQ, each entry with its content and the sender's nickname, and there are no structured sub-messages. Images in the forward are also written into the text, with filename, dimensions, size and download URL.
+  - Cards (tested live): `message_type = 3`; `ark_data` holds the title, source and preview image, and the body is a text summary. Mini-program cards such as those of Bilibili and Zhihu do not carry the original link, so Max sees only the title.
+  - A message has two ids: the event's `id`, used for passive replies and retraction, and `msg_idx`, used for quoting. `native_id` stores the former. For messages Max sends, the send API returns `id` and `ext_info.ref_idx`. Tested live (2026-10-29): when a user's message is quoted, `ref_msg_idx` matches the original message's `msg_idx` exactly; when one of Max's messages is quoted, the quote index is also stable but differs from the `ref_idx` obtained at send time, and both can be used for quoting. Proposal: store the `msg_idx` of inbound messages in an indexed column and look quotes up exactly by it; a quote that is not found refers to one of Max's messages, and is looked for among Max's recent messages by the original text in `msg_elements`. When Max itself quotes, it uses the stored `ref_idx` or `msg_idx`.
+  - The gateway does not push the bot's own messages, so there is no echo to drop.
 
-配置在 `[platforms.qq]`：`app_id_file`、`app_secret_file`。AppID 不算秘密，但它能找到这个机器人，和群号一样不进仓库。
+* **Outbound**:
+  - Everything is a proactive message (decided 2026-10-29): no passive replies are sent, on the assumption that every group Max is in has "机器人主动发言" ("bot may speak proactively") turned on. Originally passive replies took priority: if the message being replied to had been sent less than 5 minutes earlier and had not yet received 5 replies, a passive reply was sent carrying its `id` and an incrementing `msg_seq`; otherwise a proactive message was sent (tested live: the 6th reply returned 40034128; the 5 minutes count from the message's own send time, and counting a message redelivered after downtime from the time it was received leads to 40034005 "回复消息msg_id已过期" ("reply message msg_id has expired")). In a test group without proactive speaking enabled, the 6th segment of an answer could not be sent. Passive replies require counting the window and the number of replies, and they duplicate the premise that all groups enable proactive speaking, so they were removed.
+  - Quotas: proactive messages are limited to 60 per minute for the whole bot, and to 20 per minute and 1000 per day for each group. The sender queues per group and waits when over the limit; nothing is dropped.
+  - Format: plain text, or native Markdown (`msg_type = 2`, open to both group and private chats since 2026-04-23, with no template application required). Tested live 2026-10-29: headings, bold, italic, strikethrough, inline code, nested lists, ordered lists, block quotes, code blocks (with syntax highlighting and a copy button) and tables all render, and `<` and `&` need no escaping. A single newline breaks the line, and two trailing spaces add an extra blank line; a space after bold text is swallowed. LaTeX `$…$`, `\(…\)`, `$$…$$` and `math` code blocks render; `\[…\]` does not, so it is converted to `$$…$$` before sending. Markdown links and bare links are both clickable; URLs in plain text were not rejected either and are equally clickable (the 40054010 mentioned in the documentation was not encountered). Images in Markdown are shown only from QQ's own domains; images from other sites appear broken. The length limit has not been tested yet. Decided 2026-10-29: always send Markdown, which saves deciding between the two, and fall back to plain text when Markdown is rejected. Changed 2026-10-30 (found in review): a message counts as rejected, and is resent as plain text, only when QQ explicitly returns an error or no connection was made at all. If the request went out and then timed out, or the response could not be parsed, the platform may already have accepted it, so it is not resent: the message is recorded as `unknown`, the model sees "（可能没发出去）" ("(may not have been sent)"), and a waiting tool is told that it is unknown whether the message was sent. Previously every error led to a plain-text resend, and the message was finally recorded as failed regardless, which could send two copies.
+  - @: `<qqbot-at-user id="<member_openid>" />`, which in testing is displayed in Markdown as @ followed by the group card.
+  - Emoticons (tested live): they cannot be sent; both `<faceType=…>` and `<emoji:id>` are displayed literally. Decided 2026-10-29: Max does not send emoticons; see [How replies are written](#how-replies-are-written).
+  - Quotes: `message_reference.message_id` is set to the quoted message's `msg_idx` or `ref_idx`; this works in testing.
+  - Retraction: `DELETE /v2/groups/{group_openid}/messages/{id}`, and for private chat `/v2/users/{user_openid}/messages/{id}`; success returns 200 with no body. According to the documentation (updated 2026-08): no message, whoever sent it, can be retracted more than 2 minutes after it was sent (40064004); when the bot is a group administrator, it can retract its own messages and those of ordinary members (for members' messages, using the event's `id`); when it is not an administrator, it can retract only its own, and otherwise gets 40062003 "无操作权限" ("no permission for this operation"); 50065001 means retry later. In private chat, only the bot's own messages can be retracted. Tested live (2026-10-29, in the test group, with maxx as an ordinary member): sending a message and retracting it immediately succeeded; retracting the same id again also returned success; a made-up id returned 40061001 "请求参数无效" ("invalid request parameter"). Messages older than 2 minutes and other people's messages were not tested.
+  - **`recall_message({ id })`** (implemented 2026-10-29): Max's tool for retracting one message in this group by `#id`; whether to retract is left to Max's judgement, as in the Haskell version. Each segment of a reply is already one line and one QQ message with its own `#id`, so one id retracts only one message, and a whole reply has to be retracted segment by segment, unlike the Haskell version, where one id retracted several messages. Whatever QQ would certainly refuse is refused on the host first, with the reason explained, and is not entered in the ledger: messages older than 2 minutes (for Max's, counted from the delivery receipt time; for other people's, from the message time), messages from the group owner and administrators (judged from the identity snapshot in the message, which rarely changes within 2 minutes), other people's messages in private chat, Max's messages that were not sent or whose sending is uncertain, and messages already retracted. Whether Max is an administrator would require a separate query to QQ (`bot_state`; see group management below), which is not made here: other people's messages are retracted anyway, and if QQ refuses, the reason is passed back to the program. A retraction is entered in the ledger via `Post` as one of Max's unsend rows, carrying the turn. The sender retracts in ledger order, so retracting something Max has just said is also queued behind the sending of that message. On success, `deliveries` records sent, and on refusal, failed; in the projection that row reads `[unsend#id]（没发出去）` ("(not sent)"). At most 10 per run.
+  - Media must first be uploaded to obtain a `file_info`, and then sent with `msg_type = 7`. In testing, base64 can be uploaded directly, and a `file_info` is valid for one day; `content` is the caption text below the image, in the same message as the image. Tested live 2026-10-29: GIFs can be sent and are animated, even one of 134 frames and 1.9 MB; `content` can be omitted, in which case the group sees only the image, just like a sticker sent by group members; the `raw_url` returned by the upload is empty, so the image cannot be embedded in Markdown. For how this is used, see [Sending images](#sending-images) and [Sending files](#sending-files).
+  - Sending files (`file_type = 4`, tested live 2026-10-29): the upload must carry `file_name`, and the group shows a file with that name, which can be downloaded; both txt and PDF files have been sent. The test group at first returned 50015014 "系统繁忙" ("system busy"); only `upload_prepare` revealed the reason, 40093003 "群文件超过上限" ("group files over limit"): that group's group files were full, and the same request went through in another group.
+  - Size: a direct base64 upload of 6 MiB goes through, and 8 MiB returns 850012, so the sender switches to chunked upload above 5 MiB, for both images and files. Chunked upload: `upload_prepare` carries `file_type`, `file_name`, `file_size`, `md5`, `sha1` and `md5_10m` (the MD5 of the first 10,002,432 bytes), and returns 850012 if a digest is missing. It returns an `upload_id`, a `block_size`, and for each part its `index` (counted from 1), a presigned URL and its `block_size` (all as strings). Each part is PUT to its URL, followed by `upload_part_finish` reporting the `upload_id`, `part_index`, `block_size` and the part's MD5; finally, `upload_id`, `file_type` and `file_name` are sent to `files`, which returns the `file_info`. Files are uploaded in 10 MiB parts, and an image as a single part. Uploading the same file again does not get an "instant upload"; it goes through the whole process again. A 12 MiB file and a 9 MiB PNG were both uploaded, and a 5.5 MiB txt was sent into the group in parts.
+  - Platform moderation: content that violates the rules is rejected (40034006) and recorded as a failure in `deliveries`. A banned bot "暂不支持解封" ("cannot be unbanned for now").
+
+- **Not available**: reactions, nudges, edits, group cards and sending emoticons. No "someone retracted a message" event has been found either, so other people's retractions are not visible on the timeline. The group management API is covered in the next item.
+- **Group management**: these APIs were added on 2026-08-10 and 2026-09-03. The following are the results of reading the documentation and testing in the test group on 2026-10-29; muting was tested after the owner made maxx an administrator of the test group that day, and everything else was tested while maxx was still an ordinary member. All paths are under `/v2/groups/{group_openid}/`.
+  - Usable without being an administrator, tested live: `info` (group name, introduction, category, tags, member count) and `bot_state` (maxx's `member_openid` in this group, its join time, its role owner/admin/member, whether proactive messages are enabled, and whether it receives all messages or only @s). The documentation says these two are allowlist-only, but in testing maxx could get both. 30 calls per minute each.
+  - Requiring maxx to be a group administrator: muting with `POST restrict_chat_setting`, whose body is `members: [{op, member_openid, mute_expire_at}]`. `op` is add, update or del; the expiry time is in RFC3339, at most 30 days ahead; at most 20 people per call. add and update work only on ordinary members, and del with an empty string lifts the mute immediately. `GET restrict_chat_setting` returns the whole-group mute rules and the people currently muted. There are also the join request list `join_request_list` and the approval `approval_join_request/{member_openid}`, and the join request event `GROUP_JOIN_REQUEST` is likewise received only by administrators; and there is `<qqbot-at-everyone />` for @everyone (added 2026-10-26), once per group per day. Tested live: none of these return 11253; with maxx not an administrator, querying mutes, querying join requests and a del on an ordinary member who was not muted all returned 11703 "机器人不是群管理员" ("the bot is not a group administrator") (err_code 40011030).
+  - Muting tested live (maxx an administrator, `bot_state` returning `member_role: admin`, on an ordinary member): an add with an expiry time 60 seconds ahead in `+08:00` returned 200 and `{}`; an immediate `GET` showed the person, with an expiry 1 second earlier than the one given; a del with an empty string returned 200 and `{}`, and a further `GET` showed no one. An add with an empty-string expiry returned 40103009 "请求参数mute_expire_at无效" ("request parameter mute_expire_at is invalid"); a del on someone who was not muted returned 200. Not tested: update, add on someone already muted, muting the group owner or an administrator, and more than 30 days.
+  - Allowlist-only (the documentation says "内邀接入中", "invitation-only access in progress"): the member list `members`, a single member `members/{member_openid}`, batch removal `batch_remove_members` (optionally blacklisting at the same time), and querying and editing the blacklist `member_blacklist`. In testing, the member list and the single member returned 11253 "应用无接口访问权限" ("the application has no access to this API") (err_code 40012010): maxx is not on the allowlist, so it cannot get the openids of people who have not spoken.
+  - Events: `GROUP_MEMBER_ADD` and `GROUP_MEMBER_REMOVE` (intent `GROUP_MEMBER_EVENT`, `1<<24`), carrying only `member_openid`, with no nickname.
+  - **`mute_member({ member, seconds })`** (implemented 2026-10-29): Max's tool for muting or unmuting a person in this group. Whether to mute and for how long is left to Max's judgement, and after muting, Max briefly says so in the group. `member` is the number from `[mention#N]`; the `member_openid` is found from the account with which this person most recently spoke in this group, so a person who has not spoken in this group cannot be found and cannot be muted. A `seconds` of 0 unmutes (del), and the maximum is 2592000 seconds (30 days). For a nonzero value, the tool first does a `GET` to see whether the person is currently muted, and uses update if so and add if not, with the expiry written in `+08:00`. Whatever QQ would certainly refuse is refused on the host first: private chats, Max itself, and the group owner and administrators (judged from the identity snapshot in the person's latest message). Whether Max is an administrator is not queried; if QQ refuses (40011030), the reason is reported as it is. The tool goes through neither the actor nor the sender and is not entered in the ledger: a mute is not a message on the timeline, and there is nothing it needs to be ordered against in what Max says. Muting twice does no harm, so when it is unknown whether a mute succeeded, simply muting again is enough. The tool calls the QQ client directly (`qq::admin`) and leaves only a log line; the next core can learn whom Max muted only from what Max said in the group. At most 5 per run.
+
+The configuration is in `[platforms.qq]`: `app_id_file`, `app_secret_file`. The AppID is not a secret, but it identifies this bot, so, like group numbers, it stays out of the repository.
 
 ## Matrix
 
-2026-10-29 定：先不做，包括[镜像](#消息格式)。原来和 QQ 一起做，是为了不让[消息格式](#消息格式)长成某一个平台的形状；现在消息格式已经定型，以后要做就加一个适配器。下面是 10-27、10-28 为加密房间定下和查到的，留作以后参考。
+Decided 2026-10-29: Matrix is not implemented for now, and neither is mirroring (see [Message format](#message-format)). It was originally to be built together with QQ so that the message format (see [Message format](#message-format)) would not take the shape of any single platform; now that the message format is settled, supporting Matrix later means adding one adapter. What follows is what was decided and found out for encrypted rooms on 2026-10-27 and 2026-10-28, kept for future reference.
 
-2026-10-27 定：支持加密房间。matrix-sdk 的 `e2e-encryption` 和 `sqlite` 特性都开；不加密的房间照常工作。Haskell 版只用 access token 调 Client-Server API，读不了加密房间。
+Decided 2026-10-27: encrypted rooms are supported. matrix-sdk's `e2e-encryption` and `sqlite` features are both enabled; unencrypted rooms work as usual. The Haskell version called the Client-Server API with only an access token and could not read encrypted rooms.
 
-- **状态存储**：matrix-sdk 的房间状态和密钥存在状态目录下的 sqlite 里（`/var/lib/max/matrix/`），口令来自 sops（`store_passphrase_file`）。这是 matrix-sdk 自己的存储，Max 的代码不读它，也不和 Postgres 混在一起。
-- **登录和设备**：第一次启动用密码登录（`password_file`），把会话（user id、device id、access token）存进同一个目录，以后启动都恢复这个会话。设备 id 因此不变，别人的客户端不会每次重启都看到一个新设备。
-- **交叉签名和密钥备份**：bot 账号开 secret storage 和服务器端密钥备份，恢复密钥放在 sops 里（`recovery_key_file`）。启动时用它恢复：设备由 bot 自己的身份签名，收到的房间密钥会备份到服务器。状态目录丢了，就重新登录成一个新设备，再从备份取回房间密钥，历史消息仍然能解开。
-- **解不开的消息**：密钥晚到是常事。适配器先等一会儿（提议 60 秒），期间收到密钥就重新解密。超时就落一行占位消息，文本兜底是"[无法解密]"，`raw` 存密文事件；之后解开了，像编辑一样追加一行 `kind = event`、`target_id` 指向它。ledger 仍然只追加。
-- **`raw` 存明文**：加密房间的 `raw` 存解密后的事件，不存密文，因为镜像和重建节点都要用明文。这意味着加密房间的明文也会进 Postgres，库的保护级别要按这个来定。
-- **媒体**：加密房间里的媒体本身是加密的，解密密钥在事件里，`raw` 保留着它。等做媒体下载（v1 不做）时，由 matrix-sdk 下载并解密。
-- **发送**：matrix-sdk 发送时自动加密，房间密钥发给成员的所有设备，不要求对方先验证。
-- **初次设置**：`max matrix-bootstrap` 子命令。用密码登录、建设备，开交叉签名、secret storage 和密钥备份，把恢复密钥打印出来，由人放进 sops。服务本身启动时缺 `recovery_key_file` 照样报错退出，恢复密钥只能先经这一步拿到。
-- **依赖约束**（2026-10-28 实测）：matrix-sdk 钉 0.18.0。sqlx 即使不开 sqlite 特性，sqlx-sqlite 也参与依赖解析：sqlx 0.9.0 要求 `libsqlite3-sys` `<0.38`，matrix-sdk 0.19 的 rusqlite 0.40 要求 `^0.38`，两边都声明 `links = "sqlite3"`，cargo 直接拒绝解析。0.18.0 用 rusqlite 0.37（`libsqlite3-sys` 0.35），能和 sqlx 0.9.0 一起解析，reqwest 也还是只有一份。等 sqlx 放宽这个范围再升 matrix-sdk。
-- **测试**：单元测试用解密后的事件做 fixture；加密的完整路径在新建的加密测试房间里验证，用同一个 bot 账号登录成一个新设备，Haskell 版只同步它配置的那一个房间，互不影响。原来的镜像房间不加密，也不要给它开加密，开了就关不掉。
+- **State store**: matrix-sdk's room state and keys are stored in sqlite under the state directory (`/var/lib/max/matrix/`), with the passphrase coming from sops (`store_passphrase_file`). This is matrix-sdk's own storage: Max's code does not read it, and it is not mixed with Postgres.
+- **Login and device**: on first startup the bot logs in with a password (`password_file`) and stores the session (user id, device id, access token) in the same directory; every later startup restores that session. The device id therefore stays the same, and other people's clients do not see a new device after every restart.
+- **Cross-signing and key backup**: the bot account enables secret storage and server-side key backup, and the recovery key is kept in sops (`recovery_key_file`). At startup the recovery key is used to restore state: the device is signed by the bot's own identity, and received room keys are backed up to the server. If the state directory is lost, the bot logs in again as a new device and retrieves the room keys from the backup, so past messages can still be decrypted.
+- **Messages that cannot be decrypted**: keys often arrive late. The adapter first waits for a while (60 seconds proposed) and decrypts again if the key arrives in the meantime. On timeout, it writes a placeholder message row whose text fallback is "[无法解密]" ("[unable to decrypt]"), with the encrypted event stored in `raw`; if the message is decrypted later, a `kind = event` row is appended, as for an edit, with `target_id` pointing to the placeholder. The ledger remains append-only.
+- **`raw` stores plaintext**: in encrypted rooms, `raw` stores the decrypted event rather than the ciphertext, because both mirroring and node reconstruction need the plaintext. This means that the plaintext of encrypted rooms also goes into Postgres, and the database's level of protection must be set accordingly.
+- **Media**: media in encrypted rooms is itself encrypted; the decryption key is in the event, and `raw` keeps it. When media download is built (not in v1), matrix-sdk will download and decrypt the media.
+- **Sending**: matrix-sdk encrypts automatically when sending and sends the room key to all of the members' devices, without requiring them to be verified first.
+- **Initial setup**: the `max matrix-bootstrap` subcommand. It logs in with the password, creates the device, enables cross-signing, secret storage and key backup, and prints the recovery key, which a person then puts into sops. The service itself still exits with an error at startup if `recovery_key_file` is missing; the recovery key can only be obtained through this step first.
+- **Dependency constraints** (tested 2026-10-28): matrix-sdk is pinned to 0.18.0. Even without sqlx's sqlite feature enabled, sqlx-sqlite takes part in dependency resolution: sqlx 0.9.0 requires `libsqlite3-sys` `<0.38`, while matrix-sdk 0.19's rusqlite 0.40 requires `^0.38`, and both declare `links = "sqlite3"`, so cargo refuses to resolve them. 0.18.0 uses rusqlite 0.37 (`libsqlite3-sys` 0.35), which resolves together with sqlx 0.9.0, and there is still only one copy of reqwest. matrix-sdk will be upgraded once sqlx relaxes this range.
+- **Testing**: unit tests use decrypted events as fixtures. The full encrypted path is verified in a newly created encrypted test room, logging in with the same bot account as a new device; the Haskell version syncs only the one room it is configured for, so the two do not interfere. The original mirroring room is not encrypted, and encryption must not be enabled for it either, because once enabled it cannot be turned off.
 
-配置在 `[platforms.matrix]`：`homeserver`、`user_id`、`password_file`、`recovery_key_file`、`store_passphrase_file`、`rooms_file`（一行一个房间）。
+The configuration is in `[platforms.matrix]`: `homeserver`, `user_id`, `password_file`, `recovery_key_file`, `store_passphrase_file`, `rooms_file` (one room per line).
 
-## 工具和 codemode
+## Tools and codemode
 
-2026-10-27 定。
+Decided 2026-10-27.
 
-### 纯 codemode
+### Pure codemode
 
-- **模型只有两个工具：`run_code` 和 `shell`。** tools 数组固定不变，请求前缀不会因为工具变化而失效；要守的是"固定"，不是"只有一个"。`run_code` 的参数是 `{code, args?, timeout_ms?}`：`code` 是 async 函数体，`return` 的值就是结果；`timeout_ms` 和 `shell` 的一样。同一轮可以有多个 `run_code`，各跑各的。
-- **程序里调 Max 的工具**：`tools.<名字>(args)` 返回 Promise，`Promise.all` 就是并发。沿用 Haskell 版 SDK 的形状：`max.raw` 拿完整的成败结果，`max.cancel` 和 `max.race` 取消调用，`tools.agent()` 派后台 agent（2026-10-30 做了，见[后台 agent](#后台-agent)）。做成的（2026-10-29）：`tools.x()` 失败抛 `ToolError`；`max.raw` 不抛，返回 `{ok: true, value}` 或 `{ok: false, error: {code, message}}`；`max.cancel` 中止那次请求，`max.race` 取先完成的、取消其余的；没 await 就读字段会直接报错，提示先 await。
-- **`shell`**（2026-10-28 定）：跑终端命令不用从 JS 绕。只有 `run_code` 的话，每次都要写 `child_process`，非零退出直接抛异常，stderr 拿不到；命令套在 JS 字符串里再套进 JSON，转义多一层，模板字符串里的 `${VAR}` 还会先被 JS 吃掉。主流模型在 shell 工具上训练得最多，形状贴近它们熟悉的最好用。
-  - 参数 `{command, workdir?, timeout_ms?}`，贴近 Codex 的 shell 工具。在群 VM 里用 `bash -lc` 执行，默认工作目录 `/work`。
-  - 结果是退出码加合并的输出；过长保留头尾，全文写进 VM 里的文件。墙钟上限和 `run_code` 一样。
-  - 原来不能调 Max 的工具、不开 MCP 会话，交图也得再调一次 `run_code`。11-02 起和 `run_code` 一样开会话，命令里用 `maxx` 调，见下一条。
-  - 安全上没有新东西：`run_code` 本来就能 `execSync`，VM 里本来就是 root。
-- **`maxx`**（2026-11-02 做，owner 提的："语言无关的 codemode"）：VM 里的一个命令，`shell` 的命令和任何语言写的程序都用它调 Max 的工具。
-  - **工具只有一个来源**：工具还是只在宿主上写一处（`mcp::tool::TOOLS`，见下面的"工具契约"）。runner 的 `tools.<名字>` 和 `maxx` 都只是 MCP 服务的通用客户端，按名字调，没有哪个工具单独的代码；新工具两边自动都有。
-  - **一个客户端**：调用的代码从 `runner.js` 抽成 `nix/client.js`，runner 和 `maxx`（`nix/maxx.js`，Node 写的）共用。没反过来让 SDK 包 `maxx`：那样每个 `tools.x` 都起一个进程，`Promise.all` 二十个查询就是二十个进程，错误和图都要经退出码和 stdout 转一道。代价是每次 `maxx` 都启动一次 Node，几十毫秒；一百次的循环该用 `run_code`。
-  - **用法**：`maxx 工具名 --参数 值`、`--参数=值`、单独的 `--参数` 是 true、`--no-参数` 是 false；或者给一个 JSON 对象，`-` 从标准输入读；没写名字的词按顺序填必填参数，再填其余的。参数按 `tools/list` 列出的 schema 转类型；数组参数重复写就是多项。`maxx` 列出工具，`maxx 工具名 --help` 看参数和说明。runner 自己的两个调用不在 `tools/list` 里，`maxx` 单独认：`maxx show 路径`（`max.image`）、`maxx file 句柄`（`max.file`）。`maxx events` 不是调用，是群里消息的流，见[常驻程序](#常驻程序)的第四步。
-  - **结果**：成功打印 JSON 到标准输出；工具失败把"工具: 原因（code）"写到标准错误，退出码 1；命令行写错退出码 2。
-  - **会话**：前台的 `shell` 和 `run_code` 一样开 MCP 会话，token 经 `systemd-run --setenv` 放进命令的环境变量 `MAXX_TOKEN`；runner 也把自己的 token 放进 `process.env`，程序起的子进程能用 `maxx`。所以命令里调的工具也计入"调了 Max 的工具"那一行，`maxx show` 的图跟在 `shell` 的结果后面。后台命令比这一轮活得久，没有 token。
-  - **没有 token**（常驻程序、后台命令，11-02 做）：按群算，只开放一部分工具，`maxx say`、`maxx wake` 也在这里，见[常驻程序](#常驻程序)的第三步。
-- **工具说明**：系统提示里放 Max 工具的 TypeScript 声明，带返回类型，内容固定。
-- **skill 只是文档。** `use_skill` 是普通的 Max 工具，返回说明书和相关工具的声明，和别的结果一样只往上下文后面追加。能调哪些工具由群和会话决定，一个 turn 里不变，不随 skill 加载变化。所以核心里没有"活动工具集"，Responses 的 `tool_search` 和 Chat 的元工具也都不需要。
-- **调用格式**：用最通用的 function tool，参数是 JSON。代码是原文还是转义进 JSON 字符串，取决于模型自己的工具调用格式：Claude 的字符串参数和 Qwen 3.5/3.6 的 XML 参数是原文；GPT 和 Gemini 要转义，Gemini 偶尔还会多转义一层（gemini-cli 专门写了修正代码）。aider 2024 年测过，代码包进 JSON 后，所有被测模型的通过率都下降了，幅度不一。暂不处理，见[待定事项](#待定事项)。
-- **代价**：所有工具都依赖 VM。VM 起不来就没有工具，模型还能纯文字回答；`/status` 要能看到 VM 的状态。前沿模型写 JS 没问题，qwen3.8-27b 这类本地模型要在 v1 里评测。
+- **The model has only two tools: `run_code` and `shell`.** The tools array is fixed, so the request prefix is never invalidated by a change in tools; what must be preserved is that the set is "fixed", not that there is "only one" tool. The parameters of `run_code` are `{code, args?, timeout_ms?}`: `code` is the body of an async function, and the value it `return`s is the result; `timeout_ms` behaves as it does for `shell`. One round may contain several `run_code` calls, each running independently.
+- **Calling Max's tools from a program:** `tools.<name>(args)` returns a Promise, so `Promise.all` provides concurrency. The shape of the Haskell version's SDK is kept: `max.raw` obtains the full success-or-failure result, `max.cancel` and `max.race` cancel calls, and `tools.agent()` dispatches a background agent (implemented 2026-10-30; see [Background agents](#background-agents)). Implemented (2026-10-29): `tools.x()` throws `ToolError` on failure; `max.raw` does not throw, and returns `{ok: true, value}` or `{ok: false, error: {code, message}}`; `max.cancel` aborts that request, and `max.race` takes whichever call finishes first and cancels the rest; reading a field without awaiting raises an error immediately, with a hint to await first.
+- **`shell`** (decided 2026-10-28): runs terminal commands without a detour through JS. With only `run_code`, every command would require writing `child_process` code; a non-zero exit throws an exception outright and stderr is lost; the command is nested in a JS string that is in turn nested in JSON, which adds a layer of escaping, and any `${VAR}` inside a template string is consumed by JS first. Mainstream models are trained most heavily on shell tools, and a shape close to what they know works best.
+  - The parameters are `{command, workdir?, timeout_ms?}`, close to Codex's shell tool. The command is executed in the group VM with `bash -lc`; the default working directory is `/work`.
+  - The result is the exit code plus the combined output; overly long output keeps its head and tail, and the full text is written to a file in the VM. The wall-clock limit is the same as for `run_code`.
+  - Originally it could not call Max's tools and did not open an MCP session, and handing over an image required a further `run_code` call. Since 2026-11-02 it opens a session just as `run_code` does, and commands call tools with `maxx`; see the next item.
+  - It introduces nothing new in terms of security: `run_code` could already call `execSync`, and everything in the VM already runs as root.
+- **`maxx`** (implemented 2026-11-02, proposed by the owner as "language-independent codemode"): a command in the VM through which `shell` commands, and programs written in any language, call Max's tools.
+  - **Tools have a single source:** each tool is still written in only one place, on the host (`mcp::tool::TOOLS`; see "Tool contract" below). The runner's `tools.<name>` and `maxx` are both merely generic clients of the MCP service that call tools by name; neither contains code specific to any tool, and a new tool automatically becomes available in both.
+  - **One client:** the calling code was extracted from `runner.js` into `nix/client.js`, which the runner and `maxx` (`nix/maxx.js`, written for Node) share. The reverse arrangement, in which the SDK wraps `maxx`, was rejected: every `tools.x` would then start a process, a `Promise.all` over twenty queries would mean twenty processes, and errors and images would have to be relayed through exit codes and stdout. The cost is that every `maxx` invocation starts Node once, which takes a few tens of milliseconds; a loop of a hundred calls should use `run_code`.
+  - **Usage:** `maxx tool-name --param value` or `--param=value`; a bare `--param` means true and `--no-param` means false. Alternatively, a single JSON object may be given, with `-` reading it from standard input. Words without a parameter name fill the required parameters in order, then the remaining ones. Arguments are converted to the types in the schema listed by `tools/list`; repeating an array parameter yields several items. `maxx` on its own lists the tools, and `maxx tool-name --help` shows a tool's parameters and description. The runner's own two calls are not in `tools/list`, so `maxx` recognises them separately: `maxx show path` (`max.image`) and `maxx file handle` (`max.file`). `maxx events` is not a call but a stream of the group's messages; see step four of [Resident programs](#resident-programs).
+  - **Results:** on success, JSON is printed to standard output; when a tool fails, "tool: reason (code)" is written to standard error and the exit code is 1; a malformed command line exits with code 2.
+  - **Sessions:** a foreground `shell` opens an MCP session just as `run_code` does, and the token is placed in the command's environment variable `MAXX_TOKEN` via `systemd-run --setenv`. The runner likewise puts its own token in `process.env`, so child processes started by the program can use `maxx`. Tools called from a command are therefore also counted in the "Max tools called" line, and images from `maxx show` follow the `shell` result. Background commands outlive the turn and have no token.
+  - **Without a token** (resident programs and background commands, implemented 2026-11-02): access is granted per group and only a subset of tools is exposed; `maxx say` and `maxx wake` belong here as well. See step three of [Resident programs](#resident-programs).
+- **Tool descriptions:** the system prompt contains TypeScript declarations of Max's tools, including return types; this content is fixed.
+- **A skill is only documentation.** `use_skill` is an ordinary Max tool that returns the manual and the declarations of the related tools, which, like any other result, are only appended to the end of the context. Which tools may be called is determined by the group and the conversation; it does not change within a turn, and it does not change when a skill is loaded. The core therefore has no "active tool set", and neither Responses' `tool_search` nor meta-tools for Chat Completions are needed.
+- **Call format:** the most common form, a function tool with JSON arguments, is used. Whether the code arrives as original text or escaped inside a JSON string depends on the model's own tool-call format: Claude's string parameters and the XML parameters of Qwen 3.5/3.6 carry the original text; GPT and Gemini require escaping, and Gemini occasionally adds an extra layer of escaping (gemini-cli contains code written specifically to correct this). aider measured this in 2024: once code was wrapped in JSON, the pass rate of every model tested dropped, by varying amounts. This is not addressed for now; see [Open items](#open-items).
+- **Cost:** every tool depends on the VM. If the VM cannot start, no tools are available, although the model can still answer in plain text; `/status` must show the VM's state. Frontier models write JS without difficulty; local models such as qwen3.8-27b are to be evaluated in v1.
 
-### 在群 VM 里跑
+### Running in the group VM
 
-程序跑在群 VM 里的 Node 上，不用进程内的 JS 引擎（Haskell 版是 wasmtime 里的 QuickJS）。好处：
+Programs run on Node inside the group VM rather than in an in-process JS engine (the Haskell version used QuickJS inside wasmtime). The benefits are:
 
-- 和后台 pi 共享 `/work`，交接任务只要留文件；群里的图片和文件用 `max.file()` 拷进 `/work/chat` 再读，见[读文件](#读文件)。
-- 浏览器直接写 Playwright，见[浏览器](#浏览器)。
-- Max 不用维护 JS 引擎、单步协议和 ABI。
+- `/work` is shared with the background pi, so handing over a task only requires leaving files behind; images and files from the group are copied into `/work/chat` with `max.file()` and read from there (see [Reading files](#reading-files)).
+- The browser is driven directly with Playwright (see [The browser](#the-browser)).
+- Max does not have to maintain a JS engine, a single-step protocol or an ABI.
 
-做法：
+The approach:
 
-- **每次运行一个新进程**：宿主通过 vsock 上的 SSH，在群 VM 里执行 `node /run/max/runner.js`。runner 和 SDK 打进 guest 镜像，只读。stdin 传程序、参数、会话 token 和 Max 工具的名字；stdout 只有返回值（字符串原样，别的转成 JSON），`console` 和程序自己往 stdout 写的都改到 stderr，作为日志带回；退出码 0 是正常返回，1 是抛了异常，带上程序自己的行号。和 `shell` 一样是一个 transient unit，经 `bash -lc` 启动，程序里的子进程有登录环境。不做常驻进程，免得运行之间共享状态。`shell` 也是每次一个 SSH channel，直接 `bash -lc`，不经过 runner。
-- **启动**：VM 按需启动，约 4.5 秒后能执行命令（Haskell 版实测），闲置两小时关机。模型输出流里一出现 `run_code` 或 `shell` 调用就开始启动 VM，和模型写代码的时间重叠；不用工具的 turn 不启动。
-- **限制**：VM 的 CPU、内存上限和网络策略；`run_code` 和 `shell` 一次运行的墙钟上限；drop 时杀掉命令。不要求确定性，也没有 fuel。
-- **和核心的关系**：`run_code` 和 `shell` 在核心眼里都只是一次工具调用。程序里的 Max 工具调用不是核心的输入，结果里附一份内部调用的摘要，方便排查。
-- **每次调用记一行日志**（2026-11-03 owner 要的）：`a tool call ends`，带会话、工具（`run_code`、`shell`、`background`）、程序有没有用浏览器（代码里有 `max.page(`、`max.browser(`、`max.snapshot(` 就算）、耗时、是否出错、结果的 token 数和程序调过的 Max 工具。不记代码和输出：浏览器的程序常带着替人填的账号密码。起因：私聊里 gemini-3.8-flash 在 Google Cloud 控制台里点了 126 步，库里只有每次模型调用的 token 和耗时，看不出哪几步白点了。Max 重启时宽限期到了还在跑的调用随连接断开被杀，核心给它补"已取消"，见[重启](#重启)。
-- **已知风险**：VM 里的命令都以 root 运行。之前的提示注入如果在 VM 里留下了常驻进程，它可以拿到 runner 的 token 或接上它的 fd，用这一轮的工具。影响范围就是这一轮模型本来就能调的工具，新增的只是跨 turn 的持久化。接受。
-- **测试**：runner 只认 stdio 和 MCP，测试里在本机跑 node，接 fake MCP 服务，不需要 VM。
+- **A new process for each run:** the host executes `node /run/max/runner.js` in the group VM over SSH on vsock. The runner and the SDK are built into the guest image and are read-only. stdin carries the program, the arguments, the session token and the names of Max's tools; stdout carries only the return value (a string as is, anything else converted to JSON), while `console` output and anything the program itself writes to stdout are redirected to stderr and brought back as logs. Exit code 0 means a normal return, and 1 means an exception was thrown, reported with the program's own line number. Like `shell`, each run is a transient unit started through `bash -lc`, so child processes of the program have a login environment. No resident process is used, so that no state is shared between runs. `shell` likewise uses one SSH channel per run and invokes `bash -lc` directly, without going through the runner.
+- **Startup:** the VM is started on demand and can execute commands after about 4.5 seconds (verified in testing with the Haskell version); it shuts down after two hours of idleness. VM startup begins as soon as a `run_code` or `shell` call appears in the model's output stream, overlapping with the time the model spends writing the code; turns that use no tools do not start the VM.
+- **Limits:** the VM's CPU and memory limits and its network policy; a wall-clock limit for each run of `run_code` and `shell`; commands are killed on drop. Determinism is not required, and there is no fuel.
+- **Relationship to the core:** to the core, `run_code` and `shell` are each just a single tool call. The Max tool calls made inside a program are not inputs to the core; the result carries a summary of those internal calls to aid troubleshooting.
+- **One log line per call** (requested by the owner on 2026-11-03): `a tool call ends`, carrying the conversation, the tool (`run_code`, `shell` or `background`), whether the program used the browser (counted if the code contains `max.page(`, `max.browser(` or `max.snapshot(`), the duration, whether it failed, the token count of the result and the Max tools the program called. The code and output are not logged, because browser programs often contain account names and passwords filled in on someone's behalf. The motivation: in a private chat, gemini-3.8-flash clicked through 126 steps in the Google Cloud console, and the database held only the tokens and duration of each model call, which did not reveal which steps had been wasted. When Max restarts, calls still running when the grace period expires are killed as the connection drops, and the core records them as "cancelled"; see [Restarts](#restarts).
+- **Known risk:** all commands in the VM run as root. If an earlier prompt injection left a resident process in the VM, that process could obtain the runner's token or attach to its file descriptors and use this turn's tools. The impact is limited to the tools the model could already call in this turn; the only new element is persistence across turns. This risk is accepted.
+- **Testing:** the runner depends only on stdio and MCP, so tests run node on the local machine against a fake MCP service, with no VM required.
 
-### VM 进程
+### VM processes
 
-2026-10-27 定：沿用 Haskell 版的 VM 方案（cloud-hypervisor 加 NixOS guest），但去掉 broker。VM 是主进程的子进程，运行时不需要 root。
+Decided 2026-10-27: the Haskell version's VM design (cloud-hypervisor plus a NixOS guest) is kept, but the broker is removed. Each VM is a child process of the main process, and nothing at run time requires root.
 
-Haskell 版的做法见 [ADR 011](https://github.com/HCHogan/max/blob/a5de2e1410f5cdfaa4b88c052bd499ee8b676759/docs/adr/011-native-systemd-runtime.md)（当时还是 nspawn）：主进程没有 root，起停 VM、建网络命名空间、分配地址、准备卷、在 guest 里执行命令、装包，都交给一个 socket 激活的 root broker，约 1,000 行。VM 的 unit 没设 `User=`，以 root 运行。
+The Haskell version's approach is described in [ADR 011](https://github.com/HCHogan/max/blob/a5de2e1410f5cdfaa4b88c052bd499ee8b676759/docs/adr/011-native-systemd-runtime.md) (which still used nspawn at the time): the main process had no root, and starting and stopping VMs, creating network namespaces, allocating addresses, preparing volumes, executing commands in the guest and installing packages were all delegated to a socket-activated root broker of about 1,000 lines. The VM's unit set no `User=` and ran as root.
 
-这里的做法和 microvm.nix 自己的 host 模块一样：cloud-hypervisor 以普通用户、`kvm` 组运行，tap 由 root 预先建给这个用户。
+The approach here is the same as that of microvm.nix's own host module: cloud-hypervisor runs as an ordinary user in the `kvm` group, and root creates the taps for that user in advance.
 
-- **需要 root 的只有开机时的声明式配置**，都在 NixOS 里：
-  - `maxx` 加入 `kvm` 组。
-  - 一个 oneshot unit `maxx-taps` 用 `ip tuntap` 预建一组 tap（数量是配置，默认 32），属主 `maxx`，开多队列和 vnet header。不用 systemd-networkd：module 不替宿主选网络栈。这个 unit 停了 tap 还在，重启它不会断开在跑的 VM。
-  - 每个 tap 是自己的 /30（默认从 `10.235.0.0/24` 里切）：宿主一端是 `.1`，guest 是 `.2`，所有 VM 用同一个 MAC。地址不用 DHCP（2026-10-29 改，原先 2026-10-27 定的是 DHCP）：主进程起 VM 时把 `max.ip`、`max.gateway`、`max.dns` 和这次开机的 SSH 公钥 `max.key` 加在 guest 的内核命令行上，guest 里一个 oneshot 在网络起来之前读出来配好。宿主上不用跑 DHCP，也不用为 DNS 和公钥另开一个共享目录。
-  - tap 之间不桥接，VM 互相不通靠路由和 nft。nft 只许 VM 用自己 tap 的 `.2` 作源地址、只许去公网地址、不许 IPv6；VM 连宿主一律拒绝，宿主只回已经建立的连接；出去的做 masquerade。
-- **起 VM**：主进程选一个空闲槽位（没有就关掉闲置最久、没在用、不常开的那个），在 `/var/lib/maxx/vm/<会话 id>/` 下准备 `work` 和 `nix.img`，起两个 virtiofsd（只读的 store、读写的 `/work`）和 cloud-hypervisor，都是 `kill_on_drop` 的子进程。然后每 100 ms 试一次 SSH，连上就算起好了，不另做就绪通知。不挂会话的媒体视图，见[读文件](#读文件)。
-- **vCPU 至少 2 个**：tap 是多队列的，cloud-hypervisor 要两对队列以上才按多队列打开它，而每个 vCPU 最多配一对。
-- **每个 VM 的 tap 名不同**，而 microvm.nix 生成的 `microvm-run` 把 tap 名写死在构建时。2026-10-29 定：主进程自己拼 cloud-hypervisor 和 virtiofsd 的命令行，只借用 guest 的 kernel、initrd 和内核命令行，由 guest 的构建产出一个 JSON，路径写进配置。每个 VM 本来就有好几个参数不同（目录、tap、Landlock 规则），microvm.nix 的 runner 还会自己建盘、起 socat 转发通知，和"主进程直接管两个子进程"对不上。
-- **通道**：hybrid vsock 的 socket 就在这个目录里，主进程直接用。连 22 端口跑 russh，每个 VM 一条连接，每条命令一个 channel；在 `notify.vsock_7777` 上监听 MCP，见 [MCP 通道](#mcp-通道)。
-- **生命周期就是进程的生命周期**：闲置关机就是 drop；`maxx.service` 停止或崩溃时，systemd 按 cgroup 把 VM 一起杀掉。不需要清理孤儿、实例元数据和配置代数，下次起的 VM 用的就是当前配置。服务重启时 VM 和里面在跑的命令一起结束；VM 重启只要几秒，可以接受（2026-10-27）。
-- **卷**归 `maxx` 所有，只在显式删除时删。
-- **装包、搜包**：`maxx` 经 nix daemon 构建，gc root 放在 `/var/lib/maxx/gcroots/<会话 id>/`，guest 通过只读的 store 共享看到它们。不需要 root。
-- **资源上限**：内存和 vCPU 由 hypervisor 参数限住（tank 上每个 8 个 vCPU、16 GiB），单个 VM 没有自己的 cgroup，所有 VM 加起来也没有上限：`maxx.slice` 没设内存上限，设了会连 maxx 本身一起限、到线就杀进程。内存是用到才分配的，guest 释放的页经 balloon 的 free page reporting 还给宿主；guest 的页缓存不算空闲，留到 VM 闲置关机（2026-10-30 定，owner 选的：平时一个 VM 用 1–2 GiB，几个群同时大编译才会挤，到时候在 guest 里闲置后清页缓存）。以后需要再做 cgroup 委托。
-- **闲置的 VM 清缓存**（2026-11-03 定）：VM 10 分钟没被工具用，宿主经 SSH 让 guest `sync`、`drop_caches=3`、`compact_memory`，之后每闲 10 分钟再来一次。页缓存放掉，记着的 dentry 和 inode 也放掉（virtiofsd 跟着关掉对应的描述符），整理出的大块空闲页由 free page reporting 还给宿主：cloud-hypervisor v52 对共享内存（`shared=on`，memfd）先 `fallocate` 打洞再 `MADV_DONTNEED`（看过源码）。常开的 VM 也清。不用 balloon 调大小、virtio-mem 热插拔内存或热插拔 vCPU：vCPU 闲着不占宿主，内存用到才分配，缩 VM 的上限只是逼 guest 丢缓存，直接丢更简单，也不用给 cloud-hypervisor 开 API socket。当天 tank 的数据：一周里最多同时 7 个 VM，平常 1–4 个；在跑的 7 个占 0.8–5.7 GiB，virtiofsd 另占 4.3 GiB，其中一个私聊的 store virtiofsd 开着 167 万个描述符（又有人扫了 store）；宿主 CPU 和内存压力都接近 0。所以 VM 的规格（8 vCPU、16 GiB、64 GiB 盘）、闲置关机的两小时、32 个槽位都不改。
-- **store 共享的文件描述符**：guest 查过的每个 store 文件，store 的 virtiofsd 都开着一个 O_PATH 描述符，直到 guest 的内核把它忘掉；guest 内存够大，就一直不忘。2026-10-30 一个后台 agent 为了找 glibc 的 ld-linux，`find /nix/store` 扫宿主的整个 store（当时 641 万个文件），virtiofsd 用满了 `maxx.service` 的 524288 个描述符，之后这个 VM 里新查的 store 文件都报 `Too many open files in system`，直到 VM 重启。所以：
-  - `LimitNOFILE` 提到 8388608，virtiofsd 自己把软限制提到这么高，整个 store 扫一遍也够用。代价是宿主的内核内存，每个开着的文件约 1.4 KB（bcachefs 的 inode 1048 B，dentry 和 file 各 192 B），扫遍 store 约 9 GiB，guest 忘掉或 VM 关掉就还回来。
-  - Max 和后台 agent 的提示里说：要某个包里的文件，用 `nix build --no-link --print-out-paths nixpkgs#包名` 拿路径，不在 `/nix/store` 下 find、ls、用通配符。
-  - 不用 virtiofsd 的 `--inode-file-handles`（存句柄、不留描述符）：`open_by_handle_at` 要初始 user 命名空间里的 `CAP_DAC_READ_SEARCH`，有了它能按句柄打开宿主文件系统上的任何文件。
-- **安全**：VM 逃逸拿到的是 `maxx`，比 Haskell 版的 root 好，但 `maxx` 能读数据库和秘密。cloud-hypervisor 开 seccomp 和 Landlock，virtiofsd 进自己的命名空间，见下面的验证。
-- **和 Haskell 版的区别**：每个 VM 不再有自己的网络命名空间。Haskell 版用 netns 加 NAT，guest 固定是 `10.0.2.2`；guest 镜像的网络配置要跟着改。
-- **在 tank 上验证过**（2026-10-29，借 Haskell 版的 guest，以 `maxx` 身份、套着 `maxx.service` 的加固跑）：
-  - cloud-hypervisor 52 用预建的多队列 tap，不需要 `CAP_NET_ADMIN`。它只提示 tap 已经存在、不改它的地址。
-  - virtiofsd 1.13 以普通用户运行时，自己进新的 user、mount、pid、net 命名空间，根目录换成共享目录，没有任何 capability。`/work` 里建删改名、软硬链接、chmod、flock、git、写 300 MB 文件都正常。guest 的 root 映射成 `maxx`，其它 uid 都压成 `maxx`，所以 chown 不报错但不生效；mknod 失败，和 Haskell 版一样。`meta` 和 `chat` 也要这样映射，否则 guest 里 `authorized_keys` 的属主不是 root，sshd 不认。
-  - `maxx.service` 的加固要放开四处，其它不动：
-    - 去掉 `ProtectKernelTunables`、`ProtectKernelLogs`、`ProtectHostname`。它们在 `/proc` 上叠了只读挂载，内核就不让 virtiofsd 在自己的 user 命名空间里再挂一个 proc。这三项对没有 capability 的服务本来也挡不了什么。
-    - `RestrictNamespaces` 放开 user、mnt、pid、net，virtiofsd 的沙箱要用。
-    - `SystemCallFilter` 加上 `@mount`。
-    - `PrivateDevices` 留着，用 `BindPaths` 把 `/dev/kvm` 和 `/dev/net/tun` 带进来，`DeviceAllow` 放行。
+- **Only the declarative configuration applied at boot requires root**, and all of it lives in NixOS:
+  - `maxx` is added to the `kvm` group.
+  - A oneshot unit, `maxx-taps`, pre-creates a set of taps with `ip tuntap` (the number is configurable and defaults to 32), owned by `maxx`, with multi-queue and vnet headers enabled. systemd-networkd is not used, because the module does not choose a network stack on the host's behalf. The taps remain when this unit stops, so restarting it does not disconnect running VMs.
+  - Each tap is its own /30 (carved out of `10.235.0.0/24` by default): the host end is `.1`, the guest is `.2`, and all VMs use the same MAC. Addresses are not assigned by DHCP (changed 2026-10-29; DHCP had been decided on 2026-10-27): when the main process starts a VM, it adds `max.ip`, `max.gateway`, `max.dns` and the SSH public key for this boot, `max.key`, to the guest's kernel command line, and a oneshot in the guest reads them and applies the configuration before the network comes up. No DHCP server has to run on the host, and no separate shared directory is needed for DNS and the public key.
+  - The taps are not bridged; VMs are kept apart from one another by routing and nft. nft allows a VM to use only its own tap's `.2` as a source address, allows it to reach only public addresses, and forbids IPv6; connections from VMs to the host are always rejected, the host answers only established connections, and outgoing traffic is masqueraded.
+- **Starting a VM:** the main process picks a free slot (if there is none, it shuts down the VM that has been idle longest and is neither in use nor kept running), prepares `work` and `nix.img` under `/var/lib/maxx/vm/<conversation id>/`, and starts two virtiofsd instances (a read-only one for the store and a read-write one for `/work`) and cloud-hypervisor, all as `kill_on_drop` child processes. It then attempts an SSH connection every 100 ms; once one succeeds, the VM counts as started, with no separate readiness notification. The conversation's media view is not mounted; see [Reading files](#reading-files).
+- **At least 2 vCPUs:** the tap is multi-queue, and cloud-hypervisor opens it in multi-queue mode only when there are two or more queue pairs, while each vCPU can be assigned at most one pair.
+- **Each VM has a different tap name**, whereas the `microvm-run` generated by microvm.nix hard-codes the tap name at build time. Decided 2026-10-29: the main process assembles the cloud-hypervisor and virtiofsd command lines itself and borrows only the guest's kernel, initrd and kernel command line, which the guest's build emits as a JSON file whose path is written into the configuration. Each VM already differs in several parameters (directories, tap, Landlock rules), and microvm.nix's runner also creates disks by itself and starts socat to forward notifications, which does not fit the model of "the main process directly manages two child processes".
+- **Channels:** the hybrid vsock socket lives in this directory, and the main process uses it directly. It connects to port 22 and runs russh, with one connection per VM and one channel per command; it listens for MCP on `notify.vsock_7777` (see [The MCP channel](#the-mcp-channel)).
+- **A VM's lifetime is the lifetime of its process:** idle shutdown is simply a drop; when `maxx.service` stops or crashes, systemd kills the VMs along with it by cgroup. There is no need to clean up orphans, instance metadata or configuration generations, and the next VM to start uses the current configuration. When the service restarts, the VMs end together with the commands running inside them; a VM restart takes only a few seconds, which is acceptable (2026-10-27).
+- **Volumes** are owned by `maxx` and are removed only on explicit deletion.
+- **Installing and searching packages:** `maxx` builds through the nix daemon and places gc roots in `/var/lib/maxx/gcroots/<conversation id>/`; the guest sees them through the read-only store share. Root is not required.
+- **Resource limits:** memory and vCPUs are capped by hypervisor parameters (8 vCPUs and 16 GiB per VM on tank). Individual VMs have no cgroup of their own, and there is no limit on all VMs combined: `maxx.slice` sets no memory limit, because such a limit would also constrain maxx itself and kill processes once reached. Memory is allocated only when used, and pages freed by the guest are returned to the host through the balloon's free page reporting; the guest's page cache does not count as free and is kept until the VM's idle shutdown (decided 2026-10-30 by the owner's choice: a VM normally uses 1–2 GiB, and memory becomes tight only when several groups run large builds at the same time, at which point the page cache can be dropped inside the guest once it is idle). cgroup delegation can be added later if needed.
+- **Idle VMs drop their caches** (decided 2026-11-03): when a VM has not been used by any tool for 10 minutes, the host has the guest run `sync`, `drop_caches=3` and `compact_memory` over SSH, and repeats this after every further 10 idle minutes. The page cache is released, as are the cached dentries and inodes (virtiofsd closes the corresponding descriptors in turn), and the large blocks of free pages produced by compaction are returned to the host via free page reporting: for shared memory (`shared=on`, memfd), cloud-hypervisor v52 first punches holes with `fallocate` and then applies `MADV_DONTNEED` (confirmed by reading the source). VMs kept running are cleaned as well. Balloon resizing, virtio-mem memory hot-plug and vCPU hot-plug are not used: idle vCPUs cost the host nothing, memory is allocated only when used, and shrinking a VM's limit merely forces the guest to drop its cache, so dropping the cache directly is simpler and avoids opening an API socket for cloud-hypervisor. Data from tank on that day: over one week, at most 7 VMs ran at the same time, and usually 1–4; the 7 running VMs used between 0.8 and 5.7 GiB each, and virtiofsd used a further 4.3 GiB, of which the store virtiofsd of one private chat held 1.67 million open descriptors (someone had scanned the store again); CPU and memory pressure on the host were both close to 0. The VM specification (8 vCPUs, 16 GiB, 64 GiB disk), the two-hour idle shutdown and the 32 slots therefore remain unchanged.
+- **File descriptors of the store share:** for every store file the guest has looked up, the store's virtiofsd keeps an O_PATH descriptor open until the guest's kernel forgets that file; if the guest has enough memory, it never forgets. On 2026-10-30, a background agent looking for glibc's ld-linux ran `find /nix/store` and scanned the host's entire store (6.41 million files at the time); virtiofsd exhausted the 524288 descriptors allowed to `maxx.service`, after which every store file newly looked up in that VM failed with `Too many open files in system` until the VM restarted. Therefore:
+  - `LimitNOFILE` is raised to 8388608, and virtiofsd raises its own soft limit to the same value, which is enough for a scan of the entire store. The cost is host kernel memory, about 1.4 KB per open file (1048 B for a bcachefs inode, plus 192 B each for the dentry and the file); a scan of the whole store costs about 9 GiB, which is returned once the guest forgets the files or the VM shuts down.
+  - The prompts of Max and of background agents state that, to find a file in a package, the path should be obtained with `nix build --no-link --print-out-paths nixpkgs#<package>`, rather than by running find or ls, or using wildcards, under `/nix/store`.
+  - virtiofsd's `--inode-file-handles` (which stores handles instead of keeping descriptors open) is not used: `open_by_handle_at` requires `CAP_DAC_READ_SEARCH` in the initial user namespace, and that capability allows any file on the host's file systems to be opened by handle.
+- **Security:** a VM escape yields `maxx`, which is better than the Haskell version's root, but `maxx` can read the database and the secrets. cloud-hypervisor runs with seccomp and Landlock enabled, and virtiofsd enters its own namespaces; see the verification below.
+- **Differences from the Haskell version:** VMs no longer have their own network namespaces. The Haskell version used a netns plus NAT, and the guest was always `10.0.2.2`; the guest image's network configuration has to change accordingly.
+- **Verified on tank** (2026-10-29, borrowing the Haskell version's guest, running as `maxx` under the hardening of `maxx.service`):
+  - cloud-hypervisor 52 uses the pre-created multi-queue taps without needing `CAP_NET_ADMIN`. It merely notes that the tap already exists and does not change its address.
+  - When run as an ordinary user, virtiofsd 1.13 enters new user, mount, pid and net namespaces by itself, changes its root directory to the shared directory, and holds no capabilities. In `/work`, creating, deleting and renaming files, symbolic and hard links, chmod, flock, git and writing a 300 MB file all work. The guest's root is mapped to `maxx` and every other uid is squashed to `maxx`, so chown reports no error but has no effect; mknod fails, as in the Haskell version. `meta` and `chat` need the same mapping; otherwise `authorized_keys` in the guest is not owned by root and sshd refuses it.
+  - The hardening of `maxx.service` has to be relaxed in four places, and nothing else changes:
+    - Remove `ProtectKernelTunables`, `ProtectKernelLogs` and `ProtectHostname`. They overlay read-only mounts on `/proc`, and the kernel then refuses to let virtiofsd mount another proc in its own user namespace. For a service without capabilities, these three options did not block much in any case.
+    - `RestrictNamespaces` allows user, mnt, pid and net, which virtiofsd's sandbox needs.
+    - `SystemCallFilter` adds `@mount`.
+    - `PrivateDevices` stays; `/dev/kvm` and `/dev/net/tun` are brought in with `BindPaths` and permitted with `DeviceAllow`.
 
-    `RestrictSUIDSGID` 顺带挡住了 guest 在 `/work` 里设 setuid 位。
-  - cloud-hypervisor 的 Landlock 能开，要补两条规则：`/sys/devices/virtual/net` 只读（读 tap 的 flags），VM 目录读写（建 vsock 的 socket）。开了以后它没有 capability，`NoNewPrivs`，有 seccomp 过滤。
-  - 从起进程到 SSH 连得上约 3.8 秒。hybrid vsock 上的 SSH 先发 `CONNECT 22\n`，systemd 的 `systemd-ssh-proxy vsock-mux/<socket>` 就能连，russh 照做即可。
-  - guest 里 `systemd-run --pipe --wait` 能带回输出和退出码。它会往输出里写设终端标题的转义，要设 `SYSTEMD_ADJUST_TERMINAL_TITLE=0`。
-  - tank 的 CPU 开了嵌套 KVM，module 的 NixOS 测试里也能起 guest。flake 的 `nestedChecks.x86_64-linux.vm` 就是这样：测试机里 module 建好 tap、nft 和加固过的 `maxx.service`，再用同样加固的 `maxx-vm-check` 起一个 VM，经 `shell` 的同一条路径跑 `uname -a`。2026-10-29 在 tank 上跑通，测试机里的 VM 10 秒起好。CI 的 runner 自己就是 VM，给不了测试机 KVM，所以它不在 `checks` 里，要在 tank 上手动跑。
-  - **aarch64 也能部署**（2026-11-05 owner 要的）：flake 的 `guest` 和 `nestedChecks` 对 aarch64-linux 也有。cloud-hypervisor 在 x86_64 上直接引导 ELF 的 `vmlinux`，在 aarch64 上引导 `Image`，串口是 PL011，所以内核和 console 按架构选（`ttyS0`、`ttyAMA0`），和 microvm.nix 自己的 runner 一样；x86_64 的 guest 一个字节没变。aarch64 没有 `earlyprintk` 那样的早期输出，`quiet` 下 `serial.log` 平时是空的。验证：在 Mac 的 Linux builder（Virtualization.framework，开了嵌套虚拟化）的一个副本里，以普通用户跑 `max vm-check`，guest 起来了，`uname -m` 是 aarch64，程序经 MCP 调得到工具；同一份 guest 里的 Chromium 和 ffmpeg 在 builder 里直接跑都正常。但 guest 在那里隔了两层虚拟化，比 tank 慢十倍以上（开机 50 秒，Chromium 启动要两分钟 CPU），浏览器的几项检查都超时，所以浏览器在 aarch64 的 VM 里还没整个验过。Mac 上跑不了 `nestedChecks`：Apple 给的虚拟 EL2 没有 VHE，builder 的 KVM 只能是 nVHE，内核不认 `kvm-arm.mode=nested`，测试机里就没有 KVM；macOS 上 QEMU 11.1 用 HVF 给 EL2，测试机能开 KVM，但时钟乱跳、卡在 initrd。要在一台 KVM 能嵌套的 aarch64 机器上跑。
-- 运维网络：2026-11-05 做了，见[运维网络](#运维网络)。
+    `RestrictSUIDSGID` incidentally prevents the guest from setting the setuid bit in `/work`.
+  - cloud-hypervisor's Landlock can be enabled, but two rules must be added: `/sys/devices/virtual/net` read-only (to read the tap's flags) and the VM directory read-write (to create the vsock socket). Once Landlock is enabled, cloud-hypervisor has no capabilities, runs with `NoNewPrivs`, and has a seccomp filter.
+  - It takes about 3.8 seconds from starting the process to a working SSH connection. SSH over hybrid vsock first sends `CONNECT 22\n`, after which systemd's `systemd-ssh-proxy vsock-mux/<socket>` can connect; russh simply does the same.
+  - In the guest, `systemd-run --pipe --wait` brings back the output and the exit code. It writes escape sequences that set the terminal title into the output, so `SYSTEMD_ADJUST_TERMINAL_TITLE=0` must be set.
+  - tank's CPU has nested KVM enabled, so the guest can also be started inside the module's NixOS tests. The flake's `nestedChecks.x86_64-linux.vm` does exactly this: inside the test machine, the module sets up the taps, nft and the hardened `maxx.service`, and the equally hardened `maxx-vm-check` then starts a VM and runs `uname -a` through the same path that `shell` uses. It passed on tank on 2026-10-29, with the VM inside the test machine ready in 10 seconds. CI runners are themselves VMs and cannot give the test machine KVM, so this test is not part of `checks` and has to be run manually on tank.
+  - **aarch64 can be deployed too** (requested by the owner on 2026-11-05): the flake's `guest` and `nestedChecks` also exist for aarch64-linux. On x86_64, cloud-hypervisor boots the ELF `vmlinux` directly; on aarch64 it boots `Image` and the serial port is a PL011, so the kernel and the console are chosen per architecture (`ttyS0`, `ttyAMA0`), as in microvm.nix's own runner; the x86_64 guest has not changed by a single byte. aarch64 has no early output comparable to `earlyprintk`, so with `quiet`, `serial.log` is normally empty. Verification: in a copy of the Mac's Linux builder (Virtualization.framework, with nested virtualisation enabled), `max vm-check` was run as an ordinary user; the guest came up, `uname -m` reported aarch64, and programs could call tools through MCP. Chromium and ffmpeg from the same guest also ran normally when run directly in the builder. However, the guest there sits beneath two layers of virtualisation and is more than ten times slower than on tank (50 seconds to boot, two minutes of CPU time to start Chromium), and all of the browser checks timed out, so the browser has not yet been fully verified in an aarch64 VM. `nestedChecks` cannot run on the Mac: the virtual EL2 that Apple provides lacks VHE, so the builder's KVM can only run in nVHE mode, the kernel rejects `kvm-arm.mode=nested`, and the test machine therefore has no KVM; on macOS, QEMU 11.1 provides EL2 through HVF and the test machine can enable KVM, but its clock jumps erratically and it hangs in the initrd. The checks have to be run on an aarch64 machine that supports nested KVM.
+- Operations network: implemented 2026-11-05; see [The operations network](#the-operations-network).
 
-### 运维网络
+### The operations network
 
-2026-11-05 做（owner 要的），照搬 Haskell 版的做法（`haskell-base` 的 `nix/operations.nix`），只是 VM 换成了 cloud-hypervisor 的 tap。
+Implemented 2026-11-05 (requested by the owner), copying the Haskell version's approach (`nix/operations.nix` at `haskell-base`), except that the VMs now use cloud-hypervisor taps.
 
-- **做法**：tank 上一个网络命名空间 `maxx-ops`，里面跑一个专用的 tailscaled，是 tailnet 里的节点 `maxops`（Headscale 用户 `max@imdomestic.com`）。配置里列出的群（`vm.operations.conversations`，按会话 id，公开仓库里不写群号），它们的 VM 用另一组 tap（`maxx-ops0…`，10.236.0.0/24），宿主按源地址把这些 tap 的流量全部路由进命名空间（`ip rule from 10.236.0.0/24 lookup 236`）。命名空间里，tailnet 和它广播的子网走 tailscale0，别的从 uplink 回到宿主出公网，两条路都伪装成命名空间自己的地址。
-- **这条规则要 networkd 留着**（2026-11-07）：systemd-networkd 每配置一个它管的口，就删掉它的 `.network` 里没写的 ip rule（`ManageForeignRoutingPolicyRules`，默认开）。11-06 tank 重启，`maxx-ops-network` 加上这条规则五秒后，networkd 配置 `ens6` 把它删了；运维 VM 的包于是走宿主的主路由表从 br-lan 出去，被上面的 `oifname != maxx-uplink` 拒掉（ICMP admin-prohibited，VM 里看到 "Packet filtered"），连公网也上不去，一直到 11-07 有人在群里让 Max 报告才发现。现在：用 networkd 的宿主要在一个它管的口的 `.network` 里写上这条规则（tank 写在 nix-config 的 `hosts/tank/maxx.nix`，挂在 `30-br-lan` 上），否则模块的断言不让构建；`maxx-ops-network` 先删掉所有同样的规则，再以 `proto static` 加回去，和 networkd 加的是同一条：networkd 认规则时连协议一起比，协议不同的照删。owner 要留着 `ManageForeignRoutingPolicyRules`，所以没关它。嵌套测试的机器也改用 networkd，查这条规则熬过 `networkctl reconfigure` 和 `maxx-ops-network` 重启。
-- **登录不用密钥**：fleet 的机器开着 Tailscale SSH，Headscale 的 SSH 策略按 tailnet 身份放行 `group:imdomestic`（`max@` 在里面）。机器上有个 `max` 用户，免密 sudo（nix-config 的 `system/modules/max-operator.nix`）。VM 里没有 key，也拿不到 tailscaled 的 socket 和节点状态。
-- **guest**：VM 的内核命令行多一个 `max.domain=<tailnet 的域名>`，DNS 前面加上 `100.100.100.100`（MagicDNS 只答 tailnet 的名字，别的 SERVFAIL，glibc 接着问下一个）。`max-guest` 据此写 `/run/max/ssh_config`：短名字补上域名，`User max`、`BatchMode`、`StrictHostKeyChecking accept-new`；known_hosts 在 `/work/.ssh`（root 的家是 /work）。guest 的 ssh_config 一律 `Include` 它，别的 VM 没有这个文件，ssh 忽略。
-- **宿主守的**：运维 tap 的流量只能进命名空间（`oifname != maxx-uplink` 就拒），命名空间没起来时也不会落到宿主自己的 tailnet 节点上；命名空间出来的只能上公网，不能去局域网、别的 VM、宿主的 tailnet 和宿主的服务。命名空间里不接 VM 发来的新连接。tank 自己 ssh 不上：它的 tailnet 地址在宿主上是本机地址，VM 的包先按本地投递进了宿主的 input，被拒；跑着 maxx 和所有 VM 的机器，本来也不该让一个群拿到 root。
-- **guest 的 ssh**：要关掉 `programs.ssh.systemd-ssh-proxy`。它的 Include 是 store 里的文件，virtiofs 上看着不归 root，ssh 因此拒绝整份配置（"Bad owner or permissions"），什么都连不了。Haskell 版也关了它。2026-11-05 部署后在 tank 上用 `vm-check --operations` 实测：`ssh h610 hostname`、`ssh h610 sudo -n whoami`（root）都通，host key 记进了 `/work/.ssh/known_hosts`。
-- **提示词**：这些群的系统提示末尾多一段"运维网络"：怎么 ssh、免密 sudo、改东西之前先说清楚、长任务放远端的 systemd-run 或 tmux。
-- **权限**：和 Haskell 版一样，群里谁都能让 Max 在 fleet 上做事，等于 root。只给信得过的群开。
-- **槽位**：运维的群只用运维的 tap（默认 4 个），普通群只用普通的；满了各自按闲置时间挤掉自己那一类的 VM。改了名单，正在跑的 VM 要等下次开机才换 tap。
-- **状态**：节点身份是 Haskell 版 `maxops` 的，2026-11-05 从 tank 的 `/var/lib/max/tailscale` 拷到 `/var/lib/maxx-ops-tailscale`，不用新的 preauthkey；`vm.operations.authKeyFile` 留着给从头登录用。
-- **检查**：`max vm-check --operations --command "ssh h610 hostname"` 在运维网络最后一个 tap 上开 VM 跑命令。嵌套的 NixOS 测试用一个假的"tailnet"（`maxx-ops` 里一条 veth 连到另一个命名空间的 100.64.0.2）：运维的 VM ping 得通，普通的不通，也没有 ssh_config。
-- 代码：`config::Operations`，`vm.rs` 的 `Free`，`vm/machine.rs` 的命令行，`nix/guest.nix` 的 `max-guest`，`nix/module.nix` 的 `vm.operations`。
+- **Approach:** on tank, a network namespace `maxx-ops` runs a dedicated tailscaled, which is the node `maxops` in the tailnet (Headscale user `max@imdomestic.com`). The VMs of the groups listed in the configuration (`vm.operations.conversations`, given as conversation ids so that group numbers are not written in the public repository) use a separate set of taps (`maxx-ops0…`, 10.236.0.0/24), and the host routes all traffic from these taps into the namespace by source address (`ip rule from 10.236.0.0/24 lookup 236`). Inside the namespace, traffic to the tailnet and the subnets it advertises goes through tailscale0, while everything else returns to the host through the uplink and goes out to the internet; both paths are masqueraded as the namespace's own address.
+- **networkd must keep this rule** (2026-11-07): each time systemd-networkd configures an interface it manages, it deletes any ip rule not written in that interface's `.network` file (`ManageForeignRoutingPolicyRules`, enabled by default). When tank restarted on 2026-11-06, networkd configured `ens6` five seconds after `maxx-ops-network` had added this rule, and deleted it; packets from the operations VMs then followed the host's main routing table out through br-lan and were rejected by the `oifname != maxx-uplink` rule (ICMP admin-prohibited, seen in the VM as "Packet filtered"), so the VMs could not even reach the internet. This went unnoticed until 2026-11-07, when someone in the group asked Max for a report. Now, a host that uses networkd must write this rule into the `.network` file of an interface networkd manages (on tank it is written in nix-config's `hosts/tank/maxx.nix`, attached to `30-br-lan`), or else the module's assertion refuses to build; `maxx-ops-network` first deletes every identical rule and then adds it back with `proto static`, making it the same rule that networkd adds: networkd compares rules including their protocol, and deletes those whose protocol differs. The owner wants to keep `ManageForeignRoutingPolicyRules`, so it has not been turned off. The nested test machine has also switched to networkd and checks that the rule survives `networkctl reconfigure` and a restart of `maxx-ops-network`.
+- **Login without keys:** the fleet's machines run Tailscale SSH, and Headscale's SSH policy admits `group:imdomestic` (which includes `max@`) by tailnet identity. Each machine has a `max` user with passwordless sudo (nix-config's `system/modules/max-operator.nix`). The VM holds no key and cannot reach tailscaled's socket or node state.
+- **The guest:** the VM's kernel command line gains `max.domain=<tailnet domain>`, and `100.100.100.100` is placed first among the DNS servers (MagicDNS answers only tailnet names and returns SERVFAIL for everything else, whereupon glibc asks the next server). From these, `max-guest` writes `/run/max/ssh_config`: short names are completed with the domain, and it sets `User max`, `BatchMode` and `StrictHostKeyChecking accept-new`; known_hosts lives in `/work/.ssh` (root's home directory is /work). The guest's ssh_config always `Include`s this file; other VMs do not have it, and ssh ignores the missing file.
+- **What the host enforces:** traffic from the operations taps can only enter the namespace (anything with `oifname != maxx-uplink` is rejected), so even when the namespace is not up it never falls through to the host's own tailnet node; traffic leaving the namespace can only reach the internet, and cannot reach the LAN, other VMs, the host's tailnet or the host's services. The namespace does not accept new connections from the VMs. tank itself cannot be reached over ssh: its tailnet address is a local address on the host, so the VM's packets are delivered locally into the host's input chain and rejected; in any case, the machine that runs maxx and all the VMs should not let a group obtain root.
+- **ssh in the guest:** `programs.ssh.systemd-ssh-proxy` must be disabled. Its Include is a file in the store, which on virtiofs does not appear to be owned by root, so ssh rejects the entire configuration ("Bad owner or permissions") and cannot connect anywhere. The Haskell version disabled it as well. Tested live on tank with `vm-check --operations` after the 2026-11-05 deployment: `ssh h610 hostname` and `ssh h610 sudo -n whoami` (root) both work, and the host key was recorded in `/work/.ssh/known_hosts`.
+- **Prompt:** the system prompt of these groups ends with an additional "operations network" section covering how to ssh, passwordless sudo, explaining clearly before changing anything, and placing long tasks in a remote systemd-run or tmux.
+- **Permissions:** as in the Haskell version, anyone in the group can have Max act on the fleet, which amounts to root. It should be enabled only for trusted groups.
+- **Slots:** operations groups use only the operations taps (4 by default), and ordinary groups use only the ordinary ones; when the slots are full, each class evicts its own VMs by idle time. When the list changes, a running VM switches taps only at its next boot.
+- **State:** the node identity is that of the Haskell version's `maxops`, copied on 2026-11-05 from tank's `/var/lib/max/tailscale` to `/var/lib/maxx-ops-tailscale`, so no new preauthkey was needed; `vm.operations.authKeyFile` is kept for logging in from scratch.
+- **Checks:** `max vm-check --operations --command "ssh h610 hostname"` starts a VM on the last tap of the operations network and runs the command. The nested NixOS test uses a fake "tailnet" (a veth in `maxx-ops` connected to 100.64.0.2 in another namespace): the operations VM can ping it, while the ordinary VM cannot and has no ssh_config either.
+- Code: `config::Operations`, `Free` in `vm.rs`, the command line in `vm/machine.rs`, `max-guest` in `nix/guest.nix`, and `vm.operations` in `nix/module.nix`.
 
-### MCP 通道
+### The MCP channel
 
-VM 里的进程调 Max 的工具，一律走 Max 的 MCP 服务。codemode 的 runner 和后台 pi 都是它的客户端，区别只在会话权限。
+Processes in the VM call Max's tools exclusively through Max's MCP service. The codemode runner and the background pi are both its clients; they differ only in their session permissions.
 
-- **通道**：cloud-hypervisor 的 hybrid vsock 里，guest 连主机的某个端口，会落到宿主上 `<vsock socket>_<端口>` 这个 unix socket，Haskell 版的就绪通知就走这条路。Max 在每个 VM 的这个位置监听一个端口，用 axum 跑 MCP 的 Streamable HTTP（只有 POST 和 JSON 回复的那部分，自己写的）。连进来的是哪个 VM，由 socket 路径决定。guest 里把 `127.0.0.1:7777` 转发到这个 vsock 端口，客户端都配 `http://127.0.0.1:7777/mcp`。IP 层照样连不到宿主，外面也照样连不进 VM。做成的：guest 里是 socket 激活，每个连接一个 socat 连到 vsock 的 2:7777；宿主在 VM 启动前就在 `notify.vsock_7777` 上监听，每个 VM 一个 MCP 服务，跟着 VM 起停。
-- **协议**（2026-10-29）：协议版本 2026-07-28，无状态，回复用 JSON 不用 SSE。这个版本每个请求都要带 `MCP-Protocol-Version`、`Mcp-Method`、`Mcp-Name` 头，`_meta` 里也要有协议版本和客户端能力。runner 自己用 fetch 拼，不装 MCP 的 SDK。更早协议的客户端也收（2026-10-30）：pi 1.4 的是 2025-11-25，先发 `initialize`；当时用的 rmcp 默认要给它建会话，而服务没有会话管理，回 500，关掉 `legacy_session_mode` 后它的每个请求各自处理。
-- **不用 rmcp**（2026-11-03，owner 提的，说它是纯负资产）：我们只用到无状态、JSON 回复的一小块，rmcp 的会话管理、SSE、传输抽象都用不上，反倒要为它配 `legacy_session_mode`、`NeverSessionManager`，在 `ServerHandler` 里从 extensions 取 HTTP 头，日志还得压。换成 `mcp/service.rs` 里自己写的一页：`POST /mcp` 收一条 JSON-RPC；`initialize` 回 tools 能力和协议版本（客户端要的版本认识就照给，不认识给最新的）；`ping` 回 `{}`；`tools/list`、`tools/call` 照旧；没有 id 的通知回 202；不认识的方法回 -32601，不是 JSON 回 400 和 -32700，token 不对仍是 -32600。GET、DELETE 回 405：没有会话可结束，也没有流可开。pi 1.4 的 MCP 客户端是它自己写的（看过它打包的代码）：通知收到 2xx 就算数，之后发 GET 要推送流，见了 405 就不要了；回复认 `application/json`；我们不发 `Mcp-Session-Id`，它关的时候也就不发 DELETE。`MCP-Protocol-Version` 这些头不查。结果照 rmcp 的样子：`structuredContent` 之外 `content` 里放同一个值的 JSON 文本，pi 给模型看的是这个。去掉了 rmcp 和它带来的 async-trait、pastey、uuid。测试用原始 HTTP 走一遍 pi 的握手：`initialize`、`notifications/initialized`、GET、`tools/list`、`tools/call` 读文本。
-- **调用表**（同一天，去重）：程序按名字要的东西是 `mcp::Call`：Max 的工具，或 runner 自己的三个请求 `max.image`、`max.video`、`max.file`。谁能调什么（`Caller::allows`）、会话里怎么分派、哪些算进工具调用次数（只有 Max 的工具），都看这一个枚举，不再在 `service.rs` 和 `mcp.rs` 里各比一遍名字。`max.image` 和 `max.video` 合进 `mcp/show.rs`，共用从 `/work` 读、存进内容库、记进会话的步骤；会话记的直接是 `Part`，`run_code` 的结果按程序交的顺序接上，不再图一份、视频一份。MP4 读时长的代码挪到 `media/mp4.rs`。
-- **会话**：每次 `run_code`、每个后台 job 各开一个，记着 token、所属的群和 turn、允许的工具、在途的调用。`run_code` 的会话能用全部 Max 工具；job 的会话只列、只许调标了 `job` 的工具（不在群里说话做事的：`history`、`web_search`），别的回 `not_allowed`，另外能经 `/llm` 调它的模型，见[后台 agent](#后台-agent)。会话还记着每个工具调了几次、失败几次，附在结果后面。
+- **Channel:** with cloud-hypervisor's hybrid vsock, a guest that connects to a port on the host lands on the unix socket `<vsock socket>_<port>` on the host; the Haskell version's readiness notification took this path. At this location Max listens on one port for each VM and runs MCP's Streamable HTTP on axum (only the part with POST and JSON replies, written in-house). Which VM has connected is determined by the socket path. In the guest, `127.0.0.1:7777` is forwarded to this vsock port, and every client is configured with `http://127.0.0.1:7777/mcp`. The host remains unreachable at the IP layer, and the VM remains unreachable from outside. Implemented: the guest side is socket-activated, with one socat per connection to vsock 2:7777; the host listens on `notify.vsock_7777` before the VM starts, with one MCP service per VM that starts and stops with the VM.
+- **Protocol** (2026-10-29): protocol version 2026-07-28, stateless, with JSON replies rather than SSE. In this version every request must carry the `MCP-Protocol-Version`, `Mcp-Method` and `Mcp-Name` headers, and `_meta` must also contain the protocol version and the client capabilities. The runner builds requests itself with fetch and does not install an MCP SDK. Clients of earlier protocol versions are also accepted (2026-10-30): pi 1.4 uses 2025-11-25 and sends `initialize` first; rmcp, which was in use at the time, by default tried to create a session for it, but the service has no session management and replied with 500; with `legacy_session_mode` turned off, each of its requests is handled independently.
+- **No rmcp** (2026-11-03, proposed by the owner, who called it a pure liability): only a small slice is used, stateless and with JSON replies; rmcp's session management, SSE and transport abstractions all go unused, and it instead required configuring `legacy_session_mode` and `NeverSessionManager`, extracting HTTP headers from extensions in `ServerHandler`, and suppressing its logs. It was replaced by a single page of in-house code in `mcp/service.rs`: `POST /mcp` accepts one JSON-RPC message; `initialize` replies with the tools capability and the protocol version (the version the client asks for is granted if it is known, otherwise the latest is given); `ping` replies `{}`; `tools/list` and `tools/call` are unchanged; notifications without an id receive 202; unknown methods receive -32601, non-JSON receives 400 and -32700, and a wrong token still receives -32600. GET and DELETE receive 405: there is no session to end and no stream to open. pi 1.4's MCP client is its own implementation (confirmed by reading its bundled code): a notification counts as delivered once it receives a 2xx; the client then sends a GET for a push stream and abandons it on seeing 405; it accepts `application/json` replies; and since we do not send `Mcp-Session-Id`, it does not send DELETE when closing. Headers such as `MCP-Protocol-Version` are not checked. Results follow rmcp's form: alongside `structuredContent`, `content` holds the JSON text of the same value, which is what pi shows the model. rmcp was removed, together with the async-trait, pastey and uuid it brought in. A test walks through pi's handshake over raw HTTP: `initialize`, `notifications/initialized`, GET, `tools/list`, and `tools/call` reading text.
+- **Call table** (same day, deduplication): what a program requests by name is an `mcp::Call`: either a Max tool or one of the runner's own three requests, `max.image`, `max.video` and `max.file`. Who may call what (`Caller::allows`), how calls are dispatched within a session, and which calls count towards the number of tool calls (only Max's tools) are all decided by this one enum, instead of names being compared separately in `service.rs` and in `mcp.rs`. `max.image` and `max.video` were merged into `mcp/show.rs` and share the steps of reading from `/work`, saving to the content store and recording in the session; the session records `Part` values directly, and the result of `run_code` appends them in the order the program handed them over, instead of keeping one list for images and another for videos. The code that reads an MP4's duration moved to `media/mp4.rs`.
+- **Sessions:** each `run_code` run and each background job opens its own session, which records the token, the group and turn it belongs to, the permitted tools and the calls in flight. A `run_code` session can use all of Max's tools; a job's session lists, and permits calls to, only the tools marked `job` (those that do not speak or act in the group: `history`, `web_search`) and replies `not_allowed` to anything else; in addition, it can call its model through `/llm` (see [Background agents](#background-agents)). The session also records how many times each tool was called and how many of those calls failed, and appends this to the result.
 
-  | 会话 | 能用的工具 | 生命周期 |
-  |---|---|---|
-  | `run_code` | 这个 turn 的工具，由 `RunSpec` 定 | 这一次运行 |
-  | 后台 job | 标了 `job` 的工具，和 `/llm` | 这个 job |
+  | Session | Tools available | Lifetime |
+  | --- | --- | --- |
+  | `run_code` | This turn's tools, determined by `RunSpec` | This run |
+  | Background job | Tools marked `job`, and `/llm` | This job |
+- **Authentication:** `Authorization: Bearer <token>`. The group the token belongs to must be the same as the group of the VM that has connected. `tools/list` lists only the tools this session allows.
+- **Revocation is synchronous:** removing a session from the in-memory table drops the futures of its in-flight calls along with it, so revocation can be placed in `Drop`. Sessions exist only in memory, so after Max restarts or crashes all old tokens become invalid, and no expiry time is needed.
+- **Executor:** every call passes through the same executor, which is responsible for schema validation, the per-call timeout, a concurrency limit of 64, an output size limit, and a per-session limit on the number of calls with side effects (code can send, retract or mute in a loop). Implemented: 60 seconds per call and 64 concurrent calls per session, with the excess queued; arguments are checked against the tool contract (see below). The output limit and the side-effect count will be added once there are tools that produce large output or have side effects; `history` paginates on its own.
+- **Results:** tools declare an `outputSchema`, successful results are placed in `structuredContent`, and what `tools.x()` receives is JSON. A failure sets `isError`, with `{code, message}` as its `structuredContent`. In stateless HTTP, cancellation means disconnecting: when hyper sees that the connection has dropped, it discards that call's future, and `max.cancel` simply aborts the fetch. `notifications/cancelled` is accepted and ignored.
+- **No retries and no classification by side effect** (decided 2026-10-29, with the owner's agreement): the original plan was to mark each tool as read-only, idempotent or side-effecting, and to include in failure results an outcome (rejected, failed-before-effect, outcome-unknown) and whether a retry is possible, in order to decide on host retries, on which tools background jobs may use, and on whether an interruption counts as "outcome unknown". None of this is needed: the host never retries and leaves that decision to the model; a background job's session lists the tools it may use; and operations that affect the group (sending messages, sending images, retracting) are all entered in the ledger through the conversation actor, so whether they succeeded is visible on the timeline in the next round. Timeouts and cancellations are therefore always reported as "may already have taken effect; check the records before deciding whether to try again". The worst case is calling again immediately after a timeout within the same run and sending one extra image, which is accepted.
+- **Tool contract** (implemented 2026-10-30, raised in review: originally the names, descriptions, both schemas and the TypeScript declarations were all hand-written in max-core's `MAX_TOOLS`, while the argument structs and execution functions lived in max; the three copies were each written separately, and some of the constraints in the schemas were not checked at run time): each Max tool is written in only one place, in max, by implementing `mcp::tool::Tool`, which provides the name, a one-sentence description for the MCP listing, the maximum number of calls per run, whether background jobs may use the tool, the argument type, the return type, the usage notes for the system prompt (`guide`) and the execution function. Arguments and return values are ordinary serde types that derive schemars' `JsonSchema`; constraints are written as attributes (`length`, `range`), the descriptions of argument fields are written as `description`, and numbers in the descriptions and in `guide` refer directly to constants in the code. The registry `mcp::tool::TOOLS` generates three things from these:
+  - The `inputSchema` and `outputSchema` listed by MCP: all sub-schemas are inlined, and titles and integer formats are removed; only the descriptions of the argument fields themselves are kept, and English doc comments on types are left out. When a return value has several shapes (`history`), the schema is an `anyOf`, with `type: object` added at the root, because MCP requires the root to be an object.
+  - Argument checks before the call: string lengths (in characters) and numeric ranges are checked against the schema, with errors such as "history 的 before 要在 0 到 50 之间" ("history's before must be between 0 and 50"); types, required fields and unknown fields are checked when serde reads the arguments. Out-of-range values are reported as errors rather than silently truncated, as they were before.
+  - The TypeScript declarations in the system prompt: `/** guide */` followed by a signature converted from the two schemas. Optional fields are written as `x?: T`, and fields that are required but may be null as `x: T | null`.
 
-- **鉴权**：`Authorization: Bearer <token>`。token 所属的群必须和连进来的 VM 是同一个群。`tools/list` 只列出这个会话允许的工具。
-- **吊销是同步的**：从内存表里删掉会话，它在途调用的 future 一起 drop，所以可以放进 `Drop`。会话只存在内存里，Max 重启或崩溃后旧 token 全部失效，不需要过期时间。
-- **执行器**：所有调用都经过同一个执行器，负责 schema 校验、单次调用的超时、并发上限 64、输出大小上限，以及按会话限制有副作用的调用次数（代码里可以循环发送、撤回、禁言）。做成的：单次 60 秒，每个会话同时 64 个，多的排队；参数按工具契约查（见下）。输出上限和副作用次数等有了会产生大输出或有副作用的工具再加，`history` 自己分页。
-- **结果**：工具声明 `outputSchema`，成功结果放在 `structuredContent` 里，`tools.x()` 拿到的就是 JSON。失败设 `isError`，`structuredContent` 是 `{code, message}`。无状态的 HTTP 里取消就是断开连接：hyper 看到连接断了就丢掉那次调用的 future，`max.cancel` 就是中止 fetch。`notifications/cancelled` 收下不管。
-- **不重试，不按副作用分类**（2026-10-29 定，owner 同意）：原打算给每个工具标只读、幂等、有副作用，失败结果里再带 outcome（rejected、failed-before-effect、outcome-unknown）和能否重试，用来决定宿主重试、后台 job 能用哪些、中断后算不算"结果未知"。都用不上：宿主一律不重试，交给模型；后台 job 的会话列一份能用的工具；会动群的操作（发消息、发图、撤回）都经会话 actor 入账，做没做成，下一轮在时间线上看得到。所以超时和取消一律说"可能已经生效，先看记录再决定要不要再来"。最坏是同一次运行里拿到超时马上再调，多发一张图，接受。
-- **工具契约**（2026-10-30 做成，review 提的：原来名字、描述、两个 schema 和 TypeScript 声明都手写在 max-core 的 `MAX_TOOLS` 里，参数结构体和执行函数在 max 里，三份各写各的，schema 里的约束有的运行时没查）：一个 Max 工具只在 max 里写一处，实现 `mcp::tool::Tool`：名字、MCP 列表里的一句描述、一次运行最多调几次、后台 job 能不能用、参数类型、返回类型、系统提示里的用法说明（`guide`）和执行函数。参数和返回值是普通的 serde 类型，派生 schemars 的 `JsonSchema`；约束写成属性（`length`、`range`），参数字段的说明写成 `description`，说明和 `guide` 里的数字直接引用代码里的常量。注册表 `mcp::tool::TOOLS` 从这些生成三样东西：
-  - MCP 列出的 `inputSchema` 和 `outputSchema`：子 schema 全部内联，去掉 title 和整数的 format；只留参数字段自己的说明，类型上的英文文档注释不进去。返回值有好几种形状时（`history`）是 `anyOf`，根上补 `type: object`，MCP 要求根是对象。
-  - 调用前的参数检查：按 schema 查字符串长度（按字符数）和数值范围，报"history 的 before 要在 0 到 50 之间"这样的错；类型、必填、多余字段在 serde 读参数时查。超出范围的直接报错，不再悄悄截断。
-  - 系统提示里的 TypeScript 声明：`/** guide */` 加从两个 schema 转出来的签名。可选字段写成 `x?: T`，必填但可以是 null 的写成 `x: T | null`。
-  
-  serde_json 开了 `preserve_order`，字段按类型里声明的顺序列出。max-core 不再有 Max 工具的清单，`prompt::system` 收现成的声明文本。换过来时生成的声明和手写的逐字节相同，提示词没变；声明的全文有 insta 快照，改了哪个工具的说明，快照的 diff 里看得到。
+  serde_json has `preserve_order` enabled, so fields are listed in the order in which they are declared in the type. max-core no longer holds a list of Max's tools, and `prompt::system` receives the finished declaration text. At the switch-over, the generated declarations were byte-for-byte identical to the hand-written ones, so the prompt did not change; the full text of the declarations is covered by an insta snapshot, so a change to any tool's description shows up in the snapshot's diff.
 
-### 多模态结果
+### Multimodal results
 
-参考了 Codex、pi 和 Hermes 的做法。
+The approaches of Codex, pi and Hermes were consulted.
 
-- **程序显式交图**，学 Codex code mode 的 `image()`：`max.image(src, {detail})`、`max.video(src, {start, end})`。`src` 是 VM 里的路径（`/work/…`）或消息句柄（`image#123.0`），不接受 http 地址。只有交了的才进上下文；截图、下载这类操作只产出文件。不需要单独的 `view_image` 工具。
-- **宿主自己取文件，不经过 MCP**：`/work` 是 virtiofs 共享，宿主能直接读；消息句柄的图在内容库里。宿主校验能否解码、按模型的上限缩放，按 hash 存进内容库，turn 记录里只存引用（原则 7）。要复制一份，是因为 `/work` 里的文件之后可能被改或被删。
-- **中立格式**：`ToolOutput { parts: Vec<Part>, error: bool }`，`Part` 是 `Text` 或 `Media(MediaRef)`，和消息里的 `Media` 节点共用一套渲染。
-- **在适配层降级**（原则 8）：
-  - Responses：放进 `function_call_output` 的数组，`input_text` 加 `input_image`。
-  - Chat：tool 消息里只放文字，带"图 1 见下"这类标记；这一轮所有 tool 消息之后跟一条 user 消息放图。有的 provider 不接受数组形式的 tool 内容，这样也避开了。
-  - 视频：抽帧成图。（2026-11-03 改了：原样交给看得了视频的模型，见下面的"视频"。）
-- **预算**：
-  - 交图时就缩放到上限。
-  - 每次运行最多交 N 张。
-  - 同一张图（hash 相同）再交时只写"同上文图 x"。
-  - 组装请求时超出视觉 token 预算，从最旧的图开始换成"`[image#…` 已省略，需要时再 `max.image`]"，turn 记录不变（原则 6）。
+- **Programs hand over images explicitly**, following `image()` in Codex's code mode: `max.image(src, {detail})` and `max.video(src, {start, end})`. `src` is a path in the VM (`/work/…`) or a message handle (`image#123.0`); http addresses are not accepted. Only what is handed over enters the context; operations such as screenshots and downloads only produce files. No separate `view_image` tool is needed.
+- **The host fetches the files itself, not through MCP:** `/work` is a virtiofs share that the host can read directly, and images referenced by message handles are in the content store. The host checks that the file can be decoded, scales it to the model's limit, and stores it in the content store by hash; the turn record stores only a reference (principle 7). A copy has to be made because files in `/work` may later be changed or deleted.
+- **Neutral format:** `ToolOutput { parts: Vec<Part>, error: bool }`, where a `Part` is either `Text` or `Media(MediaRef)`, sharing a single rendering path with the `Media` nodes in messages.
+- **Downgrading in the adapter layer** (principle 8):
+  - Responses: the parts go into the array of `function_call_output`, as `input_text` plus `input_image`.
+  - Chat: the tool message contains only text, with markers such as "图 1 见下" ("image 1, see below"); after all of the round's tool messages comes a single user message holding the images. This also avoids the problem that some providers do not accept tool content in array form.
+  - Video: frames are extracted as images. (Changed 2026-11-03: videos are now passed as they are to models that can watch video; see "Video" below.)
+- **Budget:**
+  - Images are scaled to the limit when they are handed over.
+  - At most N images may be handed over per run.
+  - When the same image (same hash) is handed over again, only "同上文图 x" ("same as image x above") is written.
+  - When an assembled request exceeds the vision token budget, images are replaced, oldest first, with "`[image#… 已省略，需要时再 max.image]`" ("image omitted; call `max.image` again if needed"); the turn record is unchanged (principle 6).
 
-  Hermes 加这类预算的起因，是一个子 agent 在 15 分钟里把 5 张截图重新加载了 158 次。
+  Hermes added this kind of budget after a sub-agent reloaded 5 screenshots 158 times within 15 minutes.
 
-做成的（2026-10-29，先只做图）：
+Implemented (2026-10-29, images only at first):
 
-- **SDK**：`await max.image(src)`，`src` 是 `/work` 下的路径，或者图片的 Buffer（比如 `page.screenshot()` 的返回值）。Buffer 先写进 `/work/.max/shown/`，宿主存好就删。返回原图的 `{width, height}`；读不了、不是图、超过上限都抛 `ToolError`。消息句柄没做，群里的图先 `max.file` 拷出来。
-- **怎么交给宿主**：runner 用这次运行的 token 发一个 MCP 调用 `max.image`，只带路径；它不是 Max 的工具，不在工具列表里，也不算进"调了 Max 的工具"。宿主像 `send_image` 那样一段一段打开 `/work` 下的文件、不跟符号链接、10 MiB 封顶，用和下载一样的办法做给模型的版本（长边 1568 的 JPEG，或者原图），存进内容库，记进这次 MCP 会话。程序结束后，`run_code` 的结果在文字后面按顺序加上这些图（`Part::Media`，内容库的 sha256），每张按 1200 token 估。
-- **预算**：一次 `run_code` 最多交 4 张，同一张（hash 相同）只算一次。组装请求时工具结果里的图全带上（2026-11-04 改，owner 定：一个 turn 里的图全留着，下一个 turn 本来就没有）。原来只带最新的 8 张，更早的在那个位置写"[这张图省略了，要看再 max.image]"：第 9 张起每来一张就改掉一个早先的结果，从那里往后都不命中缓存。这句话现在只在内容库里读不到那张图时出现。视频仍然只带最新的 10 分钟：一段最多 32 MiB，全留着请求太大。"同上文图 x"没做。
-- **降级**：Responses 把有图的结果写成 `input_text` 和 `input_image` 的数组，没图的仍是字符串。Chat 在 tool 消息里写"[图 n，见下]"，连着的几条 tool 消息之后跟一条 user 消息，按编号放图。
+- **SDK:** `await max.image(src)`, where `src` is a path under `/work` or a Buffer containing an image (for example, the return value of `page.screenshot()`). A Buffer is first written to `/work/.max/shown/` and deleted once the host has stored it. The call returns the original image's `{width, height}`; a file that cannot be read, is not an image or exceeds the limit throws `ToolError`. Message handles have not been implemented; images from the group are first copied out with `max.file`.
+- **How images reach the host:** the runner sends an MCP call, `max.image`, with this run's token, carrying only the path; it is not a Max tool, is not in the tool list, and does not count towards "Max tools called". As with `send_image`, the host opens the file under `/work` one path component at a time, without following symbolic links, with a cap of 10 MiB; it produces the version for the model in the same way as for downloads (a JPEG with a long edge of 1568, or the original image), stores it in the content store and records it in this MCP session. After the program ends, the `run_code` result appends these images in order after the text (`Part::Media`, referenced by the content store's sha256), each estimated at 1200 tokens.
+- **Budget:** a single `run_code` can hand over at most 4 images, and the same image (same hash) counts only once. When a request is assembled, all images in tool results are included (changed 2026-11-04, decided by the owner: all images within a turn are kept, and the next turn does not have them anyway). Previously only the latest 8 were included, and older ones were replaced in place with "[这张图省略了，要看再 max.image]" ("this image was omitted; call max.image again to view it"): from the 9th image on, each new image altered an earlier result, and everything from that point onward missed the cache. That text now appears only when the image cannot be read from the content store. Videos are still limited to the latest 10 minutes: a clip can be up to 32 MiB, and keeping them all would make requests too large. "同上文图 x" ("same as image x above") has not been implemented.
+- **Downgrading:** Responses writes results that contain images as an array of `input_text` and `input_image`; results without images remain strings. Chat writes "[图 n，见下]" ("[image n, see below]") in the tool message, and after a run of consecutive tool messages comes a single user message with the images placed by number.
 
-视频（2026-11-03 做的，owner 要的）：模型直接看视频，画面和声音都有，不抽帧。
+Video (implemented 2026-11-03, requested by the owner): the model watches the video directly, with both picture and sound, and no frames are extracted.
 
-- **为什么能做**：当天在 tank 上试过。cliproxy 把 Chat 里 `video_url` 的 data URL 转成 Gemini 的 `inlineData`（Antigravity 和 AI Studio 两条路都转），`gemini-3.8-flash-high` 说对了 6 秒测试片里三种颜色的先后、时长，哪段有声音、哪段音高。按时长计费，约 87 token 一秒（一秒一帧加声音）；按字节算的是时间：14、28、54 MiB 的视频都收，54 MiB 那次 77 秒才回。
-- **SDK**：`await max.video(path, {start, end})`，`path` 是 VM 里的文件，相对路径在 `/work` 下；`start`、`end` 是秒数或者 `"1:30"`。群里的视频先 `max.file` 拷出来，网上的 Max 自己下（owner 定，不另装 yt-dlp）。返回 `{seconds}`。shell 里是 `maxx video 路径 --start --end`。
-- **先在 VM 里转小**（`nix/video.js`，runner 和 maxx 共用）：一个 turn 里之后每次模型调用都要再发一遍，所以用 VM 里的 ffmpeg 转成一秒一帧（Gemini 本来就一秒取一帧）、边长不超过 640、单声道 32k 的 MP4，`+faststart`。两分钟的噪点测试片 3.8 MB，普通的 1.2 MB，转一次一秒左右。ffprobe 先看时长，超了不转。宿主不解码视频：群里的视频是不可信的文件，ffmpeg 的解析器常出 CVE，留在 VM 里。
-- **宿主**（`mcp/video.rs`）：像 `max.image` 一样读 `/work` 下的文件，32 MiB 封顶；只读 MP4 的 `ftyp` 和 `moov/mvhd`，拿时长（四舍五入到秒，至少 1 秒），不是 MP4 就拒；存进内容库，记进这次 MCP 会话。结果后面加 `Part::Video { media, seconds }`，每秒按 100 token 估。
-- **模型**：模型配置的 `video = true` 表示它看视频；MCP 的 `Context` 带着这个 turn 的模型的这一项，不看视频的模型调 `max.video` 回"这个模型看不了视频"（`unavailable`）。tank 上给 Gemini 的几个开。
-- **预算**：一次 `run_code` 交的视频合计最多 10 分钟，同一段（hash 相同）只算一次；组装请求时只带工具结果里最新的、合计不超过 10 分钟的几段，更早的写"[这段视频省略了，要看再 max.video]"。
-- **降级**：Chat 和图一样跟在 tool 消息后面那条 user 消息里，`[视频 n]` 加 `video_url`，tool 消息里写"[视频 n，见下]"。Responses 不收视频，写"[这里有一段视频，这个模型看不了]"；`max.video` 本来就不让这种模型用。
-- **测试**：`mcp/runner_tests.rs` 在本机用 dev shell 的 ffmpeg 做 Matroska 测试片，走 runner 和 maxx 两条路，查转出来的 MP4、时长、一次 10 分钟的上限、不看视频的模型；`max-llm` 查两种降级；嵌套 VM 测试里 vm-check 用 VM 自己的 ffmpeg 做片子再 `maxx video`，宿主读出 3 秒。
+- **Why this is possible:** it was tried on tank that day. cliproxy converts the data URL of a `video_url` in Chat into Gemini's `inlineData` (on both the Antigravity and the AI Studio paths), and `gemini-3.8-flash-high` correctly stated the order of three colours in a 6-second test clip, its duration, which section had sound and the pitch of each section. Billing is by duration, at about 87 tokens per second (one frame per second plus audio); size in bytes costs time instead: videos of 14, 28 and 54 MiB were all accepted, and the 54 MiB one took 77 seconds to answer.
+- **SDK:** `await max.video(path, {start, end})`, where `path` is a file in the VM, with relative paths resolved under `/work`; `start` and `end` are numbers of seconds or strings such as `"1:30"`. Videos from the group are first copied out with `max.file`, and Max downloads videos from the web itself (decided by the owner; yt-dlp is not installed separately). The call returns `{seconds}`. In the shell, it is `maxx video path --start --end`.
+- **Shrunk inside the VM first** (`nix/video.js`, shared by the runner and maxx): every subsequent model call within the turn has to send the video again, so ffmpeg in the VM converts it to an MP4 at one frame per second (Gemini samples one frame per second anyway), with edges no longer than 640 and mono 32k audio, using `+faststart`. A two-minute noise test clip comes out at 3.8 MB and an ordinary one at 1.2 MB, and each conversion takes about one second. ffprobe checks the duration first, and a video over the limit is not converted. The host does not decode video: videos from the group are untrusted files and ffmpeg's parsers frequently have CVEs, so decoding stays in the VM.
+- **Host** (`mcp/video.rs`): reads the file under `/work` as `max.image` does, with a cap of 32 MiB; it reads only the MP4's `ftyp` and `moov/mvhd` to obtain the duration (rounded to the nearest second, with a minimum of 1 second), and rejects anything that is not an MP4; it stores the file in the content store and records it in this MCP session. The result gains a `Part::Video { media, seconds }`, estimated at 100 tokens per second.
+- **Models:** `video = true` in a model's configuration means that the model watches video; MCP's `Context` carries this setting for the turn's model, and when a model that does not watch video calls `max.video`, it receives "这个模型看不了视频" ("this model cannot watch video") (`unavailable`). On tank the setting is enabled for the Gemini models.
+- **Budget:** the videos handed over in a single `run_code` total at most 10 minutes, and the same clip (same hash) counts only once; when a request is assembled, only the latest clips in tool results, totalling no more than 10 minutes, are included, and older ones are written as "[这段视频省略了，要看再 max.video]" ("this video was omitted; call max.video again to watch it").
+- **Downgrading:** in Chat, as with images, videos go into the user message that follows the tool messages, as `[视频 n]` ("[video n]") plus a `video_url`, and the tool message says "[视频 n，见下]" ("[video n, see below]"). Responses does not accept video and writes "[这里有一段视频，这个模型看不了]" ("[there is a video here, which this model cannot watch]"); `max.video` is not available to such models in the first place.
+- **Testing:** `mcp/runner_tests.rs` makes a Matroska test clip locally with the dev shell's ffmpeg and goes through both the runner and the maxx paths, checking the converted MP4, the duration, the 10-minute limit per run and models that do not watch video; `max-llm` checks both downgrades; in the nested VM test, vm-check makes a clip with the VM's own ffmpeg and then runs `maxx video`, and the host reads a duration of 3 seconds.
 
-### 网页搜索
+### Web search
 
-2026-10-29 定，排在媒体第 1 小步之后（owner 选的）。`web_search` 当天做完：配置 `[search] api_key_file`，不配就回 `unavailable`；所有群合计同时最多 4 个搜索；没有单独的超时，MCP 执行器的 60 秒管着；每个 Max 工具可以声明一次运行最多调几次（`per_run`），超了回 `too_many`；2026-11-05 去掉了，见[常驻程序](#常驻程序)的"不限"。
+Decided 2026-10-29 and scheduled after the first small step of media (the owner's choice). `web_search` was implemented the same day: it is configured with `[search] api_key_file` and replies `unavailable` if that is not set; at most 4 searches run concurrently across all groups; there is no separate timeout, since the MCP executor's 60 seconds applies; each Max tool could declare a maximum number of calls per run (`per_run`), and exceeding it replied `too_many`, but this was removed on 2026-11-05 (see the "No limits" item in [Resident programs](#resident-programs)).
 
-- **`web_search(query, limit?)`**：Max 的工具，宿主上经 MCP 调 Exa 的 REST 接口（`type: auto`，带 highlights），key 留在宿主，sops 里沿用 Haskell 版的 `search-exa-api-key`。返回前几条的标题、链接、摘要和发布时间，`limit` 1 到 10，默认 5；标题 200 字、摘要 800 字封顶。失败回 `{code, message}`，不做 Haskell 版那套免 key 的 MCP 优先、冷却和重试。一次运行最多调 20 次。Exa 走 tank 的日本出口，中文结果一般；以后不够用，在同一个签名后面换博查或智谱，它们国内直连。
-- 工具常驻在系统提示的声明里，不藏进 skill：Haskell 版藏进 `web` skill 以后，模型不搜了，凭记忆答错剧情和价格（a51424d）。
-- **抓网页不做成宿主工具**：宿主连得到 tailnet 里的服务，做成工具就是 SSRF 的口子。VM 镜像里加一个 `webread <url>` 命令：Python 加 trafilatura 抽正文、转 Markdown，PDF 用 `pdftotext`（2026-10-29 做完；原打算用 Node 的 Readability 加 turndown，trafilatura 少一套 npm 打包，也认得 GBK 这类老编码）；跟 5 次跳转、20 秒、10 MB 封顶，打印开头 1.2 万字，全文写进 `/work/.max/web/`，`--offset` 从存下的全文接着读。测试在本机用 dev shell 的 Python 跑这个脚本，接本地的 HTTP 服务。nft 本来就不让 VM 碰内网。要跑 JS 或登录的页面用[浏览器](#浏览器)。
-- 不做：答案合成、模型 API 自带的搜索（工具数组固定不变，结果程序也拿不到）、结果缓存、图片搜索。
+- **`web_search(query, limit?)`:** a Max tool that, on the host, calls Exa's REST API via MCP (`type: auto`, with highlights); the key stays on the host, and sops keeps using the Haskell version's `search-exa-api-key`. It returns the title, link, summary and publication date of the top results; `limit` ranges from 1 to 10 and defaults to 5; titles are capped at 200 characters and summaries at 800. Failures return `{code, message}`; the Haskell version's machinery of preferring key-free MCP, cooldowns and retries is not reproduced. A run may make at most 20 calls. Exa goes out through tank's Japanese exit, and its Chinese results are mediocre; if it proves insufficient later, Bocha or Zhipu, which are directly reachable within China, can be substituted behind the same signature.
+- The tool stays permanently among the declarations in the system prompt rather than being hidden in a skill: after the Haskell version hid it in the `web` skill, the model stopped searching and answered from memory, getting plots and prices wrong (a51424d).
+- **Fetching web pages is not a host tool:** the host can reach services on the tailnet, so such a tool would open an SSRF hole. The VM image gains a `webread <url>` command: Python with trafilatura extracts the main text and converts it to Markdown, and PDFs are handled with `pdftotext` (implemented 2026-10-29; the original plan was Node's Readability plus turndown, but trafilatura avoids a set of npm packaging and also recognises legacy encodings such as GBK). It follows up to 5 redirects, with caps of 20 seconds and 10 MB, prints the first 12,000 characters and writes the full text to `/work/.max/web/`, and `--offset` continues reading from the saved full text. Tests run this script locally with the dev shell's Python against a local HTTP server. nft already prevents the VM from reaching the internal network. Pages that require JS or a login are handled with the browser (see [The browser](#the-browser)).
+- Not done: answer synthesis, the model APIs' built-in search (the tools array is fixed, and programs could not obtain those results anyway), result caching, and image search.
 
-### 浏览器
+### The browser
 
-v1 不做。2026-10-29 先做成每次运行现起 camoufox，当天晚上改成 VM 里常驻的 Chromium（owner 定），做法见本节末尾的"做成的"。
+Not in v1. On 2026-10-29 it was first implemented as a camoufox instance started fresh for each run, and that same evening it was changed to a Chromium resident in the VM (decided by the owner); the implementation is described under "Implemented" at the end of this section.
 
-- **为什么换**：模型看完页面、下一次 `run_code` 再点，页面得还在。各家给模型用的浏览器（Playwright MCP、chrome-devtools-mcp、agent-browser、Hermes 的 `browser_exec`）都让浏览器常驻，Hermes 和我们一样是代码模式：每次调用起新的解释器，经 CDP 连同一个 Chromium。camoufox 做不到这样：Playwright 的连接一断，服务端就关掉这个客户端开的 context（playwright-core 1.59 的 `cleanupContexts`），想跨进程留住页面，得自己写个常驻进程持有它；Firefox 又已经不支持 CDP。CDP 的状态在浏览器进程身上，断开连接不关页面，在本机用 Chrome 和 playwright-core 1.59 验证过：上一个进程开的页面和填的字，下一个进程连上来都在。
-- **代价**：反指纹不如 camoufox。自己起的 Chromium 不带 Playwright 的自动化开关，`navigator.webdriver` 是 false，User-Agent 去掉了 HeadlessChrome；但 VM 里的 WebGL 指纹、CDP 本身的痕迹还在，Cloudflare 这类检查更容易拦。真被拦得多了，再在 VM 里跑 camofox-browser 这类常驻服务。
-- 不再有 navigate、click 这类浏览器工具，程序里直接用 Playwright 连这个浏览器。SDK 附带一个快照助手，给出带编号的可访问性树：各家给模型看的页面都收敛到这个形状（Playwright MCP 的 `[ref=e5]`、Claude 的 `ref_N`、agent-browser 的 `@e1`），Playwright 1.59 自带，不用自己写。原来沿用 Haskell 版的“可交互元素加 CSS 选择器”清单删了。
-- 登录状态（2026-10-29 定，owner 选的）：只给 Max 自己的小号用，存在本群浏览器的 profile 里，写明全群的程序都用得到；不做个人登录，Haskell 版那种按人加密、程序看不到 cookie 的做法要宿主侧的工具，以后再说。
-- 截图交给 `max.image` 看，下载存进 `/work`。
+- **Why the change:** after the model has looked at a page, the page must still be there when the next `run_code` clicks on it. The browsers that the various vendors give their models (Playwright MCP, chrome-devtools-mcp, agent-browser, Hermes's `browser_exec`) all keep the browser resident, and Hermes, like us, works in code mode: each call starts a new interpreter that connects to the same Chromium over CDP. camoufox cannot do this: as soon as a Playwright connection drops, the server closes the contexts that client opened (`cleanupContexts` in playwright-core 1.59), so keeping a page alive across processes would require writing a resident process to hold it; and Firefox no longer supports CDP. CDP state lives in the browser process, and disconnecting does not close pages; this was verified locally with Chrome and playwright-core 1.59: the pages opened, and the text typed, by one process are all still there when the next process connects.
+- **Cost:** anti-fingerprinting is weaker than with camoufox. A Chromium that we start ourselves lacks Playwright's automation switches, so `navigator.webdriver` is false and HeadlessChrome is removed from the User-Agent; but the WebGL fingerprint inside the VM and the traces of CDP itself remain, so checks such as Cloudflare's block it more readily. If it does get blocked often, a resident service such as camofox-browser can be run in the VM at that point.
+- There are no longer browser tools such as navigate and click; programs connect to this browser directly with Playwright. The SDK includes a snapshot helper that produces a numbered accessibility tree: the page representations that all vendors show their models have converged on this shape (Playwright MCP's `[ref=e5]`, Claude's `ref_N`, agent-browser's `@e1`), and Playwright 1.59 provides it built in, so nothing has to be written in-house. The list of "interactive elements plus CSS selectors" carried over from the Haskell version was deleted.
+- Login state (decided 2026-10-29, chosen by the owner): only Max's own secondary accounts are used, stored in the profile of the group's browser, with an explicit statement that every program in the group can use them; personal logins are not supported. The Haskell version's approach, with per-person encryption and cookies hidden from programs, requires host-side tools and is left for later.
+- Screenshots are handed to `max.image` for viewing, and downloads are saved in `/work`.
 
-做成的（2026-10-29）：
+Implemented (2026-10-29):
 
-- **服务**：guest 里的 `max-browser.service`，nixpkgs 的 Chromium，`--headless=new`，CDP 只听 127.0.0.1:9222；root 跑、关掉 Chromium 自己的沙箱，VM 就是沙箱。profile 在 `/work/.max/chromium`，cookie 和登录跨 VM 重启都在；VM 没关干净留下的 profile 锁，启动前删掉。中文界面和 `Accept-Language`，时区 Asia/Shanghai，窗口 1280×900，内存上限 2 GiB，崩了 systemd 重启（标签页没了，profile 还在）。不开机就起：第一个要浏览器的程序 `systemctl start` 它，等 CDP 端口能连才返回。VM 闲置关机时它跟着停，常驻的浏览器不让 VM 算作在用。
-- **SDK**：`await max.browser()` 返回浏览器唯一的 BrowserContext，`await max.page()` 返回最近打开或 `bringToFront()` 过的标签页，没有就开一个。顺序取 Chromium 自己的 `/json/list`（按最近激活排，导航不算），不用 `context.pages()`：后来连上的程序拿到的 `pages()` 是 Chromium 挂上它们的顺序，不是打开的顺序；2026-10-29 tank 上第一次 vm-check 就因此拿到了 Chromium 启动时自带的新标签页，它上面也有个搜索框，读回来是空的。之后照常写 Playwright。一个程序里只连一次。程序结束只是断开连接，标签页留着，下一个程序接着用；用完的由程序自己关。`await max.snapshot(page, {selector?, depth?})` 是 Playwright 的 `ariaSnapshot({mode: "ai"})`，前面加上标题和地址：每个元素带 `[ref=e5]`，iframe 里的是 `f1e2` 这样，`page.locator("aria-ref=e5")` 找得到。`selector` 只拍那个元素（取第一个），`depth` 限层数。编号存在这次连接注入页面的脚本里，下一个程序连上来要先拍一次；页面没变，编号也一样（本机用 Chrome 验证过）。
-- **打包**：`nix/runner.nix` 把 runner、SDK 和 playwright-core 1.59.0（没有依赖，直接取 npm 的包）放在一起，guest 的 `/run/max/runner.js` 链到包里。原来 camoufox 的发行包、camoufox-js 和它的补丁都删了。
-- **字体**：guest 装了 Noto Sans CJK，Chromium 经 fontconfig 找到它。
-- **实测**（tank 上的嵌套测试，VM 2 个 vCPU、1 GiB 内存）：`vm-check` 的第三个程序起浏览器、打开一个 data: 页面、快照、截图存进 `/work`，测试检查快照里的选择器和截图。VM 10 秒起好。VM 开机后第一次起浏览器要 22 秒，多半是经 virtiofs 冷读 store，加上嵌套虚拟化；同一个 VM 里再起 4.3 秒，打开页面 0.4 秒。开着两个 context 时这次运行的匿名内存 370～410 MiB，cgroup 峰值（含页缓存）775 MiB。宿主上直接跑：加载模块 0.6 秒，起浏览器 0.5 秒，第一个页面 1.4 秒。真实网站没测，测试机不通外网。VM 默认 4 GiB 内存，不用加。
-- **启动参数是 Max 的**（2026-11-03，owner 指出 Max 没法给我们起的 Chromium 装扩展）：`max-browser` 在我们的参数后面加上 `/work/.max/chromium-flags` 里的行（一行一个，空行和 `#` 开头的跳过），每次启动都读。Max 写好再 `systemctl restart max-browser`，开着的标签页会关掉。装扩展用 `--load-extension=目录`：Google Chrome 137 起不认这个参数了，nixpkgs 的是 Chromium，还认；`--headless=new` 也跑扩展。嵌套测试里 vm-check 写一个 MV3 扩展（内容脚本给页面打个标记），写进这个文件、重启浏览器，再用 Playwright 编一个页面，查标记在。
-- **提议**：Haskell 版用了 humanize（模拟鼠标轨迹）和虚拟显示（Xvfb，比 headless 难认出来），这里先只用 headless；被网站认出来再加。
+- **Service:** `max-browser.service` in the guest runs nixpkgs' Chromium with `--headless=new`, with CDP listening only on 127.0.0.1:9222; it runs as root with Chromium's own sandbox disabled, since the VM is the sandbox. The profile is in `/work/.max/chromium`, so cookies and logins survive VM restarts; profile locks left behind when the VM did not shut down cleanly are deleted before startup. It uses a Chinese UI and `Accept-Language`, the time zone Asia/Shanghai, a 1280×900 window and a memory limit of 2 GiB, and systemd restarts it after a crash (the tabs are lost, but the profile remains). It does not start at boot: the first program that needs the browser runs `systemctl start` on it, which returns only once the CDP port accepts connections. It stops along with the VM at idle shutdown, and a resident browser does not make the VM count as in use.
+- **SDK:** `await max.browser()` returns the browser's single BrowserContext, and `await max.page()` returns the tab most recently opened or brought to the front with `bringToFront()`, opening one if there is none. The order is taken from Chromium's own `/json/list` (sorted by most recent activation; navigation does not count) rather than from `context.pages()`: the `pages()` that later-connecting programs receive are in the order in which Chromium attached them, not the order in which they were opened; on 2026-10-29, the very first vm-check on tank obtained, for exactly this reason, the new tab page that Chromium opens at startup, which also has a search box, and read back an empty value. After that, Playwright code is written as usual. A program connects only once. When a program ends it merely disconnects; the tabs remain for the next program to use, and programs close the tabs they have finished with themselves. `await max.snapshot(page, {selector?, depth?})` is Playwright's `ariaSnapshot({mode: "ai"})`, preceded by the title and URL: each element carries `[ref=e5]`, elements inside iframes carry refs such as `f1e2`, and `page.locator("aria-ref=e5")` finds them. `selector` captures only that element (the first match), and `depth` limits the number of levels. The refs are stored in a script that this connection injects into the page, so the next program to connect must take a snapshot first; if the page has not changed, the refs stay the same (verified locally with Chrome).
+- **Packaging:** `nix/runner.nix` bundles the runner, the SDK and playwright-core 1.59.0 (which has no dependencies and is taken directly from the npm package), and the guest's `/run/max/runner.js` links into that bundle. The former camoufox distribution, camoufox-js and its patches were deleted.
+- **Fonts:** the guest has Noto Sans CJK installed, and Chromium finds it through fontconfig.
+- **Tested live** (the nested test on tank, with a VM of 2 vCPUs and 1 GiB of memory): the third program of `vm-check` starts the browser, opens a data: page, takes a snapshot and saves a screenshot to `/work`; the test checks the selectors in the snapshot and the screenshot. The VM was ready in 10 seconds. The first browser start after the VM boots takes 22 seconds, mostly owing to cold reads of the store over virtiofs plus nested virtualisation; a second start in the same VM takes 4.3 seconds, and opening a page takes 0.4 seconds. With two contexts open, the run's anonymous memory was 370–410 MiB, and the cgroup peak (including page cache) was 775 MiB. Run directly on the host, loading the module takes 0.6 seconds, starting the browser 0.5 seconds and the first page 1.4 seconds. Real websites were not tested, because the test machine has no internet access. The VM's default 4 GiB of memory does not need to be increased.
+- **The launch flags belong to Max** (2026-11-03; the owner pointed out that Max had no way to install extensions in the Chromium we start): `max-browser` appends the lines of `/work/.max/chromium-flags` after our own flags (one flag per line, skipping blank lines and lines beginning with `#`), and reads the file on every start. Max writes the file and then runs `systemctl restart max-browser`, which closes any open tabs. Extensions are installed with `--load-extension=<directory>`: Google Chrome stopped accepting this flag as of version 137, but nixpkgs ships Chromium, which still accepts it; `--headless=new` also runs extensions. In the nested test, vm-check writes an MV3 extension (a content script that marks the page), adds it to this file, restarts the browser, and then uses Playwright to compose a page and check that the mark is present.
+- **Proposals:** the Haskell version used humanize (simulated mouse trajectories) and a virtual display (Xvfb, which is harder to detect than headless mode); here only headless mode is used for now, and these will be added if websites detect it.
 
-opencli（2026-11-03 加，同一天去掉）：[opencli](https://github.com/jackwener/opencli) 把 150 来个网站做成命令，带着各站接口的门道。先打包进了 guest（npm 的包、自己做的 lock、一个让每条命令开自己标签页的包装，嵌套测试也过了），当天 owner 改了主意：这种只图方便、不提供原语的第三方工具，让 Max 要用时自己装，不由我们钉版本、跟着它更新；照经验，它对各站的适配很快就过期。去掉了包、包装和测试，提示词只留一句：常见网站有现成的命令行工具，比如 npm 上的 `@jackwener/opencli`，设 `OPENCLI_CDP_ENDPOINT=http://127.0.0.1:9222` 就用本群浏览器的登录状态，它会把一个标签页导航走。VM 能上公网，有 Node 和 npm。
+opencli (added 2026-11-03, removed the same day): [opencli](https://github.com/jackwener/opencli) turns some 150 websites into commands and encodes the quirks of each site's interfaces. It was first packaged into the guest (the npm package, a lock file of our own, and a wrapper that gives each command its own tab; the nested test passed as well), but the owner reconsidered the same day: third-party tools of this kind, which offer convenience rather than primitives, are for Max to install itself when needed, rather than for us to pin to a version and keep updating; experience suggests that its adaptations to individual sites go stale quickly. The package, the wrapper and the test were removed, and the prompt keeps only one sentence: common websites have ready-made command-line tools, such as `@jackwener/opencli` on npm, and setting `OPENCLI_CDP_ENDPOINT=http://127.0.0.1:9222` makes it use the login state of the group's browser, although it will navigate one tab away. The VM can reach the internet and has Node and npm.
 
 ### GitHub
 
-2026-10-31 加（owner 要的）：有人让 Max 开 PR，它用自己的 GitHub 账号开，之后自己改、关、回评论。账号是 owner 建的机器账号（GitHub 要求由一个人建、为它负责），注册邮箱是 owner 的转发地址，Max 不碰邮箱。
+Added 2026-10-31 (requested by the owner): when someone asks Max to open a PR, Max opens it with its own GitHub account, and afterwards revises it, closes it and replies to comments itself. The account is a machine account created by the owner (GitHub requires such an account to be created by a person who is responsible for it), and it is registered with the owner's forwarding address; Max does not touch the mailbox.
 
-2026-11-03 改（owner 定）：去掉宿主上的两个工具和它们的规矩，GitHub 走[宿主带 key 的 API](#宿主带-key-的-api)。fork、clone、推送、开 PR 都由 Max 自己用 git 和 REST API 做，什么该做由它自己判断：群都小，不太会有人滥用；这套流程每个模型都熟；规矩的代码比它防的事多。
+Changed 2026-11-03 (decided by the owner): the two tools on the host and their rules were removed, and GitHub is reached through the host-keyed APIs (see [Host-keyed APIs](#host-keyed-apis)). Forking, cloning, pushing and opening PRs are all done by Max itself with git and the REST API, and Max judges for itself what should be done: the groups are all small, so abuse is unlikely; every model knows this workflow well; and the code for the rules outweighed what it guarded against.
 
-- **token 留在宿主**：群友能让 Max 在 VM 里跑任何命令，放进 VM 的东西（环境变量、`~/.config/gh`、浏览器里登录的 GitHub）都能被读出来。token 是 classic 的、只有 `public_repo`：fine-grained 的开不了往别人仓库的 PR（从 fork 开也不行，社区里的报告，GitHub 文档没写）。它删不了仓库（那要 `delete_repo`），也碰不到私有仓库。
-- **两个 API**（tank 的配置在 nix-config）：
-  - `github`：`https://api.github.com`，头是 `Authorization: Bearer {secret}`，加上 `Accept`、`X-GitHub-Api-Version` 和 `User-Agent`（GitHub 不收没有 User-Agent 的请求）。
-  - `github-git`：`https://github.com`，git 的 HTTPS。git 只认 basic auth（2026-11-03 在 tank 上试过，`Bearer` 和 `token` 都是 401），所以 secret 是 `base64("x-access-token:<token>")`，sops 里的 `maxx/github-git-auth`；和 `maxx/github-token` 是同一个 token，换的时候两个一起换。推送用 `git push http://127.0.0.1:7777/api/github-git/<Max>/<仓库>.git <分支>`；clone 公开仓库直接从 github.com。
-  - 都不写 `allow` 和 `per_hour`。`about` 里提醒两句：PR 只在群友要时开，描述末尾用一行英文说明是 AI 应群友要求开的；GitHub 会封看着像刷屏的账号。宿主不管。
-  - 转发器把请求体整个读进来，最多 64 MiB，一次推送的 pack 也不能超过这个；响应头要在 60 秒内到，推得太大、GitHub 处理太久会断。程序的 `Expect` 头不转：宿主自己的服务答它。
-- **提交人**：配了 `[github]`（现在只有 `login`、`user_id`），VM 的内核命令行多一个 `max.git=<login>,<id>+<login>@users.noreply.github.com`，guest 开机写进 `/etc/gitconfig`，Max 的提交就算在账号名下，注册邮箱不出现。
-- **去掉的**（10-31 到 11-03）：`github_push` 让 guest 打一个 bundle，宿主建空的 bare 仓库、浅取前置提交、`fetch.fsckObjects` 地收下再推，宿主不在 guest 写过的仓库里跑 git；`github` 调 REST，返回 `{status, body}`，超过 3 万字截短。宿主的规矩：写只能写 Max 自己的仓库、它开的 PR 和 issue、它的评论；所有群加起来 24 小时最多 10 个新 PR；PR 描述末尾由宿主加 AI 的脚注。三天里 `github` 调了 66 次（26 轮），`github_push` 9 次（8 轮），没出过错。
+- **The token stays on the host:** group members can have Max run any command in the VM, so anything placed in the VM (environment variables, `~/.config/gh`, a GitHub login in the browser) can be read out. The token is a classic token with only the `public_repo` scope: fine-grained tokens cannot open PRs against other people's repositories (not even from a fork, according to community reports; GitHub's documentation does not mention this). It cannot delete repositories (that requires `delete_repo`), nor can it access private repositories.
+- **Two APIs** (tank's configuration is in nix-config):
+  - `github`: `https://api.github.com`, with the header `Authorization: Bearer {secret}`, plus `Accept`, `X-GitHub-Api-Version` and `User-Agent` (GitHub rejects requests without a User-Agent).
+  - `github-git`: `https://github.com`, git over HTTPS. git accepts only basic auth (tried on tank on 2026-11-03; both `Bearer` and `token` returned 401), so the secret is `base64("x-access-token:<token>")`, stored in sops as `maxx/github-git-auth`; it is the same token as `maxx/github-token`, and the two must be rotated together. Pushing uses `git push http://127.0.0.1:7777/api/github-git/<Max>/<repo>.git <branch>`; public repositories are cloned directly from github.com.
+  - Neither sets `allow` or `per_hour`. `about` gives two reminders: PRs are to be opened only when group members ask for them, and the description is to end with one line in English stating that the PR was opened by an AI at a group member's request; and GitHub bans accounts that look like spam. The host does not enforce any of this.
+  - The forwarder reads the entire request body, up to 64 MiB, so the pack of a single push cannot exceed that size either; response headers must arrive within 60 seconds, so a push that is too large, or that GitHub takes too long to process, is cut off. The program's `Expect` header is not forwarded: the host's own service answers it.
+- **Committer:** when `[github]` is configured (currently only `login` and `user_id`), the VM's kernel command line gains `max.git=<login>,<id>+<login>@users.noreply.github.com`, which the guest writes into `/etc/gitconfig` at boot, so Max's commits are attributed to the account and the registration email address never appears.
+- **Removed** (2026-10-31 to 2026-11-03): `github_push` had the guest create a bundle, after which the host created an empty bare repository, shallow-fetched the prerequisite commits, received the bundle with `fetch.fsckObjects` and then pushed, so that the host never ran git in a repository the guest had written to; `github` called the REST API and returned `{status, body}`, truncated beyond 30,000 characters. The host's rules were: writes were permitted only to Max's own repositories, the PRs and issues it had opened, and its own comments; at most 10 new PRs per 24 hours across all groups; and the host appended an AI footnote to the end of every PR description. Over three days, `github` was called 66 times (in 26 rounds) and `github_push` 9 times (in 8 rounds), without a single error.
 
-### 宿主带 key 的 API
+### Host-keyed APIs
 
-2026-11-02 加（owner 要的，起因是想让 Max 发邮件）：每接一个要 key 的服务就在宿主上写一个工具（像 [GitHub](#github)、[网页搜索](#网页搜索)）太重。通用的做法是宿主替 VM 转发 HTTP 请求、路上加 key，和后台 agent 的 `/llm` 一样（见[后台 agent](#后台-agent)），key 不进 VM。
+Added 2026-11-02 (requested by the owner, prompted by the wish to let Max send email): writing a tool on the host for every service that needs a key (as was done for [GitHub](#github) and [Web search](#web-search)) is too heavy. The general approach is for the host to forward HTTP requests on the VM's behalf and add the key along the way, as with the background agents' `/llm` (see [Background agents](#background-agents)), so that the key never enters the VM.
 
-- **调研**（2026-11-02）：现成的有两类。一类在出口解开 HTTPS，把 VM 里的占位符换成真的 key：[iron-proxy](https://github.com/ironsh/iron-proxy)（Go，Apache-2.0，没列出的域名一律拒绝），Docker Sandboxes、Deno Sandbox 里也有同样的功能。好处是 git、gh、SDK 都不用改；代价是 guest 要信任一个 CA，流量要绕一个代理，而 Max 的 VM 要能上整个公网（浏览器、`webread`）。另一类是显式代理：Fly.io 的 [tokenizer](https://github.com/superfly/tokenizer)，客户端把它当 HTTP 代理用，它加上 key、用 HTTPS 发出去，每个 secret 绑着许可的主机。VM 到宿主已经有 MCP 服务这条通道，就照 tokenizer 的模型在 `forward.rs` 旁边写了一个，不多跑一个服务。
-- **用法**：VM 里请求 `http://127.0.0.1:7777/api/<名字>/<路径>`，宿主把路径接在配置的 `base_url` 后面，换上 key 转过去，回答原样流回来（状态码、头、正文）。curl、fetch 都行；用 SDK 就把 base URL 设成 `http://127.0.0.1:7777/api/<名字>`，key 随便填。不用 token：unit、后台命令、后台 agent 都能调。和不带 token 的 `maxx` 一样，宿主分不出 VM 里是谁在调（见[常驻程序](#常驻程序)）。
-- **配置**：
+- **Research** (2026-11-02): existing solutions fall into two kinds. One kind terminates HTTPS at the egress and replaces placeholders sent from the VM with the real key: [iron-proxy](https://github.com/ironsh/iron-proxy) (Go, Apache-2.0, rejecting every domain not listed), and Docker Sandboxes and Deno Sandbox offer the same feature. The advantage is that git, gh and SDKs need no changes; the cost is that the guest must trust a CA and traffic must detour through a proxy, while Max's VMs need to reach the whole internet (the browser, `webread`). The other kind is an explicit proxy: Fly.io's [tokenizer](https://github.com/superfly/tokenizer), which clients use as an HTTP proxy; it adds the key and sends the request out over HTTPS, with each secret bound to its permitted hosts. Since a channel from the VM to the host already exists for the MCP service, a proxy following tokenizer's model was written alongside `forward.rs`, rather than running an additional service.
+- **Usage:** inside the VM, a program requests `http://127.0.0.1:7777/api/<name>/<path>`; the host appends the path to the configured `base_url`, inserts the key and forwards the request, and the response streams back unchanged (status code, headers, body). Both curl and fetch work; with an SDK, the base URL is set to `http://127.0.0.1:7777/api/<name>` and any value can be given as the key. No token is required: units, background commands and background agents can all call it. As with token-less `maxx`, the host cannot tell who inside the VM is calling (see [Resident programs](#resident-programs)).
+- **Configuration:**
 
   ```toml
   [api.resend]
@@ -1656,306 +1657,309 @@ opencli（2026-11-03 加，同一天去掉）：[opencli](https://github.com/jac
   about = "发邮件，发件人写 max@example.com。文档 https://resend.com/docs/api-reference 。"
   ```
 
-  - `headers`、`query` 里的 `{secret}` 换成 key，至少要有一处。不带 key 的固定头（API 版本之类）也写在 `headers` 里。basic auth 就把 `base64(用户:密码)` 存成 secret，写 `Authorization = "Basic {secret}"`。
-  - `allow` 是一条条 `方法 路径`，方法可以写 `*`；路径里的 `*` 段匹配任意一段，末尾的 `**` 匹配下面所有的。不写 `allow` 就都许。`per_hour` 是所有群加起来的次数，记在内存里，重启清零。
-  - `about` 连同地址、`allow`、`per_hour` 放进系统提示，一个 API 一行（`prompt::system` 的第三个参数）。没配 VM 就不放。
-  - 名字只能有小写字母、数字和 `-`。这些在建系统时由 `check-config` 查（它不读 secret）；secret 在 max 启动时读，读不到就起不来。
-- **宿主守的**：
-  - 路径归一化以后必须还在 `base_url` 下面、同一个 origin。路径里有 `%2f`、`%5c`、`%2e` 的一律拒绝，免得 API 那边解码出别的路径，绕过 `allow`。
-  - 程序带的 `Authorization`（可能是它这一轮的 token）、连接相关的头和 `Accept-Encoding` 不转；配置里的头盖掉同名的。
-  - 不跟重定向，3xx 原样回给程序。跟了的话，key 所在的头会带到 API 指的任何地方：reqwest 只在换主机时去掉 `Authorization`，别的头照带。
-  - 连不上时，给程序的错误去掉 URL：key 可能在 query 里。
-  - 每次调用、每次拒绝都记日志：群、API、方法、路径、状态码，不记正文。
-  - 连接 10 秒超时；响应头和之后的每一段要在 60 秒内到。
-- **管不了的**：key 防得住泄露，防不住滥用。能让 Max 在 VM 里跑命令的人，就能让它调这些 API，所以只适合 `allow` 和 `per_hour` 圈得住的 key，或者 owner 愿意交给 Max 自己判断的（GitHub，见 [GitHub](#github)）。要看内容才能判断、又非管不可的（比如邮件只许发给哪些地址），还是写成宿主上的工具。
-- 代码：`config::Api`、`config::Rule`，`mcp/forward/api.rs`；VM 服务把 `/api` 并进每个 VM 的路由（`vm.rs`）。
-
-### 待定事项
+  The `about` text means "Send email, with max@example.com as the sender. Documentation: https://resend.com/docs/api-reference."
+  - `{secret}` in `headers` and `query` is replaced with the key, and it must appear in at least one place. Fixed headers that carry no key (such as an API version) are also written in `headers`. For basic auth, `base64(user:password)` is stored as the secret and `Authorization = "Basic {secret}"` is written.
+  - `allow` is a list of `METHOD path` entries, in which the method may be `*`; a `*` segment in the path matches any single segment, and a trailing `**` matches everything below it. If `allow` is omitted, everything is permitted. `per_hour` is a count across all groups, kept in memory and reset on restart.
+  - `about`, together with the address, `allow` and `per_hour`, is placed in the system prompt, one line per API (the third parameter of `prompt::system`). If no VM is configured, it is left out.
+  - Names may contain only lowercase letters, digits and `-`. These rules are checked by `check-config` when the system is built (it does not read secrets); secrets are read when max starts, and if one cannot be read, max fails to start.
+- **What the host enforces:**
+  - After normalisation, the path must still lie under `base_url`, on the same origin. Paths containing `%2f`, `%5c` or `%2e` are always rejected, so that the API side cannot decode them into a different path and thereby bypass `allow`.
+  - The program's `Authorization` header (which may be its token for this turn), connection-related headers and `Accept-Encoding` are not forwarded; headers in the configuration override any of the same name.
+  - Redirects are not followed; 3xx responses are returned to the program as they are. If they were followed, the header carrying the key would be sent wherever the API pointed: reqwest strips `Authorization` only when the host changes, and carries every other header along.
+  - When the connection fails, the URL is removed from the error returned to the program, since the key may be in the query.
+  - Every call and every refusal is logged with the group, API, method, path and status code; the body is not logged.
+  - The connection times out after 10 seconds; the response headers, and each subsequent chunk, must arrive within 60 seconds.
+- **What it cannot control:** the key is protected against leakage, but not against misuse. Anyone who can have Max run commands in the VM can have it call these APIs, so the mechanism suits only keys that `allow` and `per_hour` can contain, or keys the owner is willing to leave to Max's own judgement (GitHub; see [GitHub](#github)). Where a decision requires inspecting the content and control is indispensable (for example, restricting which addresses email may be sent to), a tool on the host is still the right approach.
+- Code: `config::Api`, `config::Rule`, `mcp/forward/api.rs`; the VM service merges `/api` into each VM's routes (`vm.rs`).
+
+### Open items
 
-- v1 开放哪几个 Max 工具。
-- ~~调 VM 用 `ssh` 命令还是 russh~~：已定（2026-10-27），russh，见 [VM 进程](#vm-进程)。
-- 每次运行最多交几张图、视觉 token 预算多大。
-- 代码转义的问题（2026-10-27 记下，暂不决定）：要不要让 GPT 用 Responses 的 custom（freeform）工具直接写原文，Codex 的 code mode 就是这么做的，cliproxy 也已支持；Gemini 过度转义要不要在 runner 里兜底，比如原文解析失败、去掉多余转义后能解析时才用修正版。先看 v1 里转义出错的频率。
-
-## 后台 agent
-
-v1 之后做。
-
-- 每个 job 是群 VM 里的一个 pi 进程（print 模式），它的插件 `max-job.ts` 经 VM 里的 `/job/…` 和宿主说话，见[和 harness 脱钩](#和-harness-脱钩)。2026-11-07 前是 stdio 上的 RPC JSONL。
-- 宿主这边在 `crates/max/src/job.rs`（2026-10-30；2026-11-07 改成约定）：`job::drive` 留着 steer 等插件来取、到点叫停、等报告或进程结束；`job::run` 起 unit、写 job 那一行、关 stdin、记用量；路由在 `mcp/harness.rs`。用量、工具调用由 `/llm` 的转发器读出来报，`Watch` 只剩提问。没有再抽一层 `AgentBackend`：宿主定约定、harness 在 guest 里接，见[和 harness 脱钩](#和-harness-脱钩)。命令用 `Vm::open` 起。
-- **模型**（2026-10-30 定）：`[llm]` 里单独配 `job = { model, effort }`，没配就没有后台 agent。pi 不拿 provider 的 key：它的模型请求发到 VM 里的 `http://127.0.0.1:7777/llm/<端点>`，和 MCP 是同一个服务、同一个 token。宿主认出是哪个 job 的会话，把 `model` 换成配置里的，带上 provider 的 key 和头转过去，回答原样流回来。provider 在 `stream_idle_timeout_secs`（默认 120 秒）里没出声，不管是回答开始前还是流到一半，都和 max-llm 一样掐断：pi 当作这次调用失败，自己重试，不会干等到 job 到点（10-30 Max 自己 review 时指出的）。只认这个 provider 协议的端点（`chat/completions` 或 `responses`），请求最大 64 MiB；job 结束、会话吊销后 token 就没用了。没选的办法：cliproxy 的管理接口能在运行时加删 key，但改完要写回配置文件，tank 上那是 sops 渲染出来的；给 VM 一个固定的 cliproxy key，等于给了群里所有人。
-- 领域工具走 Max 的 MCP 服务，见 [MCP 通道](#mcp-通道)。工具要的东西（数据库、搜索、嵌入、内容库、QQ 管理）在 main 里建一份 `mcp::Services`，所有调用共用，里面的 `None` 只表示没配置。谁在调由 `mcp::Caller` 说：`Turn` 带着这一轮的 `Poster`，`Job` 带着 `job::Link`（它的上游，和听它模型调用的通道），`Check` 是 `vm-check`。能用哪些工具只看 `Caller` 和 `job` 标记（2026-10-30 改：原来每处手拼一份上下文，job 那份漏了嵌入，`context_search` 静默退化成只按字面搜）。每个 job 开一个会话，会话活多久 job 就多久，所以工具的次数上限按一次运行的 10 倍算（`web_search` 一次运行 20 次，一个 job 200 次）。只开放不在群里说话做事的工具：读的，和 GitHub 的两个（2026-10-31 加，见 [GitHub](#github)）；job 结束时吊销。pi 在 VM 里也能跑 codemode 的 runner，用 job 自己的会话批量调这些工具。
-- 会影响群的动作（发消息、发文件、撤回、禁言、建自动化）不给后台 agent。它的结果是一种唤醒（`Reason::Job`）：会话有核心在跑就喂给它，没有就起一个；由前台的模型决定怎么说。job 中途提问同样处理，见下面的**提问**。
-- **工具**（2026-10-30）：Max 在 `run_code` 里用四个 Max 工具管 job，都由会话 actor 回答（经 `Poster`，带回信通道），后台 agent 自己用不了：
-  - `agent({ task, title? })` 马上返回 `{ job: "job#3" }`。job 在会话 actor 的表里，编号只在这次运行里递增，重启从 1 数。同时最多 3 个，每个 2 小时（原来 30 分钟，读一遍三万行代码都不够，10-30 改）。剩 5 分钟时 steer 一句让它停手写报告，到点叫停（`/job/stop`，插件 abort pi），交出做到一半的。不提醒的话，到点时它多半正在调工具，最后一条助手消息没有文字，什么也交不出来（2026-10-30 job#2 就是这样）。一次运行最多起 3 个。没配 `llm.job`、没有 VM、正在重启时报错。
-  - `agent_steer({ job, message })` 排在宿主上，这个 job 下一轮结束时插件取走（`/job/turn`），在下一次模型调用前送到；它在等 Max 答复时（见**提问**），这一句就是答复。`agent_cancel({ job })` 从表里删掉，scope 丢掉就停了，unit 由 VM 的 stopper 停，结果不要了；`agent_status({ job? })` 列标题、分钟、模型和工具调用次数、最近的工具。`job` 写 `job#3` 或 3。
-  - `/kill` 连 job 一起停，回一句停了哪些；`/status` 每个 job 一行。
-- **什么时候交出去**（2026-10-31）：系统提示的工具段说，要很多步的活交给后台 agent，别在 turn 里自己做：看一整个仓库的代码、审代码、改代码、装依赖、构建、跑测试、提 PR，读一大堆网页或文件。同一次输出里先回一句接了、大概要多久，再起 agent；几步就能答的自己做。起因：会话 9 里有人要它看代码、改代码，它总是在 turn 里自己做，10-31 那次 49 次工具、41 分钟才说第一句。[埋头太久的提醒](#核心)也提一句，剩下的活还多就交出去。
-- **结果**：agent 停下后插件报告最后一条有文字的助手消息（`/job/report`），宿主存成 `/work/.max/jobs/job-<n>-<时间>.md`，再给会话 actor 一个 `JobDone`。actor 起一个 `Wake { ids: [], reason: Job { job }, item }`，`item` 是 `[job#3 完成] 标题`、`[job#3 到点停了，下面是做到一半的] 标题` 或 `[job#3 失败] 标题：原因`，下面是报告；超过单条上限只给开头 2000 字。末尾写全文的路径。报告来时还有 steer 没送到（到点丢掉的、最后一轮之后才来的），也说一句“你最后补充的 N 条它没收到”。没有报告时（失败的除外）指给它 `/work/.max/jobs` 里 pi 的会话记录。和判定一样，有核心就进它的下一批，没有就起一个。已经取消的 job 的结果丢掉。这条唤醒失败了（模型出错）不补发，全文还在文件里。
-- **用量**：每次模型调用记一行 `llm_usage`，`purpose` 是 `job`（迁移 0015），没有 turn。2026-11-07 起由转发器记（`mcp/forward.rs`），不再读 pi 的 `message_end`：回答流回 pi 的路上喂给 `max_llm::Meter`，用量按 max-llm 读 Max 自己调用的同一套换算（chat 的 `usage` 块要 `stream_options.include_usage`，pi 自己会带）；模型调了哪些工具按名字记，回答没完整的不算（工具不会跑）；还有 `first_ms`、`took_ms`、`quiet_ms`，原来 job 的这三个为空。调用结束（读完、断了、pi 不读了）时经 `job::Link` 告诉 job 的 `Ledger`：调用次数加一，工具次数和最近的工具跟着改，用量不为零就记一行。provider 还没回话就失败的（连不上、没出声）也算一次调用；转发器自己拒掉的（token、端点、不是 JSON）不算。`Meter` 的测试拿 max-llm 录下的 8 段回答对过：用量、工具和 max-llm 自己读出来的一样。
-- **提问**（2026-10-30；2026-11-07 改走 `/job/ask`）：后台 agent 卡在只有 Max 或群友才知道的事上，用 `ask_max({ question })` 问。这个工具在 guest 里的 pi 插件 `nix/max-job.ts` 里（原来是单独的 `ask-max.ts`），用 maxx 的客户端（`client.js` 的 `job({ url, token }).ask()`，路径由 `max-pi.nix` 的 `MAX_CLIENT` 给）带 job 的 token（`MAXX_TOKEN`）`POST /job/ask`，在这个工具调用里一直等，上下文不断。宿主的路由在 `mcp/harness.rs`：经 `job::Link` 把问题交给 `job::drive`，`drive` 交给会话 actor（`Event::JobAsks`），actor 像报告一样唤醒 Max（`Reason::Job`），`item` 是 `[job#3 问] 标题`，下面是问题和“用 agent_steer 回答它，10 分钟内没答复它就自己判断”；已经取消的 job 的问题丢掉。问题没答复时，这个 job 的下一句 steer 就是答复，工具返回 `Max 答复：…`。10 分钟（`QUESTION_WAIT`）没答复，答复是 null，工具返回“Max 这次没有答复，按你自己的判断继续，在报告里写明你做了哪些假设”；之后再来的 steer 照常是 steer。到点收尾和到点叫停前，先把没答复的问题回成 null：它在工具里等着，收不到 steer。`ask_max` 一次只跑一个（`executionMode: "sequential"`），同时来第二个问题或叫停后来的问题直接回 null。pi abort 时请求跟着断，问题就撤回了，之后 Max 的话是 steer。回答是 NDJSON：头马上回，每 30 秒一个空行，最后一行 `{"answer": …}`；不发心跳的话 Node 的 fetch 300 秒就放弃。没走 MCP 工具：MCP 调用 60 秒（`CALL_TIME`）就超时，而且 Max 自己的工具表里不该有它。原来（10-30 起）是 `ctx.ui.input`，RPC 里成了一个 `input` 对话框，答复作为对话框的 `value` 回去；换掉是为了不靠 pi 的 RPC，见[和 harness 脱钩](#和-harness-脱钩)。11-07 在 Mac 上用钉住的 pi 1.4.0 跑过（假的 `/llm` 和 `/job/ask`）：答复和没答复两条路，模型看到的工具结果都对；`scripts/check-pi-job` 里有答复这条。
-- **pi 的系统提示**：追加一段，说它是 Max 的后台 agent，看不到群聊，要聊天记录用 `mcp__max__history`，查网页用 `mcp__max__web_search` 和 `webread`；卡在只有 Max 或群友才知道的事上用 `ask_max` 问，能自己查到、试出来的别问；最后一条消息就是报告，先结论后要点和出处，2000 字以内；文件放 `/work`；快到点时会提醒它收尾。
-
-pi 插件靠的行为（2026-10-29 用 RPC 实测，11-07 用 print 模式和插件重测，都是 pi 1.4.0；同一天钉子挪到 1.5.0，`scripts/check-pi-job` 照样过）：
-
-- steer 不打断正在跑的工具。插件在 `turn_end` 的处理里 `pi.sendUserMessage(steer, { deliverAs: "steer" })`：pi 等 `turn_end` 的处理跑完才取 steer 队列，所以进的是下一次模型调用。默认是 `one-at-a-time`，`settings.json` 里 `"steeringMode": "all"` 后两条一起送到。最后一个 `turn_end`（模型已经给了最终回答）取到 steer，pi 会再跑一轮。
-- `ctx.abort()` 立刻杀掉正在跑的工具（`sleep 30`），pi 停下。RPC 的 `abort` 不清队列，原来要先 `clear_queue`；现在 pi 里没有排着的 steer，不用清。
-- `agent_end` 不代表结束，要等 `agent_settled`；自动重试、排着的 steer 都在它之前。pi 等 `agent_settled` 的处理跑完才退出，报告就在那里发。
-- print 模式最后一条是失败或中断时什么也不打，退出码 1，所以报告要插件自己发。失败的调用 `stopReason` 是 `error`，原因在 `errorMessage`；重试成功后以最后一次为准。
-- print 模式跑完不调 `process.exit`，等事件循环空了才退出：插件报告之后什么也不能留着等。stop 的流在 `agent_settled` 和 `session_shutdown` 时中止，重连前的等待也能中止。
-- 任务从 stdin 进：写成参数的话，开头的 `@` 会被当成要读的文件（`@小明 帮我查一下` 报 File not found）。stdin 读完整个、去掉首尾空白，和 RPC 的 `prompt` 一样走 `session.prompt`，`/` 开头的照旧。
-- print 模式没有 UI，宿主不再见到对话框；原来 RPC 里的 `extension_ui_request` 一律回 `cancelled`。
-- `--append-system-prompt` 给的文字接在 pi 自己的系统提示后面（包在 `<addendum>` 里）。agent 目录里的 `SYSTEM.md` 会顶替 pi 自己的提示：包装脚本原来把 job 的系统提示写成 `system.md`，在不分大小写的 Mac 上它就是 `SYSTEM.md`，pi 自己的提示没了、job 的出现两次（11-07 发现，guest 的 `/run` 分大小写，没中招）。现在叫 `job-system.md`，`scripts/check-pi-job` 查这一条。
-- MCP 工具在 `mcp.json` 里配 `"exposure": "direct"`，直接以 `mcp__max__<工具>` 出现在工具表里。pi 的 MCP 客户端说 2025-11-25 的协议，见 [MCP 通道](#mcp-通道)。
-
-guest 里的 pi 来自 numtide 的 llm-agents.nix，flake 里钉在一个 rev 上。包装脚本 `max-pi`（`nix/max-pi.sh`）从 stdin 第一行读这个 job 的 JSON（见下面的约定），`contract` 不是 1 就以退出码 2 退出。它在 unit 的 RuntimeDirectory 里写 `models.json`（provider 只有一个 `max`，`baseUrl` 是 `/llm`，`apiKey` 是 `$MAX_JOB_TOKEN`）、`mcp.json`、`settings.json`、系统提示和任务，再 exec `pi --print --no-approve`，带上 `--extension` `max-job.ts`（路径由 `max-pi.nix` 的 `MAX_JOB` 给，它用的 `client.js` 由 `MAX_CLIENT` 给），任务从 stdin 进；会话存在 `/work/.max/jobs`。`/work` 里的 `.pi/` 是群里能写的，不信任。unit 停了目录就删，token 跟着没了。宿主写完 job 那一行就关掉 stdin。
-
-pi 2026-04 被 Earendil 收购，仓库搬到了 `earendil-works/pi`，几乎每天发补丁，扩展 API 和原来的 RPC 一样没有版本。所以在 Nix 里钉版本，挪钉子或改了插件、包装脚本、`client.js` 的 job 部分后跑 `scripts/check-pi-job`：用钉住的 pi、真的 `max-pi.sh` 和 `max-job.ts`，对着一个假的宿主跑四个 job（steer、最后一轮的 steer、叫停、提问），看上面这些行为还在。原来是录几段 RPC 的 JSONL 回放（`job/fixtures/`），11-07 和 `job::pi` 一起去掉了。
-
-### 和 harness 脱钩
-
-2026-11-07 定，owner 提的：宿主不再说 pi 的 RPC，改成宿主定一份 job 的约定，每种 agent harness 在 guest 里用自己的插件（或一个小 shim）去接，pi 是第一个。宿主上 job 的代码就不跟着 pi 的版本走，换 harness 也不改宿主。这和上面"等有第二个实现再抽 `AgentBackend`"不冲突：不是在 Rust 里加一层 trait，是线上的约定；前两步不管有没有第二个 harness 都值得做。
-
-**约定**（`contract: 1`；pi 的 RPC 没有版本字段，吃过亏）：
-
-- **起**：照旧，宿主在 unit 里起 harness 的包装脚本，stdin 第一行是 job 的 JSON：`contract`、`token`、`task`、`system`、`model`、`api`、`window`、`max_output`、`effort`。包装脚本把 token 导出成 `MAXX_TOKEN`。下面的调用都打到 VM 里的 `127.0.0.1:7777`，带 `Authorization: Bearer <token>`，job 结束后 401。
-- **`/llm/<端点>`、`/mcp`**：已有的。用量、调用次数、工具次数和最近的工具由转发器从回答里读（第一步，做了，见**用量**）。
-- **`POST /job/turn`**：harness 在每一轮的边界上调：一次模型调用和它的工具都跑完、下一次调用之前。回 `{"steers": [...], "stop": false}`，是上次以来排着的 steer，按先后，从此算送到了。
-- **`GET /job/stop`**：整个 job 开着一条，NDJSON：头马上回，每 30 秒一个空行，要停时一行 `{"stop": true}`。断了重连，已经要停的马上再给；job 结束时什么也不发就断，再连是 401。
-- **`POST /job/ask`** `{"question"}`：`ask_max` 用。和 stop 一样先回头、发心跳，最后一行 `{"answer": "…"}` 或 `{"answer": null}`。要心跳是因为 Node 的 fetch（undici）头和正文 300 秒没动静就放弃，问题要等 10 分钟（`QUESTION_WAIT`）；它也不走 MCP，不受调用 60 秒（`CALL_TIME`）的限制。
-- **`POST /job/report`** `{"text", "error"}`：agent 停下后调一次，job 就结束。
-- **没报告就退出**：退出码 0 就把 stdout（留最后 256 KiB）当报告，否则算失败，原因是“agent 退出了，退出码 N：”加上 stderr 的最后一行。没有插件的 harness（`x -p "$task"`）也能当 job 跑，只是没有 steer、提问和做到一半的报告。
-
-**规矩留在宿主**，和现在的 `job::drive` 一样，只换了 I/O：
-
-- 有问题在等时来的 steer 就是答复，不进队列。一次一个问题，第二个和叫停后来的马上回 `null`。`/job/turn` 回答前先把已经到了的 steer 收进来；请求断了没收到回答，这些 steer 留给下一轮。
-- 剩 5 分钟：先把在等的问题回 `null`，再排上收尾的 steer。到点：在等的问题回 `null`，排着的 steer 丢掉，发 stop。到点后过 `GRACE` 还没报告：算到点停了、没有文字，停 unit。
-- 怎么结束的：发过 stop 是到点停了；否则 `error` 有值是失败；否则是完成。
-- 报告来时还排着的 steer 没送到，宿主知道，`JobDone` 里可以告诉 Max；原来这种悄悄丢了。
-- 取消照旧，停 unit。
-
-**steer 拉，stop 推**：steer 留在宿主上等 harness 来拉，harness 里就没有队列，叫停前不用先清队列（pi 扩展的 `ctx` 只有 `abort`、`isIdle`、`hasPendingMessages`、`shutdown`，没有清队列）；宿主也知道哪些送到了；别的 harness 的 hook（比如工具调用后跑的那种）也是在边界上拉。送达不比现在晚：pi 本来也只在两轮之间收 steer。stop 要打断正在跑的长工具或模型调用，只能推。
-
-**pi 那边**：`nix/max-job.ts` 代替 `ask-max.ts`，一百来行；`client.js` 加一个 `job({ url, token })`，有 `turn()`、`ask(question, signal)`、`stopped(signal)`（断了或 90 秒没动静就重连，要停时回 true，job 结束或 `signal` 中止时回 false）、`report({ text, error })`，用 JS 写的插件都能用。
-
-- **steer**：`pi.on("turn_end")` 里 `await job.turn()`，每条 `pi.sendUserMessage(steer, { deliverAs: "steer" })`。循环等 `turn_end` 的处理跑完才取 steer 队列，所以会进下一次调用（实测过）。包装脚本在 `settings.json` 写 `"steeringMode": "all"`，几条一起进（原来是 RPC 的 `set_steering_mode`）。
-- **stop**：记下 `agent_start`、`turn_start` 给的 `ctx`，收到 stop 就置 `stopping`、`ctx.abort()`，之后 `turn_end` 不再拉。请求过 abort 后再起的 run，pi 自己会再 abort；pi 里没有排着的 steer，不会接着做。
-- **报告**：用 `message_end` 记最后一条有文字的助手消息，`agent_settled`（pi 会等它的处理）时 `job.report({ text, error })`，`stopReason` 是 `error` 时 `error` 是它的 `errorMessage`。print 模式在最后一条是失败或中断时什么也不打，所以要插件自己报。
-- **`ask_max`**：工具照旧，`execute` 调 `job.ask(question, signal)`，不再用 `ctx.ui.input`；`null` 回原来"没有答复"那句。abort 经 `signal` 取消请求，宿主当问题撤回了。
-- **`max-pi.sh`**：`--mode rpc` 换成 `--print`，任务从 stdin 进（见上面 pi 插件靠的行为），扩展换成 `max-job.ts`，导出 `MAXX_TOKEN`，`client.js` 的路径放环境变量，写 `settings.json`，先查 `contract`。`models.json`、`mcp.json`、系统提示和会话目录不变。
-
-**试过的**（11-07，Mac 上钉住的 pi 1.4.0 和后来的 1.5.0，假的宿主，就是 `scripts/check-pi-job`）：`turn_end` 的顺序对；job 的系统提示接在 pi 自己的后面；print 模式等 `agent_settled` 的处理跑完才退出，报告发得出去；任务里的 `@` 和换行原样到模型；最后一个 `turn_end` 取到 steer，pi 接着做；叫停打断正在跑的 `sleep 30`，两秒内报告、退出。宿主这边（路由、`drive`、`client.js`）有 max 的测试。还没在 tank 上跑过真的 job。
-
-**风险**：token 在 agent 的环境里，它的 shell 也能调 `/job/*`，比如报一个假的报告。现在 `/mcp` 也是这样，报告本来就不可信；只是别往 `/job/*` 后面放更大的权限。
-
-**分三步**，每步单独有用：
-
-1. 用量和进度从转发器来（2026-11-07 做了，见**用量**）：`job::pi` 不再读用量和 `tool_execution_start`。
-2. `ask_max` 走 `/job/ask`，不再走对话框（2026-11-07 做了，见**提问**）：`job::pi` 的 `Question` 和 `Answer` 去掉了。`Dialog` 和 `Dismiss` 留到第三步：RPC 模式下别的扩展还可能开对话框，print 模式没有 UI。包装脚本导出了 `MAXX_TOKEN`，所以 pi 的 shell 里跑 `maxx` 也是以 job 的身份调，只有 `job` 标着的工具；原来不带 token，算作常驻程序，什么工具都能用。
-3. `/job/turn`、`/job/stop`、`/job/report`，pi 改用 print 模式（2026-11-07 做了）：`job::pi` 和 `job/fixtures/` 整个去掉，`drive` 成为通用的状态机：steer 队列、在等的问题、stop 和报告都在它那里，harness 的调用经 `job::Link` 的 `hooks` 进来，stop 是 `Link` 上的 `CancellationToken`。它的测试不再要 pi；pi 那边由 `scripts/check-pi-job` 查。
-
-再接一个 harness 要的：一个包装脚本，让它的模型请求走 `/llm`（现在只说 chat/completions 和 responses）、工具走 `/mcp`，追加 `system`；再在它接得上的地方接上面四个调用：边界上 `/job/turn`，`/job/stop` 接它的中断，停下时 `/job/report`，`ask_max` 调 `/job/ask`。一个都接不上，就是退回 stdout 的那种。
-
-## 后台命令
-
-2026-11-01 加。一条要跑好几分钟的命令（构建、跑测试、下载）用不着另一个模型，后台 agent 太重；在 turn 里跑又让群里干等。所以 `shell` 多一个参数 `background`，为 true 时马上返回一个 job 编号，命令在后台跑，跑完了叫醒 Max。只做 `shell`：后台的 `run_code` 在 turn 结束后还能调 `send_message`、禁言这类工具，动作就没有 turn 可挂了。
-
-- **和后台 agent 共用 job 表**：编号一起数（`job#N`），`agent_status` 列出来（标题是 `$ 命令的第一行`，次数都是 0），`agent_cancel` 停掉，`/status` 一行（`job#2 · 3m · shell · $ make`），`/kill`、出错收尾和重启都一起停。`agent_steer` 补不了话。同时最多 3 个，不算 agent 的。
-- **怎么起**：`tools::run` 见到 `background`，经这一轮的 `Poster` 给会话 actor 发 `Request::Shell`（和 `agent` 走同一条路，turn 已经结束就拒绝），actor 在 job 表里起一个任务跑它，马上回编号。返回给模型的是编号、限时、输出文件的路径，和"别 sleep 等它，也别反复查"。
-- **怎么跑**：和前台的 `shell` 一样是 VM 里的一个 systemd unit，只是限时默认 30 分钟、`timeout_ms` 最多 2 小时（和 agent 一样）。输出从一开始就写进 `/work/.max/out/<unit>.txt`，每段都 flush，Max 想看进度就读它的末尾。unit 名是 `max-<max 这次启动的时间，十六进制秒>-<序号>`（11-01 改）：输出文件在 `/work` 里比 max 活得久，原来只用序号，每次重启又从 1 数起，撞上以前的文件就失败（文件不覆盖），10-30 起前台的长输出撞过 4 次；后台命令一开始就建文件，嵌套测试第二次开机时撞上了。任务拿着 `Vm`，命令没跑完 VM 不算闲置；任务被丢掉（取消、`/kill`、重启）时 `Command` 的 drop 让 VM 的 stopper 停掉 unit。
-- **跑完**：`JobDone` 叫醒 Max，和 agent 的报告一样：`[job#2 完成] $ make`，下面是退出码和跑了多久，再是输出（超过 16 KiB 只有头尾，中间写明全文在哪）。到点停了是 `[job#2 到点停了，下面是做到一半的]`；VM 起不来这类是 `[job#2 失败]`。Max 自己用 `systemctl stop` 停掉也会叫醒它一次。
-- **提示词**：工具段说，一条命令要跑好几分钟就用 `background`，同一次输出里先在群里说一声，然后就停，等 `[job#N 完成]`。
-- **测试**：`vm-check` 在后台跑一条命令，命令自己 grep 它的输出文件，证明输出在跑的时候就写进去了；tank 上的嵌套测试检查这一段。
-
-## 常驻程序
-
-2026-11-01 定，owner 提出。Max 自己要一直跑着的东西（定时提醒、每隔几分钟查一次 CI 或网页、一直连着的监听）不按来源一种一种地做（Haskell 版的 monitor 有 cron、消息匹配、外部轮询、HTTP 四种），给它一个通用的办法：在群 VM 里写普通的 systemd unit，用沙箱里已有的东西自己组合。`.timer` 就是 cron，`.path` 盯文件，`Restart=` 管崩溃。
-
-- **第一步（做了）：unit 跟着 `/work` 走。** VM 的 `/` 和 `/etc` 的可写层是 tmpfs，每次开机从 NixOS 配置重建；VM 闲 120 分钟、被挤掉、每次部署都会停。所以 unit 文件放在 `/work/.max/systemd/`，和记忆一样，这个目录就是登记表，不用表、不用工具。
-  - `max-units`（`nix/max-units.sh`）让这个目录成为在跑的那些：新的、改了的复制到 `/run/systemd/system`，service 加一个 drop-in 放进 `max-units.slice`；有 `[Install]` 的按这次开机启用并启动（`enable --runtime --now`）；改了且在跑的重启；目录里没了的停掉、删掉。和系统 unit 重名的不装（`/etc` 里的优先，装了也不生效）。最后列出每个的状态，失败的带上最后 10 行日志，有失败就非零退出。加锁，开机那次和 Max 手动那次不会撞上。
-  - 开机时 `max-units.service` 在 `/work` 挂好、网络和 nix-daemon 起来之后跑一次；Max 改了目录自己再跑 `max-units`。启动都不阻塞（`--no-block`），最多等 5 秒再报状态。
-  - `max-units.slice`：`CPUWeight=20`、`IOWeight=20`，给命令让路；`MemoryMax=50%`，吃不光内存。
-  - 手写的 unit 没有 PATH：NixOS 的 unit 各自设了，systemd 自带的默认值里没有 `/run/current-system/sw/bin`。所以 manager 的 `DefaultEnvironment` 设成系统的 PATH；unit 自己写的 `Environment=PATH=` 照样优先。
-  - **救命开关**：内核命令行带 `max.units=off`，开机就不装。坏掉的 unit（停了 sshd、关机、吃光内存）每次开机都会回来，这是唯一的出路；什么时候带上由宿主定，见第二步。
-  - 能活下来的只有 `/work` 和 Nix store：unit 要跑的东西放 `/work` 里，或者用 store 路径、`nix run`。每次部署程序都会重启，状态要写文件。
-  - **家目录是 `/work`**（2026-11-05 owner 定）：`DefaultEnvironment` 里加 `HOME=/work`，root 在 passwd 里的家也改成 `/work`。之前 systemd 不给没写 `User=` 的 unit 设 `HOME`，`shell`、`run_code` 的 `bash -lc` 进来时没有 `$HOME`，`/etc/profile` 把 PATH 拼成了 `/.nix-profile/bin`、`/.local/state/nix/profile/bin` 这种挂在 `/` 下的路径；家要是 `/root`，又是 tmpfs，`~/.profile`、`~/.gitconfig`、`gh auth` 这些每次开机都没了。没另外持久化一个 `/root`：宿主只读 `/work`（记忆、`send_image`、`send_file`、`max.file`、完整输出、unit 登记），两个持久目录 Max 得记着哪个宿主看得见；挂载点改名又会让 Max 写死 `/work` 的脚本和 unit 全坏。Max 本来就把 `/work` 当家用（9 号群的 `/work` 里有 `.pnpm-store`），tank 的盘还剩 11T，缓存留着无妨，下次开机还热。`nix profile add` 装的包在 `/nix/var/nix/profiles/default`，本来就持久、在 PATH 里；PATH 和环境变量写 `~/.profile`，`bash -lc` 每次都读，写坏了 `shell` 和 `run_code` 都跑不了，只能在宿主上删掉那个文件，提示词里说了。unit 不读 `~/.profile`，提示词让它写 `Environment=`。改的时候已经有 `/work/.ssh`、`.config`、`.local` 的群，这些从此生效。
-  - **测试**：`vm-check` 在 `/work/.max/systemd` 放一个记下开机 id 的 unit，跑 `max-units`。嵌套测试跑两次 `vm-check`：第一次 `max-units` 起了它；第二次开机时它已经起了（`max-units` 跑之前就是 active），两次开机都记下了。
-  - 提示词在第二步加：只有第一步时 VM 照旧会停，跟 Max 说"常驻"不对。
-- **第二步（做了，11-01）：宿主那边。**
-  - ~~**宿主的端口**~~（11-02 去掉，见第三步）：每个 VM 第二个 hybrid vsock 端口 7778，一次连接一行 JSON：`{"wake": "……"}` 或 `{"units": 2}`，回 `{"ok": true, "said": "……"}`。每个 VM 有自己的 socket，连上来的是哪个群不用 token。
-  - **常开**：`[vm] kept`，默认 4 个群（tank 62 GiB；11-01 在跑的三个 VM 占 0.8、2.2、4.6 GiB，page cache 会让它慢慢往 16 GiB 涨）。tank 上 2026-11-03 起是 12 个：当时 4 个名额已经满了（三个群、一个私聊），owner 要请几个朋友在私聊里把 Max 当个人 agent 用；闲置清缓存以后一个常开、闲着的 VM 不再一直涨。提示词里不写名额，满了 `max-units` 会说。常开的 VM 不因闲置关、不被挤掉，扫的时候没在跑就开起来。哪些群常开：
-    - maxx 启动时读 `<vm.dir>/<会话>/work/.max/systemd/`，有 unit 文件的（和 `max-units` 认的后缀一样，链接不算）按会话 id 取前 `kept` 个，马上开。会话 0 是 `vm-check` 的，不算。
-    - `vm-check` 用自己的目录 `<vm.dir>/check`（2026-11-03）：它起的 VM 服务启动时也会把目录里有 unit 的会话开起来，原来和 maxx 共用目录，就会在最后一个槽位上把 maxx 正开着的某个群的 VM 再起一次。第二次起先删掉"残留"的 socket（`store.sock`、`work.sock`、`notify.vsock` 和 MCP 的 `notify.vsock_7777`）再绑自己的：virtiofsd 因为 pid 文件锁起不来，cloud-hypervisor 也没起，但正在跑的那个 VM 的 socket 文件已经被换掉，guest 连不上宿主的 MCP，maxx 也连不进新的 SSH。当天在 tank 上手动跑 `vm-check` 时碰上的，那个 VM 重启就好了。
-    - 之后听 `max-units`：它每次跑完（开机那次和 Max 手动的）把 unit 个数报给宿主，有就常开（满了就不，回话里说），0 个就不再常开。回话 `max-units` 原样打出来，Max 看得到这个群的 VM 会不会一直开着。
-  - **叫醒**：`max-wake '……'`（`nix/max-wake.sh`，参数或标准输入）。VM 服务把它作为 `Signal::Wake` 交给会话表，会话表找这个会话的 actor，没在跑就起一个（按 Max 在的平台查 `endpoint_on`、`find_endpoint`，和收到消息时起的一样），送 `Event::Woken`。actor 里原因是 `Reason::Program`，给模型看的是 `[max-wake] ……`，按单条上限截；有核心在跑就当输入，没有就起一个。程序收到"叫醒了 Max"。没用原计划的 `[自动化 m#2 触发]`：没有登记表，也就没有编号。
-  - **不限次数，但标着次数**（`actor/woken.rs`，2026-11-05 改）：原来每个群每小时最多叫醒 6 次，多的攒着到点一起叫醒。去掉了：Max 想自己一步一步跟人下棋，每一步都要叫醒它。每次叫醒都是一次模型调用，程序出了毛病一直叫，群里看不出来（Max 可以每次都 `[silence]`），所以一小时里第二次起，`[max-wake]` 后面标着"（这一小时第 N 次）"：叫醒不是记录里的行，下一个 turn 看不到前面几次，有了这个数，哪个 turn 都知道叫得多不多，Max 自己去查是哪个程序。`/status` 多两行：`units` 列出 unit 文件，`woken` 是这一小时叫醒了几次。
-  - **开不起来**：每个群的 VM 起不来、或者开着开着自己停了，都记一次（常不常开都算）；30 分钟内两次，下次开机就带 `max.units=off`，这个群不再常开，并用 `Signal::Notice` 告诉 Max（`[VM] ……`，同一条路，不限流）。Max 修好、跑 `max-units`，就又常开了。不带 unit 也起不来，说明不是 unit 的事：也不再常开，等工具要用再开，不每分钟重试。`max-units` 开机那次的报告不清这个计数：那时 unit 还没来得及出问题。
-  - **提示词**：VM 闲置会关那句加上"有常驻程序的群除外"；后台命令后面加一段：要一直跑、到点跑、盯着什么的，写成 `/work/.max/systemd/` 里的 unit，跑 `max-units`；`.timer`、`.path`、`Restart=on-failure`；ExecStart 写绝对路径；状态写进 `/work`；用 `systemctl status`、`journalctl -u` 查；`max-wake` 叫醒自己，一小时 6 次，只在真有新情况时叫。
-  - **测试**：`vm-check` 自己接 `Signal`，回"vm-check 收到了"。嵌套测试看 `max-units` 说这个 VM 会一直开着，`max-wake` 到了 `vm-check`。会话表的测试：一个没人说过话、actor 没在跑的群被 `max-wake` 叫醒，Max 回话，`[VM]` 送到同一个 actor。限流、常开名额、启动时的扫描各有纯测试。
-  - 以后：webhook 由宿主收，经同一个端口交给群里的程序。
-- **第三步（做了，11-02）：程序用 `maxx` 调工具。** owner 提的：程序不光叫醒 Max，也能自己在群里说话、读记录，和 Max 用同一套工具，见 [`maxx`](#纯-codemode)。
-  - **没有 token 的调用**：MCP 服务收到不带 `authorization` 的请求，就当成这个 VM 里常驻程序的。哪个群还是由 VM 自己的 socket 定。`tools/list` 列出所有工具；`tools/call` 作为 `Signal::Call` 经会话表交给这个群的 actor（没在跑就起一个，和叫醒一样），actor 用 `Caller::Program` 的上下文在 `side` 里跑，不进核心、不算哪一轮。60 秒超时，和别的调用一样。
-  - **能用的**：Max 的工具都能用，加上只给程序的 `say` 和 `wake`（`mcp/program.rs`），和 `max.file`（`maxx file`）；不能用的只有 `max.image`、`max.video`（给模型看，程序没有模型）。原来只给 `history`、`find_stickers`、`web_search`、`send_image`、`send_file`，`mute_member`、`recall_message` 怕不经 Max 判断就动群里的人，`agent` 怕没人看着花钱；2026-11-05 owner 定都给：程序是 Max 写的，它做什么由 Max 决定，和禁言撤回交给 Max 判断是一个道理。后台 agent 还是只能用 `job` 标着的那几个：它是另一个模型，结果交回 Max，不替 Max 在群里说话或动手。
-  - **`say`**：参数是一段 Max 回话写法的文字，过同一个分段器：`[reply#id]`、`[mention#id]`、`[sticker#id.n]`、`[image#id.n]`、`[split]`、空行分条；`[mention#id]` 的人要是这个群认得的（`platform::roster`），和模型的输出一样。不做结构化的参数：一种写法，Max 本来就会。一条一条发，等平台回执，返回 `{messages: [id, …]}`；中间失败的，原因里写已经发了哪几条。
-  - **没填的编号拒发**（2026-11-05）：`say` 的文字里有 `[reply#]`、`[mention#undefined]`、`[reply#${id}]` 这样编号是空的、`undefined`、`null`、`NaN` 或者以 `$`、`{` 开头的标记，整条不发，报错"编号是空的：程序里的变量没填进去？"。它们不是标记，原来会当文字发进群：Max 用 shell 写脚本时 shell 把 JS 的 `${…}` 吞成了空，群 4 和群 9 的三个程序都这样（11-02、11-03、11-05）。写成 `[reply#id]` 这类说明文字的照常发。只拦程序的 `say`，模型自己的回话不拦。
-  - **`wake`**：原来的 `max-wake`，经 `Poster::wake` 送 `Event::Woken`。`max-wake` 留着，成了 `maxx wake` 外面一层（参数或标准输入，打印 `said`）：Max 11-01 以来写的 unit 都在用它，在各群的 `/work` 里，不能替它们改。
-  - **不限**（2026-11-05 owner 定）：程序发的消息原来每个群每小时最多 30 条，给 QQ 每群每分钟 20 条、每天 1000 条的配额留余地；11-04 Max 写的五子棋程序一步一张棋盘图，一盘没下完就用完了 30 条，Max 还绕过去，改成超了就叫醒自己代发，比限流前更费。先提到 200，次日连同工具的每次运行上限（`per_run`：`send_image` 5 张、`mute_member` 5 次、`web_search` 20 次……）一起去掉。程序发多了群里马上看得见，有人说、Max 自己就会停；QQ 自己每分钟 20 条的限制兜底。代价：一个失控的循环能在一个小时里用完这个群一天的配额，之后 Max 在这个群说不了话；`web_search` 按次收费，循环搜会花钱。
-  - **记录里的标记**：程序发的行 `raw` 是 `{"said_by": "program"}`（Max 别的行是 null），不加列，不用迁移。渲染时头部多一个 ` 程序发的`（`Mark::Program`）：`[12:00 maxx #45 程序发的]: ……`，`history` 和尾巴都一样，Max 分得清哪些是自己说的、哪些是程序说的。跑着的核心看不到它们（和命令的回答一样），下一个核心的尾巴里有。
-  - **这一轮里也能试**：只给程序的工具（`say`、`wake`），带 token 调也当成程序的，经同一条路去 actor：Max 写好的脚本在 `shell` 里先跑一遍，`say` 不会被拒，发出去的也标着程序发的。后台 agent 带 token 调还是拒。
-  - **7778 去掉**：`max-units` 改用 `curl` POST `http://127.0.0.1:7777/units`（`{"units": 2}`，回话不变），走 MCP 的 socat，和 `/mcp`、`/llm` 同一个服务（`vm/host.rs` 现在是这个路由）；叫醒走 `maxx wake`。每个 VM 少一个 socket 和一个任务。`max-units.service` 排在 `max-mcp.socket` 后面。
-  - **提示词**：`max-wake` 换成 `maxx wake`；加一段：不用 Max 判断的话程序自己用 `maxx say` 说，写法和回话一样，一小时 200 条（原来 30），标着"程序发的"；发图发文件用 `maxx send-image`、`send-file`；unit 和后台命令里只能用的那几个工具。
-  - **测试**：runner 测试里不带 token 的 `maxx` 列出所有工具（有 `say`、`file`、`mute_member`、`agent`，没有 `show`、`video`），调用作为 `Signal::Call` 送出，`mute_member` 也一样；带 token 的 `maxx wake` 也走这条路。actor 测试：`say` 分两条发，回执给了才返回编号，`raw` 带标记，下一个核心看到 `程序发的`。`vm-check` 的后台命令跑 `max-wake`（没有 token），`vm-check` 接 `Signal::Call` 回"vm-check 收到了"；`max-units` 经 `/units` 报 unit 数。
-- **第四步（做了，11-02）：`maxx events`。** owner 定的。第三步以后程序要对群里的消息做反应，只能轮询 `history`：11-02 Max 在 9 群写的 ping-responder 每 2 秒查一次，一分钟约 19 次 MCP 调用，每次都经会话 actor 查库，rmcp 每次记 3 行 info；还要用正则拆渲染出来的行，格式一改就坏，没有报错。
-  - **会话 actor 发**：每一行入账后（`committed`，和派生数据 worker 同一处）有人订阅就送进一个 `broadcast`（256 行）。订阅是 `Signal::Subscribe` 经会话表交给这个群的 actor（没在跑就起一个，和程序调工具一样），actor 回 `Subscription`：place、当时的 `head`、接收端。actor 一次只处理一个事件，所以 `head` 之前的都在库里，之后的都会来，不重不漏。actor 停了（出错、重启）流就结束。
-  - **路由**：每个 VM 的 MCP 服务上 `GET /events`（`vm/events.rs`），和 `/units`、`/api` 一样不要 token，哪个群由 VM 自己的 socket 定。回 `application/x-ndjson`，头 `max-head` 是订阅时的 `head`。`?after=编号` 先从库里补那条之后到 `head` 的，最多最近 1000 条，一次读 100 条；再接着送新的，`after` 以前的不送。30 秒没有新行发一个空行当心跳。落后超过 256 行、actor 停了、VM 的服务停了，流都结束：程序从最后一条重新要，补的从库里来。
-  - **一行**：`{id, at, sender, person, by, reply_to, text}`。`at` 是本地时间的 RFC 3339；`person` 是发的人的编号，`[mention#person]` 能 @ 他；`by` 是 `max`（Max 的账号发的）或 `program`（程序发的），群友的没有；`reply_to` 是回复的那条；`text` 和 `history` 里一行冒号后面的一样（`Render::body`），超长的也不截。不分 kind：命令、编辑（`[edit#…]`）、撤回（`[unsend#…]`）也在里面，和 `history` 一样。
-  - **`maxx events [--after 编号]`**（`nix/client.js` 的 `events()`）：每行原样打印一行 JSON，一直跑。断了、出错、90 秒连心跳都没有，就过 1 秒重连，之后翻倍到 30 秒，从打印过的最后一条接着要；一条都还没打印就从 `max-head` 接着要，所以中间来的也不丢。重连的原因写到标准错误。读的一方走了（EPIPE）就退出。`--after` 认 `123` 和 `#123`。
-  - **日志**：rmcp 的 target 只记 warn 以上，不再每个请求记 3 行（11-03 去掉 rmcp 后就没有这些日志了）。
-  - **提示词**：常驻程序那段加上：对群里的新消息做反应用 `maxx events`，别拿 `history` 轮询；每行的字段、`by` 别回自己、断了自己重连、`--after` 和把 id 写进 `/work` 接上。unit 和后台命令里能用的后面加上 events。
-  - **测试**：actor 测试：订阅时的 `head` 是最后入账的那行，之后群友的话和 Max 的回答按顺序来，actor 停了流就结束。会话表的测试：`Signal::Subscribe` 到了 `max-wake` 起的那个 actor。`vm/events.rs` 的测试：从 `after` 补库里的行（`by`、`reply_to`、`person`、`at`），再收新的，`after` 以前的不重发，心跳，actor 停了流结束；不带 `after` 只要新的；别的查询 400；会话不回 503；服务停的时候流结束，不拖住关机。`maxx events` 用 Node 对着这个路由跑：打印补的和新来的，流断了以后从打印过的最后一条重连，中间来的那条补上，标准错误里写着重连。
-  - 9 群那个轮询的 ping-responder 不替它改：它在群的 `/work` 里，是 Max 的；部署后让 Max 自己换成 `maxx events`。
-
-## crate 划分
-
-2026-10-27 定。拆 crate 只认三个理由：强制依赖方向（编译器替你挡住违规 import）、隔离重依赖的编译时间、单独复用或发布。"这是一个功能"不算：lingo、embedder、召回向量都要用库、LLM 客户端和消息渲染，各拆一个只会多出一堆 Cargo.toml 和一张互相依赖的网，什么都没挡住。
-
-| crate | 内容 | 拆开的理由 |
-|---|---|---|
-| `qqbot` | QQ 官方机器人接口：token、网关（心跳、Resume、重连）、事件和 REST 的类型、发送和撤回，发图时再加上传。不认识 Max：没有 Node，没有会话。2026-11-03 起在自己的仓库 [HCHogan/qqbot](https://github.com/HCHogan/qqbot) | 依赖方向：协议层不能长成 Max 的形状。也是唯一值得复用的一块 |
-| `max-core` | 所有纯逻辑：Node/Message/Draft/Item 类型、核心和 intent 两个状态机、请求构造、分段器、给模型看的渲染。只依赖 serde、serde_json、thiserror，以及不开 `clock` 特性的 chrono（渲染 `HH:MM`、换日、间隔标记要用） | 依赖方向：sans-I/O 靠编译器保证 |
-| `max-db` | schema、迁移、全部 sqlx 查询和行类型 | 编译时间；`.sqlx` 离线元数据集中在一处 |
-| `max-llm` | Responses 和 Chat 适配、流式解析、推理透传、多模态降级 | 协议细节都关在这里，用录下来的响应单独测 |
-| `max` | 二进制：配置、CLI、services、会话 actor 和 I/O 任务、平台 sender、QQ 适配、投影、lingo、worker 框架、VM、MCP 服务、工具、命令 | 其余都是业务，放一起 |
-| ~~`max-import`~~ | 二进制：旧库导入 | 旧 schema 的代码只在这里；2026-11-05 删掉，见[导入](#导入) |
-- 依赖只能往下：`qqbot` 和 `max-core` 在底层，互不依赖；`max-db`、`max-llm` 依赖 `max-core`；`max` 依赖全部。QQ 事件到 Node 的映射在 `max` 里，不在 `qqbot`。
-- `max-core` 的依赖白名单写进 CI：`cargo tree -p max-core -e normal` 里只能出现那四个库。CI 再单独跑一次 `cargo check -p max-core`：只构建这一个包时，chrono 的特性不会和 `max` 合并，核心里调 `Utc::now` 就编不过。
-- intent 的状态机和拼分类提示词、解析输出在 `max-core`；分类任务（读库、调小模型）是 `max` 里的 I/O 任务。派生数据 worker 各一个模块，比如 `max/src/recall.rs`；它们的纯逻辑（提示词、校验）放 `max-core`，不起库就能测。
-- 平台适配先不拆出 crate，`max` 大到难受再分。
-- `qqbot` 原来不单独 repo（v1 期间协议层的形状还会动）。2026-11-03 owner 让拆出去：`git subtree split` 带着它的 17 个提交建了 [HCHogan/qqbot](https://github.com/HCHogan/qqbot)，公开、MIT，有自己的 Cargo.toml（workspace 的依赖、lint、包字段都写开）、工具链、clippy.toml 和跑 fmt、clippy、测试的 CI。max 按提交依赖它：`Cargo.toml` 里 `git` 加 `rev`，换版本改 `rev`；cargo-deny 的 `allow-git` 只放这一个仓库；crane 照 `Cargo.lock` 取，不用另给 hash。不用 git submodule。只有它用的 md-5、sha1、tokio-tungstenite 从 workspace 的依赖里删了。
-- lint 集中在 workspace 的 `[workspace.lints]`；裸 `tokio::spawn` 用 `clippy.toml` 的 `disallowed-methods` 拦。2026-11-05 加了几条 pedantic 的：可能截断、变号、溢出的 `as`（改用 `try_from`，确实要截的写 `#[expect]` 和理由），单个变体的 `_` 分支（加了变体不会悄悄落进去），`#[allow]` 一律换成带理由的 `#[expect]`，多余的 clone，大 future。没开 `cast_precision_loss`（这里转 f64 的都是小数目）和 `expect_used`（`unwrap_used` 已经逼着写带理由的 `expect`，再拦就是同一句话写两遍）。
-- **限制集中在 `max_core::limits`**（2026-11-05）。原来散在十几个文件里，有的同一个数写了两三遍（64 MiB 在下载、send_file、chat_file 的报错里各一份；视频 600 秒在 show 和投影里各一份；记忆文件 256 KiB 在 actor 和 dreamer 里各一份），提示词、工具说明里的数字又是手写的。现在模型会被告知的、或者不止一处在用的限制都在这一个模块；系统提示的规则、run_code 和 shell 的说明、后台 agent 的说明、整理记忆的提示词都用 `format!` 从这里写出来，改一个数，模型读到的跟着变。VM 闲置多久关机来自配置 `vm.idle_minutes`，经 `Vms::idle` 传给 `prompt::system`。guest 里 `webread` 的默认字数是 Python 写的，有个测试对着常量查。留在原处的：工具参数的范围（跟着各自的 schema）、QQ 自己的限制（两分钟撤回、禁言 30 天）、算法的调参（intent 的批大小、等待）、只为管道不卡死的超时和重试。
-
-### 工具链
-
-stable，edition 2024（2026-10-27 定）。`rust-toolchain.toml` 钉具体版本号，不写浮动的 `stable`；Nix 里 crane 和 devenv 用同一个版本。升级单独提交。
-
-不用 nightly。这个设计里可能想要的 nightly 特性都有稳定的替代：
-
-- async drop：已决定不用，见[资源怎么结束](#资源怎么结束)。
-- trait 里的 `async fn`：1.75 起稳定。要 `dyn` 的地方（工具注册表）返回 `Pin<Box<dyn Future + Send>>`，不用 `impl_trait_in_assoc_type`。
-- `gen` 块、`try` 块：不需要。
-- rustfmt 的 import 分组选项：用 stable 的默认格式。
-- 要 nightly 的工具（cargo-udeps）不进 CI，用 cargo-machete 代替。
-
-## 审阅性约束
-
-- 直接依赖集中写在 workspace 根 `Cargo.toml` 的 `[workspace.dependencies]` 里。新增依赖单独提交，并在提交里写理由。
-- 用 cargo-deny 检查许可证、重复版本和来源；安全公告用 cargo-audit 对 flake 里钉住的 advisory-db 查，Nix 的构建沙箱里没有网。
-- 每个提交都要能单独审完（2026-10-27 定）：手写的改动以 400 行左右为准，`Cargo.lock`、`.sqlx`、快照和 fixture 不算；按内容合理拆分，略超可以（2026-10-28 放宽）。一个提交只做一件事，单独拿出来也能编译、测试通过。
-- crate 数量保持少，按需再拆。初始划分见 [crate 划分](#crate-划分)。
-- 不写 legacy 和兼容代码，要删就删干净。
-- ADR 只记真正的取舍。
-- `timeout(` 和 `sleep(` 只出现在[超时](#超时)一节列出的地方；`select!` 循环里只放 cancel-safe 的分支，见 [cancellation safety](#cancellation-safety)。
-
-## 测试
-
-- 用 cargo-nextest 跑全部测试。
-- 纯逻辑用 fake provider 和 fake 平台测；超时和宽限期用 tokio 的 `start_paused`。
-- 取消：会话 actor 在任意两个事件之间插 `/kill`，I/O 任务在每个 poll 点 drop 一次，见 [cancellation safety](#cancellation-safety)；正常路径的测试断言没有资源是因为连接断开而被杀的，以此抓漏调的 `close`。
-- 数据库测试用 `#[sqlx::test]`，每个测试一个临时库。本地用开发 shell 里的 `devenv up` 起的 Postgres（端口 5434，角色和库都叫 `max`）；flake 的 nextest 检查自己起一个临时 Postgres，只听 TCP。
-- prompt 渲染用 insta 快照。是否取代 `max-prompt-flow` 生成的文档 **待定**。
-- codemode 的 runner 在本机跑 node，接 fake MCP 服务，不需要 VM。
-- 平台层用录下来的 QQ 网关事件做 fixture。fixture 里只用假的 openid 和 AppID。
-
-### 测试环境
-
-2026-10-27 定：
-
-- QQ（2026-10-28 改）：老账号被封，Haskell 版在 QQ 上已经停了。Rust 版用官方机器人 maxx，拉进一个 owner 当管理员、开了两个开关的测试群，见 [QQ 官方机器人](#qq-官方机器人)。不碰 NapCat。
-- **和 Haskell 版完全分开**（2026-10-27 定）：Rust 版在 tank 上是一套并行的服务，名字一律用 `maxx`，和 Haskell 版的 `max` 区分开：
-  - systemd：`maxx.target` 管整套服务，所有单元都挂在 `maxx.slice` 下，资源上限单独算。VM 是 `maxx.service` 的子进程，没有单独的单元，见 [VM 进程](#vm-进程)。
-  - 存储：系统用户 `maxx`，状态目录 `/var/lib/maxx`，运行时目录 `/run/maxx`，sops 里的 `maxx/` 前缀，Postgres 里单独的 `maxx` 库和角色。
-  - VM：tap 池和子网单独一套，子网避开 Haskell 版用的 10.231 和 10.233。不碰 Haskell 版的 broker 和它的 `max-sb-` 名字空间：Haskell 版启动对账时会删掉这个前缀下自己数据库里没有的实例和卷。
-  - 这个名字是 NixOS module 的一个参数，文中其它地方的例子仍按 `max` 写。
-
-## v1 实施顺序
-
-2026-10-27 定，10-28 补上 tank 那一步和重启恢复，10-29 删掉 Matrix 和重启恢复两步，编号不变。每一步是一串小提交；前五步不碰 tank。没定的数值先用文中的提议值，做到那一步再调。
-
-1. **骨架**（2026-10-28 完成）：workspace、钉住版本的 `rust-toolchain.toml`、crane 加 devenv（带 Postgres）、检查项（fmt、clippy、nextest、`max-core` 的依赖白名单）。全部检查是 flake 的 `checks`，CI 只跑 `nix flake check --impure`。
-2. **`max-core`**（2026-10-28 完成）：消息类型、渲染、分段器、核心和 intent 两个状态机、投影，全用 fake 测。两个状态机的签名在这一步定下来，写的时候改动的地方已经更新到[核心](#核心)和 [intent](#intent) 两节。
-3. **`max-db`**（2026-10-28 完成）：四个迁移覆盖 v1 表里平台、ledger、turn、用量和摘要几块（媒体和记忆随功能加），以及会话 actor 和 sender 要用的查询，全部用 `#[sqlx::test]` 测（10-29 加了第 6 个迁移，去掉恢复用的表和列）。写的时候定下的细节已经补进 [schema](#schema)。
-4. **`qqbot`**（2026-10-28 从 `onebot` 改，10-29 完成）：token、网关、事件和 REST 的类型、发送和撤回，fixture 里用假 openid。网关会话是不做 I/O 的状态机，断线、Resume、僵死连接和各个关闭码都在里面测；驱动用本地 WebSocket 服务测。`listen` 例子只连网关、打印事件，不发消息。
-5. **`max-llm`**（2026-10-29 完成）：Responses 和 Chat 两种协议的请求降级和流式解析，解析器不做 I/O。客户端一次只发一次，用 `Error::retryable` 给错误分类；重不重试由 `max` 的模型调用任务决定，因为只有它知道有没有已经说出去的文字。录了四家的真实响应做回放测试：cliproxy 的 gpt-5.6-luna 走 Responses，加密推理原样回传；cliproxy 的 Gemini、DeepSeek、taipan 上的 Qwen 走 Chat，带 `reasoning_content`。录的时候发现两件事：一是 Responses 默认把函数工具设成 strict，会把可选参数全变成必填，所以显式发 `strict: false`；二是 Gemini 会报推理 token 却不给推理内容，这部分不算进任何条目，因为条目的 token 是它下次再发时的花费。NInfer 的缓存断点做成 Chat 的选项：后面紧跟另一个 user 条目的 user 条目打断点，也就是基础上下文里易变块之前的那几块，已在 taipan 上验证。工具结果里的图片 2026-10-29 随 `max.image()` 降成真正的图，见[多模态结果](#多模态结果)。
-6. **tank 上的 `maxx`**（2026-10-29 完成）：`nixosModules.maxx` 按名字生成用户、Postgres 角色和库、目录、slice、target 和服务，配置文件在构建时跑 `max check-config`；`nixosModules.max` 是同一个 module 换成上线后的名字。`max` 现在只做三件事：迁移数据库，用 QQ 凭据问一次自己是谁，等 SIGTERM。QQ 的 AppID 和 secret 在 sops 的 `maxx/` 下。module 有一个 VM 测试，用和 tank 一样的 Postgres 16。部署时遇到两件事：一是 sqlx 0.9 不认 `postgresql://max@/max?host=…`（有用户名就不能是空主机），改成 `postgresql:///max?host=/run/postgresql&user=max`；二是 tank 的集群建在 glibc 2.40 上，系统现在是 2.42，`template1` 的 collation 版本对不上，新建库就失败，所以刷新了 `template1` 的版本记录（它里面没有用户对象）。同一天按 owner 的意思，把 `postgres`、`luckperms`、`minecraft`、`matrix-synapse` 几个库 `REINDEX DATABASE CONCURRENTLY` 加 `REINDEX SYSTEM` 后也刷新了。
-7. **`max`**（2026-10-29 完成，测试群里实测过）：配置、会话表和会话 actor、I/O 任务、平台 sender 和 `deliveries`、QQ 适配和 `/bind`、命令、intent。做完第一次实机：测试群里纯文字对话，顺便实测 [QQ 官方机器人](#qq-官方机器人)里标了实测的几项。工具在第 9 步之前一律回错误"工具还没接上，现在用不了。"。实测结果：`/bind` 接上测试群；@ 的对话和闲聊经 intent 判定都正常；停服务 2 分钟和 10 分钟，网关都 Resume 上了，停机期间的 @ 补发过来并且回答了。10 分钟那次回答被 QQ 拒了（40034005），被动回复的窗口改成按消息的发送时间算。同一天按 owner 的意思做了一轮减法：核心撞上限就认输，不再交接（见[运行流程](#运行流程)第 4 步）；重启时给宽限期再中断，不再挂起恢复（见[重启](#重启)）；intent 只留去抖、小模型判定和每小时上限（见 [intent](#intent)）；Max 不发表情；Matrix 先不做。这一步定下的：命令输出留在同一个会话（见[出站](#出站)）、命令权限（见[权限](#权限)）、actor 测试用真实时间（见[核心和 actor 的测试](#核心和-actor-的测试)）、一段老记录只接一个群（见 [QQ 官方机器人](#qq-官方机器人)）。tank 上的主模型是经 cliproxy 的 Gemini 3.8 Flash（Chat 协议），intent 用 h610 上的 qwen3.5-4b。
-8. ~~**Matrix**，带加密房间和 `matrix-bootstrap`~~：2026-10-29 删，先不做，见 [Matrix](#matrix)。
-9. **VM、MCP、codemode runner**。[VM 进程](#vm-进程)里要先在 tank 上验证的几件事 2026-10-29 验证完了。同一天做完第一段：VM 服务、`shell` 工具、module 里的 tap、nft 和加固，`max vm-check` 和嵌套的 NixOS 测试，测试在 tank 上通过。地址改走内核命令行，不用 DHCP。部署到 tank 后在测试群里实测过：模型调 `shell`，群的 VM 3 秒多起好，结果回到模型。第一次没调成，因为系统提示里还留着第 7 步那句"工具还没接上，别调用"。同一天按 owner 的意思，提示词里改叫 maxx（以前叫 Max）。tank 上的 Haskell 版同日删掉，数据留给导入。第二段同日做完：MCP 服务、guest 里的 runner、`run_code` 和第一个开放的工具 `context_read`，做法见 [MCP 通道](#mcp-通道)。runner 的测试在本机用 Node 跑，接真的 MCP 服务；嵌套测试里 `vm-check` 跑一个程序，经 MCP 服务查到数据库。
-10. **historian**（2026-10-29 做完，10-30 删了，当天晚上改回按群的开关，11-02 再删，见[摘要](#摘要)）：capture、`summary_runs`、`/compact`，当天挪到通用驱动器上，又拆回自己排。
-11. ~~**重启恢复**~~：2026-10-29 删，重启时给宽限期再中断，见[重启](#重启)。
-12. **媒体**（2026-10-29 开始）：v1 之后第一块，分六小步（10-29 加了发图和表情包库），见[媒体](#媒体)。第 1 小步当天做完、上了 tank，测试群里的一张图入账后半秒内下载好。第 2 小步当天做完：媒体句柄、条目里的图、两种协议的降级、附图；owner 定了不支持看不了图的模型。
-13. **网页搜索**（2026-10-29 做完，插在媒体第 1 小步之后）：`web_search` 和 VM 里的 `webread`，见[网页搜索](#网页搜索)。
-14. **导入**（2026-10-29 做完）：`max-import`，先导进临时库演练，再停机约 12 分钟正式导入，见[导入](#导入)。网关的 Resume 信息在被换掉的库里，停机期间群里的消息没补发过来。
-
-## 上线：drop-in 替换的条件
-
-- [功能对齐清单](#功能对齐清单)全部完成。
-- 写一个数据导入程序，把 Haskell 版数据库一次性导入新 schema，映射见 [schema 的导入](#导入)。它要能重复跑，上线前先演练。
-- NixOS module 的接口不保持兼容，tank 的 nix-config 跟着改，见[配置](#配置)。
-- 测试期间新版在 tank 上叫 `maxx`，和 Haskell 版并行（见[测试环境](#测试环境)）。上线时停掉 Haskell 版的 `max` 那一套，由新版替换；名字是 module 的参数，改回 `max` 只动一处。
-- Haskell 版各群 VM 的 `/work` 迁到新版，见[导入](#导入)。
-- 切换（2026-10-31 做了）：在 `maxx` 分支上合并 main，保留 main 期间的 Haskell 历史、内容全部用 Rust 的；然后 main 快进到 `maxx`，不 force push。main 最后一个 Haskell 提交打 tag `haskell-final`（`f33261b`，一个没做完的功能：排在等待中的请求后面的请求并进去）。nix-config 里 h610 和 tank 的 gaoji 还在用 Haskell 版的 NapCat module，`max` 输入钉在 `haskell-base`。
-- 回滚：Haskell 版保留到 Rust 版稳定为止；Rust 版上线后产生的新数据怎么处理 **待定**。
-
-## 调研：DSH 和 qq-bridge
-
-2026-10-28 记。只是记录，不是待办；后来采纳和否决的在条目里注明。
-
-[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）是 DeepSeek 2026 年 8 月开源的 agent harness。QQ 上流行的是社区插件 [qq-bridge](https://github.com/Derpyu520/qq-bridge)：走 OneBot v11，每个群一个只追加的 DSH 会话，主打"AI 仿真群友"。腾讯官方的 [dsh-qqbot](https://github.com/tencent-connect/dsh-qqbot) 被 @ 才回，群聊上没有设计。
-
-**机制和 Max 相反，不借。** qq-bridge 里模型的文本只算思考，说话要调 `qq_send_message`；什么时候醒、读到哪、下次怎么叫醒，都由模型调工具自己管（`qq_wait_for_messages` 长轮询、`qq_mark_read`、`qq_set_wake_config`）。为了补模型的健忘，又加了防"永眠"的提醒和潜水前强制观察 5 分钟的闸门；每次唤醒往一个从不重新投影的会话里追加三到六千字状态。Max 由 actor 驱动核心，空闲窗口、intent 判定和重新投影做的是同一件事。它的模型太爱潜水，Max 的判定器是拿不准就不说，方向也相反。
-
-可能有用的做法，按在 Max 里的位置记：
-
-- **"没说完"去抖**（`src/v2-wait.js`）：触发消息以"但是、然后、我跟你讲、对了"这类词或"，、；："结尾，或者同一个人 15 秒内连发 3 条以上，先等 8～12 秒没人说话再回。**已采纳**（2026-10-28），在 [intent](#intent) 的规则层。
-- **时间感**（`src/bridge.js` 的 `buildTimeSenseLine`）：一行"现在几点、最新一条是多久前发的"，加三档规则：10 分钟内正常接；2 小时内别用"刚"这类实时口气；更久默认不回，要回先说"才看到"。起因是模型睡了几十分钟被叫醒，还把旧消息当成刚发的。**否决**（2026-10-28）：qq-bridge 的问题出在模型自己管睡眠；Max 入账就处理，每条消息又都带着时间，模型自己会判断。
-- **参与度**（`src/bridge.js` 的 `formatParticipationV2`）：确定性算出"你近 1 小时发言 N 次，群友 M 条，近 5 分钟 K 条、P 人"，附一句"这轮少说"或"别一个人撑场"。2026-10-28 采纳过，做成 intent 分类输入里的"本群情况"；10-29 随 intent 精简删掉，见 [intent](#intent)。
-- **人设文案**（`dsh/agent-presets/qq-chat-v2/agent.cordis.yml`、`roles/小鲸鱼.md`）：一份"AI 味黑名单"（"首先、其次"、"希望对你有帮助"、"你们觉得呢"、每句都加"～"）配正反例；不当主持人（不总结话题、不劝架、不挨个回应）；潜水回来别假装一直在场；同一个人反复说同一件事，之后只接情绪；刚说完别马上补一条。和 Rust 无关，可以先在 Haskell 版的提示词上试。
-- **主动插话的反馈**：intent 触发的发言之后几分钟内，有没有人回复、引用或 @ Max，按群算成功率，用来调冷却，或者喂给判定器。2026-10-28 采纳过，就是 intent 的接住率；10-29 删掉。
-- **记忆标来源**（[dsh-qq-bot-playbook](https://github.com/rentaoyan0628-collab/dsh-qq-bot-playbook) 第 07 篇）：分"对方说的"和"模型判断的"。还要在人设里写清什么时候该记：他们跑了两天，存了 1477 条原文，经历只记下 2 条。
-- **出站拦 secret**：发出去的内容含凭据、token 就拦。在 Max 里是 actor 入账 `Said` 前按已知的 secret 值过滤，VM 里的程序拿得到 MCP token。
-
-不借的：装傻和已读乱回、好感度数值、`reply_gate` 工具（`[silence]` 已经等价）、一代按空格分句。
-
-## 调研：判断模型
-
-2026-10-28 记。只是记录，不是待办。
-
-[Jev](https://docs.typesafe.ai/models)（TypeSafe AI，2026-09）是不自回归的判断模型：是非、选择、打分三种题，直接给概率；每百万输入 token $0.042，输出免费；只有美国的托管 API，闭源；官方说英文最好，中日韩能用但弱一些。
-
-暂不用它替代 intent 的小模型：
-
-- 省的钱不在瓶颈上。现在的小模型跑在自己的机器上，没有按次的费用；花钱的是误触发，每次白跑一个前沿模型的 turn。Haskell 版 7 月两天的日志：约 7,500 条没点名的消息，分类 2,051 次，触发 77 次。
-- 中文多人群聊上没有任何公开证据；英文测试里加了注入后判决翻转 22%，被测的评审模型里最高（[Braintrust](https://www.braintrust.dev/evals/jev-vs-gpt-eval-judges)）。
-- 每条闲聊都要发给一家美国公司；版本 30～60 天弃用，每次升级都要重评、重定阈值。
-
-可能有用的：
-
-- 小模型改读标签的 logprob（llama.cpp 的 `n_probs`），直接拿概率、设阈值，比生成 JSON 快得多；代价是没有 `reason`，判定那一行少了说明。
-- 评测集从 ledger 里建：真正 @ 或回复 Max 的消息去掉 @ 和引用，是"没打 @ 的点名"正例；判定触发后主模型回 `[silence]` 是弱负例，之后有人 `/proactive off` 或叫它闭嘴是强负例；再人工抽几百条难例。评测集是真实群聊，不进公开仓库。有了评测集，可以花几美分离线测一次 Jev。
-- 标签里最值的是"在不在跟 Max 说话"、"是不是在等 Max 回应"、"是不是嫌 Max 烦"；最后一个做过 intent 的 `dismiss`，10-29 删掉，现在只写在分类提示词里。话题切换、值不值得记、情感、垃圾和注入检测不值得逐条判。
-
-## 待讨论
-
-1. ~~代码放在哪~~：已定（2026-10-27），放在这个仓库的 `maxx` 分支，见文首。
-2. ~~初始 crate 划分~~：已定（2026-10-27），见 [crate 划分](#crate-划分)。
-3. ~~v1 带不带工具~~：已定（2026-10-27），带，见[工具和 codemode](#工具和-codemode)。intent 分类也进 v1，见 [intent](#intent)。
-4. ~~新 schema 的设计，以及从旧库导入的映射~~：已定（2026-10-27），见 [schema](#schema)。
-5. ~~NixOS module 的接口要不要保持不变~~：已定（2026-10-27），不保持，见[配置](#配置)。
-6. ~~Matrix 加密房间要不要支持~~：已定（2026-10-27），支持；10-29 Matrix 整个先不做，见 [Matrix](#matrix)。
-7. ~~v1 的测试环境~~：已定（2026-10-27），并行的 `maxx` 一套服务，见[测试环境](#测试环境)。
-8. ~~Rust 工具链版本和 edition~~：已定（2026-10-27），stable 钉版本、edition 2024，见[工具链](#工具链)。
-9. ~~每个提交的大小上限~~：已定（2026-10-27），见[审阅性约束](#审阅性约束)。
-10. [数据和运行模型](#数据和运行模型)一节末尾的待定项：保留期、崩溃时丢掉的 turn 要不要通知。基础上下文的存法和裁剪规则已定，不再恢复挂起的 turn。
-11. ~~身份模型~~：已定（2026-10-27），见[身份](#身份)。跨平台合并和镜像一起做。
-12. [工具和 codemode](#工具和-codemode) 一节末尾的待定项：v1 开放哪几个 Max 工具、图片预算、代码转义。调 VM 已定用 russh。
+- Which Max tools v1 exposes.
+- ~~Whether to drive the VM with the `ssh` command or with russh~~: decided (2026-10-27): russh; see [VM processes](#vm-processes).
+- The maximum number of images handed over per run, and the size of the vision token budget.
+- The code-escaping problem (noted 2026-10-27, not decided for now): whether GPT should use Responses' custom (freeform) tools to write the original text directly, as Codex's code mode does and as cliproxy already supports; and whether the runner should provide a fallback for Gemini's over-escaping, for example by using the corrected version only when parsing the original text fails and parsing succeeds once the extra escaping is removed. The frequency of escaping errors in v1 will be observed first.
+
+## Background agents
+
+To be done after v1.
+
+- Each job is a pi process (in print mode) in the group VM. Its plugin `max-job.ts` talks to the host through `/job/…` in the VM; see [Decoupling from the harness](#decoupling-from-the-harness). Before 2026-11-07, this was RPC JSONL over stdio.
+- The host side is in `crates/max/src/job.rs` (2026-10-30; switched to the contract on 2026-11-07). `job::drive` holds steers until the plugin fetches them, stops the job when its time is up, and waits for the report or for the process to end. `job::run` starts the unit, writes the job's JSON line, closes stdin and records usage. The routes are in `mcp/harness.rs`. Usage and tool calls are read out and reported by the `/llm` forwarder, and `Watch` is left with nothing but questions. No further `AgentBackend` layer is abstracted: the host defines the contract and the harness implements it in the guest; see [Decoupling from the harness](#decoupling-from-the-harness). Commands are started with `Vm::open`.
+- **Model** (decided 2026-10-30): `job = { model, effort }` is configured separately in `[llm]`; if it is not configured, there are no background agents. pi does not hold the provider's key: its model requests go to `http://127.0.0.1:7777/llm/<endpoint>` in the VM, which is the same service as MCP, with the same token. The host recognises which job's session a request belongs to, replaces `model` with the one from the configuration, adds the provider's key and headers, and forwards the request; the response streams back unchanged. If the provider stays silent for `stream_idle_timeout_secs` (default 120 seconds), whether before the response starts or midway through the stream, the connection is cut, just as in max-llm: pi treats that call as failed and retries on its own, rather than waiting idly until the job's time runs out (pointed out by Max itself during a review on 2026-10-30). Only the endpoint of this provider's protocol (`chat/completions` or `responses`) is accepted, and requests are limited to 64 MiB; once the job ends and its session is revoked, the token is useless. Approaches not chosen: cliproxy's management interface can add and remove keys at runtime, but the changes then have to be written back to the configuration file, which on tank is rendered by sops; and giving the VM a fixed cliproxy key would amount to giving it to everyone in the group.
+- Domain tools go through Max's MCP service; see [The MCP channel](#the-mcp-channel). What the tools need (the database, search, embeddings, the content store, QQ administration) is built once in main as `mcp::Services` and shared by all calls; a `None` inside it means only that the item is not configured. Who is calling is stated by `mcp::Caller`: `Turn` carries the current turn's `Poster`, `Job` carries a `job::Link` (its upstream, and the channel that listens to its model calls), and `Check` is `vm-check`. Which tools are available depends only on the `Caller` and the `job` marker (changed 2026-10-30: previously each call site assembled a context by hand, the job's version left out embeddings, and `context_search` silently degraded to literal search only). Each job opens one session, and the session lives as long as the job, so the tools' usage caps are set at 10 times those of a single run (`web_search` allows 20 calls per run and 200 per job). Only tools that neither speak nor act in the group are exposed: the read-only ones, and the two GitHub tools (added 2026-10-31; see [GitHub](#github)). They are revoked when the job ends. pi can also run the codemode runner in the VM, using the job's own session to call these tools in batches.
+- Actions that affect the group (sending messages, sending files, retracting, muting, creating automations) are not given to background agents. A background agent's result is a kind of wake (`Reason::Job`): if the conversation has a core running, the result is fed to it; if not, a core is started; the foreground model decides what to say. Questions that a job asks midway are handled the same way; see **Questions** below.
+- **Tools** (2026-10-30): Max manages jobs in `run_code` with four Max tools, all of which are answered by the conversation actor (through the `Poster`, which carries a reply channel). Background agents cannot use them themselves:
+  - `agent({ task, title? })` returns `{ job: "job#3" }` immediately. Jobs live in the conversation actor's table; their numbers increase only for as long as the process runs and start again from 1 after a restart. At most 3 run at the same time, each for at most 2 hours (originally 30 minutes, which was not enough even to read through 30,000 lines of code; changed 2026-10-30). With 5 minutes left, a steer tells the agent to stop working and write its report; when the time is up, it is stopped (`/job/stop`; the plugin aborts pi) and hands over what it has done so far. Without the reminder, the agent would most likely be in the middle of a tool call when the time ran out, its last assistant message would contain no text, and it would have nothing to hand over (this is what happened to job#2 on 2026-10-30). At most 3 can be started in one run. The tool returns an error when `llm.job` is not configured, when there is no VM, or while a restart is in progress.
+  - `agent_steer({ job, message })` is queued on the host. The plugin takes it (`/job/turn`) when the job's next turn ends, and it is delivered before the next model call. If the job is waiting for Max's answer (see **Questions**), this message is the answer. `agent_cancel({ job })` removes the job from the table: dropping its scope stops it, the unit is stopped by the VM's stopper, and the result is discarded. `agent_status({ job? })` lists the title, the minutes elapsed, the model, the number of tool calls and the most recent tool. `job` may be written as `job#3` or 3.
+  - `/kill` stops the jobs as well and replies with which ones it stopped; `/status` shows one line per job.
+- **When to hand work off** (2026-10-31): the tools section of the system prompt says that work requiring many steps should be handed to a background agent rather than done within the turn: reading the code of a whole repository, reviewing code, changing code, installing dependencies, building, running tests, opening PRs, and reading large numbers of web pages or files. In the same output, Max first replies that it has taken the task on and roughly how long it will take, and then starts the agent; anything that can be answered in a few steps it does itself. The reason: in conversation 9, whenever people asked it to read or change code, it always did the work itself within the turn; on 2026-10-31 it made 49 tool calls and took 41 minutes before saying its first sentence. The reminder about working heads-down for too long (see [The core](#the-core)) also tells it to hand the work off if much of it remains.
+- **Results**: when the agent stops, the plugin reports the last assistant message that contains text (`/job/report`). The host stores it as `/work/.max/jobs/job-<n>-<time>.md` and then gives the conversation actor a `JobDone`. The actor raises a `Wake { ids: [], reason: Job { job }, item }`, where `item` is `[job#3 完成] 标题` ("[job#3 done] title"), `[job#3 到点停了，下面是做到一半的] 标题` ("[job#3 stopped at the deadline; below is the work so far] title") or `[job#3 失败] 标题：原因` ("[job#3 failed] title: reason"), followed by the report; if the report exceeds the single-message limit, only its first 2000 characters are given. The path of the full text is written at the end. If some steers had not been delivered when the report arrived (dropped at the deadline, or arriving after the last turn), it also says "你最后补充的 N 条它没收到" ("it did not receive the last N messages you added"). When there is no report (except on failure), it points Max to pi's session log in `/work/.max/jobs`. As with classification verdicts, if a core is running, the wake joins its next batch; if not, a core is started. Results of jobs that have already been cancelled are discarded. If this wake fails (a model error), it is not resent; the full text remains in the file.
+- **Usage**: each model call records a row in `llm_usage` with `purpose` set to `job` (migration 0015) and no turn. Since 2026-11-07 the row is recorded by the forwarder (`mcp/forward.rs`) instead of by reading pi's `message_end`. On its way back to pi, the response is fed to `max_llm::Meter`, and usage is computed with the same conversion that max-llm uses to read Max's own calls (for chat, the `usage` block requires `stream_options.include_usage`, which pi sends on its own). The tools the model called are recorded by name; incomplete responses are not counted (their tools will not run). There are also `first_ms`, `took_ms` and `quiet_ms`, which used to be empty for jobs. When a call ends (read to completion, disconnected, or no longer read by pi), the job's `Ledger` is told through the `job::Link`: the call count goes up by one, the tool count and the most recent tool are updated, and a row is recorded if the usage is non-zero. A call that fails before the provider responds (unable to connect, or silent) still counts as a call; calls that the forwarder itself rejects (token, endpoint, not JSON) do not. The `Meter` tests were checked against 8 responses recorded by max-llm: the usage and tools match what max-llm itself reads.
+- **Questions** (2026-10-30; switched to `/job/ask` on 2026-11-07): when a background agent is stuck on something that only Max or the group members know, it asks with `ask_max({ question })`. This tool lives in the pi plugin `nix/max-job.ts` in the guest (it used to be a separate `ask-max.ts`). It uses maxx's client (`job({ url, token }).ask()` in `client.js`, whose path is given by `MAX_CLIENT` in `max-pi.nix`) with the job's token (`MAXX_TOKEN`) to `POST /job/ask`, and keeps waiting inside this tool call, so the context is not broken. The host's route is in `mcp/harness.rs`: the question is passed through the `job::Link` to `job::drive`, `drive` passes it to the conversation actor (`Event::JobAsks`), and the actor wakes Max just as it does for a report (`Reason::Job`). Here `item` is `[job#3 问] 标题` ("[job#3 asks] title"), followed by the question and "用 agent_steer 回答它，10 分钟内没答复它就自己判断" ("answer it with agent_steer; if there is no answer within 10 minutes, it will use its own judgement"). Questions from jobs that have already been cancelled are discarded. While a question is unanswered, the job's next steer is the answer, and the tool returns `Max 答复：…` ("Max's answer: …"). If there is no answer within 10 minutes (`QUESTION_WAIT`), the answer is null and the tool returns "Max 这次没有答复，按你自己的判断继续，在报告里写明你做了哪些假设" ("Max did not answer this time; continue using your own judgement, and state in your report which assumptions you made"); steers that arrive after that are treated as ordinary steers. Before the wrap-up steer near the deadline and before the stop at the deadline, any unanswered question is first answered with null, because the agent is waiting inside the tool and cannot receive steers. Only one `ask_max` runs at a time (`executionMode: "sequential"`); a second question arriving at the same time, or a question arriving after the stop, is answered with null immediately. When pi aborts, the request is cut along with it and the question is withdrawn; anything Max says after that is a steer. The answer is NDJSON: the headers are returned immediately, then an empty line every 30 seconds, and finally the line `{"answer": …}`; without the heartbeat, Node's fetch would give up after 300 seconds. It does not go through an MCP tool: MCP calls time out after 60 seconds (`CALL_TIME`), and it does not belong in Max's own tool list either. Originally (from 2026-10-30) it was `ctx.ui.input`, which in RPC became an `input` dialog, with the answer returned as the dialog's `value`; it was replaced so as not to depend on pi's RPC; see [Decoupling from the harness](#decoupling-from-the-harness). On 2026-11-07 it was run on the Mac with the pinned pi 1.4.0 (against a fake `/llm` and `/job/ask`): on both paths, answered and unanswered, the tool results that the model saw were correct; `scripts/check-pi-job` covers the answered path.
+- **pi's system prompt**: a section is appended saying that it is Max's background agent and cannot see the group chat; that it should use `mcp__max__history` to get the chat history, and `mcp__max__web_search` and `webread` to look things up on the web; that when stuck on something only Max or the group members know, it should ask with `ask_max`, but should not ask about anything it can look up or find out by trying; that its last message is the report, with the conclusion first and then the key points and sources, within 2000 characters; that files go in `/work`; and that it will be reminded to wrap up when its time is nearly up.
+
+The behaviours of pi that the plugin relies on (tested live with RPC on 2026-10-29, and retested with print mode and the plugin on 2026-11-07, both with pi 1.4.0; the same day the pin was moved to 1.5.0, and `scripts/check-pi-job` still passes):
+
+- A steer does not interrupt a running tool. In its `turn_end` handler the plugin calls `pi.sendUserMessage(steer, { deliverAs: "steer" })`: pi takes items from the steer queue only after the `turn_end` handlers have finished, so the steer goes into the next model call. The default is `one-at-a-time`; with `"steeringMode": "all"` in `settings.json`, two queued steers were delivered together. If the last `turn_end` (after the model has already given its final answer) picks up a steer, pi runs another turn.
+- `ctx.abort()` immediately kills the running tool (`sleep 30`), and pi stops. RPC's `abort` does not clear the queue, so `clear_queue` used to be needed first; now there are no queued steers in pi, so nothing needs to be cleared.
+- `agent_end` does not mean the end: the plugin must wait for `agent_settled`, because automatic retries and queued steers all come before it. pi exits only after the `agent_settled` handlers have finished, and that is where the report is sent.
+- When the last message is a failure or an interruption, print mode prints nothing and exits with code 1, so the plugin must send the report itself. A failed call has `stopReason` set to `error`, with the reason in `errorMessage`; after a successful retry, the last attempt is what counts.
+- Print mode does not call `process.exit` when it finishes; it exits only once the event loop is empty, so after reporting, the plugin must leave nothing waiting. The stop stream is aborted at `agent_settled` and `session_shutdown`, and the wait before a reconnect can be aborted as well.
+- The task comes in through stdin. If it were passed as an argument, a leading `@` would be treated as a file to read (`@小明 帮我查一下` ("@Xiaoming, please look this up for me") fails with File not found). stdin is read in full, trimmed of leading and trailing whitespace, and passed through `session.prompt` just like RPC's `prompt`; input that starts with `/` is handled as before.
+- Print mode has no UI, so the host no longer sees dialogs; in RPC, every `extension_ui_request` used to be answered with `cancelled`.
+- Text given with `--append-system-prompt` is appended after pi's own system prompt (wrapped in `<addendum>`). A `SYSTEM.md` in the agent directory replaces pi's own prompt: the wrapper script used to write the job's system prompt as `system.md`, which on the case-insensitive Mac is the same file as `SYSTEM.md`, so pi's own prompt disappeared and the job's appeared twice (found on 2026-11-07; the guest's `/run` is case-sensitive and was not affected). The file is now called `job-system.md`, and `scripts/check-pi-job` checks this.
+- MCP tools are configured in `mcp.json` with `"exposure": "direct"`, so they appear directly in the tool list as `mcp__max__<tool>`. pi's MCP client speaks the 2025-11-25 version of the protocol; see [The MCP channel](#the-mcp-channel).
+
+The pi in the guest comes from numtide's llm-agents.nix and is pinned to a rev in the flake. The wrapper script `max-pi` (`nix/max-pi.sh`) reads the job's JSON from the first line of stdin (see the contract below) and exits with code 2 if `contract` is not 1. It writes `models.json` (with a single provider, `max`, whose `baseUrl` is `/llm` and whose `apiKey` is `$MAX_JOB_TOKEN`), `mcp.json`, `settings.json`, the system prompt and the task into the unit's RuntimeDirectory, and then execs `pi --print --no-approve` with `--extension` `max-job.ts` (whose path is given by `MAX_JOB` in `max-pi.nix`; the `client.js` that it uses is given by `MAX_CLIENT`), with the task coming in through stdin. Sessions are stored in `/work/.max/jobs`. The `.pi/` in `/work` is writable from the group and is not trusted. When the unit stops, the directory is deleted and the token goes with it. The host closes stdin as soon as it has written the job's line.
+
+In April 2026 pi was acquired by Earendil, and its repository moved to `earendil-works/pi`. Patches are released almost daily, and the extension API, like the old RPC, has no version. The version is therefore pinned in Nix, and `scripts/check-pi-job` is run after moving the pin or after changing the plugin, the wrapper script or the job part of `client.js`. Using the pinned pi and the real `max-pi.sh` and `max-job.ts`, it runs four jobs against a fake host (a steer, a steer in the last turn, a stop, a question) and checks that the behaviours above still hold. This used to be a replay of a few recorded RPC JSONL sessions (`job/fixtures/`), which was removed on 2026-11-07 together with `job::pi`.
+
+### Decoupling from the harness
+
+Decided 2026-11-07, at the owner's proposal: the host no longer speaks pi's RPC. Instead, the host defines a contract for jobs, and each agent harness implements it in the guest with its own plugin (or a small shim); pi is the first. The job code on the host therefore no longer tracks pi's versions, and switching harnesses requires no change to the host. This does not conflict with the earlier "abstract `AgentBackend` once there is a second implementation": it is not an extra trait layer in Rust but a wire contract, and the first two steps are worth doing whether or not a second harness ever arrives.
+
+**The contract** (`contract: 1`; pi's RPC has no version field, which has caused trouble before):
+
+- **Start**: as before, the host starts the harness's wrapper script in a unit, and the first line of stdin is the job's JSON: `contract`, `token`, `task`, `system`, `model`, `api`, `window`, `max_output`, `effort`. The wrapper script exports the token as `MAXX_TOKEN`. All the calls below go to `127.0.0.1:7777` in the VM with `Authorization: Bearer <token>`, and return 401 once the job has ended.
+- **`/llm/<endpoint>`, `/mcp`**: these already exist. Usage, call counts, tool counts and the most recent tool are read from the responses by the forwarder (step one, done; see **Usage**).
+- **`POST /job/turn`**: the harness calls this at each turn boundary, after a model call and its tools have all finished and before the next call. It returns `{"steers": [...], "stop": false}`: the steers queued since the previous call, in order, which from then on count as delivered.
+- **`GET /job/stop`**: one such request is kept open for the whole job, as NDJSON: the headers are returned immediately, then an empty line every 30 seconds, and the line `{"stop": true}` when the job must stop. If it drops, the harness reconnects, and a stop that has already been requested is sent again immediately. When the job ends, the connection is closed without anything being sent, and a reconnect returns 401.
+- **`POST /job/ask`** `{"question"}`: used by `ask_max`. Like stop, it returns the headers first and sends heartbeats, and its last line is `{"answer": "…"}` or `{"answer": null}`. The heartbeat is needed because Node's fetch (undici) gives up if neither the headers nor the body show any activity for 300 seconds, while a question may wait 10 minutes (`QUESTION_WAIT`). It also bypasses MCP, so it is not subject to the 60-second call limit (`CALL_TIME`).
+- **`POST /job/report`** `{"text", "error"}`: called once after the agent stops, which ends the job.
+- **Exiting without a report**: if the exit code is 0, stdout (its last 256 KiB) is taken as the report; otherwise the job counts as failed, with the reason "agent 退出了，退出码 N：" ("the agent exited, exit code N:") followed by the last line of stderr. A harness without a plugin (`x -p "$task"`) can also run as a job, only without steers, questions or partial reports.
+
+**The rules stay on the host**, as in the current `job::drive`; only the I/O changes:
+
+- A steer that arrives while a question is waiting is the answer and does not enter the queue. There is one question at a time; a second question, or one that arrives after the stop, is answered with `null` immediately. Before answering `/job/turn`, the host first takes in the steers that have already arrived; if the request drops before the answer is received, those steers are kept for the next turn.
+- With 5 minutes left, any waiting question is first answered with `null`, and then the wrap-up steer is queued. At the deadline, any waiting question is answered with `null`, the queued steers are discarded, and stop is sent. If there is still no report `GRACE` after the deadline, the job is treated as stopped at the deadline with no text, and the unit is stopped.
+- How the job ended: if stop was sent, it stopped at the deadline; otherwise, if `error` has a value, it failed; otherwise, it completed.
+- The host knows which queued steers had not been delivered when the report arrived, and can tell Max in `JobDone`; previously such steers were silently lost.
+- Cancellation works as before: the unit is stopped.
+
+**Steers are pulled, stop is pushed.** Steers stay on the host until the harness pulls them, so the harness keeps no queue and does not need to clear one before stopping (the `ctx` of a pi extension has only `abort`, `isIdle`, `hasPendingMessages` and `shutdown`, with no way to clear the queue). The host also knows which steers were delivered, and the hooks of other harnesses (such as the kind that runs after a tool call) also pull at boundaries. Delivery is no later than it is today: pi only takes in steers between turns anyway. Stop has to interrupt a long-running tool or model call, so it can only be pushed.
+
+**The pi side**: `nix/max-job.ts` replaces `ask-max.ts` and is about a hundred lines long. `client.js` gains a `job({ url, token })` with `turn()`, `ask(question, signal)`, `stopped(signal)` (which reconnects if the connection drops or shows no activity for 90 seconds, returns true when the job must stop, and returns false when the job ends or `signal` is aborted) and `report({ text, error })`; any plugin written in JS can use it.
+
+- **steer**: in `pi.on("turn_end")`, the plugin calls `await job.turn()` and then `pi.sendUserMessage(steer, { deliverAs: "steer" })` for each steer. The loop takes items from the steer queue only after the `turn_end` handlers have finished, so the steers go into the next call (verified in testing). The wrapper script writes `"steeringMode": "all"` in `settings.json` so that several steers go in together (this used to be RPC's `set_steering_mode`).
+- **stop**: the plugin keeps the `ctx` given by `agent_start` and `turn_start`; on receiving stop, it sets `stopping` and calls `ctx.abort()`, after which `turn_end` no longer pulls. If a run starts again after an abort has been requested, pi aborts it again on its own; since there are no queued steers in pi, it will not carry on.
+- **Report**: the plugin uses `message_end` to record the last assistant message that contains text, and calls `job.report({ text, error })` at `agent_settled` (pi waits for its handlers); when `stopReason` is `error`, `error` is its `errorMessage`. Print mode prints nothing when the last message is a failure or an interruption, so the plugin must report on its own.
+- **`ask_max`**: the tool stays as it was; `execute` calls `job.ask(question, signal)` instead of using `ctx.ui.input`, and `null` returns the original "no answer" sentence. An abort cancels the request through `signal`, and the host treats the question as withdrawn.
+- **`max-pi.sh`**: `--mode rpc` is replaced with `--print`, the task comes in through stdin (see the behaviours of pi that the plugin relies on, above), the extension is replaced with `max-job.ts`, `MAXX_TOKEN` is exported, the path of `client.js` is placed in an environment variable, `settings.json` is written, and `contract` is checked first. `models.json`, `mcp.json`, the system prompt and the session directory are unchanged.
+
+**What was tested** (2026-11-07, on the Mac with the pinned pi 1.4.0 and later 1.5.0, against a fake host; this is what `scripts/check-pi-job` does): the ordering around `turn_end` is correct; the job's system prompt is appended after pi's own; print mode exits only after the `agent_settled` handlers have finished, so the report gets sent; an `@` and line breaks in the task reach the model unchanged; when the last `turn_end` picks up a steer, pi carries on; a stop interrupts a running `sleep 30`, and the report and exit follow within two seconds. The host side (the routes, `drive`, `client.js`) is covered by max's tests. No real job has been run on tank yet.
+
+**Risk**: the token is in the agent's environment, so its shell can also call `/job/*`, for example to submit a fake report. `/mcp` is in the same position today, and reports were never trustworthy in the first place; the point is simply not to put greater privileges behind `/job/*`.
+
+**In three steps**, each useful on its own:
+
+1. Usage and progress come from the forwarder (done 2026-11-07; see **Usage**): `job::pi` no longer reads usage or `tool_execution_start`.
+2. `ask_max` goes through `/job/ask` instead of the dialog (done 2026-11-07; see **Questions**): `Question` and `Answer` were removed from `job::pi`. `Dialog` and `Dismiss` were kept until step three, since in RPC mode other extensions might still open dialogs, whereas print mode has no UI. The wrapper script exports `MAXX_TOKEN`, so running `maxx` in pi's shell also makes calls under the job's identity, with only the tools marked `job`; previously it carried no token, counted as a resident program, and could use every tool.
+3. `/job/turn`, `/job/stop` and `/job/report`, with pi switched to print mode (done 2026-11-07): `job::pi` and `job/fixtures/` were removed entirely, and `drive` became a generic state machine. The steer queue, the waiting question, stop and the report all live there; the harness's calls come in through the `hooks` of the `job::Link`, and stop is a `CancellationToken` on the `Link`. Its tests no longer need pi; the pi side is checked by `scripts/check-pi-job`.
+
+What connecting another harness requires: a wrapper script that sends its model requests through `/llm` (which currently speaks only chat/completions and responses) and its tools through `/mcp`, and appends `system`; then the four calls above, hooked in wherever the harness allows: `/job/turn` at boundaries, `/job/stop` wired to its interrupt, `/job/report` when it stops, and `ask_max` calling `/job/ask`. If none of them can be hooked in, the harness is of the kind that falls back to stdout.
+
+## Background commands
+
+Added 2026-11-01. A command that runs for several minutes (a build, a test run, a download) does not need another model, so a background agent is too heavy for it; running it inside the turn, however, leaves the group waiting. `shell` therefore gains a parameter `background`: when it is true, the tool returns a job number at once, the command runs in the background, and Max is woken when it finishes. Only `shell` has this option: a background `run_code` could still call tools such as `send_message` or muting after the turn has ended, and those actions would then have no turn to belong to.
+
+- **Shared job table with background agents.** Numbers are counted together (`job#N`); `agent_status` lists background commands (the title is `$ <first line of the command>`, and all counts are 0); `agent_cancel` stops them; `/status` shows one line for each (`job#2 · 3m · shell · $ make`); and `/kill`, error cleanup and restarts stop them along with the agents. `agent_steer` cannot send them further input. At most 3 run at the same time, not counting agents.
+- **How one starts.** When `tools::run` sees `background`, it sends a `Request::Shell` to the conversation actor through this turn's `Poster` (the same path as `agent`; the request is refused if the turn has already ended). The actor starts a task in the job table to run the command and replies with the number immediately. What is returned to the model is the number, the time limit, the path of the output file, and the instruction "别 sleep 等它，也别反复查" ("do not sleep waiting for it, and do not keep checking on it").
+- **How it runs.** Like the foreground `shell`, it is a systemd unit in the VM, except that the time limit defaults to 30 minutes and `timeout_ms` can be at most 2 hours (the same as for agents). Output is written to `/work/.max/out/<unit>.txt` from the start and flushed after every chunk, so Max can read its tail when it wants to see progress. The unit name is `max-<the time this run of max started, in hexadecimal seconds>-<sequence number>` (changed 2026-11-01): output files in `/work` outlive max, and the name used to contain only the sequence number, which started again from 1 on every restart, so a command whose file collided with an earlier one failed (files are not overwritten). Long foreground output had collided 4 times since 2026-10-30; background commands create their file as soon as they start, and the nested test collided on its second boot. The task holds the `Vm`, so the VM does not count as idle while the command is still running; when the task is dropped (cancellation, `/kill`, restart), the drop of `Command` has the VM's stopper stop the unit.
+- **When it finishes.** `JobDone` wakes Max, in the same way as an agent's report: `[job#2 完成] $ make` ("job#2 done"), followed by the exit code and how long the command ran, then the output (above 16 KiB, only the head and the tail, with a note in the middle saying where the full text is). A command stopped at its time limit gives `[job#2 到点停了，下面是做到一半的]` ("job#2 stopped at its time limit; below is the partial output"); a failure such as the VM not starting gives `[job#2 失败]` ("job#2 failed"). If Max stops the command itself with `systemctl stop`, Max is also woken once.
+- **Prompt.** The tools section says that a command that will run for several minutes should use `background`; in the same output Max first tells the group, then stops and waits for `[job#N 完成]`.
+- **Tests.** `vm-check` runs a command in the background that greps its own output file, which proves that the output is written while the command is still running; the nested test on tank checks this part.
+
+## Resident programs
+
+Decided 2026-11-01, proposed by the owner. Things that Max needs to keep running (scheduled reminders, checking CI or a web page every few minutes, a listener that stays connected) are not built one kind at a time according to their source (the Haskell version's monitor had four kinds: cron, message matching, external polling and HTTP). Instead, Max is given a general mechanism: it writes ordinary systemd units in the group VM and combines what is already in the sandbox. A `.timer` is cron, a `.path` watches files, and `Restart=` handles crashes.
+
+- **Step 1 (done): units follow `/work`.** The writable layer of the VM's `/` and `/etc` is a tmpfs, rebuilt from the NixOS configuration at every boot; the VM is stopped after 120 idle minutes, when it is evicted, and on every deployment. Unit files are therefore kept in `/work/.max/systemd/`. As with memory, this directory is the registry: there is no table and no tool.
+  - `max-units` (`nix/max-units.sh`) makes the units in this directory the ones that are running: new and changed files are copied to `/run/systemd/system`, and each service gets a drop-in that places it in `max-units.slice`; units with an `[Install]` section are enabled and started for this boot (`enable --runtime --now`); changed units that are running are restarted; units no longer in the directory are stopped and removed. A unit with the same name as a system unit is not installed (the one in `/etc` takes precedence, so installing it would have no effect). Finally, it lists the status of each unit, with the last 10 log lines of any that failed, and exits non-zero if any failed. It takes a lock, so the run at boot and a manual run by Max cannot collide.
+  - At boot, `max-units.service` runs once, after `/work` is mounted and the network and nix-daemon are up; when Max changes the directory, it runs `max-units` again itself. Starting never blocks (`--no-block`); it waits at most 5 seconds before reporting status.
+  - `max-units.slice`: `CPUWeight=20` and `IOWeight=20`, so that it yields to commands; `MemoryMax=50%`, so that it cannot use up all the memory.
+  - Hand-written units have no PATH: NixOS units each set their own, and systemd's built-in default does not include `/run/current-system/sw/bin`. The manager's `DefaultEnvironment` is therefore set to the system PATH; an `Environment=PATH=` written in a unit still takes precedence.
+  - **Escape hatch**: with `max.units=off` on the kernel command line, nothing is installed at boot. A broken unit (one that stops sshd, shuts the machine down or uses up all the memory) comes back at every boot, and this is the only way out; the host decides when to add it, see step 2.
+  - Only `/work` and the Nix store survive: whatever a unit runs goes in `/work`, or uses a store path or `nix run`. Programs are restarted on every deployment, so state must be written to files.
+  - **The home directory is `/work`** (decided by the owner 2026-11-05): `DefaultEnvironment` includes `HOME=/work`, and root's home directory in passwd is also changed to `/work`. Before this, systemd did not set `HOME` for units without `User=`, so the `bash -lc` of `shell` and `run_code` started without `$HOME`, and `/etc/profile` built a PATH from entries hanging off `/`, such as `/.nix-profile/bin` and `/.local/state/nix/profile/bin`; and a home of `/root` would also be on tmpfs, so `~/.profile`, `~/.gitconfig`, `gh auth` and the like would be lost at every boot. A separate persistent `/root` was not added: the host reads only `/work` (memory, `send_image`, `send_file`, `max.file`, full output, the unit registry), and with two persistent directories Max would have to remember which of them the host can see; renaming the mount point, in turn, would break every script and unit in which Max has hard-coded `/work`. Max was already using `/work` as its home (group 9's `/work` contains a `.pnpm-store`), and tank's disk still has 11T free, so keeping caches does no harm, and they stay warm for the next boot. Packages installed with `nix profile add` live in `/nix/var/nix/profiles/default`, which is already persistent and on PATH. PATH and environment variables go in `~/.profile`, which `bash -lc` reads every time; if that file is broken, neither `shell` nor `run_code` can run, and the only fix is to delete it on the host. The prompt says so. Units do not read `~/.profile`, so the prompt tells Max to use `Environment=` for them. In groups that already had `/work/.ssh`, `.config` and `.local` when this changed, those take effect from then on.
+  - **Tests**: `vm-check` puts a unit that records the boot id in `/work/.max/systemd` and runs `max-units`. The nested test runs `vm-check` twice: the first time, `max-units` starts the unit; on the second boot, the unit has already been started (it is active before `max-units` runs), and both boots are recorded.
+  - The prompt is added in step 2: with only step 1, the VM still stops as before, so telling Max that its programs are "resident" would be wrong.
+- **Step 2 (done, 2026-11-01): the host side.**
+  - ~~**The host port**~~ (removed 2026-11-02, see step 3): a second hybrid vsock port, 7778, for each VM, taking one line of JSON per connection, `{"wake": "……"}` or `{"units": 2}`, answered with `{"ok": true, "said": "……"}`. Each VM has its own socket, so no token is needed to tell which group is connecting.
+  - **Kept running**: `[vm] kept`, 4 groups by default (tank has 62 GiB; on 2026-11-01 the three running VMs used 0.8, 2.2 and 4.6 GiB, and the page cache makes this grow slowly towards 16 GiB). On tank it has been 12 since 2026-11-03: by then the 4 slots were full (three groups and one private chat), and the owner wanted to invite a few friends to use Max as a personal agent in private chats; since the cache is dropped when idle, a VM that is kept running but idle no longer keeps growing. The prompt does not state the number of slots; when they are full, `max-units` says so. VMs that are kept running are not shut down when idle and are not evicted, and the sweep boots any of them that are not running. Which groups are kept running:
+    - When maxx starts, it reads `<vm.dir>/<conversation>/work/.max/systemd/`; conversations that have unit files (with the same suffixes that `max-units` accepts; links do not count) are taken in order of conversation id, up to the first `kept`, and booted at once. Conversation 0 belongs to `vm-check` and does not count.
+    - `vm-check` uses its own directory, `<vm.dir>/check` (2026-11-03): the VM service it starts also boots, at startup, the conversations that have units in its directory. It used to share the directory with maxx, so on the last slot it would start a second instance of a VM that maxx was already running for some group. The second start first deleted the "leftover" sockets (`store.sock`, `work.sock`, `notify.vsock` and MCP's `notify.vsock_7777`) and then bound its own: virtiofsd failed to start because of its pid-file lock, and cloud-hypervisor did not start either, but the socket files of the running VM had already been replaced, so the guest could no longer reach the host's MCP, and maxx could not open new SSH connections into it. This was hit that same day when `vm-check` was run by hand on tank; restarting the affected VM fixed it.
+    - After that, it follows `max-units`: every time `max-units` runs (at boot and manually by Max), it reports the number of units to the host. If there are any, the VM is kept running (unless the slots are full, which the reply says); with 0, it is no longer kept running. `max-units` prints the reply verbatim, so Max can see whether this group's VM will stay running.
+  - **Waking**: `max-wake '……'` (`nix/max-wake.sh`, taking an argument or standard input). The VM service hands it to the conversation table as `Signal::Wake`; the conversation table finds this conversation's actor, starting one if none is running (looking up `endpoint_on` and `find_endpoint` for the platform Max is on, as when a message arrives), and sends it `Event::Woken`. In the actor the reason is `Reason::Program`, and the model sees `[max-wake] ……`, truncated to the single-message limit; if a core is running, this becomes its input, otherwise a core is started. The program receives "叫醒了 Max" ("Max has been woken"). The originally planned `[自动化 m#2 触发]` ("automation m#2 triggered") was not used: there is no registry, and therefore no numbers.
+  - **No limit on the count, but the count is shown** (`actor/woken.rs`, changed 2026-11-05): previously each group could wake Max at most 6 times an hour, and any further wakes were held back and delivered together when the hour was up. This limit was removed: Max wanted to play chess with someone move by move on its own, and every move needs a wake. Every wake is a model call, and a malfunctioning program that wakes Max constantly is invisible in the group (Max can answer `[silence]` every time), so from the second wake in an hour onwards, `[max-wake]` is followed by "（这一小时第 N 次）" ("(time N this hour)"). Wakes are not lines in the record, so the next turn cannot see the earlier ones; with this number, every turn knows whether wakes are frequent, and Max can find out for itself which program is responsible. `/status` gains two lines: `units` lists the unit files, and `woken` is the number of wakes in this hour.
+  - **Failing to boot**: each time a group's VM fails to start, or stops by itself while running, this is recorded (whether or not the VM is kept running). After two such events within 30 minutes, the next boot adds `max.units=off`, the group is no longer kept running, and Max is told through `Signal::Notice` (`[VM] ……`, the same path, not rate-limited). Once Max has fixed the problem and run `max-units`, the VM is kept running again. If the VM fails to start even without units, the units are not the cause: it is likewise no longer kept running, and is booted when a tool needs it instead of being retried every minute. The report from the boot-time run of `max-units` does not reset this count: at that point the units have not yet had time to cause trouble.
+  - **Prompt**: the sentence saying that an idle VM is shut down gains "有常驻程序的群除外" ("except in groups with resident programs"). After background commands, a paragraph is added: anything that must keep running, run on a schedule or watch something is written as a unit in `/work/.max/systemd/`, followed by running `max-units`; use `.timer`, `.path` and `Restart=on-failure`; write absolute paths in ExecStart; write state to `/work`; check with `systemctl status` and `journalctl -u`; `max-wake` wakes Max itself, 6 times an hour, and only when there is genuinely something new.
+  - **Tests**: `vm-check` handles `Signal` itself and replies "vm-check 收到了" ("vm-check received it"). The nested test checks that `max-units` says this VM will stay running and that `max-wake` reached `vm-check`. The conversation table's test: a group in which nobody has spoken and whose actor is not running is woken by `max-wake`, Max replies, and `[VM]` reaches the same actor. Rate limiting, the kept-running slots and the scan at startup each have pure tests.
+  - Later: webhooks are received by the host and handed to the group's programs through the same port.
+
+* **Step 3 (done, 2026-11-02): programs call tools with `maxx`.** Proposed by the owner: programs do not only wake Max; they can also speak in the group and read the record themselves, using the same set of tools as Max; see `maxx` in [Pure codemode](#pure-codemode).
+  - **Calls without a token**: when the MCP service receives a request without `authorization`, it treats the request as coming from a resident program in this VM. Which group it belongs to is still determined by the VM's own socket. `tools/list` lists all tools; `tools/call` is handed as `Signal::Call` through the conversation table to this group's actor (starting one if none is running, as with waking), and the actor runs it in `side` with a `Caller::Program` context, outside the core and not counted towards any turn. It has a 60-second timeout, like other calls.
+  - **What is available**: all of Max's tools, plus `say` and `wake`, which exist only for programs (`mcp/program.rs`), and `max.file` (`maxx file`). The only tools not available are `max.image` and `max.video` (they show content to the model, and a program has no model). Originally only `history`, `find_stickers`, `web_search`, `send_image` and `send_file` were provided: `mute_member` and `recall_message` were withheld for fear that they would act on group members without Max's judgement, and `agent` for fear of spending money with nobody watching. On 2026-11-05 the owner decided to provide them all: programs are written by Max, and what they do is Max's decision, for the same reason that muting and retracting are left to Max's judgement. Background agents can still use only the tools marked `job`: a background agent is a different model whose results go back to Max, and it does not speak or act in the group on Max's behalf.
+  - **`say`**: its argument is a piece of text written the way Max writes replies, and it goes through the same segmenter: `[reply#id]`, `[mention#id]`, `[sticker#id.n]`, `[image#id.n]`, `[split]`, and blank lines separating messages. A person in `[mention#id]` must be someone this group knows (`platform::roster`), as with the model's output. There are no structured arguments: a single way of writing, which Max already knows. Messages are sent one at a time, each waiting for the platform's receipt, and the tool returns `{messages: [id, …]}`; if it fails partway, the reason states which messages have already been sent.
+  - **Unfilled ids are refused** (2026-11-05): if the text given to `say` contains markers such as `[reply#]`, `[mention#undefined]` or `[reply#${id}]`, whose id is empty, `undefined`, `null` or `NaN`, or begins with `$` or `{`, nothing is sent, and the error is "编号是空的：程序里的变量没填进去？" ("The id is empty: was a variable in the program not filled in?"). These are not markers, and they used to be sent into the group as text: when Max wrote scripts through the shell, the shell swallowed the JS `${…}` into nothing, and three programs in groups 4 and 9 did this (2026-11-02, 2026-11-03 and 2026-11-05). Explanatory text written as `[reply#id]` and the like is sent as usual. Only programs' `say` is checked, not the model's own replies.
+  - **`wake`**: the former `max-wake`, sending `Event::Woken` through `Poster::wake`. `max-wake` remains, now as a wrapper around `maxx wake` (taking an argument or standard input, and printing `said`): the units Max has written since 2026-11-01 all use it, and they live in each group's `/work`, where they cannot be changed on Max's behalf.
+  - **No limits** (decided by the owner 2026-11-05): messages sent by programs used to be capped at 30 per group per hour, to leave headroom within QQ's quota of 20 messages per group per minute and 1000 per day. On 2026-11-04 a gomoku program written by Max sent one board image per move and used up the 30 messages before a single game was finished; Max then worked around the cap by having the program wake Max to send on its behalf once over the limit, which cost more than before the cap existed. The cap was first raised to 200, and the next day it was removed altogether, together with the tools' per-run limits (`per_run`: 5 images for `send_image`, 5 times for `mute_member`, 20 times for `web_search`, and so on). When a program sends too much, it is immediately visible in the group: someone will say so, and Max will stop by itself; QQ's own limit of 20 messages per minute is the backstop. The cost: a runaway loop can use up this group's daily quota within an hour, after which Max cannot speak in this group; and `web_search` is charged per call, so searching in a loop costs money.
+  - **Markers in the record**: lines sent by programs have `raw` set to `{"said_by": "program"}` (Max's other lines have null); no column is added, so no migration is needed. When rendered, the header gains `  程序发的 ` ("sent by a program") (`Mark::Program`): `[12:00 maxx #45 程序发的]: ……`, the same in `history` and in the tail, so Max can tell which lines it said itself and which a program said. A running core does not see these lines (as with command answers); the next core's tail includes them.
+  - **Can also be tried within a turn**: the program-only tools (`say`, `wake`) are treated as program calls even when called with a token, and go to the actor by the same path. A script Max has written can therefore be run once through `shell` first: `say` is not refused, and what it sends is likewise marked as sent by a program. Background agents calling with a token are still refused.
+  - **7778 removed**: `max-units` now uses `curl` to POST to `http://127.0.0.1:7777/units` (`{"units": 2}`, with the reply unchanged), going through MCP's socat to the same service as `/mcp` and `/llm` (`vm/host.rs` is now this router); waking goes through `maxx wake`. Each VM has one socket and one task fewer. `max-units.service` is ordered after `max-mcp.socket`.
+  - **Prompt**: `max-wake` is replaced with `maxx wake`, and a paragraph is added: whatever needs no judgement from Max, a program says itself with `maxx say`, written the same way as replies, up to 200 messages an hour (previously 30), and marked "程序发的" ("sent by a program"); images and files are sent with `maxx send-image` and `send-file`; and the limited set of tools usable in units and background commands.
+  - **Tests**: in the runner tests, `maxx` without a token lists all tools (including `say`, `file`, `mute_member` and `agent`, but not `show` or `video`), and calls are sent as `Signal::Call`, `mute_member` included; `maxx wake` with a token also takes this path. Actor tests: `say` sends two messages and returns the ids only after the receipts have arrived, `raw` carries the marker, and the next core sees `程序发的`. The background command in `vm-check` runs `max-wake` (without a token), and `vm-check` handles `Signal::Call` and replies "vm-check 收到了" ("vm-check received it"); `max-units` reports the unit count through `/units`.
+* **Step 4 (done, 2026-11-02): `maxx events`.** Decided by the owner. After step 3, a program that wanted to react to messages in the group could only poll `history`: the ping-responder Max wrote in group 9 on 2026-11-02 queried every 2 seconds, about 19 MCP calls a minute, each going through the conversation actor to the database, with rmcp logging 3 info lines every time. It also had to split the rendered lines with regular expressions, which break without any error whenever the format changes.
+  - **Published by the conversation actor**: after each line is entered in the ledger (at `committed`, the same place as the derived-data workers), it is sent into a `broadcast` (256 lines) if anyone is subscribed. A subscription is a `Signal::Subscribe` handed through the conversation table to this group's actor (starting one if none is running, as when programs call tools), and the actor replies with a `Subscription`: the place, the `head` at that moment, and a receiver. The actor processes one event at a time, so everything up to `head` is in the database and everything after it will arrive, with no duplicates and no gaps. When the actor stops (on an error or a restart), the stream ends.
+  - **Route**: `GET /events` on each VM's MCP service (`vm/events.rs`), which, like `/units` and `/api`, requires no token; which group it belongs to is determined by the VM's own socket. It responds with `application/x-ndjson`, and the header `max-head` carries the `head` at the time of subscription. `?after=<id>` first backfills from the database the lines after that one up to `head`, at most the latest 1000, read 100 at a time; it then continues with new lines, and nothing before `after` is sent. After 30 seconds without a new line, an empty line is sent as a heartbeat. If the subscriber falls behind by more than 256 lines, if the actor stops, or if the VM's service stops, the stream ends: the program asks again from the last line, and the backfill comes from the database.
+  - **A line**: `{id, at, sender, person, by, reply_to, text}`. `at` is local time in RFC 3339; `person` is the sender's person id, and `[mention#person]` can @ them; `by` is `max` (sent by Max's account) or `program` (sent by a program), and is absent for group members; `reply_to` is the message being replied to; `text` is the same as what follows the colon in a `history` line (`Render::body`), and is not truncated even when very long. Kinds are not distinguished: commands, edits (`[edit#…]`) and retractions (`[unsend#…]`) are included too, as in `history`.
+  - **`maxx events [--after <id>]`** (`events()` in `nix/client.js`): prints each line verbatim as one line of JSON and keeps running. If the connection breaks, an error occurs, or 90 seconds pass without even a heartbeat, it reconnects after 1 second, doubling the delay up to 30 seconds after that, and resumes from the last line it printed; if it has not printed any line yet, it resumes from `max-head`, so nothing that arrived in between is lost. The reason for reconnecting is written to standard error. If the reader goes away (EPIPE), it exits. `--after` accepts both `123` and `#123`.
+  - **Logs**: rmcp's target logs only warn and above, instead of 3 lines per request (since rmcp was removed on 2026-11-03, these logs no longer exist).
+  - **Prompt**: the resident programs paragraph gains: to react to new messages in the group, use `maxx events` rather than polling `history`; the fields of each line; using `by` so as not to reply to itself; reconnecting itself when the stream breaks; and `--after`, with the id written to `/work`, to resume. `events` is added to the list of what can be used in units and background commands.
+  - **Tests**: actor tests: the `head` at subscription is the line last entered in the ledger, after which group members' messages and Max's answers arrive in order, and the stream ends when the actor stops. The conversation table's test: `Signal::Subscribe` reaches the actor started by `max-wake`. Tests of `vm/events.rs`: lines after `after` are backfilled from the database (`by`, `reply_to`, `person`, `at`), then new ones are received, nothing before `after` is resent, heartbeats are sent, and the stream ends when the actor stops; without `after`, only new lines are sent; other queries get 400; a conversation that does not answer gets 503; when the service stops, the stream ends and does not hold up shutdown. `maxx events` is run with Node against this route: it prints the backfilled and the new lines, reconnects from the last printed line after the stream breaks, the line that arrived in between is backfilled, and the reconnection is reported on standard error.
+  - The polling ping-responder in group 9 is not changed on Max's behalf: it is in the group's `/work` and belongs to Max; after deployment, Max is to be asked to switch it to `maxx events` itself.
+
+## Crate layout
+
+Decided 2026-10-27. Only three reasons justify splitting out a crate: enforcing the direction of dependencies (the compiler blocks forbidden imports for you), isolating the compile time of heavy dependencies, and reuse or publication on its own. "This is a feature" does not count: lingo, the embedder and recall vectors all need the database, the LLM client and message rendering, and giving each of them its own crate would only add a pile of Cargo.toml files and a web of mutual dependencies while blocking nothing.
+
+| crate | Contents | Reason for splitting |
+| --- | --- | --- |
+| `qqbot` | The official QQ bot API: tokens, the gateway (heartbeat, Resume, reconnection), event and REST types, sending and retracting, plus uploads once images are sent. It knows nothing of Max: no Node, no conversations. Since 2026-11-03 it lives in its own repository, [HCHogan/qqbot](https://github.com/HCHogan/qqbot) | Dependency direction: the protocol layer must not grow into Max's shape. It is also the only part worth reusing |
+| `max-core` | All pure logic: the Node/Message/Draft/Item types, the two state machines (the core and intent), request construction, the segmenter, and rendering for the model. It depends only on serde, serde_json, thiserror, and chrono without the `clock` feature (needed to render `HH:MM`, day changes and gap markers) | Dependency direction: sans-I/O is guaranteed by the compiler |
+| `max-db` | The schema, migrations, all sqlx queries and row types | Compile time; the `.sqlx` offline metadata is kept in one place |
+| `max-llm` | The Responses and Chat adapters, stream parsing, reasoning pass-through, multimodal downgrading | All protocol details are contained here and tested on their own with recorded responses |
+| `max` | The binary: configuration, CLI, services, the conversation actor and I/O tasks, platform senders, the QQ adapter, projection, lingo, the worker framework, VMs, the MCP service, tools, commands | Everything else is business logic and belongs together |
+| ~~`max-import`~~ | Binary: import of the old database | The old schema's code lived only here; removed 2026-11-05, see [Import](#import) |
+
+- Dependencies point only downwards: `qqbot` and `max-core` are at the bottom and do not depend on each other; `max-db` and `max-llm` depend on `max-core`; `max` depends on all of them. The mapping from QQ events to Node lives in `max`, not in `qqbot`.
+- `max-core`'s dependency allowlist is written into CI: only those four libraries may appear in `cargo tree -p max-core -e normal`. CI also runs `cargo check -p max-core` separately: when only this package is built, chrono's features are not merged with those requested by `max`, so a call to `Utc::now` in the core fails to compile.
+- intent's state machine, together with building the classification prompt and parsing its output, is in `max-core`; the classification task (reading the database, calling the small model) is an I/O task in `max`. Each derived-data worker is a module of its own, for example `max/src/recall.rs`; their pure logic (prompts, validation) goes in `max-core`, where it can be tested without starting a database.
+- Platform adapters are not split into a crate for now; `max` will be split once it grows uncomfortably large.
+- `qqbot` originally did not have its own repository (the shape of the protocol layer was still expected to change during v1). On 2026-11-03 the owner asked for it to be split out: `git subtree split` created [HCHogan/qqbot](https://github.com/HCHogan/qqbot) with its 17 commits. It is public and MIT-licensed, with its own Cargo.toml (the workspace's dependencies, lints and package fields written out), toolchain, clippy.toml, and CI that runs fmt, clippy and the tests. max depends on it by commit: `git` plus `rev` in `Cargo.toml`, and changing versions means changing `rev`; cargo-deny's `allow-git` lists only this one repository; crane fetches it according to `Cargo.lock`, so no separate hash is needed. Git submodules are not used. md-5, sha1 and tokio-tungstenite, which only qqbot used, were removed from the workspace's dependencies.
+- Lints are centralised in the workspace's `[workspace.lints]`; bare `tokio::spawn` is blocked through `disallowed-methods` in `clippy.toml`. On 2026-11-05 a few pedantic lints were added: `as` casts that may truncate, change sign or overflow (use `try_from` instead; where truncation is really intended, write `#[expect]` with a reason); `_` arms that cover a single variant (so that a newly added variant does not silently fall into them); every `#[allow]` replaced with an `#[expect]` that gives a reason; redundant clones; large futures. `cast_precision_loss` is not enabled (every conversion to f64 here is of small numbers), nor is `expect_used` (`unwrap_used` already forces an `expect` with a reason, so blocking that as well would mean writing the same sentence twice).
+- **Limits are centralised in `max_core::limits`** (2026-11-05). They used to be scattered over a dozen or so files, some with the same number written two or three times (64 MiB once each in the error messages of downloads, send_file and chat_file; the 600-second video limit once each in show and in projection; the 256 KiB memory file limit once each in the actor and the dreamer), and the numbers in prompts and tool descriptions were written by hand. Now every limit that the model is told about, or that is used in more than one place, lives in this one module; the system prompt's rules, the descriptions of run_code and shell, the background agent description and the memory-tidying prompt are all generated from it with `format!`, so changing a number changes what the model reads. How long a VM may stay idle before it is shut down comes from the configuration key `vm.idle_minutes` and is passed to `prompt::system` through `Vms::idle`. The default character count of `webread` in the guest is written in Python, and a test checks it against the constant. What stays where it is: the ranges of tool arguments (they follow their own schemas), QQ's own limits (two minutes to retract, 30 days of muting), algorithm tuning (intent's batch size and waits), and timeouts and retries that exist only to keep pipelines from hanging.
+
+### Toolchain
+
+Stable, edition 2024 (decided 2026-10-27). `rust-toolchain.toml` pins a specific version number rather than a floating `stable`; crane and devenv in Nix use the same version. Upgrades are committed separately.
+
+Nightly is not used. Every nightly feature that this design might want has a stable alternative:
+
+- async drop: decided against; see [How resources end](#how-resources-end).
+- `async fn` in traits: stable since 1.75. Where `dyn` is needed (the tool registry), the method returns `Pin<Box<dyn Future + Send>>`; `impl_trait_in_assoc_type` is not used.
+- `gen` blocks and `try` blocks: not needed.
+- rustfmt's import grouping options: the default stable formatting is used.
+- Tools that require nightly (cargo-udeps) are kept out of CI; cargo-machete is used instead.
+
+## Reviewability constraints
+
+- Direct dependencies are declared centrally in `[workspace.dependencies]` in the workspace root's `Cargo.toml`. A new dependency is added in a commit of its own, and the commit gives the reason.
+- cargo-deny checks licences, duplicate versions and sources; security advisories are checked with cargo-audit against the advisory-db pinned in the flake, since the Nix build sandbox has no network.
+- Every commit must be reviewable on its own (decided 2026-10-27): about 400 lines of hand-written changes is the guide, not counting `Cargo.lock`, `.sqlx`, snapshots and fixtures; changes are split sensibly by content, and going slightly over is acceptable (relaxed 2026-10-28). A commit does one thing, and it compiles and passes the tests when taken on its own.
+- The number of crates is kept small, and crates are split further only when needed. The initial layout is described in [Crate layout](#crate-layout).
+- No legacy or compatibility code is written: when something is removed, it is removed completely.
+- ADRs record only genuine trade-offs.
+- `timeout(` and `sleep(` appear only in the places listed in [Timeouts](#timeouts); `select!` loops contain only cancel-safe branches, see [Cancellation safety](#cancellation-safety).
+
+## Testing
+
+- All tests are run with cargo-nextest.
+- Pure logic is tested with a fake provider and a fake platform; timeouts and grace periods use tokio's `start_paused`.
+- Cancellation: the conversation actor has a `/kill` inserted between any two events, and each I/O task is dropped once at every poll point, see [Cancellation safety](#cancellation-safety); tests of the normal path assert that no resource was killed because its connection was dropped, which catches missed calls to `close`.
+- Database tests use `#[sqlx::test]`, with a temporary database per test. Locally they use the Postgres started by `devenv up` in the dev shell (port 5434, with both the role and the database named `max`); the flake's nextest check starts its own temporary Postgres, listening only on TCP.
+- Prompt rendering uses insta snapshots. Whether they replace the documentation generated by `max-prompt-flow` is **TBD**.
+- The codemode runner runs node locally against a fake MCP service and needs no VM.
+- The platform layer uses recorded QQ gateway events as fixtures. Fixtures use only fake openids and AppIDs.
+
+### Test environment
+
+Decided 2026-10-27:
+
+- QQ (changed 2026-10-28): the old account was banned, and the Haskell version has stopped running on QQ. The Rust version uses the official bot maxx, added to a test group in which the owner is an administrator and the two switches are turned on; see [The official QQ bot](#the-official-qq-bot). NapCat is not touched.
+- **Fully separate from the Haskell version** (decided 2026-10-27): on tank the Rust version is a parallel set of services, all named `maxx` to distinguish them from the Haskell version's `max`:
+  - systemd: `maxx.target` manages the whole set of services, and all units sit under `maxx.slice`, so that their resource limits are accounted separately. VMs are child processes of `maxx.service` and have no units of their own; see [VM processes](#vm-processes).
+  - Storage: the system user `maxx`, the state directory `/var/lib/maxx`, the runtime directory `/run/maxx`, the `maxx/` prefix in sops, and a separate `maxx` database and role in Postgres.
+  - VMs: a separate tap pool and set of subnets, with the subnets avoiding 10.231 and 10.233, which the Haskell version uses. The Haskell version's broker and its `max-sb-` namespace are not touched: when the Haskell version starts, it reconciles and deletes any instances and volumes under this prefix that are not in its own database.
+  - This name is a parameter of the NixOS module; examples elsewhere in this document still use `max`.
+
+## v1 implementation order
+
+Decided 2026-10-27; the tank step and restart recovery were added on 2026-10-28, and the Matrix and restart recovery steps were removed on 2026-10-29, with the numbering unchanged. Each step is a series of small commits; the first five steps do not touch tank. Values not yet decided use the values proposed in this document, and are tuned when the step that needs them is reached.
+
+1. **Skeleton** (completed 2026-10-28): the workspace, a version-pinned `rust-toolchain.toml`, crane plus devenv (with Postgres), and the checks (fmt, clippy, nextest, `max-core`'s dependency allowlist). All checks are the flake's `checks`, and CI runs only `nix flake check --impure`.
+2. **`max-core`** (completed 2026-10-28): message types, rendering, the segmenter, the two state machines (the core and intent), and projection, all tested with fakes. The signatures of the two state machines were settled in this step, and the changes made while writing them have been carried into the sections [The core](#the-core) and [Intent](#intent).
+3. **`max-db`** (completed 2026-10-28): four migrations covering the platform, ledger, turn, usage and summary parts of the v1 tables (media and memory are added along with their features), plus the queries that the conversation actor and the senders need, all tested with `#[sqlx::test]` (on 2026-10-29 a 6th migration was added, removing the tables and columns used for recovery). The details settled while writing it have been added to [Schema](#schema).
+4. **`qqbot`** (changed from `onebot` on 2026-10-28, completed 2026-10-29): tokens, the gateway, event and REST types, sending and retracting, with fake openids in the fixtures. The gateway session is a state machine that performs no I/O, and disconnection, Resume, dead connections and each close code are tested within it; the driver is tested against a local WebSocket server. The `listen` example only connects to the gateway and prints events; it sends no messages.
+5. **`max-llm`** (completed 2026-10-29): request downgrading and stream parsing for both protocols, Responses and Chat; the parsers perform no I/O. The client sends each request only once and classifies errors with `Error::retryable`; whether to retry is decided by `max`'s model call task, because only that task knows whether any text has already been sent out. Real responses from four providers were recorded for replay tests: cliproxy's gpt-5.6-luna over Responses, with encrypted reasoning passed back verbatim; and cliproxy's Gemini and DeepSeek and the Qwen on taipan over Chat, with `reasoning_content`. Recording revealed two things. First, Responses makes function tools strict by default, which turns every optional parameter into a required one, so `strict: false` is sent explicitly. Second, Gemini reports reasoning tokens without returning any reasoning content; these tokens are not counted in any entry, because an entry's tokens are what it costs the next time it is sent. NInfer's cache breakpoints are an option of Chat: a breakpoint is placed on each user entry that is immediately followed by another user entry, that is, on the blocks of the base context that precede the volatile block; this has been verified on taipan. Images in tool results were downgraded into real images on 2026-10-29 along with `max.image()`; see [Multimodal results](#multimodal-results).
+6. **`maxx` on tank** (completed 2026-10-29): `nixosModules.maxx` generates, by name, the user, the Postgres role and database, the directories, slice, target and service, and runs `max check-config` on the configuration file at build time; `nixosModules.max` is the same module with the post-go-live name. `max` currently does only three things: it migrates the database, asks once who it is using the QQ credentials, and waits for SIGTERM. The QQ AppID and secret are under `maxx/` in sops. The module has a VM test that uses the same Postgres 16 as tank. Deployment ran into two problems. First, sqlx 0.9 does not accept `postgresql://max@/max?host=…` (with a user name, the host cannot be empty), so it was changed to `postgresql:///max?host=/run/postgresql&user=max`. Second, tank's cluster was created on glibc 2.40 while the system is now on 2.42, so the collation version of `template1` did not match and creating a database failed; the version record of `template1` was therefore refreshed (it contains no user objects). The same day, at the owner's request, the records of the `postgres`, `luckperms`, `minecraft` and `matrix-synapse` databases were also refreshed, after `REINDEX DATABASE CONCURRENTLY` plus `REINDEX SYSTEM`.
+7. **`max`** (completed 2026-10-29, tested live in the test group): configuration, the conversation table and the conversation actor, I/O tasks, platform senders and `deliveries`, the QQ adapter and `/bind`, commands, and intent. Once it was done came the first run on the real platform: plain-text conversation in the test group, which was also used to test live the items marked for live testing in [The official QQ bot](#the-official-qq-bot). Until step 9, every tool returned the error "工具还没接上，现在用不了。" ("Tools are not connected yet and cannot be used now."). Results of the live test: `/bind` connected the test group; @ conversations and casual chat through intent classification both worked; with the service stopped for 2 minutes and for 10 minutes, the gateway Resumed both times, and @ messages sent during the downtime were redelivered and answered. In the 10-minute case the answer was rejected by QQ (40034005), so the passive reply window is now computed from the message's send time. The same day, at the owner's request, a round of cuts was made: the core gives up when it hits a limit, with no handover (see step 4 of [Processing flow](#processing-flow)); on restart, turns are interrupted after a grace period instead of being suspended and resumed (see [Restarts](#restarts)); intent keeps only debouncing, small-model classification and the hourly cap (see [Intent](#intent)); Max does not send emoticons; and Matrix is deferred. Settled in this step: command output stays in the same conversation (see [Outbound](#outbound)); command permissions (see [Permissions](#permissions)); actor tests use real time (see [Testing the core and the actor](#testing-the-core-and-the-actor)); and a stretch of old records attaches to only one group (see [The official QQ bot](#the-official-qq-bot)). The main model on tank is Gemini 3.8 Flash via cliproxy (Chat protocol), and intent uses qwen3.5-4b on h610.
+8. ~~**Matrix**, with encrypted rooms and `matrix-bootstrap`~~: removed 2026-10-29 and deferred; see [Matrix](#matrix).
+9. **VMs, MCP, the codemode runner**. The items in [VM processes](#vm-processes) that first had to be verified on tank were verified on 2026-10-29. The first part was done the same day: the VM service, the `shell` tool, tap, nft and hardening in the module, `max vm-check` and the nested NixOS test, which passed on tank. Addresses are now passed on the kernel command line instead of through DHCP. After deployment to tank it was tested live in the test group: the model called `shell`, the group's VM was up in a little over 3 seconds, and the result came back to the model. The first attempt made no call, because the system prompt still contained step 7's sentence "工具还没接上，别调用" ("tools are not connected yet; do not call them"). The same day, at the owner's request, the prompt began calling it maxx (previously Max). The Haskell version on tank was removed the same day, with its data kept for the import. The second part was also done the same day: the MCP service, the runner in the guest, `run_code` and the first tool to be opened up, `context_read`; the approach is described in [The MCP channel](#the-mcp-channel). The runner's tests run locally with Node against the real MCP service; in the nested test, `vm-check` runs a program that queries the database through the MCP service.
+10. **historian** (done 2026-10-29, removed 2026-10-30, changed back to a per-group switch that evening, removed again 2026-11-02; see [Summaries](#summaries)): capture, `summary_runs` and `/compact`; moved onto the generic driver that day, then split back out to do its own scheduling.
+11. ~~**Restart recovery**~~: removed 2026-10-29; on restart, turns are interrupted after a grace period; see [Restarts](#restarts).
+12. **Media** (started 2026-10-29): the first piece after v1, in six small steps (sending images and the sticker library were added on 2026-10-29); see [Media](#media). Small step 1 was done the same day and deployed to tank: an image in the test group was downloaded within half a second of being entered in the ledger. Small step 2 was done the same day: media handles, images in entries, downgrading for both protocols, and attached images; the owner decided not to support models that cannot view images.
+13. **Web search** (done 2026-10-29, inserted after small step 1 of media): `web_search` and `webread` in the VM; see [Web search](#web-search).
+14. **Import** (done 2026-10-29): `max-import`, first rehearsed by importing into a temporary database, then the real import with about 12 minutes of downtime; see [Import](#import). The gateway's Resume information was in the database that was replaced, so messages sent in the groups during the downtime were not redelivered.
+
+## Go-live: conditions for a drop-in replacement
+
+- Everything in the [Feature parity checklist](#feature-parity-checklist) is complete.
+- A data import program is written that imports the Haskell version's database into the new schema in one go; the mapping is described in [Import](#import) (under [Schema](#schema)). It must be able to run repeatedly, and it is rehearsed before go-live.
+- The NixOS module's interface is not kept compatible, and tank's nix-config changes along with it; see [Configuration](#configuration).
+- During testing, the new version is called `maxx` on tank and runs in parallel with the Haskell version (see [Test environment](#test-environment)). At go-live, the Haskell version's `max` set of services is stopped and replaced by the new version; the name is a parameter of the module, so changing it back to `max` touches only one place.
+- The `/work` directory of each of the Haskell version's group VMs is migrated to the new version; see [Import](#import).
+- The switch (done 2026-10-31): main was merged into the `maxx` branch, keeping the Haskell history from main's lifetime while taking all content from the Rust version; main was then fast-forwarded to `maxx`, without a force push. The last Haskell commit on main is tagged `haskell-final` (`f33261b`, an unfinished feature: requests queued behind a waiting request are merged into it). In nix-config, gaoji on h610 and on tank still uses the Haskell version's NapCat module, with the `max` input pinned to `haskell-base`.
+- Rollback: the Haskell version is kept until the Rust version is stable; how to handle new data produced after the Rust version goes live is **TBD**.
+
+## Research: DSH and qq-bridge
+
+Recorded 2026-10-28. This is a record only, not a to-do list; items later adopted or rejected are marked as such.
+
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) is an agent harness that DeepSeek open-sourced in August 2026. What is popular on QQ is the community plugin [qq-bridge](https://github.com/Derpyu520/qq-bridge): it uses OneBot v11, with one append-only DSH session per group, and its main selling point is "AI 仿真群友" ("an AI that passes as a group member"). Tencent's official [dsh-qqbot](https://github.com/tencent-connect/dsh-qqbot) replies only when @-mentioned and has no design for group chat.
+
+**Its mechanism is the opposite of Max's, so it is not borrowed.** In qq-bridge, the model's text counts only as thinking, and speaking requires calling `qq_send_message`; when to wake, how far it has read and how it will be woken next time are all managed by the model itself through tool calls (`qq_wait_for_messages` long polling, `qq_mark_read`, `qq_set_wake_config`). To make up for the model's forgetfulness, qq-bridge adds reminders against "eternal sleep" and a gate that forces 5 minutes of observation before lurking; every wake appends three to six thousand characters of state to a session that is never re-projected. In Max, the actor drives the core, and the idle window, intent classification and re-projection do the same job. Its model is too fond of lurking, whereas Max's classifier is designed to stay quiet whenever it is unsure, so the two also pull in opposite directions.
+
+Possibly useful practices, recorded according to where they would sit in Max:
+
+- **"Not finished yet" debounce** (`src/v2-wait.js`): if the triggering message ends with words such as "但是、然后、我跟你讲、对了" ("but", "and then", "let me tell you", "oh, right") or with "，、；：", or if the same person sends 3 or more messages within 15 seconds, it first waits until nobody has spoken for 8 to 12 seconds before replying. **Adopted** (2026-10-28), in the rule layer of [Intent](#intent).
+- **Sense of time** (`buildTimeSenseLine` in `src/bridge.js`): one line stating what time it is now and how long ago the latest message was sent, plus three tiers of rules: within 10 minutes, carry on normally; within 2 hours, avoid real-time phrasing such as "刚" ("just now"); beyond that, do not reply by default, and if replying, first say "才看到" ("only just saw this"). It arose because a model woken after sleeping for tens of minutes still treated old messages as freshly sent. **Rejected** (2026-10-28): qq-bridge's problem comes from the model managing its own sleep; Max processes each message as soon as it is entered in the ledger, and every message carries its time, so the model can judge for itself.
+- **Participation** (`formatParticipationV2` in `src/bridge.js`): deterministically computes "你近 1 小时发言 N 次，群友 M 条，近 5 分钟 K 条、P 人" ("you have spoken N times in the last hour and group members M times; in the last 5 minutes, K messages from P people"), followed by a remark such as "这轮少说" ("say less this round") or "别一个人撑场" ("don't carry the conversation alone"). Adopted on 2026-10-28 as "本群情况" ("this group's situation") in the input of intent classification; removed on 2026-10-29 when intent was slimmed down; see [Intent](#intent).
+- **Persona copy** (`dsh/agent-presets/qq-chat-v2/agent.cordis.yml`, `roles/小鲸鱼.md`): a blocklist of AI-sounding phrases ("首先、其次" ("firstly, secondly"), "希望对你有帮助" ("hope this helps"), "你们觉得呢" ("what do you all think?"), adding "～" to every sentence) with positive and negative examples; do not act as a host (do not summarise topics, do not mediate quarrels, do not respond to everyone in turn); when coming back from lurking, do not pretend to have been present all along; when the same person keeps repeating the same thing, respond only to the emotion from then on; do not add another message right after finishing one. This is unrelated to Rust and can be tried first on the Haskell version's prompt.
+- **Feedback on unprompted interjections**: whether anyone replies to, quotes or @-mentions Max within a few minutes of a message triggered by intent, computed per group as a success rate and used to tune the cooldown or fed to the classifier. Adopted on 2026-10-28 as intent's uptake rate; removed on 2026-10-29.
+- **Memory tagged with its source** (article 07 of [dsh-qq-bot-playbook](https://github.com/rentaoyan0628-collab/dsh-qq-bot-playbook)): distinguish "what the other person said" from "what the model judged". The persona must also state clearly when something should be remembered: in two days of running, they stored 1477 pieces of original text but recorded only 2 experiences.
+- **Blocking secrets on the way out**: block outgoing content that contains credentials or tokens. In Max, this would be the actor filtering by known secret values before entering `Said` in the ledger, since programs in the VM can obtain the MCP token.
+
+Not borrowed: playing dumb and replying at random to messages already read, favourability scores, the `reply_gate` tool (`[silence]` is already equivalent), and the first generation's sentence splitting on spaces.
+
+## Research: the classification model
+
+Recorded 2026-10-28. This is a record only, not a to-do list.
+
+[Jev](https://docs.typesafe.ai/models) (TypeSafe AI, 2026-09) is a non-autoregressive judgement model: it handles three kinds of question (yes/no, multiple choice and scoring) and returns probabilities directly. It costs $0.042 per million input tokens, with output free; it is available only as a hosted API in the United States and is closed-source; officially, English works best, while Chinese, Japanese and Korean are usable but somewhat weaker.
+
+For now it will not replace intent's small model:
+
+- The savings are not where the bottleneck is. The current small model runs on our own machine, with no per-call cost; what costs money is false triggers, each of which runs a frontier model's turn for nothing. Two days of the Haskell version's logs in July: about 7,500 messages that did not address Max by name, 2,051 classifications and 77 triggers.
+- There is no public evidence at all for multi-person Chinese group chats; in English tests, adding injections flipped 22% of its verdicts, the highest among the judge models tested ([Braintrust](https://www.braintrust.dev/evals/jev-vs-gpt-eval-judges)).
+- Every casual message would have to be sent to an American company; versions are deprecated after 30 to 60 days, and every upgrade requires re-evaluation and new thresholds.
+
+Possibly useful:
+
+- Have the small model read the logprobs of the labels instead (llama.cpp's `n_probs`), taking the probabilities directly and setting a threshold, which is much faster than generating JSON; the cost is that there is no `reason`, so the verdict line loses its explanation.
+- Build an evaluation set from the ledger: messages that genuinely @-mention or reply to Max, with the @ and the quote removed, are positive examples of "addressing Max without an @"; cases where a classification triggered and the main model answered `[silence]` are weak negatives, and cases where someone afterwards ran `/proactive off` or told Max to shut up are strong negatives; a few hundred hard cases are then sampled by hand. The evaluation set is real group chat and does not go into the public repository. With an evaluation set, Jev could be tested offline once for a few cents.
+- The most valuable labels are "is this talking to Max", "is this waiting for Max to respond" and "is this annoyed with Max"; the last was implemented as intent's `dismiss`, removed on 2026-10-29, and now exists only in the classification prompt. Topic changes, whether something is worth remembering, sentiment, and spam and injection detection are not worth classifying message by message.
+
+## Open for discussion
+
+1. ~~Where the code lives~~: decided (2026-10-27): in this repository's `maxx` branch; see the beginning of the document.
+2. ~~The initial crate layout~~: decided (2026-10-27); see [Crate layout](#crate-layout).
+3. ~~Whether v1 includes tools~~: decided (2026-10-27): it does; see [Tools and codemode](#tools-and-codemode). Intent classification is also in v1; see [Intent](#intent).
+4. ~~The design of the new schema, and the mapping for importing from the old database~~: decided (2026-10-27); see [Schema](#schema).
+5. ~~Whether the NixOS module's interface stays unchanged~~: decided (2026-10-27): it does not; see [Configuration](#configuration).
+6. ~~Whether Matrix encrypted rooms are supported~~: decided (2026-10-27): they are; on 2026-10-29 Matrix as a whole was deferred; see [Matrix](#matrix).
+7. ~~The v1 test environment~~: decided (2026-10-27): a parallel `maxx` set of services; see [Test environment](#test-environment).
+8. ~~The Rust toolchain version and edition~~: decided (2026-10-27): stable with a pinned version, edition 2024; see [Toolchain](#toolchain).
+9. ~~The size limit for each commit~~: decided (2026-10-27); see [Reviewability constraints](#reviewability-constraints).
+10. The TBD items at the end of the [Data and execution model](#data-and-execution-model) section: retention, and whether to give notice of turns lost in a crash. How the base context is stored and its trimming rules have been decided, and suspended turns are no longer resumed.
+11. ~~The identity model~~: decided (2026-10-27); see [Identity](#identity). Cross-platform merging will be done together with mirroring.
+12. The TBD items at the end of the [Tools and codemode](#tools-and-codemode) section: which Max tools v1 opens up, the image budget, and code escaping. Calling into the VM has been decided: it uses russh.

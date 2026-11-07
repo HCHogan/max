@@ -1,6 +1,6 @@
 //! `agent`, `agent_steer`, `agent_cancel` and `agent_status`: the
-//! background agents, which the conversation's actor keeps. See "后台
-//! agent" in docs/rust-rewrite.md.
+//! background agents, which the conversation's actor keeps. See "Background
+//! agents" in docs/rust-rewrite.md.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

@@ -1,6 +1,6 @@
 //! `find_stickers`: the stickers whose captions are nearest in meaning to
 //! what the program asks for, by their handles; the reply sends one by
-//! writing its handle. See "发图".
+//! writing its handle. See "Sending images".
 
 use max_core::item::Image;
 use max_core::message::MediaKind;

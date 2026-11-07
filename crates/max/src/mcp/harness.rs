@@ -1,6 +1,6 @@
 //! `/job/…` on each group's MCP service: what a background agent's
-//! harness calls, by its job's token, for what only a job does; see "和
-//! harness 脱钩" in docs/rust-rewrite.md.
+//! harness calls, by its job's token, for what only a job does; see "Decoupling
+//! from the harness" in docs/rust-rewrite.md.
 //!
 //! - `POST /job/turn`, at each turn's end: `{"steers": […], "stop": …}`.
 //! - `GET /job/stop`, open the whole job: a line `{"stop": true}` once it

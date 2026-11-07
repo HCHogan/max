@@ -1,8 +1,8 @@
 //! Background agents: an agent harness in the group's VM, pi so far,
 //! given a task by Max, working while the group talks on, and reporting
 //! when it's done. The host holds a contract with the harness's plugin,
-//! not with the harness: see "后台 agent" and "和 harness 脱钩" in
-//! docs/rust-rewrite.md.
+//! not with the harness: see "Background agents" and "Decoupling from the
+//! harness" in docs/rust-rewrite.md.
 
 mod run;
 

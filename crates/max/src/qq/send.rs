@@ -1,6 +1,6 @@
 //! QQ's sender: the only writer of `deliveries` for QQ. What a
 //! conversation says goes out in the order it was committed, one chat at a
-//! time and chats side by side; see "出站" under "QQ 官方机器人".
+//! time and chats side by side; see "Outbound" under "The official QQ bot".
 //!
 //! Every message goes out proactively, never as a passive reply: a group
 //! Max is in allows that (机器人主动发言). It keeps within QQ's rates: it

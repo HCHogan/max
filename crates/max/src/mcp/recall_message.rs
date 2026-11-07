@@ -1,5 +1,5 @@
 //! `recall_message`: takes back a message of the group, through the actor
-//! and QQ's sender. See "出站" under "QQ 官方机器人".
+//! and QQ's sender. See "Outbound" under "The official QQ bot".
 //!
 //! What QQ would refuse anyway is refused here, with the reason, and
 //! leaves no row: anything past QQ's two minutes, and the owner's and

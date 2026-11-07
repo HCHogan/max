@@ -1,6 +1,6 @@
 //! `Scope`: the only way max creates tasks. A scope owns its tasks and
 //! takes them down with it, so every task has an owner that ends it; see
-//! "运行时结构" in docs/rust-rewrite.md.
+//! "Runtime structure" in docs/rust-rewrite.md.
 //!
 //! Each task gets a token that `close` cancels. A task that has something
 //! to finish (a delivery, a close) watches it and stops at its own next

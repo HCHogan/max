@@ -1,7 +1,7 @@
 //! The dreamer: once a night, a model tidies each memory file Max wrote
 //! in the day before. Max adds lines and seldom goes back over them; the
 //! dreamer merges what says the same thing, drops what has expired, and
-//! keeps the file under its cap. See "记忆" in docs/rust-rewrite.md.
+//! keeps the file under its cap. See "Memory" in docs/rust-rewrite.md.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

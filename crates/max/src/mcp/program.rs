@@ -1,7 +1,7 @@
 //! What only the programs Max keeps in the group's VM call, outside any
 //! turn: `say`, which says something in the group as Max would, and
 //! `wake`, which wakes Max. A turn says things in its own output, and is
-//! awake. See "常驻程序" in docs/rust-rewrite.md.
+//! awake. See "Resident programs" in docs/rust-rewrite.md.
 
 use max_core::ids::PrincipalId;
 use max_core::project;

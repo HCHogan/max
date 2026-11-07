@@ -2,7 +2,7 @@
 # shown the text as [max-wake] …. It is maxx wake, kept for the programs
 # written before maxx, and prints what Max's service says: that Max was
 # woken, or when it will be, since a group's programs wake it a few times
-# an hour at most. See "常驻程序" in docs/rust-rewrite.md.
+# an hour at most. See "Resident programs" in docs/rust-rewrite.md.
 #
 #   max-wake 'CI 跑完了：挂了 2 个'
 #   echo 'CI 跑完了' | max-wake

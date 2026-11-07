@@ -1,5 +1,5 @@
 //! `send_image`: a picture a program made or fetched in /work, sent to
-//! its group. See "发图".
+//! its group. See "Sending images".
 
 use chrono::Utc;
 use image::ImageFormat;

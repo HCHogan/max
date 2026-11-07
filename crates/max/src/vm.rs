@@ -1,7 +1,7 @@
 //! The groups' VMs: one per conversation, started when a tool first needs
 //! it and stopped once it has gone unused for a while, unless the group
 //! keeps units of Max's in it. The VM service owns them all; a tool call
-//! borrows a VM's SSH connection. See "VM 进程" and "常驻程序" in
+//! borrows a VM's SSH connection. See "VM processes" and "Resident programs" in
 //! docs/rust-rewrite.md.
 
 mod events;

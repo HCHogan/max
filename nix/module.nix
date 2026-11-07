@@ -17,7 +17,7 @@ let
   max = lib.getExe' cfg.package "max";
 
   # One tap per VM that can run at a time, each its own /30 cut from the
-  # /24: the host's end is .1, the guest's .2. See "VM 进程".
+  # /24: the host's end is .1, the guest's .2. See "VM processes".
   slots = map (i: {
     tap = "${name}-vm${toString i}";
     address = "${cfg.vm.subnet}.${toString (4 * i + 2)}/30";
@@ -28,7 +28,7 @@ let
   # The operations network: the groups in vm.operations.conversations get
   # VMs on taps of their own, whose traffic goes through a network
   # namespace with a dedicated Tailscale client: the fleet by its tailnet,
-  # the internet by the namespace's uplink. See "运维网络".
+  # the internet by the namespace's uplink. See "The operations network".
   ops = cfg.vm.operations;
   operations = vm && ops.enable;
   opsSlots = map (i: {
@@ -95,7 +95,7 @@ let
 
     # What max needs from the host: TCP out (QQ, model providers),
     # Postgres's socket, its state directory. The rest is taken away,
-    # except what the VMs need back; see "VM 进程".
+    # except what the VMs need back; see "VM processes".
     NoNewPrivileges = true;
     CapabilityBoundingSet = [ "" ];
     AmbientCapabilities = [ "" ];

@@ -2,7 +2,7 @@
 //! something, for `history`'s search by meaning. Each committed row
 //! comes to it; its scan, at the start and every hour, finds the rest a
 //! page at a time, newest first, and all of them again after a change of
-//! model. See "召回".
+//! model. See "Recall".
 
 use std::collections::HashSet;
 use std::slice;

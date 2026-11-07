@@ -8,7 +8,7 @@
 //! the tools that read, and its model calls go through the same service;
 //! see [`super::forward`]. A call with no token is from a program Max
 //! keeps in the VM, outside any turn: the VM says which group it is, and
-//! the group's actor runs it; see "常驻程序" in docs/rust-rewrite.md.
+//! the group's actor runs it; see "Resident programs" in docs/rust-rewrite.md.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};

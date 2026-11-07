@@ -32,8 +32,8 @@ const SYSTEM: &str = "你是 Max 的后台 agent。Max 是一个群聊里的 AI 
 - 环境：NixOS，root，能上公网，/work 是本群的持久目录，也是家目录（~），群里的程序也用；缺什么用 nix shell nixpkgs#包名 -c 命令 临时装。/nix/store 是宿主的整个 store，几百万个文件：要某个包里的文件，用 nix build --no-link --print-out-paths nixpkgs#包名 拿到它的路径再进去找，不在 /nix/store 下 find、ls 或用通配符。
 - 有时间限制，快到点时会提醒你收尾，到点会被叫停。只做交给你的事。";
 
-/// The version of the contract with the harness; see "和 harness 脱钩" in
-/// docs/rust-rewrite.md.
+/// The version of the contract with the harness; see "Decoupling from the
+/// harness" in docs/rust-rewrite.md.
 const CONTRACT: u32 = 1;
 
 /// What stderr keeps, for the log when the agent fails.

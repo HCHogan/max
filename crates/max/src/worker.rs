@@ -1,6 +1,6 @@
 //! The derived-data workers' feed: every committed row, fanned out to
 //! each worker's mailbox. How a worker schedules its work is its own;
-//! see "派生数据 worker" under "三种角色" in docs/rust-rewrite.md.
+//! see "Derived-data workers" under "The three roles" in docs/rust-rewrite.md.
 
 use std::sync::Arc;
 

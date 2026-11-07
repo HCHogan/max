@@ -1,5 +1,5 @@
 //! What a picture or sticker shows, in words. The caption worker is the
-//! only writer; a file gets one row, ever. See "媒体".
+//! only writer; a file gets one row, ever. See "Media".
 
 use std::collections::{BTreeMap, HashSet};
 

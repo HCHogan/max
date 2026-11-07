@@ -1,7 +1,7 @@
 //! The VM service's own route on each group's MCP service: max-units
 //! POSTs `{"units": 2}` to `/units` and gets `{"ok": true, "said": "…"}`
 //! back. Which group it comes from is the VM's own socket's to say, so
-//! there is no token. See "常驻程序" in docs/rust-rewrite.md.
+//! there is no token. See "Resident programs" in docs/rust-rewrite.md.
 
 use std::time::Duration;
 

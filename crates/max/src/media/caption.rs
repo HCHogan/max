@@ -1,6 +1,6 @@
 //! The caption worker: says in words what each new picture or sticker
 //! shows, once per file. Rows show it where their node came without a
-//! description, and the sticker library searches it. See "媒体".
+//! description, and the sticker library searches it. See "Media".
 
 use std::collections::{BTreeSet, HashSet};
 use std::fmt;

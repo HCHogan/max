@@ -1,5 +1,5 @@
 """webread: a page's text, for programs and commands in a group's VM. See
-"网页搜索" in docs/rust-rewrite.md.
+"Web search" in docs/rust-rewrite.md.
 
     webread <url> [--offset N] [--max N]
 

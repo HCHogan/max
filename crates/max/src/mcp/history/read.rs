@@ -1,6 +1,6 @@
 //! `history` without a query: rows in order, as the tail shows them, a
 //! page at a time. Around a row, or the row alone in full: the context
-//! shows an over-long row's start only (see "后续输入"). Or a stretch of
+//! shows an over-long row's start only (see "Follow-up input"). Or a stretch of
 //! the timeline, a sender's rows in it if asked, from its start on or back
 //! from its end, and where to go on.
 

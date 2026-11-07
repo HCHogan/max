@@ -1,5 +1,5 @@
 //! `send_file`: a file a program made or fetched in /work, sent to its
-//! group as a file. See "发文件".
+//! group as a file. See "Sending files".
 
 use chrono::Utc;
 use max_core::message::{Draft, DraftNode};

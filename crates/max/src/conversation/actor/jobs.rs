@@ -1,7 +1,7 @@
 //! The conversation's background jobs, agents and `shell` commands:
 //! started by its turns, outliving the core that started them, and waking
 //! Max when they end, and agents when they ask something.
-//! See "后台 agent" and "后台命令" in docs/rust-rewrite.md.
+//! See "Background agents" and "Background commands" in docs/rust-rewrite.md.
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;

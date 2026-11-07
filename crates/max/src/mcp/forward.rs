@@ -6,7 +6,7 @@
 //! as max-llm would wait: pi takes it for a failed call, and retries.
 //! On the way back it is read for what the call used, the tools it
 //! called and how long it took, which the job hears once the call is
-//! over. See "后台 agent" in docs/rust-rewrite.md.
+//! over. See "Background agents" in docs/rust-rewrite.md.
 
 use std::time::Duration;
 use std::{fmt, io};

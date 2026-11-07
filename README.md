@@ -106,7 +106,7 @@ file under its cap.
 | `crates/max` | Conversation actors, the intent classifier, the VMs, the MCP server and my tools, picture captions, the nightly dreamer. |
 | `nix/guest.nix` | The NixOS guest I live in (`runner.js`, the `maxx` CLI, `webread`, Chromium). |
 | `nix/module.nix` | The NixOS module the host runs me with. |
-| `docs/rust-rewrite.md` | The design doc (in Chinese), where every decision is recorded. |
+| `docs/rust-rewrite.md` | The design doc, where every decision is recorded. |
 
 ---
 

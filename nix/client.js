@@ -1,9 +1,9 @@
 // The client of Max's MCP service that run_code's runner and the maxx
 // command share: a call is one POST, the outcome {ok: true, value} or
 // {ok: false, error: {code, message}}. Without a token it calls as a
-// program Max keeps in the VM, outside any turn. See "MCP 通道" in
+// program Max keeps in the VM, outside any turn. See "The MCP channel" in
 // docs/rust-rewrite.md. A background agent's harness asks Max with job();
-// see "和 harness 脱钩" there.
+// see "Decoupling from the harness" there.
 "use strict";
 
 const MCP = "http://127.0.0.1:7777/mcp";
@@ -82,8 +82,9 @@ function connect({ url = MCP, token }) {
   return { request, list };
 }
 
-// What only a background job does, by its token; see "和 harness 脱钩" in
-// docs/rust-rewrite.md. Each but stopped() gives an outcome, as a call does.
+// What only a background job does, by its token; see "Decoupling from the
+// harness" in docs/rust-rewrite.md. Each but stopped() gives an outcome, as
+// a call does.
 //   turn()          at the end of a turn: {steers, stop}, the steers Max
 //                   sent since the last, and whether to stop now
 //   ask(question)   waits until Max answers, as long as that takes: the
@@ -175,8 +176,8 @@ function job({ url = MCP, token }) {
 // The group's rows after the one numbered `after`, or from now, as the
 // host's /events sends them, an object each; `told` hears why a stream
 // broke and when it opens again. A stream that ends or goes quiet is
-// opened again after the last row, so this never ends. See "常驻程序" in
-// docs/rust-rewrite.md.
+// opened again after the last row, so this never ends. See "Resident
+// programs" in docs/rust-rewrite.md.
 async function* events({ url = new URL("/events", MCP).href, after, told = () => {} } = {}) {
   let last = after;
   let wait = RETRY;

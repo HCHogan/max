@@ -1,6 +1,6 @@
 //! Embeddings, for search by meaning: an OpenAI-compatible
 //! `/v1/embeddings`, such as Ollama's with bge-m3. The sticker library's
-//! vectors and `find_stickers`' queries come from here. See "发图".
+//! vectors and `find_stickers`' queries come from here. See "Sending images".
 
 use std::fmt;
 use std::time::Duration;

@@ -1,4 +1,4 @@
-//! Media: the content store, and the workers that fill it. See "媒体".
+//! Media: the content store, and the workers that fill it. See "Media".
 
 pub mod caption;
 pub mod download;

@@ -1,5 +1,5 @@
 //! Wakes from the group's own VM: `max-wake` from a program Max keeps
-//! there, and what the VM service says about the VM. See "常驻程序" in
+//! there, and what the VM service says about the VM. See "Resident programs" in
 //! docs/rust-rewrite.md.
 
 use max_core::item::Item;
