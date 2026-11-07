@@ -119,10 +119,9 @@ impl fmt::Debug for Subscription {
 #[derive(Debug)]
 pub struct Post {
     pub act: Act,
-    /// The turn it comes from, if any: the row's turn.
+    /// The turn it comes from: the row's turn. None from a program Max
+    /// keeps in the group's VM, outside any turn.
     pub origin: Option<TurnId>,
-    /// From a program Max keeps in the group's VM, outside any turn.
-    pub program: bool,
     /// Told how the sending went.
     pub receipt: Option<Receipt>,
 }
@@ -203,7 +202,6 @@ impl Poster {
         let post = Post {
             act,
             origin: self.origin,
-            program: self.origin.is_none(),
             receipt: Some(receipt),
         };
         self.mailbox

@@ -872,7 +872,8 @@ impl Conversation {
 
     /// Why a tool of `origin`'s can no longer act: its turn has ended, by
     /// `/kill` or otherwise, though its call was on the way. Only the
-    /// running core's tools act so far.
+    /// running core's tools act so far; a program's, outside any turn,
+    /// always do.
     fn ended(&self, origin: Option<TurnId>) -> Option<String> {
         let turn = origin?;
         if self.core.as_ref().is_some_and(|a| a.turn == turn) {
@@ -888,11 +889,9 @@ impl Conversation {
         let Post {
             act,
             origin,
-            program,
             receipt,
         } = post;
-        let refused = if program { None } else { self.ended(origin) };
-        if let Some(refused) = refused {
+        if let Some(refused) = self.ended(origin) {
             if let Some(receipt) = receipt {
                 let _ = receipt.send(Err(refused));
             }
@@ -900,7 +899,11 @@ impl Conversation {
         }
         let committed = match act {
             Act::Say(draft) => {
-                let by = if program { By::Program } else { By::Max };
+                let by = if origin.is_none() {
+                    By::Program
+                } else {
+                    By::Max
+                };
                 self.say(draft, origin, None, by, receipt).await?
             }
             Act::Unsend(target) => self.unsend(target, origin, receipt).await?,

@@ -657,7 +657,6 @@ async fn kill_stops_the_core_quietly(pool: PgPool) {
     let late = Post {
         act: Act::Say(draft),
         origin: Some(turn),
-        program: false,
         receipt: Some(receipt),
     };
     h.mailbox.send(Event::Post(late)).unwrap();
@@ -717,7 +716,6 @@ fn post(act: Act) -> (Post, oneshot::Receiver<Result<MessageId, String>>) {
     let post = Post {
         act,
         origin: None,
-        program: false,
         receipt: Some(receipt),
     };
     (post, sent)
