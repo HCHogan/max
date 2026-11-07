@@ -56,8 +56,10 @@ pub const FILE_BYTES: u64 = 64 << 20;
 
 /// The most agents a conversation runs at once...
 pub const JOBS_AT_ONCE: usize = 3;
-/// ...and background commands, besides.
-pub const COMMANDS_AT_ONCE: usize = 3;
+/// ...and background commands, besides: they cost no model calls while
+/// they run, only the VM's room. Three until 2026-11-08, when commands
+/// someone waits on began to move here.
+pub const COMMANDS_AT_ONCE: usize = 8;
 /// How long an agent may take; then it is aborted, and reports how far it
 /// got.
 pub const JOB_TIME: Duration = Duration::from_secs(2 * 60 * 60);

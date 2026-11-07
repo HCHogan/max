@@ -1072,7 +1072,8 @@ async fn commands_dont_count_against_agents(pool: PgPool) {
         unit: "max-9".into(),
     });
     let refused = ask(&h, shell).await.unwrap_err();
-    assert!(refused.starts_with("已经有 3 个后台命令"), "{refused}");
+    let full = format!("已经有 {} 个后台命令", max_core::limits::COMMANDS_AT_ONCE);
+    assert!(refused.starts_with(&full), "{refused}");
     let start = Request::Start {
         task: "查一下".into(),
         title: None,
