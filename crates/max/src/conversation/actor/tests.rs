@@ -756,28 +756,42 @@ async fn a_post_takes_back_a_message(pool: PgPool) {
 }
 
 /// A program's call ends once nobody waits for its result, as when the MCP
-/// service has given up on it: here a `say` waiting to hear how its
-/// sending went.
+/// service has given up on it; but a `say` goes out whole, as Max's own
+/// reply does. Here the first message's receipt never comes.
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
 async fn a_program_call_nobody_waits_for_ends(pool: PgPool) {
     let mut h = Harness::new(pool, 300).await;
     let (reply, result) = oneshot::channel();
     let call = Event::Call {
         tool: "say".into(),
-        args: serde_json::json!({ "text": "早" }),
+        args: serde_json::json!({ "text": "早[split]CI 全绿" }),
         reply,
     };
     h.mailbox.send(call).unwrap();
-    let outgoing = tokio::time::timeout(PATIENCE, h.outbound.recv())
-        .await
-        .unwrap()
-        .unwrap();
-    let mut receipt = outgoing.receipt.unwrap();
-    drop(result);
-    // The `say` no longer waits for the receipt.
-    tokio::time::timeout(PATIENCE, receipt.closed())
-        .await
-        .expect("the call went on");
+    let mut result = Some(result);
+    let mut receipts = Vec::new();
+    for said in ["早", "CI 全绿"] {
+        let outgoing = tokio::time::timeout(PATIENCE, h.outbound.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            outgoing.message.content,
+            Content::Message {
+                reply_to: None,
+                nodes: vec![Node::Text { text: said.into() }],
+            }
+        );
+        receipts.push(outgoing.receipt.unwrap());
+        // Given up on once the first message is out.
+        result.take();
+    }
+    // The `say` no longer waits for the receipts.
+    for mut receipt in receipts {
+        tokio::time::timeout(PATIENCE, receipt.closed())
+            .await
+            .expect("the call went on");
+    }
     h.stop().await;
 }
 

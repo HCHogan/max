@@ -137,6 +137,16 @@ pub enum Act {
 /// didn't go out.
 pub type Receipt = oneshot::Sender<Result<MessageId, String>>;
 
+/// Something handed to the conversation to say or do, on its way.
+pub struct Sending(oneshot::Receiver<Result<MessageId, String>>);
+
+impl Sending {
+    /// Waits until it is sent: the row, or why it didn't go out.
+    pub async fn sent(self) -> Result<MessageId, String> {
+        self.0.await.map_err(|_| "没等到发送的结果".to_owned())?
+    }
+}
+
 /// Lets a tool act in its conversation: say something, or run a
 /// background agent, for its turn, or for a program Max keeps in the
 /// group's VM.
@@ -175,12 +185,18 @@ impl Poster {
 
     /// Says `draft`, and waits until it is sent.
     pub async fn post(&self, draft: Draft) -> Result<MessageId, String> {
-        self.act(Act::Say(draft)).await
+        self.say(draft)?.sent().await
+    }
+
+    /// Hands `draft` to the conversation, which says it whether or not
+    /// anyone waits: what comes back is how the sending went.
+    pub fn say(&self, draft: Draft) -> Result<Sending, String> {
+        self.act(Act::Say(draft))
     }
 
     /// Takes back `target`, and waits until the platform has.
     pub async fn unsend(&self, target: MessageId) -> Result<MessageId, String> {
-        self.act(Act::Unsend(target)).await
+        self.act(Act::Unsend(target))?.sent().await
     }
 
     /// Asks the conversation about its background agents: the answer, or
@@ -197,7 +213,7 @@ impl Poster {
         answer.await.map_err(|_| "没等到回答".to_owned())?
     }
 
-    async fn act(&self, act: Act) -> Result<MessageId, String> {
+    fn act(&self, act: Act) -> Result<Sending, String> {
         let (receipt, sent) = oneshot::channel();
         let post = Post {
             act,
@@ -207,7 +223,7 @@ impl Poster {
         self.mailbox
             .send(Event::Post(post))
             .map_err(|_| "这个群的会话已经停了".to_owned())?;
-        sent.await.map_err(|_| "没等到发送的结果".to_owned())?
+        Ok(Sending(sent))
     }
 }
 

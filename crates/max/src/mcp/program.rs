@@ -106,21 +106,37 @@ impl Tool for Say {
         if segments.is_empty() {
             return Err(Failure::new("nothing", "没有能发的东西"));
         }
+        // All handed over before any is waited for: a say goes out whole,
+        // as Max's own reply does, even once the program has stopped
+        // waiting for it. Each message still says how it went.
+        let sendings: Vec<_> = segments
+            .into_iter()
+            .map(|segment| poster.say(segment.draft))
+            .collect();
         let mut messages = Vec::new();
-        for segment in segments {
-            match poster.post(segment.draft).await {
+        let (mut unsent, mut why) = (0, None);
+        for sending in sendings {
+            let outcome = match sending {
+                Ok(sending) => sending.sent().await,
+                Err(why) => Err(why),
+            };
+            match outcome {
                 Ok(id) => messages.push(id.0),
-                Err(why) if messages.is_empty() => {
-                    return Err(Failure::new("not_sent", format!("没发出去：{why}")));
-                }
-                Err(why) => {
-                    let sent: Vec<String> = messages.iter().map(|id| format!("#{id}")).collect();
-                    let message = format!("发了 {}，后面的没发出去：{why}", sent.join("、"));
-                    return Err(Failure::new("not_sent", message));
+                Err(reason) => {
+                    unsent += 1;
+                    why.get_or_insert(reason);
                 }
             }
         }
-        Ok(Said { messages })
+        let Some(why) = why else {
+            return Ok(Said { messages });
+        };
+        if messages.is_empty() {
+            return Err(Failure::new("not_sent", format!("没发出去：{why}")));
+        }
+        let sent: Vec<String> = messages.iter().map(|id| format!("#{id}")).collect();
+        let message = format!("发了 {}，{unsent} 条没发出去：{why}", sent.join("、"));
+        Err(Failure::new("not_sent", message))
     }
 }
 
