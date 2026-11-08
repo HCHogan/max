@@ -3,7 +3,8 @@
 // end go in before the next model call, a stop aborts a tool under way,
 // ask_max's answer reaches the model, the task arrives as written, and
 // the job's system text is appended to pi's, and the report goes out
-// before pi exits. See scripts/check-pi-job.
+// before pi exits. Project context files load even with --no-approve,
+// but the project's .pi/ stays untrusted. See scripts/check-pi-job.
 "use strict";
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -16,6 +17,10 @@ const [pi] = process.argv.slice(2);
 const repo = path.resolve(__dirname, "..");
 const TASK = "@小明 帮我查一下\n第二行";
 const SYSTEM = "你是测试用的后台 agent。";
+const PARENT = "上级目录的约定。";
+const PROJECT = "项目自己的构建测试经验。";
+const UNTRUSTED = "不该加载的项目系统提示词。";
+const SIBLING = "别的项目的约定。";
 
 // What the model says at call `n` of `scenario`: content, and a tool call.
 const SCRIPT = {
@@ -23,6 +28,8 @@ const SCRIPT = {
   last: n => ({ content: n === 1 ? "初稿" : "定稿" }),
   stop: n => (n === 1 ? { content: "开始查", tool: ["bash", { command: "sleep 30" }] } : { content: "不该到这" }),
   ask: n => (n === 1 ? { tool: ["ask_max", { question: "选火锅还是烧烤？" }] } : { content: "订了火锅" }),
+  agents: n => (n === 1 ? { tool: ["bash", { command: "pwd" }] } : { content: "项目完成" }),
+  claude: n => (n === 1 ? { tool: ["bash", { command: "pwd" }] } : { content: "项目完成" }),
 };
 // What the turn's end `n` takes.
 const STEERS = { steers: ["先看 A", "再看 B"], last: ["再补一句"] };
@@ -99,6 +106,19 @@ async function job(scenario) {
   const port = server.address().port;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `pi-job-${scenario}-`));
   for (const sub of ["home", "runtime", "sessions", "work"]) fs.mkdirSync(path.join(dir, sub));
+  const work = path.join(dir, "work");
+  fs.writeFileSync(path.join(work, "AGENTS.md"), PARENT);
+  fs.mkdirSync(path.join(work, "sibling"));
+  fs.writeFileSync(path.join(work, "sibling/AGENTS.md"), SIBLING);
+  let cwd = work;
+  if (scenario === "agents" || scenario === "claude") {
+    cwd = path.join(work, "project's directory");
+    fs.mkdirSync(path.join(cwd, ".pi/extensions"), { recursive: true });
+    fs.writeFileSync(path.join(cwd, scenario === "agents" ? "AGENTS.md" : "CLAUDE.md"), PROJECT);
+    fs.writeFileSync(path.join(cwd, ".pi/SYSTEM.md"), UNTRUSTED);
+    fs.writeFileSync(path.join(cwd, ".pi/settings.json"), JSON.stringify({ defaultTools: ["read"] }));
+    fs.writeFileSync(path.join(cwd, ".pi/extensions/untrusted.js"), 'throw new Error("untrusted extension loaded");');
+  }
   const wrapper = fs
     .readFileSync(path.join(repo, "nix/max-pi.sh"), "utf8")
     .replaceAll("127.0.0.1:7777", `127.0.0.1:${port}`)
@@ -110,7 +130,7 @@ async function job(scenario) {
   });
   const started = Date.now();
   const child = spawn("bash", ["-euo", "pipefail", path.join(dir, "max-pi.sh")], {
-    cwd: path.join(dir, "work"),
+    cwd,
     env: {
       ...process.env,
       // Not this machine's skills and settings.
@@ -133,7 +153,15 @@ async function job(scenario) {
   server.close();
   server.closeAllConnections();
   fs.rmSync(dir, { recursive: true, force: true });
-  return { seen, status, out, err, took: Date.now() - started };
+  return { seen, status, out, err, cwd, took: Date.now() - started };
+}
+
+function project({ seen, status, cwd, err }) {
+  assert.equal(status, 0);
+  assert.ok(seen.systems[0].includes(PROJECT), "the project's context file");
+  assert.deepEqual(seen.calls[1], [`tool: ${cwd}\n`], "tools use the project's working directory");
+  assert.deepEqual(seen.reports, [{ text: "项目完成", error: null }]);
+  assert.ok(!err.includes("untrusted extension loaded"), "project extensions stay untrusted");
 }
 
 const checks = {
@@ -159,6 +187,8 @@ const checks = {
     assert.deepEqual(seen.calls[1], ["tool: Max 答复：火锅"]);
     assert.deepEqual(seen.reports, [{ text: "订了火锅", error: null }]);
   },
+  agents: project,
+  claude: project,
 };
 
 (async () => {
@@ -170,6 +200,9 @@ const checks = {
       const system = ran.seen.systems[0];
       const at = system.indexOf(SYSTEM);
       assert.ok(at > 0 && system.indexOf(SYSTEM, at + 1) < 0, "the job's system text, once, after pi's");
+      assert.ok(system.includes(PARENT), "parent context files load without project trust");
+      assert.ok(!system.includes(UNTRUSTED), "project system prompts stay untrusted");
+      assert.ok(!system.includes(SIBLING), "other projects' context files don't load");
       assert.deepEqual(ran.seen.strangers, [], "calls without the job's token");
       assert.equal(ran.seen.stops, 1);
       // pi exits only once nothing is left to wait for, the stop stream

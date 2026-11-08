@@ -44,7 +44,11 @@ impl Conversation {
     /// Answers a tool's request: what the program gets, or why not.
     pub(super) fn job_request(&mut self, request: Request) -> Result<Reply, String> {
         match request {
-            Request::Start { task, title } => self.start_job(task, title),
+            Request::Start {
+                task,
+                title,
+                workdir,
+            } => self.start_job(task, title, workdir),
             Request::Shell(shell) => self.start_command(shell),
             Request::Steer { job, message } => {
                 let running = self.jobs.running.get(&job).ok_or_else(|| over(job))?;
@@ -88,7 +92,12 @@ impl Conversation {
         }
     }
 
-    fn start_job(&mut self, task: String, title: Option<String>) -> Result<Reply, String> {
+    fn start_job(
+        &mut self,
+        task: String,
+        title: Option<String>,
+        workdir: String,
+    ) -> Result<Reply, String> {
         if self.stopping.is_some() {
             return Err("Max 正在重启，起不了新的后台 agent".to_owned());
         }
@@ -138,6 +147,7 @@ impl Conversation {
             number,
             title: title.clone(),
             task,
+            workdir,
             vms,
             context,
             upstream,
