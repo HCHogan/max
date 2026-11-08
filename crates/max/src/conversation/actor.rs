@@ -132,6 +132,9 @@ struct Active {
     said_at: Option<Instant>,
     /// The people the model has been shown.
     roster: BTreeSet<PrincipalId>,
+    /// The snapshot position: the base context is projected from the
+    /// rows up to here; later ones are fed, with their pictures.
+    from: MessageId,
     /// Whether someone waits on the run, as [`Run::waited_on`] says, for
     /// its commands: one they wait on moves to the background.
     waiting: watch::Sender<bool>,
@@ -461,9 +464,22 @@ impl Conversation {
             self.shared.services.offset,
         )
         .await?;
+        // A picture they quote from before the core started was likely
+        // shown only by its caption: it comes after them.
+        let mut quoted = Vec::new();
+        for id in rows
+            .iter()
+            .filter_map(|(message, _)| project::quotes(message))
+        {
+            if id <= a.from
+                && let Some(row) = ledger::row(&mut conn, self.place.conversation, id).await?
+            {
+                quoted.push(row.message);
+            }
+        }
         if let Input::Messages { people, item, .. } = &mut input {
             a.roster.extend(people.iter());
-            let messages = rows.iter().map(|(message, _)| *message);
+            let messages = rows.iter().map(|(message, _)| *message).chain(&quoted);
             max_core::project::attach(item, messages);
         }
         a.last_at = rows.last().map(|(message, _)| message.at).or(a.last_at);
@@ -687,6 +703,7 @@ impl Conversation {
             restarts: 0,
             said_at: None,
             roster,
+            from,
             waiting: watch::Sender::new(false),
             last_at: Some(now),
             idle_since: Instant::now(),

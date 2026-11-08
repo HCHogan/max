@@ -51,8 +51,10 @@ pub struct Committed {
     pub text: String,
 }
 
-/// How far back a quote of Max's message is looked for by its text.
-const QUOTE_SEARCH: i64 = 50;
+/// How many of the conversation's latest rows a quote is looked for in by
+/// what the platform showed of it. On 2026-11-08, 99% of the quotes QQ
+/// gave a known id went back fewer than 540 rows.
+const QUOTE_SEARCH: i64 = 1000;
 
 pub async fn inbound(
     conn: &mut PgConnection,
@@ -166,8 +168,11 @@ fn mention(identity: IdentityId, display: String) -> Node {
     }
 }
 
-/// The row a quote points at: by its quote id, or for a message of Max's
-/// whose id the platform changed, by its text among what Max said lately.
+/// The row a quote points at: by its quote id, or else by what the
+/// platform showed of it among the conversation's latest rows, the newest
+/// first: by a file's name, then by its text. QQ quotes about half of
+/// everyone's messages by an id other than the one it gave with them
+/// (2026-11-08), and Max's by one other than the send gave back.
 async fn quoted(
     conn: &mut PgConnection,
     place: &Place,
@@ -178,6 +183,12 @@ async fn quoted(
     {
         return Ok(Some(found));
     }
+    for name in &quote.files {
+        let found = ledger::by_file_name(conn, place.conversation, name, QUOTE_SEARCH).await?;
+        if found.is_some() {
+            return Ok(found);
+        }
+    }
     let Some(text) = &quote.text else {
         return Ok(None);
     };
@@ -185,15 +196,16 @@ async fn quoted(
     if probe.is_empty() {
         return Ok(None);
     }
-    let said = ledger::said_by(conn, place.endpoint, place.me.identity, QUOTE_SEARCH).await?;
-    Ok(said
+    let latest = ledger::latest_texts(conn, place.conversation, QUOTE_SEARCH).await?;
+    Ok(latest
         .into_iter()
-        .find(|(_, said)| words(said).contains(&probe))
+        .find(|(_, text)| words(text).contains(&probe))
         .map(|(id, _)| id))
 }
 
-/// Text without what is in brackets or whitespace: what a platform's
-/// rendering of a message and ours have in common.
+/// Text without what is in brackets, whitespace, or the `⏎` our rendering
+/// writes for a line break: what a platform's rendering of a message and
+/// ours have in common.
 fn words(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut depth = 0u32;
@@ -201,7 +213,7 @@ fn words(text: &str) -> String {
         match c {
             '[' => depth += 1,
             ']' => depth = depth.saturating_sub(1),
-            c if depth == 0 && !c.is_whitespace() => out.push(c),
+            c if depth == 0 && !c.is_whitespace() && c != '⏎' => out.push(c),
             _ => {}
         }
     }

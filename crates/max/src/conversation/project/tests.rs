@@ -71,6 +71,7 @@ async fn a_core_sees_the_tail_and_its_trigger(pool: PgPool) {
     ask.quote = Some(Quote {
         quote_id: Some("IDX0".into()),
         text: None,
+        files: Vec::new(),
     });
     let ask = ingest::inbound(&mut conn, &place, ask, at(2), offset())
         .await
@@ -293,13 +294,14 @@ async fn the_trigger_and_what_it_quotes_show_their_pictures(pool: PgPool) {
     ask.quote = Some(Quote {
         quote_id: Some("IDX0".into()),
         text: None,
+        files: Vec::new(),
     });
     let ask = ingest::inbound(&mut conn, &place, ask, at(2), offset())
         .await
         .unwrap()
         .message
         .id;
-    let projection = Projection {
+    let mut projection = Projection {
         place: &place,
         system: "SYSTEM".into(),
         window: 100_000,
@@ -309,7 +311,9 @@ async fn the_trigger_and_what_it_quotes_show_their_pictures(pool: PgPool) {
         now: at(3),
         offset: offset(),
     };
+    let expected = [format!("image#{ask}.0"), format!("image#{}.0", ids[0])];
     let (context, _) = projection
+        .clone()
         .base(&mut conn, ask, vec![direct(ask)])
         .await
         .unwrap();
@@ -319,12 +323,25 @@ async fn the_trigger_and_what_it_quotes_show_their_pictures(pool: PgPool) {
     };
     // Not the tail's.
     let handles: Vec<String> = images.iter().map(Image::handle).collect();
-    assert_eq!(
-        handles,
-        [format!("image#{ask}.0"), format!("image#{}.0", ids[0])]
-    );
+    assert_eq!(handles, expected);
     let text_only = tokens::count(user_text(volatile));
     assert_eq!(volatile.tokens, text_only + 2 * project::PICTURE_TOKENS);
+
+    // Still in the tail, where only its caption is: the one it quotes is
+    // shown all the same, and still not the other.
+    projection.cleared_upto = None;
+    let (context, _) = projection
+        .base(&mut conn, ask, vec![direct(ask)])
+        .await
+        .unwrap();
+    let tail = user_text(&context.items[1]);
+    assert!(tail.contains(&format!("]: [image#{}.0]", ids[0])), "{tail}");
+    let volatile = context.items.last().unwrap();
+    let ItemKind::User { images, .. } = &volatile.kind else {
+        panic!("{volatile:?}")
+    };
+    let handles: Vec<String> = images.iter().map(Image::handle).collect();
+    assert_eq!(handles, expected);
 }
 
 /// A turn starts, as the actor starts one, and its base context's texts.

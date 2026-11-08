@@ -72,6 +72,7 @@ fn a_group_message_with_everything() {
         Some(Quote {
             quote_id: Some("IDX8".into()),
             text: Some("早".into()),
+            files: Vec::new(),
         })
     );
     assert_eq!(
@@ -151,4 +152,84 @@ fn base64_both_ways_of_padding() {
     assert_eq!(base64("aGk=").as_deref(), Some(&b"hi"[..]));
     assert_eq!(base64("aGk").as_deref(), Some(&b"hi"[..]));
     assert_eq!(base64("a!"), None);
+}
+
+/// What a quote says of the message it quotes, as QQ shows it.
+fn quoting(quoted: Value) -> Option<Quote> {
+    let data = json!({
+        "id": "ROBOT1.0_MSG2",
+        "group_openid": "GROUP1",
+        "author": { "member_openid": "XIAOMING", "username": "小明" },
+        "content": "<@BOT> 这是什么",
+        "mentions": [{ "id": "BOT", "username": "maxx", "bot": true, "is_you": true }],
+        "message_type": 103,
+        "message_scene": { "source": "default", "ext": ["msg_idx=IDX9", "ref_msg_idx=IDX8"] },
+        "msg_elements": [quoted]
+    });
+    inbound(&mut dispatch("GROUP_MESSAGE_CREATE", data), now())
+        .unwrap()
+        .quote
+}
+
+#[test]
+fn a_quoted_picture_by_its_file_name() {
+    // Shaped like a quote of a picture on 2026-11-08: no text, the picture.
+    let quote = quoting(json!({
+        "msg_idx": "IDX8", "message_type": 103, "content": "",
+        "attachments": [{
+            "content_type": "image/png", "filename": "0A1B2C3D4E5F60718293A4B5C6D7E8F9.png",
+            "url": "https://example.com/p.png", "size": 1024, "width": 10, "height": 10
+        }]
+    }));
+    assert_eq!(
+        quote,
+        Some(Quote {
+            quote_id: Some("IDX8".into()),
+            text: None,
+            files: vec!["0A1B2C3D4E5F60718293A4B5C6D7E8F9.png".into()],
+        })
+    );
+}
+
+#[test]
+fn quoted_text_without_mentions_or_faces() {
+    let quote = quoting(json!({
+        "msg_idx": "IDX8", "message_type": 103,
+        "content": "<@XIAOHONG> 明天<faceType=1,faceId=\"76\",ext=\"\">几点"
+    }));
+    let quote = quote.unwrap();
+    assert_eq!(quote.text.as_deref(), Some(" 明天几点"));
+    assert!(quote.files.is_empty());
+}
+
+#[test]
+fn a_quoted_quote_comes_as_a_dump() {
+    // A quote of a message that quoted another: its own text and files,
+    // not what it quotes, which is indented after [关联消息].
+    let dump = "=== 消息 1 ===\n\
+        [消息内容]   ？这上面的照片是\n何意味\n\
+        [消息类型] 引用消息\n\
+        [附件1] 类型:图片 文件名:11111111111111111111111111111111.jpg 尺寸:30x40 大小:8.2MB URL:https://example.com/1\n\
+        [关联消息]\n\
+        --- 第1条 ---\n    \
+        [消息内容] 看\n    \
+        [消息类型] 引用消息\n    \
+        [附件1] 类型:图片 文件名:22222222222222222222222222222222.jpg 尺寸:30x40 大小:1MB URL:https://example.com/2\n";
+    let quote = quoting(json!({ "msg_idx": "IDX8", "message_type": 103, "content": dump }));
+    assert_eq!(
+        quote,
+        Some(Quote {
+            quote_id: Some("IDX8".into()),
+            text: Some("   ？这上面的照片是\n何意味".into()),
+            files: vec!["11111111111111111111111111111111.jpg".into()],
+        })
+    );
+
+    // One with no text of its own, and a forward, which has none either.
+    let empty = "=== 消息 1 ===\n[消息内容]   \n\n[消息类型] 引用消息\n[关联消息]\n--- 第1条 ---\n    [消息内容] 早\n";
+    let quote = quoting(json!({ "msg_idx": "IDX8", "message_type": 103, "content": empty }));
+    assert_eq!(quote.unwrap().text, None);
+    let forward = "=== 消息 1 ===\n[消息内容] [群聊的聊天记录]\n[消息类型] 引用消息\n[关联消息]\n--- 第1条 ---\n    [消息内容] 早\n    [发送者] 小红\n";
+    let quote = quoting(json!({ "msg_idx": "IDX8", "message_type": 103, "content": forward }));
+    assert_eq!(quote.unwrap().text.as_deref(), Some(" [群聊的聊天记录]"));
 }

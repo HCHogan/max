@@ -5,7 +5,7 @@
 use std::time::Duration;
 
 use max_core::ids::ConversationId;
-use max_core::item::ItemKind;
+use max_core::item::{Image, ItemKind};
 use max_core::message::{Content, Node};
 use max_core::run::Outcome;
 use max_db::PgPool;
@@ -17,7 +17,7 @@ use crate::command;
 use crate::conversation::testing::{
     from_xiaohong, from_xiaoming, group, private, privately, shared, text,
 };
-use crate::inbound::InNode;
+use crate::inbound::{InNode, Quote};
 use crate::job::{Ending, Finished, How, Reply, Request};
 use crate::llm::testing::{Answer, Script};
 use crate::tools::Background;
@@ -196,6 +196,15 @@ impl Harness {
             other => panic!("{other:?}"),
         }
     }
+
+    /// The pictures in the last item of the n-th request, by handle.
+    fn request_pictures(&self, n: usize) -> Vec<String> {
+        let requests = self.script.requests.lock().unwrap();
+        match &requests[n].items.last().unwrap().kind {
+            ItemKind::User { images, .. } => images.iter().map(Image::handle).collect(),
+            other => panic!("{other:?}"),
+        }
+    }
 }
 
 /// An @ of Max, which a command in a group needs.
@@ -330,6 +339,43 @@ async fn calls_reach(h: &Harness, n: usize) {
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
+}
+
+/// A picture from before the core started is in its tail by its caption
+/// only: a row that quotes it while the core runs brings the picture.
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn a_row_brings_the_picture_it_quotes(pool: PgPool) {
+    use max_core::message::{MediaKind, MediaMeta, MediaRef};
+
+    let mut h = Harness::unprompted(pool, 300).await;
+    h.script.push(Answer::says("嗯"));
+    h.script.push(Answer::says("一只猫"));
+    let picture = InNode::Node(Node::Media {
+        media: Some(MediaRef::Remote("https://q.example/cat".into())),
+        meta: MediaMeta {
+            kind: MediaKind::Image,
+            mime: None,
+            size: None,
+            name: None,
+            description: None,
+        },
+    });
+    h.send(from_xiaohong(0, vec![picture]));
+    h.send(at_max(1, " 在吗"));
+    assert_eq!(h.said().await.1, "嗯");
+    assert!(h.request_pictures(0).is_empty());
+    let mut ask = at_max(2, " 这是什么");
+    ask.quote = Some(Quote {
+        quote_id: Some("IDX0".into()),
+        ..Quote::default()
+    });
+    h.send(ask);
+    assert_eq!(h.said().await.1, "一只猫");
+    let picture = h
+        .count("select id from messages where native_id = 'MSG0'")
+        .await;
+    assert_eq!(h.request_pictures(1), [format!("image#{picture}.0")]);
+    h.stop().await;
 }
 
 /// Someone who @s Max and finishes the sentence in the next message gets

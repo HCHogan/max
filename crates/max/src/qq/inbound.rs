@@ -2,14 +2,14 @@
 //! docs/rust-rewrite.md. Text with `<@openid>` mentions and
 //! `<faceType=…>` faces becomes nodes; attachments become media, with
 //! where to download them; the
-//! quoted message is found by its `msg_idx`, or by its text.
+//! quoted message is found by its `msg_idx`, or by what QQ shows of it.
 
 use chrono::{DateTime, Utc};
 use max_core::message::{
     Emote, MediaKind, MediaMeta, MediaRef, MentionTarget, Node, Platform, Role,
 };
 use max_db::platform::ConversationKind;
-use qqbot::event::{Attachment, User};
+use qqbot::event::{Attachment, Element, User};
 use qqbot::{Dispatch, Event};
 
 use crate::inbound::{Chat, InNode, Inbound, Person, Quote};
@@ -50,7 +50,7 @@ pub fn inbound(dispatch: &mut Dispatch, now: DateTime<Utc>) -> Option<Inbound> {
     nodes.extend(message.attachments.iter().map(attachment));
     let quote = message.quotes().map(|quote_id| Quote {
         quote_id: Some(quote_id.to_owned()),
-        text: message.quoted().and_then(|quoted| quoted.content.clone()),
+        ..message.quoted().map(shown).unwrap_or_default()
     });
     let at = message
         .timestamp
@@ -79,6 +79,60 @@ pub fn inbound(dispatch: &mut Dispatch, now: DateTime<Utc>) -> Option<Inbound> {
         // The payload goes with the message, taken: nothing else reads it.
         raw: dispatch.data.take(),
     })
+}
+
+/// How a quoted message that quotes another, or holds a forward, comes:
+/// as a dump, not as its text.
+///
+/// ```text
+/// === 消息 1 ===
+/// [消息内容]   its text
+/// [消息类型] 引用消息
+/// [附件1] 类型:图片 文件名:0FD9….jpg 尺寸:3072x4096 大小:8.2MB URL:…
+/// [关联消息]
+/// --- 第1条 ---
+///     [消息内容] what it quotes, indented
+/// ```
+const DUMP: &str = "=== 消息 1 ===";
+
+/// What QQ shows of a quoted message: its text, without mentions or
+/// faces, and its files' names. Of a dump, the quoted message's own: not
+/// what it quotes in turn.
+fn shown(quoted: &Element) -> Quote {
+    let content = quoted.content.as_deref().unwrap_or_default();
+    let mut files: Vec<String> = quoted
+        .attachments
+        .iter()
+        .filter_map(|attachment| attachment.filename.clone())
+        .collect();
+    let text = match content.strip_prefix(DUMP) {
+        Some(dump) => {
+            let own = dump.split("\n[关联消息]").next().unwrap_or_default();
+            files.extend(
+                own.lines()
+                    .filter(|line| line.starts_with("[附件"))
+                    .filter_map(|line| line.split_once("文件名:"))
+                    .filter_map(|(_, rest)| rest.split_whitespace().next())
+                    .map(str::to_owned),
+            );
+            own.split_once("[消息内容]")
+                .and_then(|(_, rest)| rest.split("\n[消息类型]").next())
+                .unwrap_or_default()
+        }
+        None => content,
+    };
+    let text: String = content_nodes(text, &[])
+        .into_iter()
+        .filter_map(|node| match node {
+            InNode::Node(Node::Text { text }) => Some(text),
+            _ => None,
+        })
+        .collect();
+    Quote {
+        quote_id: None,
+        text: Some(text).filter(|text| !text.trim().is_empty()),
+        files,
+    }
 }
 
 /// Text, `<@openid>` and `<@all>` mentions, and `<faceType=…>` faces.

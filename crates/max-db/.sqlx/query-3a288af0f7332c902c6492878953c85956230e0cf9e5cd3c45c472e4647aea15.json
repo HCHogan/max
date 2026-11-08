@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        select id as \"id!\" from (\n            select id, nodes from messages\n            where conversation_id = $1 and kind <> 'event'\n            order by id desc limit $3\n        ) latest\n        where nodes @> jsonb_build_array(jsonb_build_object(\n            'type', 'media', 'meta', jsonb_build_object('name', $2::text)))\n        order by id desc limit 1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "3a288af0f7332c902c6492878953c85956230e0cf9e5cd3c45c472e4647aea15"
+}

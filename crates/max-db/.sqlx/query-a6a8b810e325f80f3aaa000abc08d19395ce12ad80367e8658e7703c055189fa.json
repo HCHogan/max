@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select id, text from messages\n         where endpoint_id = $1 and sender_identity_id = $2 and kind <> 'event'\n         order by id desc limit $3",
+  "query": "select id, text from messages\n         where conversation_id = $1 and kind <> 'event'\n         order by id desc limit $2",
   "describe": {
     "columns": [
       {
@@ -29,7 +29,6 @@
     "parameters": {
       "Left": [
         "Int8",
-        "Int8",
         "Int8"
       ]
     },
@@ -38,5 +37,5 @@
       false
     ]
   },
-  "hash": "a7b80a6c4d7854628bd48663cdc2f6acf9ef4a4eb6f27394ad0344af358a4769"
+  "hash": "a6a8b810e325f80f3aaa000abc08d19395ce12ad80367e8658e7703c055189fa"
 }

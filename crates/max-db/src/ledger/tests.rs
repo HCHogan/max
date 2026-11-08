@@ -1,5 +1,5 @@
 use max_core::ids::PrincipalId;
-use max_core::message::{Emote, Role};
+use max_core::message::{Emote, MediaKind, MediaMeta, Role};
 use sqlx::PgPool;
 
 use super::*;
@@ -224,12 +224,54 @@ async fn what_the_classifier_and_the_sender_read(pool: PgPool) -> sqlx::Result<(
         .collect();
     assert_eq!(before, [ids[2], ids[3]]);
 
-    let endpoint = group.endpoint.id;
-    sqlx::query!("update messages set text = sent_at::text")
-        .execute(&mut *conn)
-        .await?;
-    let said = said_by(&mut conn, endpoint, group.max.identity, 10).await?;
-    assert_eq!(said.iter().map(|(id, _)| *id).collect::<Vec<_>>(), [ids[3]]);
+    let latest = latest_texts(&mut conn, conversation, 2).await?;
+    assert_eq!(
+        latest,
+        [(ids[4], "第4条".to_owned()), (ids[3], "第3条".to_owned())]
+    );
+
+    Ok(())
+}
+
+#[sqlx::test]
+async fn a_picture_by_its_file_name(pool: PgPool) -> sqlx::Result<()> {
+    let mut conn = pool.acquire().await?;
+    let group = group(&mut conn, "group:30001").await?;
+    let other = crate::testing::group(&mut conn, "group:30002").await?;
+    let xiaoming = sender(group.xiaoming, "小明", None);
+    let picture = |name: &str| Content::Message {
+        reply_to: None,
+        nodes: vec![
+            Node::Text { text: "看".into() },
+            Node::Media {
+                media: None,
+                meta: MediaMeta {
+                    kind: MediaKind::Image,
+                    mime: Some("image/png".into()),
+                    size: Some(1),
+                    name: Some(name.into()),
+                    description: None,
+                },
+            },
+        ],
+    };
+    commit(&mut conn, &group, &xiaoming, &picture("A1.png"), 0).await?;
+    let b2 = commit(&mut conn, &group, &xiaoming, &picture("B2.png"), 1).await?;
+    let again = commit(&mut conn, &group, &xiaoming, &picture("A1.png"), 2).await?;
+    commit(&mut conn, &group, &xiaoming, &said("A1.png"), 3).await?;
+    let elsewhere = sender(other.xiaoming, "小明", None);
+    commit(&mut conn, &other, &elsewhere, &picture("C3.png"), 4).await?;
+
+    let here = group.endpoint.conversation;
+    // Posted twice: where it was posted last. A text naming it isn't it.
+    assert_eq!(
+        by_file_name(&mut conn, here, "A1.png", 10).await?,
+        Some(again)
+    );
+    assert_eq!(by_file_name(&mut conn, here, "B2.png", 3).await?, Some(b2));
+    // Only among the latest rows, and only here.
+    assert_eq!(by_file_name(&mut conn, here, "B2.png", 2).await?, None);
+    assert_eq!(by_file_name(&mut conn, here, "C3.png", 10).await?, None);
 
     Ok(())
 }

@@ -1,7 +1,9 @@
 use max_db::PgPool;
 
 use super::*;
-use crate::conversation::testing::{at, from_xiaoming, group, group_named, offset, private, text};
+use crate::conversation::testing::{
+    at, from_xiaohong, from_xiaoming, group, group_named, offset, private, text,
+};
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
 async fn mentions_quotes_and_commands(pool: PgPool) {
@@ -58,6 +60,7 @@ async fn mentions_quotes_and_commands(pool: PgPool) {
     reply.quote = Some(Quote {
         quote_id: Some("UNKNOWN".into()),
         text: Some("在的， 说吧[微笑]".into()),
+        files: Vec::new(),
     });
     let second = inbound(&mut conn, &place, reply, at(2), offset())
         .await
@@ -80,6 +83,7 @@ async fn mentions_quotes_and_commands(pool: PgPool) {
     again.quote = Some(Quote {
         quote_id: Some("IDX0".into()),
         text: None,
+        files: Vec::new(),
     });
     let third = inbound(&mut conn, &place, again, at(3), offset())
         .await
@@ -98,6 +102,65 @@ async fn mentions_quotes_and_commands(pool: PgPool) {
         .await
         .unwrap();
     assert!(fourth.command.is_some());
+}
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn quotes_by_an_index_qq_never_gave(pool: PgPool) {
+    use max_core::message::{MediaKind, MediaMeta, MediaRef};
+
+    let mut conn = pool.acquire().await.unwrap();
+    let place = group(&mut conn).await;
+    let picture = InNode::Node(Node::Media {
+        media: Some(MediaRef::Remote("https://q.example/p".into())),
+        meta: MediaMeta {
+            kind: MediaKind::Image,
+            mime: Some("image/png".into()),
+            size: Some(1024),
+            name: Some("0A1B2C3D4E5F60718293A4B5C6D7E8F9.png".into()),
+            description: None,
+        },
+    });
+    let posted = from_xiaoming(0, vec![picture]);
+    let posted = inbound(&mut conn, &place, posted, at(0), offset())
+        .await
+        .unwrap();
+    let asked = from_xiaohong(1, vec![text("明天几点开会\n在哪个教室")]);
+    let asked = inbound(&mut conn, &place, asked, at(1), offset())
+        .await
+        .unwrap();
+    let quoting = async |conn: &mut PgConnection, n, quote| {
+        let mut row = from_xiaoming(n, vec![text("嗯")]);
+        row.quote = Some(quote);
+        let row = inbound(conn, &place, row, at(n), offset()).await.unwrap();
+        let Content::Message { reply_to, .. } = row.message.content else {
+            panic!("{:?}", row.message.content);
+        };
+        (reply_to, row.direct)
+    };
+
+    // A picture, by its file name.
+    let by_file = Quote {
+        quote_id: Some("UNKNOWN".into()),
+        text: None,
+        files: vec!["0A1B2C3D4E5F60718293A4B5C6D7E8F9.png".into()],
+    };
+    let found = quoting(&mut conn, 2, by_file).await;
+    assert_eq!(found, (Some(posted.message.id), None));
+    // Someone's words, not only Max's, across a line break.
+    let by_text = Quote {
+        quote_id: Some("UNKNOWN".into()),
+        text: Some("明天几点开会\n在哪个教室".into()),
+        files: Vec::new(),
+    };
+    let found = quoting(&mut conn, 3, by_text).await;
+    assert_eq!(found, (Some(asked.message.id), None));
+    // Nothing like it: no quote.
+    let unknown = Quote {
+        quote_id: Some("UNKNOWN".into()),
+        text: Some("后天".into()),
+        files: vec!["FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF.png".into()],
+    };
+    assert_eq!(quoting(&mut conn, 4, unknown).await, (None, None));
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]

@@ -339,21 +339,19 @@ async fn captioned(conn: &mut PgConnection, rows: &mut [Row]) -> sqlx::Result<()
     Ok(())
 }
 
-/// What an account said lately in an endpoint, newest first, by id and
-/// rendered text: where a quote of Max's message is looked for when its
-/// quote id is unknown.
-pub async fn said_by(
+/// The latest `limit` messages of a conversation, newest first, by id and
+/// rendered text: where a quote is looked for by its text when its quote
+/// id is unknown.
+pub async fn latest_texts(
     conn: &mut PgConnection,
-    endpoint: EndpointId,
-    identity: IdentityId,
+    conversation: ConversationId,
     limit: i64,
 ) -> sqlx::Result<Vec<(MessageId, String)>> {
     let rows = sqlx::query!(
         "select id, text from messages
-         where endpoint_id = $1 and sender_identity_id = $2 and kind <> 'event'
-         order by id desc limit $3",
-        endpoint.0,
-        identity.0,
+         where conversation_id = $1 and kind <> 'event'
+         order by id desc limit $2",
+        conversation.0,
         limit
     )
     .fetch_all(conn)
@@ -362,6 +360,36 @@ pub async fn said_by(
         .into_iter()
         .map(|row| (MessageId(row.id), row.text))
         .collect())
+}
+
+/// The newest of a conversation's latest `limit` messages with a medium
+/// of this file name: where a quote of a picture is looked for when its
+/// quote id is unknown. QQ names a picture by a hash of it, so a picture
+/// posted twice is found where it was posted last.
+pub async fn by_file_name(
+    conn: &mut PgConnection,
+    conversation: ConversationId,
+    name: &str,
+    limit: i64,
+) -> sqlx::Result<Option<MessageId>> {
+    let id = sqlx::query_scalar!(
+        r#"
+        select id as "id!" from (
+            select id, nodes from messages
+            where conversation_id = $1 and kind <> 'event'
+            order by id desc limit $3
+        ) latest
+        where nodes @> jsonb_build_array(jsonb_build_object(
+            'type', 'media', 'meta', jsonb_build_object('name', $2::text)))
+        order by id desc limit 1
+        "#,
+        conversation.0,
+        name,
+        limit
+    )
+    .fetch_optional(conn)
+    .await?;
+    Ok(id.map(MessageId))
 }
 
 /// One row, if it is on this conversation's timeline.

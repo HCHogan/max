@@ -40,12 +40,14 @@ pub struct Person {
 }
 
 /// The message this one quotes.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct Quote {
     pub quote_id: Option<String>,
     /// What the platform showed of it, to find it by when the id is
-    /// unknown.
+    /// unknown: its text, without mentions or faces...
     pub text: Option<String>,
+    /// ...and the names of its pictures and files.
+    pub files: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

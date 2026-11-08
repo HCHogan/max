@@ -90,9 +90,7 @@ impl Projection<'_> {
             .map(|row| row.message.id)
             .collect();
         for row in tail.iter().chain(&triggers) {
-            if let Content::Message {
-                reply_to: Some(id), ..
-            } = row.message.content
+            if let Some(id) = quotes(&row.message)
                 && !shown.contains(&id)
             {
                 quoted_ids.insert(id);
@@ -162,9 +160,19 @@ impl Projection<'_> {
         let blocks = pieces.into_iter().chain([volatile.render(self.offset)]);
         let mut context = project::context(self.system, blocks, roster, tokens::count);
         // The pictures of the first inputs and of the rows they quote, in
-        // the volatile block, each after its row.
+        // the volatile block, each after its row: one the tail shows is
+        // there only by its caption, so it comes at the end.
         if let Some(volatile) = context.items.last_mut() {
-            let messages = triggers.iter().chain(&quoted).map(|row| &row.message);
+            let wanted: BTreeSet<MessageId> = triggers
+                .iter()
+                .filter_map(|row| quotes(&row.message))
+                .collect();
+            let quoted_in_tail = tail.iter().filter(|row| wanted.contains(&row.message.id));
+            let messages = triggers
+                .iter()
+                .chain(&quoted)
+                .chain(quoted_in_tail)
+                .map(|row| &row.message);
             // Not shared yet, so this doesn't copy it.
             project::attach(Arc::make_mut(volatile), messages);
         }
@@ -179,6 +187,14 @@ impl Projection<'_> {
             return Ok(Mark::None);
         }
         direct_mark(conn, self.place, message).await
+    }
+}
+
+/// The row `message` quotes, if any.
+pub fn quotes(message: &Message) -> Option<MessageId> {
+    match message.content {
+        Content::Message { reply_to, .. } => reply_to,
+        _ => None,
     }
 }
 
