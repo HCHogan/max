@@ -17,6 +17,7 @@ use std::sync::Arc;
 use max_core::ids::{CallId, ConversationId, EndpointId, MessageId, TurnId};
 use max_core::intent::Verdict;
 use max_core::item::{ModelOutput, Timing, ToolOutput};
+use max_core::limits::Setting;
 use max_core::message::{Draft, Message, Platform};
 use max_core::segment::Segment;
 use max_db::platform::{Account, ConversationKind};
@@ -71,6 +72,13 @@ pub enum Event {
         moved: Box<Moved>,
         origin: Option<TurnId>,
         reply: oneshot::Sender<Result<u32, (String, Box<Moved>)>>,
+    },
+    /// Max's `config` tool sets the conversation's limits, None back to
+    /// the default, and is told what each is now; or why not.
+    Configure {
+        changes: Vec<(Setting, Option<u64>)>,
+        origin: Option<TurnId>,
+        reply: oneshot::Sender<Result<Vec<Configured>, String>>,
     },
     /// A background agent asks Max, and waits for the answer.
     JobAsks {
@@ -139,6 +147,15 @@ pub enum Act {
     Say(Draft),
     /// Take back an earlier message of the timeline.
     Unsend(MessageId),
+}
+
+/// A limit as the conversation has it: what is in force, and what it
+/// would be had nobody set it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Configured {
+    pub setting: Setting,
+    pub value: u64,
+    pub default: u64,
 }
 
 /// Where the sender says how a row's sending went: the row, or why it
@@ -214,6 +231,23 @@ impl Poster {
         self.mailbox
             .send(Event::Jobs {
                 request,
+                origin: self.origin,
+                reply,
+            })
+            .map_err(|_| "这个群的会话已经停了".to_owned())?;
+        answer.await.map_err(|_| "没等到回答".to_owned())?
+    }
+
+    /// Sets the conversation's limits, None back to the default: what
+    /// each is now, or why not.
+    pub async fn configure(
+        &self,
+        changes: Vec<(Setting, Option<u64>)>,
+    ) -> Result<Vec<Configured>, String> {
+        let (reply, answer) = oneshot::channel();
+        self.mailbox
+            .send(Event::Configure {
+                changes,
                 origin: self.origin,
                 reply,
             })

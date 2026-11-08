@@ -81,6 +81,7 @@ async fn a_chart_goes_out_with_its_caption(pool: PgPool) {
     });
     let context = Context {
         work: Some(scratch.work()),
+        call_time: max_core::limits::CALL_TIME,
         caller: Caller::Turn(Poster::new(mailbox, TurnId(1))),
         ..Context::check(
             Services {

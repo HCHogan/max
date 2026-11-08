@@ -1,5 +1,6 @@
 ---
 source: crates/max/src/mcp/tool/tests.rs
+assertion_line: 306
 expression: DECLARATIONS.as_str()
 ---
 /** 查本会话的聊天记录，连同图片和表情包的描述。上下文里没有的旧事、谁以前说过什么、哪天聊了什么，先查再答。筛选可以一起用：
@@ -53,3 +54,9 @@ agent_cancel(args: { job: string | number }): Promise<{ job: string }>;
 
 /** 看还在跑的后台 agent 和后台命令：标题、跑了几分钟、调了几次模型（calls）和工具（tools）、最近用的工具；后台命令的标题是 $ 加命令，次数都是 0。job 不填就是全部；做完的、停掉的不在里面。 */
 agent_status(args: { job?: string | number }): Promise<{ jobs: { job: string; title: string; minutes: number; calls: number; tools: number; tool: string | null }[] }>;
+
+/** 看或改本群的几项设置。不给参数就只看；给了就改，0 是恢复默认。返回每项现在的值和默认值。改不改由你判断：有人请你改、理由说得通，或者你确实需要时再改，改完简短说一声。群管理员也能用 /config 改，谁后改算谁的。
+  idle_window_secs：你说完话后空闲多少秒结束这一轮（60–7200）。窗口里再被叫，你还拿着这一轮查到的东西；结束后再被叫是新的一轮，从记录重新读起。默认跟着模型走。马上生效，这一轮也算。
+  call_time_secs：程序和命令里每次调 Max 的工具（包括 max.video、max.file）最多等多少秒（10–600）。转长视频、拷大文件超时了就调大。从下一次 run_code、shell 起生效。
+  commands_at_once：最多同时跑几个后台命令（1–16）。马上生效。 */
+config(args: { idle_window_secs?: number; call_time_secs?: number; commands_at_once?: number }): Promise<{ idle_window_secs: { value: number; default: number }; call_time_secs: { value: number; default: number }; commands_at_once: { value: number; default: number } }>;

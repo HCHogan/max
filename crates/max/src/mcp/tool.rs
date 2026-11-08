@@ -17,6 +17,7 @@ use serde_json::{Map, Value};
 use tracing::warn;
 
 use super::agent::{Agent, AgentCancel, AgentStatus, AgentSteer};
+use super::config::Config;
 use super::find_stickers::FindStickers;
 use super::history::History;
 use super::mute_member::MuteMember;
@@ -86,6 +87,7 @@ pub static TOOLS: LazyLock<Vec<Spec>> = LazyLock::new(|| {
         spec::<AgentSteer>(),
         spec::<AgentCancel>(),
         spec::<AgentStatus>(),
+        spec::<Config>(),
         spec::<Say>(),
         spec::<Wake>(),
     ]

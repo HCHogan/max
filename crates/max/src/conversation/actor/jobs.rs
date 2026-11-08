@@ -133,6 +133,7 @@ impl Conversation {
             page_tokens: Budgets::for_window(upstream.window).single,
             video: false,
             work: None,
+            call_time: self.call_time(),
             caller: mcp::Caller::Job(Arc::new(job::Link {
                 upstream: Arc::clone(&upstream),
                 called,
@@ -215,10 +216,10 @@ impl Conversation {
         if self.stopping.is_some() {
             return Err("Max 正在重启，起不了后台命令".to_owned());
         }
-        if self.jobs.commands() >= limits::COMMANDS_AT_ONCE {
+        let most = self.commands_at_once();
+        if self.jobs.commands() >= most {
             return Err(format!(
-                "已经有 {} 个后台命令在跑了，等一个跑完，或者用 agent_cancel 停掉一个",
-                limits::COMMANDS_AT_ONCE
+                "已经有 {most} 个后台命令在跑了，等一个跑完，或者用 agent_cancel 停掉一个"
             ));
         }
         Ok(())

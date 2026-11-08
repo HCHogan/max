@@ -30,6 +30,12 @@ pub enum Command {
     },
     /// `/unclear`: takes `/clear --all` back.
     Unclear,
+    /// `/config`, `/config <name>`, or `/config <name> <value|default>`:
+    /// the limits the conversation sets for itself.
+    Config {
+        name: Option<String>,
+        value: Option<String>,
+    },
     /// `/bind`, `/bind <legacy group>` in a private chat, `/bind <code>` in
     /// a group.
     Bind(Option<String>),
@@ -49,6 +55,7 @@ impl Command {
             Command::Persona(_) => "persona",
             Command::Clear { .. } => "clear",
             Command::Unclear => "unclear",
+            Command::Config { .. } => "config",
             Command::Bind(_) => "bind",
         }
     }
@@ -134,6 +141,20 @@ pub fn parse(text: &str) -> Option<Command> {
             all: argument.as_deref() == Some("--all"),
         },
         "unclear" => Command::Unclear,
+        "config" => {
+            let (name, value) = match argument.as_deref().map(|argument| {
+                argument
+                    .split_once(char::is_whitespace)
+                    .map_or((argument, ""), |(name, value)| (name, value.trim()))
+            }) {
+                None => (None, None),
+                Some((name, value)) => (
+                    Some(name.to_owned()),
+                    (!value.is_empty()).then(|| value.to_owned()),
+                ),
+            };
+            Command::Config { name, value }
+        }
         "bind" => Command::Bind(argument),
         _ => return None,
     })
@@ -175,6 +196,25 @@ mod tests {
         assert_eq!(parse("/clear"), Some(Command::Clear { all: false }));
         assert_eq!(parse("/clear --all"), Some(Command::Clear { all: true }));
         assert_eq!(parse("/unclear"), Some(Command::Unclear));
+        let config = |name: Option<&str>, value: Option<&str>| {
+            Some(Command::Config {
+                name: name.map(str::to_owned),
+                value: value.map(str::to_owned),
+            })
+        };
+        assert_eq!(parse("/config"), config(None, None));
+        assert_eq!(
+            parse("/config call_time_secs"),
+            config(Some("call_time_secs"), None)
+        );
+        assert_eq!(
+            parse("/config  idle_window_secs   1800 "),
+            config(Some("idle_window_secs"), Some("1800"))
+        );
+        assert_eq!(
+            parse("/config commands_at_once 4 or so"),
+            config(Some("commands_at_once"), Some("4 or so"))
+        );
         assert_eq!(
             parse("/bind 123456"),
             Some(Command::Bind(Some("123456".into())))

@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use chrono::FixedOffset;
 use color_eyre::eyre::{Result, WrapErr, bail, ensure, eyre};
 use max_core::item::Protocol;
+use max_core::limits::{self, Setting};
 use serde::Deserialize;
 use tracing::level_filters::LevelFilter;
 
@@ -45,6 +46,54 @@ pub struct Config {
     /// by the name in `/api/<name>/…`.
     #[serde(default)]
     pub api: BTreeMap<String, Api>,
+    #[serde(default)]
+    pub limits: Limits,
+}
+
+/// The defaults of the limits a conversation may set for itself, for the
+/// conversations that haven't: see [`Setting`]. The idle window is each
+/// provider's `idle_window_secs`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct Limits {
+    pub call_time_secs: u64,
+    pub commands_at_once: u64,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            call_time_secs: limits::CALL_TIME.as_secs(),
+            commands_at_once: limits::COMMANDS_AT_ONCE as u64,
+        }
+    }
+}
+
+impl Limits {
+    /// The default of `setting`; None for the idle window, the model's.
+    pub fn default_of(&self, setting: Setting) -> Option<u64> {
+        match setting {
+            Setting::IdleWindowSecs => None,
+            Setting::CallTimeSecs => Some(self.call_time_secs),
+            Setting::CommandsAtOnce => Some(self.commands_at_once),
+        }
+    }
+
+    fn check(&self) -> Result<()> {
+        for setting in Setting::ALL {
+            let (Some(value), range) = (self.default_of(setting), setting.range()) else {
+                continue;
+            };
+            ensure!(
+                range.contains(&value),
+                "{} is {value}, out of {}..={}",
+                setting.name(),
+                range.start(),
+                range.end()
+            );
+        }
+        Ok(())
+    }
 }
 
 /// The model that turns text into vectors for search by meaning; see
@@ -374,8 +423,11 @@ fn stream_idle_timeout() -> u64 {
     120
 }
 
+/// A provider's `idle_window_secs`, unless it says.
+pub const IDLE_WINDOW_SECS: u64 = 300;
+
 fn idle_window() -> u64 {
-    300
+    IDLE_WINDOW_SECS
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
@@ -522,6 +574,7 @@ impl Config {
     fn parse(text: &str) -> Result<Self> {
         let mut config: Self = toml::from_str(text)?;
         config.llm.check()?;
+        config.limits.check().wrap_err("in limits")?;
         if let Some(vm) = &config.vm {
             vm.check().wrap_err("in vm")?;
         }
@@ -781,6 +834,27 @@ mod tests {
         assert_eq!((provider, model), ("cliproxy", "gpt-5.6-luna"));
         assert_eq!(settings.protocol, ProtocolName::Responses);
         assert_eq!((settings.retries, settings.idle_window_secs), (2, 300));
+    }
+
+    #[test]
+    fn limits_default_and_keep_to_their_ranges() {
+        let database = "[database]\nurl = \"postgresql:///max\"";
+        let config = with_llm(database).unwrap();
+        assert_eq!(config.limits, Limits::default());
+        assert_eq!(config.limits.call_time_secs, 60);
+        let config = with_llm(&format!("{database}\n[limits]\ncall_time_secs = 120")).unwrap();
+        assert_eq!(config.limits.call_time_secs, 120);
+        assert_eq!(config.limits.commands_at_once, 8);
+        let error = with_llm(&format!("{database}\n[limits]\ncommands_at_once = 0")).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("commands_at_once is 0, out of 1..=16"),
+            "{error:#}"
+        );
+        let error = with_llm(&format!("{database}\n[limits]\nidle_window_secs = 600")).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("unknown field `idle_window_secs`"),
+            "{error:#}"
+        );
     }
 
     #[test]

@@ -12,6 +12,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use axum::body::Bytes;
 use axum::extract::State;
@@ -31,7 +32,7 @@ use tracing::warn;
 use super::tool::{self, Spec};
 use super::{Call, Caller, Context, Failure, chat_file, forward, harness, lock, show};
 use crate::vm::Signal;
-use max_core::limits::{CALL_TIME, CALLS_AT_ONCE};
+use max_core::limits::{CALLS_AT_ONCE, Setting};
 
 /// What a call that didn't finish may still have done. Nothing is retried
 /// or classified by its effects: what acts on the group goes through the
@@ -398,9 +399,12 @@ impl Handler {
                 .await
                 .unwrap_or_else(|_| Err(Failure::new("closed", "Max 没做完就停了")))
         };
-        timeout(CALL_TIME, call)
+        // The actor holds the call to the conversation's own call time;
+        // this is for one that never reaches the actor.
+        let longest = Duration::from_secs(*Setting::CallTimeSecs.range().end());
+        timeout(longest, call)
             .await
-            .unwrap_or_else(|_| Err(late()))
+            .unwrap_or_else(|_| Err(late(longest)))
     }
 }
 
@@ -414,8 +418,8 @@ impl Session {
             Ok(()) => tokio::select! {
                 outcome = async {
                     let _slot = self.slots.acquire().await;
-                    timeout(CALL_TIME, self.dispatch(call, args)).await
-                } => outcome.unwrap_or_else(|_| Err(late())),
+                    timeout(self.context.call_time, self.dispatch(call, args)).await
+                } => outcome.unwrap_or_else(|_| Err(late(self.context.call_time))),
                 () = self.closed.cancelled() => Err(Failure::new("closed", "这次运行已经结束了")),
             },
         };
@@ -452,10 +456,11 @@ impl Session {
     }
 }
 
-fn late() -> Failure {
+/// A call that didn't end within `limit`.
+pub(super) fn late(limit: Duration) -> Failure {
     Failure::new(
         "timeout",
-        format!("{} 秒内没做完；{MAYBE_DONE}", CALL_TIME.as_secs()),
+        format!("{} 秒内没做完；{MAYBE_DONE}", limit.as_secs()),
     )
 }
 

@@ -1,3 +1,4 @@
+use max_core::limits::Setting;
 use sqlx::PgPool;
 
 use super::*;
@@ -102,15 +103,23 @@ async fn settings_default_until_saved(pool: PgPool) -> sqlx::Result<()> {
         settings(&mut conn, conversation).await?,
         Settings::default()
     );
-    let changed = Settings {
+    let mut changed = Settings {
         model: Some("fast".into()),
         proactive: false,
         stopped: true,
         ..Settings::default()
     };
+    changed.overrides.set(Setting::CallTimeSecs, Some(120));
     let at = DateTime::from_timestamp(1_800_000_000, 0).unwrap_or_default();
     save_settings(&mut conn, conversation, &changed, at).await?;
     assert_eq!(settings(&mut conn, conversation).await?, changed);
+    // A row Max can't read is the defaults, and doesn't hold the rest up.
+    sqlx::query("update conversation_settings set overrides = '{\"call_time_secs\": \"soon\"}'")
+        .execute(&mut *conn)
+        .await?;
+    let read = settings(&mut conn, conversation).await?;
+    assert_eq!(read.overrides, Overrides::default());
+    assert_eq!(read.model.as_deref(), Some("fast"));
     Ok(())
 }
 

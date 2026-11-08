@@ -4,7 +4,9 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use max_core::ids::{ConversationId, EndpointId, IdentityId, MessageId, PrincipalId};
+use max_core::limits::Overrides;
 use max_core::message::{Platform, Role};
+use sqlx::types::Json;
 use sqlx::{Connection, PgConnection};
 
 use crate::unknown;
@@ -499,6 +501,8 @@ pub struct Settings {
     pub cleared_upto: Option<MessageId>,
     /// `/stop`: messages are recorded, but nothing starts a turn.
     pub stopped: bool,
+    /// The limits set with `/config`, or by Max with its `config` tool.
+    pub overrides: Overrides,
 }
 
 impl Default for Settings {
@@ -510,6 +514,7 @@ impl Default for Settings {
             proactive: true,
             cleared_upto: None,
             stopped: false,
+            overrides: Overrides::default(),
         }
     }
 }
@@ -519,7 +524,7 @@ pub async fn settings(
     conversation: ConversationId,
 ) -> sqlx::Result<Settings> {
     let row = sqlx::query!(
-        "select model, effort, persona, proactive, cleared_upto, stopped
+        "select model, effort, persona, proactive, cleared_upto, stopped, overrides
          from conversation_settings where conversation_id = $1",
         conversation.0
     )
@@ -532,6 +537,8 @@ pub async fn settings(
         proactive: row.proactive,
         cleared_upto: row.cleared_upto.map(MessageId),
         stopped: row.stopped,
+        // Only Max writes it; what it can't read, it doesn't hold on to.
+        overrides: serde_json::from_value(row.overrides).unwrap_or_default(),
     }))
 }
 
@@ -574,12 +581,13 @@ pub async fn save_settings(
         r#"
         insert into conversation_settings
             (conversation_id, model, effort, persona, proactive, cleared_upto, stopped,
-             updated_at)
-        values ($1, $2, $3, $4, $5, $6, $7, $8)
+             overrides, updated_at)
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         on conflict (conversation_id) do update set
             model = excluded.model, effort = excluded.effort, persona = excluded.persona,
             proactive = excluded.proactive, cleared_upto = excluded.cleared_upto,
-            stopped = excluded.stopped, updated_at = excluded.updated_at
+            stopped = excluded.stopped, overrides = excluded.overrides,
+            updated_at = excluded.updated_at
         "#,
         conversation.0,
         settings.model,
@@ -588,6 +596,7 @@ pub async fn save_settings(
         settings.proactive,
         settings.cleared_upto.map(|id| id.0),
         settings.stopped,
+        Json(&settings.overrides) as _,
         at
     )
     .execute(conn)

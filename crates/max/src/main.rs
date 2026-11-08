@@ -251,6 +251,7 @@ fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
                 page_tokens: 2000,
                 video: true,
                 work: None,
+                call_time: Duration::from_secs(config.limits.call_time_secs),
                 caller: mcp::Caller::Check,
             })
         };
@@ -607,6 +608,7 @@ async fn serve(config: Config) -> Result<()> {
         vm_dir,
         pictures,
         started: tokio::time::Instant::now(),
+        limits: config.limits,
     });
     let (intake_tx, intake_rx) = mpsc::unbounded_channel();
     let mut me = HashMap::new();

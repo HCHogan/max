@@ -6,8 +6,13 @@
 //! What stays with its own code: a tool's argument ranges (with its
 //! schema), QQ's own limits, the tuning of an algorithm, and timeouts,
 //! retries and grace periods that only keep the plumbing honest.
+//!
+//! Some a conversation may set for itself: see [`Setting`].
 
+use std::ops::RangeInclusive;
 use std::time::Duration;
+
+use serde::{Deserialize, Serialize};
 
 /// The window the hourly limits and counts are over.
 pub const HOUR: Duration = Duration::from_secs(3600);
@@ -30,7 +35,7 @@ pub const MOVE_AFTER: Duration = Duration::from_secs(15);
 /// it; the whole goes to a file in /work.
 pub const SHOWN_BYTES: usize = 16 * 1024;
 /// A call of one of Max's tools, from a program or a command: its wall
-/// clock...
+/// clock, by default ([`Setting::CallTimeSecs`])...
 pub const CALL_TIME: Duration = Duration::from_secs(60);
 /// ...and how many one run makes at once, or a VM's programs outside any
 /// turn together; more wait their turn.
@@ -59,9 +64,10 @@ pub const FILE_BYTES: u64 = 64 << 20;
 
 /// The most agents a conversation runs at once...
 pub const JOBS_AT_ONCE: usize = 3;
-/// ...and background commands, besides: they cost no model calls while
-/// they run, only the VM's room. Three until 2026-11-08, when commands
-/// someone waits on began to move here.
+/// ...and background commands, besides, by default
+/// ([`Setting::CommandsAtOnce`]): they cost no model calls while they
+/// run, only the VM's room. Three until 2026-11-08, when commands someone
+/// waits on began to move here.
 pub const COMMANDS_AT_ONCE: usize = 8;
 /// How long an agent may take; then it is aborted, and reports how far it
 /// got.
@@ -91,9 +97,130 @@ pub const WEBREAD_CHARS: usize = 12_000;
 /// against the small model going wrong. Direct triggers don't count.
 pub const JUDGED_WAKES_PER_HOUR: usize = 8;
 
+/// A limit a conversation may set for itself, with `/config` or Max's
+/// `config` tool, by the name the configuration file, the command and the
+/// tool all call it. The value in force is the conversation's, else the
+/// configuration file's (`[limits]`, and each provider's
+/// `idle_window_secs`), else the default here; the last to set it wins.
+/// See "Settings a conversation sets" in docs/rust-rewrite.md.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Setting {
+    /// How long a core waits idle before it ends.
+    IdleWindowSecs,
+    /// [`CALL_TIME`].
+    CallTimeSecs,
+    /// [`COMMANDS_AT_ONCE`].
+    CommandsAtOnce,
+}
+
+impl Setting {
+    pub const ALL: [Self; 3] = [
+        Self::IdleWindowSecs,
+        Self::CallTimeSecs,
+        Self::CommandsAtOnce,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::IdleWindowSecs => "idle_window_secs",
+            Self::CallTimeSecs => "call_time_secs",
+            Self::CommandsAtOnce => "commands_at_once",
+        }
+    }
+
+    pub fn find(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|setting| setting.name() == name)
+    }
+
+    /// What a conversation, or the configuration file's `[limits]`, may
+    /// set it to.
+    pub const fn range(self) -> RangeInclusive<u64> {
+        match self {
+            Self::IdleWindowSecs => 60..=7200,
+            Self::CallTimeSecs => 10..=600,
+            Self::CommandsAtOnce => 1..=16,
+        }
+    }
+}
+
+/// What a conversation has set of the [`Setting`]s, each within its
+/// range; None is the default.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Overrides {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub idle_window_secs: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub call_time_secs: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub commands_at_once: Option<u64>,
+}
+
+impl Overrides {
+    pub fn get(&self, setting: Setting) -> Option<u64> {
+        match setting {
+            Setting::IdleWindowSecs => self.idle_window_secs,
+            Setting::CallTimeSecs => self.call_time_secs,
+            Setting::CommandsAtOnce => self.commands_at_once,
+        }
+    }
+
+    /// Sets `setting` to `value`, or back to the default with None.
+    pub fn set(&mut self, setting: Setting, value: Option<u64>) {
+        let slot = match setting {
+            Setting::IdleWindowSecs => &mut self.idle_window_secs,
+            Setting::CallTimeSecs => &mut self.call_time_secs,
+            Setting::CommandsAtOnce => &mut self.commands_at_once,
+        };
+        *slot = value;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_are_stored_by_their_names() {
+        let mut overrides = Overrides::default();
+        for setting in Setting::ALL {
+            assert_eq!(Setting::find(setting.name()), Some(setting));
+            assert!(overrides.get(setting).is_none());
+            overrides.set(setting, Some(*setting.range().start()));
+        }
+        let stored = serde_json::to_value(overrides).unwrap();
+        let mut keys: Vec<&str> = stored
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        let mut names: Vec<&str> = Setting::ALL.iter().map(|setting| setting.name()).collect();
+        names.sort_unstable();
+        assert_eq!(keys, names);
+        overrides.set(Setting::CallTimeSecs, None);
+        assert_eq!(
+            serde_json::to_value(overrides).unwrap(),
+            serde_json::json!({ "idle_window_secs": 60, "commands_at_once": 1 })
+        );
+    }
+
+    #[test]
+    fn the_defaults_are_in_range() {
+        let call_time = CALL_TIME.as_secs();
+        assert!(Setting::CallTimeSecs.range().contains(&call_time));
+        let commands = COMMANDS_AT_ONCE as u64;
+        assert!(Setting::CommandsAtOnce.range().contains(&commands));
+    }
+
+    #[test]
+    fn stored_overrides_read_leniently() {
+        let read: Overrides =
+            serde_json::from_value(serde_json::json!({ "call_time_secs": 90, "gone": 1 })).unwrap();
+        assert_eq!(read.get(Setting::CallTimeSecs), Some(90));
+        assert_eq!(read.get(Setting::IdleWindowSecs), None);
+    }
 
     #[test]
     fn webread_prints_as_much_as_the_prompt_says() {

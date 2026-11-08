@@ -259,6 +259,7 @@ async fn programs_show_the_model_pictures(pool: PgPool) {
     let sessions = Sessions::default();
     let grant = sessions.open(Context {
         work: Some(work.clone()),
+        call_time: max_core::limits::CALL_TIME,
         ..Context::check(stored(pool, &store), place)
     });
     let (mcp, scope) = served(&sessions, conversation).await;
@@ -354,6 +355,7 @@ async fn programs_show_the_model_videos(pool: PgPool) {
     let context = |video| Context {
         video,
         work: Some(work.clone()),
+        call_time: max_core::limits::CALL_TIME,
         ..Context::check(stored(pool.clone(), &store), Arc::clone(&place))
     };
     let grant = sessions.open(context(true));
@@ -510,6 +512,7 @@ async fn programs_fetch_the_chats_files(pool: PgPool) {
     let sessions = Sessions::default();
     let grant = sessions.open(Context {
         work: Some(work.clone()),
+        call_time: max_core::limits::CALL_TIME,
         ..Context::check(stored(pool, &store), place)
     });
     let (mcp, scope) = served(&sessions, conversation).await;
@@ -614,6 +617,7 @@ async fn commands_call_max_tools_with_maxx(pool: PgPool) {
     let sessions = Sessions::with_programs(programs);
     let grant = sessions.open(Context {
         work: Some(work.clone()),
+        call_time: max_core::limits::CALL_TIME,
         ..Context::check(stored(pool, &store), place)
     });
     let (mcp, mut scope) = served(&sessions, conversation).await;

@@ -236,6 +236,21 @@ impl Models {
         })
     }
 
+    /// How long a core on `model` waits idle before it ends: its
+    /// provider's window, or the default model's when it is None or no
+    /// longer configured.
+    pub fn idle_window(&self, model: Option<&str>) -> Duration {
+        let window = |reference: &str| {
+            let (_, provider, _, _) = self.llm.model(reference).ok()?;
+            Some(provider.idle_window_secs)
+        };
+        let secs = model
+            .and_then(window)
+            .or_else(|| window(&self.llm.default.model))
+            .unwrap_or(config::IDLE_WINDOW_SECS);
+        Duration::from_secs(secs)
+    }
+
     /// Every `provider/model`, for `/model` to list.
     pub fn references(&self) -> Vec<String> {
         self.llm

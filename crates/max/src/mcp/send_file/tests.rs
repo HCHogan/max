@@ -79,6 +79,7 @@ async fn a_report_goes_out_under_its_name(pool: PgPool) {
     });
     let context = Context {
         work: Some(work.clone()),
+        call_time: max_core::limits::CALL_TIME,
         caller: Caller::Turn(Poster::new(mailbox, TurnId(1))),
         ..Context::check(
             Services {

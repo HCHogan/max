@@ -14,6 +14,7 @@ use sqlx::PgConnection;
 use tokio::sync::mpsc::{self, UnboundedReceiver};
 
 use super::{Outgoing, Place, Shared};
+use crate::config::Limits;
 use crate::inbound::{Chat, InNode, Inbound, Person};
 use crate::llm::testing::{Script, config};
 use crate::llm::{Caller, Models};
@@ -55,6 +56,7 @@ pub fn shared(
         vms: None,
         vm_dir: None,
         started: tokio::time::Instant::now(),
+        limits: Limits::default(),
     };
     (shared, rx)
 }

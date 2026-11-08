@@ -3,6 +3,7 @@
 
 mod agent;
 mod chat_file;
+mod config;
 mod find_stickers;
 mod forward;
 mod harness;
@@ -27,6 +28,7 @@ mod runner_tests;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
 
 use chrono::FixedOffset;
 use serde::de::DeserializeOwned;
@@ -69,6 +71,9 @@ pub struct Context {
     pub video: bool,
     /// The host's side of the VM's /work, for a program run there.
     pub work: Option<PathBuf>,
+    /// A call's wall clock: the conversation's, when the run or the call
+    /// started.
+    pub call_time: Duration,
     pub caller: Caller,
 }
 
@@ -173,6 +178,7 @@ impl Context {
             page_tokens: 2000,
             video: false,
             work: None,
+            call_time: max_core::limits::CALL_TIME,
             caller: Caller::Check,
         }
     }
@@ -202,16 +208,22 @@ impl From<sqlx::Error> for Failure {
 }
 
 /// Runs `name` for a program Max keeps in the group's VM, outside any
-/// turn: one of Max's tools, or the runner's max.file.
+/// turn: one of Max's tools, or the runner's max.file, within the
+/// context's call time.
 pub async fn program_call(name: &str, context: &Context, args: Value) -> Result<Value, Failure> {
-    match Call::find(name).filter(|call| context.caller.allows(*call)) {
-        Some(Call::Tool(tool)) => tool.call(context, args).await,
-        Some(Call::File) => chat_file::run(context, args).await,
-        _ => Err(Failure::new(
-            "not_allowed",
-            format!("常驻程序用不了 {name}"),
-        )),
-    }
+    let call = async {
+        match Call::find(name).filter(|call| context.caller.allows(*call)) {
+            Some(Call::Tool(tool)) => tool.call(context, args).await,
+            Some(Call::File) => chat_file::run(context, args).await,
+            _ => Err(Failure::new(
+                "not_allowed",
+                format!("常驻程序用不了 {name}"),
+            )),
+        }
+    };
+    tokio::time::timeout(context.call_time, call)
+        .await
+        .unwrap_or_else(|_| Err(service::late(context.call_time)))
 }
 
 /// Runs the Max tool `name`, as its tests do.

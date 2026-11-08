@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use max_core::ids::ConversationId;
 use max_core::item::{Image, ItemKind};
+use max_core::limits::Setting;
 use max_core::message::{Content, Node};
 use max_core::run::Outcome;
 use max_db::PgPool;
@@ -14,6 +15,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use super::*;
 use crate::command;
+use crate::conversation::Configured;
 use crate::conversation::testing::{
     from_xiaohong, from_xiaoming, group, private, privately, shared, text,
 };
@@ -1302,5 +1304,202 @@ async fn who_stops_max(pool: PgPool) {
     h.send(privately(from_xiaoming(1, vec![text("/stop")])));
     let answer = h.said().await.1;
     assert!(answer.contains("Max won't reply until /start"), "{answer}");
+    h.stop().await;
+}
+
+/// Max's `config`, as a program in the group's VM would ask: what each
+/// limit is now, or why not.
+async fn configure(
+    h: &Harness,
+    changes: Vec<(Setting, Option<u64>)>,
+    origin: Option<TurnId>,
+) -> Result<Vec<Configured>, String> {
+    let (reply, answer) = oneshot::channel();
+    h.mailbox
+        .send(Event::Configure {
+            changes,
+            origin,
+            reply,
+        })
+        .unwrap();
+    tokio::time::timeout(PATIENCE, answer)
+        .await
+        .unwrap()
+        .unwrap()
+}
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn max_sets_the_idle_window_of_the_running_turn(pool: PgPool) {
+    let mut h = Harness::new(pool, 300).await;
+    h.script.push(Answer::says("好"));
+    h.send(at_max(0, " 在吗"));
+    h.said().await;
+    let refused = configure(
+        &h,
+        vec![(Setting::IdleWindowSecs, Some(1))],
+        Some(TurnId(999)),
+    );
+    assert_eq!(refused.await.unwrap_err(), "这一轮已经结束了，没做");
+    assert_eq!(h.turns().await[0].1, None, "the turn goes on");
+
+    // Below what the tool allows, so the test is short: the actor
+    // trusts the command and the tool to keep to the ranges.
+    let configured = configure(&h, vec![(Setting::IdleWindowSecs, Some(1))], None)
+        .await
+        .unwrap();
+    let idle = configured
+        .iter()
+        .find(|one| one.setting == Setting::IdleWindowSecs);
+    assert_eq!(idle.map(|one| (one.value, one.default)), Some((1, 300)));
+    let deadline = Instant::now() + PATIENCE;
+    while h.turns().await[0].1.is_none() {
+        assert!(Instant::now() < deadline, "the core didn't end");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(h.turns().await[0].1, Some(Outcome::Answered));
+    h.stop().await;
+    let saved = h
+        .count("select (overrides->>'idle_window_secs')::bigint from conversation_settings")
+        .await;
+    assert_eq!(saved, 1);
+}
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn admins_config_the_limits_and_everyone_sees_them(pool: PgPool) {
+    let mut h = Harness::new(pool, 300).await;
+    h.send(from_xiaoming(0, vec![me(), text("/config")]));
+    assert_eq!(
+        h.said().await.1,
+        command::answer(
+            "config",
+            "this conversation's limits\n\
+             idle_window_secs  300\n\
+             call_time_secs    60\n\
+             commands_at_once  8"
+        )
+    );
+    h.send(from_xiaoming(
+        1,
+        vec![me(), text("/config call_time_secs 120")],
+    ));
+    assert_eq!(
+        h.said().await.1,
+        command::answer("config", "refused: the group owner and admins only")
+    );
+    // 小红 is an admin.
+    let mut n = 2;
+    let mut config = |h: &Harness, argument: &str| {
+        h.send(from_xiaohong(
+            n,
+            vec![me(), text(&format!("/config {argument}"))],
+        ));
+        n += 1;
+    };
+    for (argument, answer) in [
+        (
+            "call_time_secs 120",
+            "call_time_secs set to 120; takes effect from Max's next program or command",
+        ),
+        (
+            "call_time_secs 5",
+            "error: call_time_secs takes a number from 10 to 600, or default",
+        ),
+        (
+            "call_time_secs soon",
+            "error: call_time_secs takes a number from 10 to 600, or default",
+        ),
+        (
+            "job_time_secs 60",
+            "error: no such setting; there are idle_window_secs, call_time_secs, commands_at_once",
+        ),
+        (
+            "idle_window_secs 1800",
+            "idle_window_secs set to 1800; takes effect now",
+        ),
+        ("call_time_secs", "call_time_secs    120 (default 60)"),
+    ] {
+        config(&h, argument);
+        assert_eq!(
+            h.said().await.1,
+            command::answer("config", answer),
+            "{argument}"
+        );
+    }
+    h.send(from_xiaoming(9, vec![me(), text("/status")]));
+    let status = h.said().await.1;
+    assert!(
+        status.contains("\nconfig    idle_window_secs 1800 · call_time_secs 120\n"),
+        "{status}"
+    );
+    config(&h, "idle_window_secs default");
+    assert_eq!(
+        h.said().await.1,
+        command::answer(
+            "config",
+            "idle_window_secs back to the default, 300; takes effect now"
+        )
+    );
+    h.stop().await;
+    assert_eq!(h.script.calls(), 0);
+    let saved = h
+        .count("select (overrides->>'call_time_secs')::bigint from conversation_settings")
+        .await;
+    assert_eq!(saved, 120);
+    let idle = h
+        .count("select count(overrides->'idle_window_secs') from conversation_settings")
+        .await;
+    assert_eq!(idle, 0);
+}
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn a_conversation_runs_as_many_commands_as_it_set(pool: PgPool) {
+    let h = Harness::start(pool, Group, 300, false, false, None, |actor| {
+        actor
+            .settings
+            .overrides
+            .set(Setting::CommandsAtOnce, Some(2));
+        actor.jobs.pretend_command("$ make");
+        actor.jobs.pretend_command("$ make test");
+    })
+    .await;
+    let shell = Request::Shell(Background {
+        command: "make".into(),
+        workdir: None,
+        limit: Duration::from_secs(60),
+        unit: "max-9".into(),
+    });
+    let refused = ask(&h, shell).await.unwrap_err();
+    assert!(refused.starts_with("已经有 2 个后台命令"), "{refused}");
+}
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn a_program_call_ends_at_the_conversations_call_time(pool: PgPool) {
+    let mut h = Harness::start(pool, Group, 300, false, true, None, |actor| {
+        actor.settings.overrides.set(Setting::CallTimeSecs, Some(1));
+    })
+    .await;
+    let (reply, result) = oneshot::channel();
+    let call = Event::Call {
+        tool: "say".into(),
+        args: serde_json::json!({ "text": "早" }),
+        reply,
+    };
+    h.mailbox.send(call).unwrap();
+    // The sender holds the receipt, so the `say` waits on it.
+    let _held = tokio::time::timeout(PATIENCE, h.outbound.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let failed = tokio::time::timeout(PATIENCE, result)
+        .await
+        .expect("the call went on")
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(failed.code, "timeout");
+    assert!(
+        failed.message.starts_with("1 秒内没做完"),
+        "{}",
+        failed.message
+    );
     h.stop().await;
 }

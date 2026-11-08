@@ -32,6 +32,7 @@ use super::{
 };
 use crate::bind::Binds;
 use crate::command;
+use crate::config::Limits;
 use crate::inbound::Inbound;
 use crate::job::Request;
 use crate::llm::{self, Chosen, Models};
@@ -82,6 +83,9 @@ pub struct Shared {
     pub pictures: Option<Arc<Pictures>>,
     /// When Max started, for `/status`.
     pub started: Instant,
+    /// The configuration file's defaults of the limits a conversation
+    /// may set for itself.
+    pub limits: Limits,
 }
 
 /// Something Max said, committed, for the platform's sender.
@@ -269,7 +273,7 @@ impl Conversation {
             if self.stopping.is_some() {
                 self.stopping
             } else if a.run.idle() {
-                Some(a.idle_since + a.chosen.idle_window)
+                Some(a.idle_since + self.idle_window(a))
             } else {
                 None
             }
@@ -358,6 +362,21 @@ impl Conversation {
                 let answer = match self.ended(origin) {
                     Some(refused) => Err((refused, moved)),
                     None => self.adopt(moved),
+                };
+                let _ = reply.send(answer);
+                Ok(())
+            }
+            Event::Configure {
+                changes,
+                origin,
+                reply,
+            } => {
+                let answer = match self.ended(origin) {
+                    Some(refused) => Err(refused),
+                    None => {
+                        self.configure(&changes, "Max").await?;
+                        Ok(self.configured())
+                    }
                 };
                 let _ = reply.send(answer);
                 Ok(())
@@ -728,6 +747,7 @@ impl Conversation {
     /// After every event: what the core does next, if nothing is in flight.
     async fn advance(&mut self) -> Result<()> {
         loop {
+            let call_time = self.call_time();
             let Some(a) = self.core.as_mut() else {
                 return Ok(());
             };
@@ -785,6 +805,7 @@ impl Conversation {
                             page_tokens: Budgets::for_window(a.chosen.window).single,
                             video: a.chosen.video,
                             work: None,
+                            call_time,
                             caller: mcp::Caller::Turn(Poster::new(self.mailbox.clone(), a.turn)),
                         };
                         let mailbox = self.mailbox.clone();
@@ -824,7 +845,7 @@ impl Conversation {
         if let Some(a) = &self.core {
             if self.stopping.is_some_and(|deadline| now >= deadline) {
                 self.end(End::Stopped).await?;
-            } else if a.run.idle() && now >= a.idle_since + a.chosen.idle_window {
+            } else if a.run.idle() && now >= a.idle_since + self.idle_window(a) {
                 self.end(End::Idle).await?;
             }
         }
@@ -1087,6 +1108,7 @@ fn failure(what: &str, reason: &str, stopped: &[u32]) -> String {
 mod commands;
 mod jobs;
 mod program;
+mod settings;
 #[cfg(test)]
 mod tests;
 mod woken;

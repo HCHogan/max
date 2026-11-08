@@ -48,12 +48,14 @@ impl Conversation {
             Command::Model(None) | Command::Effort(None) | Command::Proactive(None) => Rank::Anyone,
             Command::Persona(Persona::Show) | Command::Clear { all: false } => Rank::Anyone,
             Command::Model(Some(argument)) if argument == "list" => Rank::Anyone,
+            Command::Config { value: None, .. } => Rank::Anyone,
             Command::Kill
             | Command::Stop
             | Command::Start
             | Command::Persona(_)
             | Command::Clear { .. }
-            | Command::Unclear => Rank::Admin,
+            | Command::Unclear
+            | Command::Config { .. } => Rank::Admin,
             Command::Model(_) | Command::Effort(_) | Command::Proactive(_) => Rank::ChatOwner,
             Command::Bind(_) => Rank::Owner,
         };
@@ -92,6 +94,10 @@ impl Conversation {
                 format!("cleared: earlier messages are out of the context; {how} brings them back")
             }
             Command::Unclear => self.unclear().await?,
+            Command::Config { name, value } => {
+                let by = &committed.message.sender.name;
+                self.config(name.as_deref(), value.as_deref(), by).await?
+            }
             Command::Bind(argument) => self.bind(committed, argument.as_deref()).await?,
         };
         self.answer(name, &answer).await
@@ -164,7 +170,7 @@ impl Conversation {
         Ok(())
     }
 
-    async fn save_settings(&mut self) -> Result<()> {
+    pub(super) async fn save_settings(&mut self) -> Result<()> {
         let mut conn = self.shared.services.pool.acquire().await?;
         platform::save_settings(
             &mut conn,
@@ -201,6 +207,9 @@ impl Conversation {
         line("proactive", proactive.to_owned());
         if settings.stopped {
             line("state", "stopped".to_owned());
+        }
+        if let Some(set) = self.config_status() {
+            line("config", set);
         }
         line(
             "core",
@@ -318,7 +327,7 @@ impl Conversation {
         let Some(a) = &self.core else {
             return "takes effect from the next reply".to_owned();
         };
-        let idle = a.chosen.idle_window.as_secs();
+        let idle = self.idle_window(a).as_secs();
         let idle = match (idle / 60, idle % 60) {
             (1, 0) => "a minute".to_owned(),
             (minutes, 0) => format!("{minutes} minutes"),

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select model, effort, persona, proactive, cleared_upto, stopped\n         from conversation_settings where conversation_id = $1",
+  "query": "select model, effort, persona, proactive, cleared_upto, stopped, overrides\n         from conversation_settings where conversation_id = $1",
   "describe": {
     "columns": [
       {
@@ -68,6 +68,17 @@
             "name": "stopped"
           }
         }
+      },
+      {
+        "ordinal": 6,
+        "name": "overrides",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "conversation_settings",
+            "name": "overrides"
+          }
+        }
       }
     ],
     "parameters": {
@@ -81,8 +92,9 @@
       true,
       false,
       true,
+      false,
       false
     ]
   },
-  "hash": "ee1f1ea6eacfbb0911962b2e5b6df77205b4422df2f49dd94122395d18238a61"
+  "hash": "015a6b0ae504914a09f106cb76761ad6947bf9b2afa32fa27385786f01b2017f"
 }

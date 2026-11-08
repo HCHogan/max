@@ -11,9 +11,8 @@ use crate::mcp::tool::Tool;
 
 impl Conversation {
     /// A program's call of `tool`; the result goes to `reply`. The call
-    /// ends once nobody waits for it: the MCP service gives up at
-    /// `CALL_TIME`, or the program closes its connection, as a turn's
-    /// call ends then.
+    /// ends at the conversation's call time, or once nobody waits for it:
+    /// the program closes its connection, as a turn's call ends then.
     pub(super) fn program_call(
         &mut self,
         tool: String,
@@ -40,6 +39,7 @@ impl Conversation {
             page_tokens: self.single(),
             video: false,
             work,
+            call_time: self.call_time(),
             caller: mcp::Caller::Program(Poster::program(self.mailbox.clone())),
         };
         self.side.spawn(move |_| async move {
