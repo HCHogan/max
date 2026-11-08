@@ -171,14 +171,17 @@ async fn a_group_is_served_once_bound(pool: PgPool) {
     s.send(owner_in_group(3, &format!("/bind {code}")));
     let bound = (
         "group:GROUP1".to_owned(),
-        command::answer("bind", "已绑定：从这里开始记录"),
+        command::answer("bind", "bound: the history starts here"),
     );
     assert_eq!(s.said().await, bound);
     // Only an owner may run /bind: the account here is the owner's now.
     s.send(owner_in_group(4, &format!("/bind {code}")));
     assert_eq!(
         s.said().await.1,
-        command::answer("bind", "错误：本群已绑定，不支持改绑")
+        command::answer(
+            "bind",
+            "error: this group is bound already, and can't be bound again"
+        )
     );
     let mut conn = s.pool.acquire().await.unwrap();
     let member = platform::account(&mut conn, Platform::Qq, "OWNERMEMBER", "hank")
@@ -229,14 +232,14 @@ async fn a_group_goes_on_from_an_old_one(pool: PgPool) {
     s.send(private(1, "/bind 30002"));
     assert_eq!(
         s.said().await.1,
-        command::answer("bind", "错误：没有老群 30002 的记录")
+        command::answer("bind", "error: no history of old group 30002")
     );
     let code = s.code(2, "/bind 30001").await;
     let again = s.code(3, "/bind 30001").await;
     s.send(owner_in_group(4, &format!("/bind {code}")));
     assert_eq!(
         s.said().await.1,
-        command::answer("bind", "已绑定：接续老群的记录")
+        command::answer("bind", "bound: the old group's history goes on here")
     );
     let mut conn = s.pool.acquire().await.unwrap();
     let bound = platform::endpoint_on(&mut conn, old.conversation, Platform::Qq)
@@ -254,7 +257,10 @@ async fn a_group_goes_on_from_an_old_one(pool: PgPool) {
     s.send(private(5, "/bind 30001"));
     assert_eq!(
         s.said().await.1,
-        command::answer("bind", "错误：老群 30001 的记录已接到别的群")
+        command::answer(
+            "bind",
+            "error: old group 30001's history goes on in another group already"
+        )
     );
     let mut elsewhere = owner_in_group(6, &format!("/bind {again}"));
     elsewhere.chat.native_id = "group:GROUP2".into();

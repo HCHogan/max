@@ -560,11 +560,14 @@ async fn commands_answer_and_never_wake(pool: PgPool) {
     assert_eq!(reply_to, None, "an answer doesn't quote the command");
 
     h.send(from_xiaoming(1, vec![me(), text("/model test/small")]));
-    assert_eq!(h.said().await.1, command::answer("model", "拒绝：仅限主人"));
+    assert_eq!(
+        h.said().await.1,
+        command::answer("model", "refused: Max's owners only")
+    );
     h.send(from_xiaoming(2, vec![me(), text("/clear --all")]));
     assert_eq!(
         h.said().await.1,
-        command::answer("clear", "拒绝：仅限群主、管理员")
+        command::answer("clear", "refused: the group owner and admins only")
     );
     // 小红 is an admin.
     h.send(from_xiaohong(3, vec![me(), text("/clear --all")]));
@@ -572,7 +575,7 @@ async fn commands_answer_and_never_wake(pool: PgPool) {
         h.said().await.1,
         command::answer(
             "clear",
-            "已清空：之前的消息不再进入上下文，@maxx /unclear 恢复"
+            "cleared: earlier messages are out of the context; @maxx /unclear brings them back"
         )
     );
     let cleared = h
@@ -583,17 +586,20 @@ async fn commands_answer_and_never_wake(pool: PgPool) {
     h.send(from_xiaoming(4, vec![me(), text("/unclear")]));
     assert_eq!(
         h.said().await.1,
-        command::answer("unclear", "拒绝：仅限群主、管理员")
+        command::answer("unclear", "refused: the group owner and admins only")
     );
     h.send(from_xiaohong(5, vec![me(), text("/unclear")]));
     assert_eq!(
         h.said().await.1,
-        command::answer("unclear", "已恢复：清空前的消息回到上下文")
+        command::answer(
+            "unclear",
+            "uncleared: the messages before the clear are back in the context"
+        )
     );
     h.send(from_xiaohong(6, vec![me(), text("/unclear")]));
     assert_eq!(
         h.said().await.1,
-        command::answer("unclear", "跳过：没有清空过")
+        command::answer("unclear", "skipped: never cleared")
     );
     h.stop().await;
     assert_eq!(h.script.calls(), 0);
@@ -609,16 +615,22 @@ async fn an_owner_changes_settings(pool: PgPool) {
     let mut h = Harness::with_owner(pool, 300, true).await;
     h.send(from_xiaoming(0, vec![me(), text("/model test/nope")]));
     let answer = h.said().await.1;
-    assert!(answer.contains("/model → 错误：没有这个模型"), "{answer}");
+    assert!(answer.contains("/model → error: no such model"), "{answer}");
     h.send(from_xiaoming(1, vec![me(), text("/model test/wide")]));
     assert_eq!(
         h.said().await.1,
-        command::answer("model", "已切换：test/wide，下次回复生效")
+        command::answer(
+            "model",
+            "switched to test/wide; takes effect from the next reply"
+        )
     );
     h.send(from_xiaoming(2, vec![me(), text("/proactive off")]));
     assert_eq!(
         h.said().await.1,
-        command::answer("proactive", "已关闭主动接话：只在被 @ 或回复时回答")
+        command::answer(
+            "proactive",
+            "proactive off: Max replies only when @-ed or replied to"
+        )
     );
     h.script.push(Answer::says("嗯"));
     // From 小红: 小明's burst of commands would hold his @ as unfinished.
@@ -633,7 +645,7 @@ async fn an_owner_changes_settings(pool: PgPool) {
         h.said().await.1,
         command::answer(
             "effort",
-            "已设置：high，这一轮对话结束后生效（闲下来 5 分钟后）"
+            "effort set to high; takes effect when the running turn ends, after 5 minutes idle"
         )
     );
     h.stop().await;
@@ -661,14 +673,20 @@ async fn a_private_chat_is_its_persons_to_command(pool: PgPool) {
     h.send(privately(from_xiaoming(0, vec![text("/model test/wide")])));
     assert_eq!(
         h.said().await.1,
-        command::answer("model", "已切换：test/wide，下次回复生效")
+        command::answer(
+            "model",
+            "switched to test/wide; takes effect from the next reply"
+        )
     );
     h.send(privately(from_xiaoming(1, vec![text("/clear --all")])));
     let cleared = h.said().await.1;
-    assert!(cleared.contains("/clear → 已清空"), "{cleared}");
+    assert!(cleared.contains("/clear → cleared: "), "{cleared}");
     // Binding a group is the owners' alone.
     h.send(privately(from_xiaoming(2, vec![text("/bind")])));
-    assert_eq!(h.said().await.1, command::answer("bind", "拒绝：仅限主人"));
+    assert_eq!(
+        h.said().await.1,
+        command::answer("bind", "refused: Max's owners only")
+    );
     h.stop().await;
     assert_eq!(h.script.calls(), 0);
 }
@@ -1142,8 +1160,146 @@ async fn kill_stops_the_jobs_too(pool: PgPool) {
     );
     h.send(from_xiaoming(1, vec![me(), text(" /kill")]));
     let (_, killed) = h.said().await;
-    assert!(killed.contains("/kill → 后台的 job#1 也停了"), "{killed}");
+    assert!(killed.contains("/kill → jobs stopped: job#1"), "{killed}");
     let status = ask(&h, Request::Status { job: None }).await.unwrap();
     assert_eq!(status, Reply::Running(Vec::new()));
+    h.stop().await;
+}
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn stop_ends_the_turn_and_its_jobs_and_nothing_starts_until_start(pool: PgPool) {
+    let (mut h, _) = Harness::with_job(pool, "查票价").await;
+    h.script.push(Answer::Hangs);
+    h.send(at_max(0, " 写篇长文"));
+    calls_reach(&h, 1).await;
+    // 小红 is an admin.
+    h.send(from_xiaohong(1, vec![me(), text("/stop")]));
+    assert_eq!(
+        h.said().await.1,
+        command::answer(
+            "stop",
+            "stopped: messages are still recorded, but Max won't reply until @maxx /start\n\
+             jobs stopped: job#1"
+        )
+    );
+    assert_eq!(h.turns().await[0].1, Some(Outcome::Interrupted));
+
+    // An @ is recorded, but wakes nobody; commands are still answered.
+    h.send(at_max(2, " 在吗"));
+    h.send(from_xiaohong(3, vec![me(), text("/stop")]));
+    assert_eq!(
+        h.said().await.1,
+        command::answer("stop", "skipped: already stopped")
+    );
+    h.send(from_xiaohong(4, vec![me(), text("/status")]));
+    let status = h.said().await.1;
+    assert!(status.contains("\nstate     stopped\n"), "{status}");
+    // The programs can't post, wake Max, mute or start a job; they can
+    // still read.
+    let draft = Draft {
+        reply_to: None,
+        nodes: vec![DraftNode::Text {
+            text: "CI 挂了".into(),
+        }],
+    };
+    let (say, sent) = post(Act::Say(draft));
+    h.mailbox.send(Event::Post(say)).unwrap();
+    assert_eq!(sent.await.unwrap(), Err(STOPPED.to_owned()));
+    let (reply, woke) = oneshot::channel();
+    let text_ = "CI 挂了".to_owned();
+    h.mailbox.send(Event::Woken { text: text_, reply }).unwrap();
+    assert!(woke.await.unwrap().is_err());
+    h.mailbox
+        .send(Event::VmNotice("VM 起不来了".into()))
+        .unwrap();
+    let (reply, muted) = oneshot::channel();
+    let call = Event::Call {
+        tool: "mute_member".into(),
+        args: serde_json::json!({ "member": 1, "seconds": 60 }),
+        reply,
+    };
+    h.mailbox.send(call).unwrap();
+    assert_eq!(muted.await.unwrap().unwrap_err().code, "stopped");
+    let start = Request::Start {
+        task: "查一下".into(),
+        title: None,
+        workdir: "/work".into(),
+    };
+    assert_eq!(ask(&h, start).await.unwrap_err(), STOPPED);
+    let status = ask(&h, Request::Status { job: None }).await.unwrap();
+    assert_eq!(status, Reply::Running(Vec::new()));
+    assert_eq!(h.turns().await.len(), 1);
+
+    // 小明 is Max's owner here.
+    h.send(from_xiaoming(5, vec![me(), text("/start")]));
+    assert_eq!(
+        h.said().await.1,
+        command::answer("start", "started: Max replies again")
+    );
+    h.send(from_xiaoming(6, vec![me(), text("/start")]));
+    assert_eq!(
+        h.said().await.1,
+        command::answer("start", "skipped: not stopped")
+    );
+    h.script.push(Answer::says("在"));
+    h.send(from_xiaohong(7, vec![me(), text(" 在吗")]));
+    assert_eq!(h.said().await.1, "在");
+    h.stop().await;
+    assert_eq!(h.turns().await.len(), 2);
+    let stopped = "select count(*) from conversation_settings where stopped";
+    assert_eq!(h.count(stopped).await, 0);
+}
+
+/// A stopped conversation's next actor, as after a restart, is stopped
+/// too. Intent didn't see what came meanwhile: the classifier's first
+/// call is on what comes after `/start`.
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn a_stop_outlasts_a_restart(pool: PgPool) {
+    let mut h = Harness::new(pool.clone(), 300).await;
+    h.send(from_xiaohong(0, vec![me(), text("/stop")]));
+    h.said().await;
+    h.stop().await;
+    let mut h = Harness::new(pool, 300).await;
+    h.script
+        .push(Answer::says(r#"{"trigger": false, "reason": "闲聊"}"#));
+    h.send(at_max(1, " 在吗"));
+    h.send(from_xiaoming(2, vec![text("今天吃什么")]));
+    h.send(from_xiaohong(3, vec![me(), text("/start")]));
+    assert_eq!(
+        h.said().await.1,
+        command::answer("start", "started: Max replies again")
+    );
+    h.send(from_xiaohong(4, vec![text("明天呢")]));
+    calls_reach(&h, 1).await;
+    h.stop().await;
+    assert!(h.turns().await.is_empty());
+    let requests = h.script.requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    let shown: String = requests[0]
+        .items
+        .iter()
+        .filter_map(|item| match &item.kind {
+            ItemKind::User { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(shown.contains("明天呢"), "{shown}");
+}
+
+/// Only the group owner and admins stop Max, and in a private chat its
+/// person.
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn who_stops_max(pool: PgPool) {
+    let mut h = Harness::new(pool.clone(), 300).await;
+    h.send(from_xiaoming(0, vec![me(), text("/stop")]));
+    assert_eq!(
+        h.said().await.1,
+        command::answer("stop", "refused: the group owner and admins only")
+    );
+    h.stop().await;
+    let mut h = Harness::private(pool).await;
+    h.send(privately(from_xiaoming(1, vec![text("/stop")])));
+    let answer = h.said().await.1;
+    assert!(answer.contains("Max won't reply until /start"), "{answer}");
     h.stop().await;
 }

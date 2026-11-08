@@ -6,6 +6,8 @@ use serde_json::Value;
 use tokio::sync::oneshot;
 
 use super::*;
+use crate::mcp::MuteMember;
+use crate::mcp::tool::Tool;
 
 impl Conversation {
     /// A program's call of `tool`; the result goes to `reply`. The call
@@ -20,6 +22,11 @@ impl Conversation {
     ) {
         if self.stopping.is_some() {
             let _ = reply.send(Err(mcp::Failure::new("closed", "Max 正在重启，没做")));
+            return;
+        }
+        // What it would post is refused as it comes; a mute posts nothing.
+        if self.settings.stopped && tool == MuteMember::NAME {
+            let _ = reply.send(Err(mcp::Failure::new("stopped", STOPPED)));
             return;
         }
         let work = self

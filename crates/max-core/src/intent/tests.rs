@@ -177,3 +177,20 @@ fn proactive_off_leaves_only_direct_triggers() {
     let e = entry(4, XIAOMING, EntryKind::Direct, "在吗？");
     assert_eq!(intent.observe(&e, clock.at(40)), [direct(&[4])]);
 }
+
+#[test]
+fn forgetting_drops_what_is_held_and_waiting() {
+    let clock = Clock(Instant::now());
+    let mut intent = Intent::new();
+    intent.observe(&chat(1), clock.at(0));
+    intent.observe(&chat(2), clock.at(1));
+    let e = entry(3, XIAOHONG, EntryKind::Direct, "我跟你讲，");
+    assert!(intent.observe(&e, clock.at(2)).is_empty());
+    intent.forget();
+    assert_eq!(intent.deadline(), None);
+    assert!(intent.tick(clock.at(30)).is_empty());
+    // The verdict on the batch in flight wakes nobody, and nothing waited
+    // behind it.
+    assert!(intent.verdict(verdict(true), clock.at(31)).is_empty());
+    assert_eq!(intent.observe(&chat(4), clock.at(40)), [classify(&[4])]);
+}

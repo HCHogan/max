@@ -3,7 +3,7 @@
 //! commands too. Only `/`: QQ's command panel fills one in, and `!` is
 //! plain text. There is no `/help`: the panel is the list.
 //! The conversation actor runs them; they never reach a core. Their
-//! answers read like a log, in a code block: see `answer`.
+//! answers read like a log, in English, in a code block: see `answer`.
 
 use max_db::platform::ConversationKind;
 
@@ -14,6 +14,9 @@ use crate::inbound::Inbound;
 pub enum Command {
     Status,
     Kill,
+    /// `/stop`: Max records messages but doesn't reply, until `/start`.
+    Stop,
+    Start,
     /// `/model`, `/model list`, or `/model <provider/model>`.
     Model(Option<String>),
     /// `/effort`, `/effort default`, or `/effort <level>`.
@@ -38,6 +41,8 @@ impl Command {
         match self {
             Command::Status => "status",
             Command::Kill => "kill",
+            Command::Stop => "stop",
+            Command::Start => "start",
             Command::Model(_) => "model",
             Command::Effort(_) => "effort",
             Command::Proactive(_) => "proactive",
@@ -110,6 +115,8 @@ pub fn parse(text: &str) -> Option<Command> {
     Some(match word.to_lowercase().as_str() {
         "status" => Command::Status,
         "kill" => Command::Kill,
+        "stop" => Command::Stop,
+        "start" => Command::Start,
         "model" => Command::Model(argument),
         "effort" => Command::Effort(argument),
         "proactive" => Command::Proactive(match argument.as_deref() {
@@ -139,6 +146,8 @@ mod tests {
     #[test]
     fn commands_and_not() {
         assert_eq!(parse(" ／Status "), Some(Command::Status));
+        assert_eq!(parse("/stop"), Some(Command::Stop));
+        assert_eq!(parse("/START"), Some(Command::Start));
         assert_eq!(
             parse("/model test/big"),
             Some(Command::Model(Some("test/big".into())))
@@ -180,6 +189,7 @@ mod tests {
             "/nix/store/abc",
             "kill",
             "/killall",
+            "/stopwatch",
             "",
         ] {
             assert_eq!(parse(chatter), None, "{chatter:?}");
@@ -188,8 +198,8 @@ mod tests {
 
     #[test]
     fn answers_are_code_blocks() {
-        assert_eq!(answer("clear", "已清空"), "```text\n/clear → 已清空\n```");
-        let persona = "当前人设：\n用 ```python 写代码";
+        assert_eq!(answer("clear", "cleared"), "```text\n/clear → cleared\n```");
+        let persona = "persona:\n用 ```python 写代码";
         assert_eq!(
             answer("persona", persona),
             format!("````text\n/persona → {persona}\n````")

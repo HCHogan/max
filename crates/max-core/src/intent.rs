@@ -198,6 +198,15 @@ impl Intent {
         self.holds.iter().map(Hold::release_at).min()
     }
 
+    /// `/stop`: drops the held triggers, the chatter waiting for the
+    /// classifier, and the batch in flight, whose verdict then wakes
+    /// nobody. What it saw lately, and the hour's judged wakes, it keeps.
+    pub fn forget(&mut self) {
+        self.holds.clear();
+        self.waiting.clear();
+        self.classifying = None;
+    }
+
     /// `/proactive on` or `off`.
     pub fn set_proactive(&mut self, on: bool) {
         self.proactive = on;

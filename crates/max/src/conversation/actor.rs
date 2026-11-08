@@ -33,6 +33,7 @@ use super::{
 use crate::bind::Binds;
 use crate::command;
 use crate::inbound::Inbound;
+use crate::job::Request;
 use crate::llm::{self, Chosen, Models};
 use crate::mcp;
 use crate::media::pictures::Pictures;
@@ -54,6 +55,9 @@ const MOST_RESTARTS: u32 = 3;
 /// The most of a reason a failure line shows: a provider's error page
 /// runs to kilobytes.
 const REASON_CHARS: usize = 300;
+/// What a program is told when it would act in a conversation `/stop`
+/// stopped.
+const STOPPED: &str = "Max 在这里停用了，没做";
 
 /// What every conversation's actor shares.
 pub struct Shared {
@@ -335,7 +339,11 @@ impl Conversation {
                 origin,
                 reply,
             } => {
-                let answer = match self.ended(origin) {
+                let starts = matches!(request, Request::Start { .. } | Request::Shell(_));
+                let refused = self
+                    .ended(origin)
+                    .or_else(|| starts.then(|| self.stopped()).flatten());
+                let answer = match refused {
                     Some(refused) => Err(refused),
                     None => self.job_request(request),
                 };
@@ -437,6 +445,11 @@ impl Conversation {
             let mark = committed.direct.map_or(Mark::None, |direct| direct.mark());
             self.feed(&[(&committed.message, mark)]).await?;
             self.follow_up(&committed).await?;
+        }
+        // Stopped, intent doesn't see it: no classifier call, and no wake.
+        // It is in the next core's tail all the same.
+        if self.settings.stopped {
+            return Ok(());
         }
         let entry = Entry {
             id: committed.message.id,
@@ -650,7 +663,7 @@ impl Conversation {
     }
 
     async fn start_core(&mut self, wake: Wake) -> Result<()> {
-        if self.stopping.is_some() {
+        if self.stopping.is_some() || self.settings.stopped {
             return Ok(());
         }
         let settings = &self.settings;
@@ -920,6 +933,12 @@ impl Conversation {
         Some("这一轮已经结束了，没做".to_owned())
     }
 
+    /// Why a program can't post or act in the group: `/stop`. A turn's
+    /// tools can't either: `/stop` ended the turn, and starts none.
+    fn stopped(&self) -> Option<String> {
+        self.settings.stopped.then(|| STOPPED.to_owned())
+    }
+
     /// What a tool says or does: a running core's, whose programs' results
     /// tell the core what they did, or a program's Max keeps in the VM.
     async fn post(&mut self, post: Post) -> Result<()> {
@@ -928,7 +947,7 @@ impl Conversation {
             origin,
             receipt,
         } = post;
-        if let Some(refused) = self.ended(origin) {
+        if let Some(refused) = self.ended(origin).or_else(|| self.stopped()) {
             if let Some(receipt) = receipt {
                 let _ = receipt.send(Err(refused));
             }

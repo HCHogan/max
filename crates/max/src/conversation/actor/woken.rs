@@ -60,6 +60,10 @@ impl Conversation {
             let _ = reply.send(Err("Max 正在重启，没叫醒".to_owned()));
             return Ok(());
         }
+        if self.settings.stopped {
+            let _ = reply.send(Err("Max 在这里停用了，没叫醒".to_owned()));
+            return Ok(());
+        }
         let count = self.woken.count(Instant::now());
         let _ = reply.send(Ok("叫醒了 Max".to_owned()));
         info!(conversation = %self.place.conversation, count, "a program wakes Max");
@@ -67,9 +71,9 @@ impl Conversation {
         self.wake_with(Reason::Program, item).await
     }
 
-    /// The VM service on the group's VM.
+    /// The VM service on the group's VM. Stopped, Max isn't told.
     pub(super) async fn vm_notice(&mut self, text: String) -> Result<()> {
-        if self.stopping.is_some() {
+        if self.stopping.is_some() || self.settings.stopped {
             return Ok(());
         }
         let text = format!("[VM] {text}");

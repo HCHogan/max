@@ -1,9 +1,9 @@
 //! Running commands. The answer is said in the same conversation, as a row
 //! of Max's outside any turn: QQ gives no way from a group member's id to a
 //! private chat with them. It doesn't quote the command, which is right
-//! above it, and reads like a log: terse, `/name → result`, in a code
-//! block (see `command::answer`). Like the command, it is in the next
-//! core's context as Max's own words.
+//! above it, and reads like a log: terse, in English, `/name → result`,
+//! in a code block (see `command::answer`). Like the command, it is in the
+//! next core's context, as the host's words.
 
 use std::fmt::Write;
 use std::time::Duration;
@@ -48,50 +48,48 @@ impl Conversation {
             Command::Model(None) | Command::Effort(None) | Command::Proactive(None) => Rank::Anyone,
             Command::Persona(Persona::Show) | Command::Clear { all: false } => Rank::Anyone,
             Command::Model(Some(argument)) if argument == "list" => Rank::Anyone,
-            Command::Kill | Command::Persona(_) | Command::Clear { .. } | Command::Unclear => {
-                Rank::Admin
-            }
+            Command::Kill
+            | Command::Stop
+            | Command::Start
+            | Command::Persona(_)
+            | Command::Clear { .. }
+            | Command::Unclear => Rank::Admin,
             Command::Model(_) | Command::Effort(_) | Command::Proactive(_) => Rank::ChatOwner,
             Command::Bind(_) => Rank::Owner,
         };
         let name = command.name();
         if rank < needs {
             let who = if needs >= Rank::ChatOwner {
-                "主人"
+                "Max's owners"
             } else {
-                "群主、管理员"
+                "the group owner and admins"
             };
-            return self.answer(name, &format!("拒绝：仅限{who}")).await;
+            return self.answer(name, &format!("refused: {who} only")).await;
         }
         let answer = match command {
             Command::Status => self.status(),
             Command::Kill => {
-                // Nothing the model has seen wakes it again, held or not.
-                self.seen = self.head;
-                if self.core.is_some() {
-                    let reason = format!("{} 用 /kill 停下了", committed.message.sender.name);
-                    self.end(End::Kill(reason)).await?;
-                }
-                let jobs = self.cancel_jobs();
+                let jobs = self.kill(committed, name).await?;
                 if jobs.is_empty() {
                     return Ok(());
                 }
-                let jobs: Vec<String> = jobs.iter().map(|job| format!("job#{job}")).collect();
-                format!("后台的 {} 也停了", jobs.join("、"))
+                stopped_jobs(&jobs)
             }
+            Command::Stop => self.stop_replying(committed).await?,
+            Command::Start => self.start_replying().await?,
             Command::Model(argument) => self.model(argument.as_deref()).await?,
             Command::Effort(argument) => self.effort(argument).await?,
             Command::Proactive(on) => self.proactive(on).await?,
             Command::Persona(persona) => self.persona(persona).await?,
             Command::Clear { all: false } => {
                 let how = command::how(self.place.kind, &self.place.my_name, "/clear --all");
-                format!("需要确认：发送 {how} 清空上下文")
+                format!("confirm: send {how} to clear the context")
             }
             Command::Clear { all: true } => {
                 self.settings.cleared_upto = Some(committed.message.id);
                 self.save_settings().await?;
                 let how = command::how(self.place.kind, &self.place.my_name, "/unclear");
-                format!("已清空：之前的消息不再进入上下文，{how} 恢复")
+                format!("cleared: earlier messages are out of the context; {how} brings them back")
             }
             Command::Unclear => self.unclear().await?,
             Command::Bind(argument) => self.bind(committed, argument.as_deref()).await?,
@@ -99,14 +97,60 @@ impl Conversation {
         self.answer(name, &answer).await
     }
 
+    /// Ends the running core quietly and stops the jobs, for `/kill` and
+    /// `/stop`, the command `name`: the jobs stopped.
+    async fn kill(&mut self, committed: &Committed, name: &str) -> Result<Vec<u32>> {
+        // Nothing the model has seen wakes it again, held or not.
+        self.seen = self.head;
+        if self.core.is_some() {
+            let reason = format!("{} ran /{name}", committed.message.sender.name);
+            self.end(End::Kill(reason)).await?;
+        }
+        Ok(self.cancel_jobs())
+    }
+
+    /// `/stop`: `/kill`, and then nothing starts a turn until `/start`,
+    /// though every message is still recorded. Saved, so it outlasts a
+    /// restart.
+    async fn stop_replying(&mut self, committed: &Committed) -> Result<String> {
+        if self.settings.stopped {
+            return Ok("skipped: already stopped".to_owned());
+        }
+        self.settings.stopped = true;
+        self.save_settings().await?;
+        // An @ held for the rest of its sentence, and chatter waiting for
+        // the classifier, wake nobody now.
+        self.intent.forget();
+        let jobs = self.kill(committed, "stop").await?;
+        let how = command::how(self.place.kind, &self.place.my_name, "/start");
+        let mut answer =
+            format!("stopped: messages are still recorded, but Max won't reply until {how}");
+        if !jobs.is_empty() {
+            answer.push('\n');
+            answer.push_str(&stopped_jobs(&jobs));
+        }
+        Ok(answer)
+    }
+
+    /// `/start`: what was said while stopped isn't answered, but it is in
+    /// the next turn's context.
+    async fn start_replying(&mut self) -> Result<String> {
+        if !self.settings.stopped {
+            return Ok("skipped: not stopped".to_owned());
+        }
+        self.settings.stopped = false;
+        self.save_settings().await?;
+        Ok("started: Max replies again".to_owned())
+    }
+
     /// Takes `/clear --all` back: what came before its mark is in the
     /// context again, as far back as the tail goes.
     async fn unclear(&mut self) -> Result<String> {
         if self.settings.cleared_upto.take().is_none() {
-            return Ok("跳过：没有清空过".to_owned());
+            return Ok("skipped: never cleared".to_owned());
         }
         self.save_settings().await?;
-        Ok("已恢复：清空前的消息回到上下文".to_owned())
+        Ok("uncleared: the messages before the clear are back in the context".to_owned())
     }
 
     async fn answer(&mut self, name: &str, body: &str) -> Result<()> {
@@ -155,6 +199,9 @@ impl Conversation {
         );
         let proactive = if settings.proactive { "on" } else { "off" };
         line("proactive", proactive.to_owned());
+        if settings.stopped {
+            line("state", "stopped".to_owned());
+        }
         line(
             "core",
             match &self.core {
@@ -199,32 +246,29 @@ impl Conversation {
 
     async fn model(&mut self, argument: Option<&str>) -> Result<String> {
         let models = &self.shared.models;
-        let list = models.references().join("、");
+        let list = models.references().join(", ");
         let current = self.settings.model.clone();
         let Some(reference) = argument.filter(|argument| *argument != "list") else {
             let current = match models.turn(current.as_deref(), None) {
                 Ok(chosen) => chosen.reference(),
                 Err(_) => current.unwrap_or_default(),
             };
-            return Ok(format!("当前：{current}\n可选：{list}"));
+            return Ok(format!("current: {current}\navailable: {list}"));
         };
         if let Err(error) = models.choose(reference, None) {
-            return Ok(format!("错误：没有这个模型（{error}）\n可选：{list}"));
+            return Ok(format!("error: no such model ({error})\navailable: {list}"));
         }
         self.settings.model = (reference != "default").then(|| reference.to_owned());
         self.save_settings().await?;
-        Ok(format!("已切换：{reference}，{}", self.takes_effect()))
+        Ok(format!("switched to {reference}; {}", self.takes_effect()))
     }
 
     async fn effort(&mut self, argument: Option<String>) -> Result<String> {
         let Some(level) = argument else {
-            let effort = match &self.settings.effort {
-                Some(effort) => effort.clone(),
-                None => "默认".to_owned(),
-            };
-            return Ok(format!("推理强度：{effort}"));
+            let effort = self.settings.effort.as_deref().unwrap_or("default");
+            return Ok(format!("effort: {effort}"));
         };
-        let answer = format!("已设置：{level}，{}", self.takes_effect());
+        let answer = format!("effort set to {level}; {}", self.takes_effect());
         self.settings.effort = (level != "default").then_some(level);
         self.save_settings().await?;
         Ok(answer)
@@ -232,20 +276,16 @@ impl Conversation {
 
     async fn proactive(&mut self, on: Option<bool>) -> Result<String> {
         let Some(on) = on else {
-            let state = if self.settings.proactive {
-                "开"
-            } else {
-                "关"
-            };
-            return Ok(format!("主动接话：{state}"));
+            let state = if self.settings.proactive { "on" } else { "off" };
+            return Ok(format!("proactive: {state}"));
         };
         self.settings.proactive = on;
         self.intent.set_proactive(on);
         self.save_settings().await?;
         Ok(if on {
-            "已开启主动接话"
+            "proactive on: Max may join in unasked"
         } else {
-            "已关闭主动接话：只在被 @ 或回复时回答"
+            "proactive off: Max replies only when @-ed or replied to"
         }
         .to_owned())
     }
@@ -254,21 +294,21 @@ impl Conversation {
         let answer = match persona {
             Persona::Show => {
                 return Ok(match &self.settings.persona {
-                    Some(persona) => format!("当前人设：\n{persona}"),
-                    None => "当前人设：默认".to_owned(),
+                    Some(persona) => format!("persona:\n{persona}"),
+                    None => "persona: default".to_owned(),
                 });
             }
             Persona::Reset => {
                 self.settings.persona = None;
-                "已恢复默认人设"
+                "persona reset to the default"
             }
             Persona::Set(text) => {
                 self.settings.persona = Some(text);
-                "已更新人设"
+                "persona updated"
             }
         };
         self.save_settings().await?;
-        Ok(format!("{answer}，{}", self.takes_effect()))
+        Ok(format!("{answer}; {}", self.takes_effect()))
     }
 
     /// When a change of model, effort or persona shows: a running core
@@ -276,24 +316,24 @@ impl Conversation {
     /// has been idle for its window.
     fn takes_effect(&self) -> String {
         let Some(a) = &self.core else {
-            return "下次回复生效".to_owned();
+            return "takes effect from the next reply".to_owned();
         };
         let idle = a.chosen.idle_window.as_secs();
-        let idle = if idle % 60 == 0 {
-            format!("{} 分钟", idle / 60)
-        } else {
-            format!("{idle} 秒")
+        let idle = match (idle / 60, idle % 60) {
+            (1, 0) => "a minute".to_owned(),
+            (minutes, 0) => format!("{minutes} minutes"),
+            _ => format!("{idle} seconds"),
         };
-        format!("这一轮对话结束后生效（闲下来 {idle}后）")
+        format!("takes effect when the running turn ends, after {idle} idle")
     }
 
     /// The `/bind <码>` that bound this group, which the table hands over
     /// instead of running it.
     pub(super) async fn bound(&mut self, continued: bool) -> Result<()> {
         let text = if continued {
-            "已绑定：接续老群的记录"
+            "bound: the old group's history goes on here"
         } else {
-            "已绑定：从这里开始记录"
+            "bound: the history starts here"
         };
         self.answer("bind", text).await
     }
@@ -302,7 +342,7 @@ impl Conversation {
     /// group is bound already, or it wouldn't have an actor.
     async fn bind(&mut self, committed: &Committed, argument: Option<&str>) -> Result<String> {
         if self.place.kind != ConversationKind::Direct {
-            return Ok("错误：本群已绑定，不支持改绑".to_owned());
+            return Ok("error: this group is bound already, and can't be bound again".to_owned());
         }
         let conversation = match argument {
             None => None,
@@ -312,11 +352,13 @@ impl Conversation {
                 let found =
                     platform::conversation_of(&mut conn, Platform::QqLegacy, &native_id).await?;
                 let Some(conversation) = found else {
-                    return Ok(format!("错误：没有老群 {group} 的记录"));
+                    return Ok(format!("error: no history of old group {group}"));
                 };
                 let bound = platform::endpoint_on(&mut conn, conversation, Platform::Qq).await?;
                 if bound.is_some() {
-                    return Ok(format!("错误：老群 {group} 的记录已接到别的群"));
+                    return Ok(format!(
+                        "error: old group {group}'s history goes on in another group already"
+                    ));
                 }
                 Some(conversation)
             }
@@ -327,14 +369,20 @@ impl Conversation {
         };
         let code = self.shared.binds.issue(pending, std::time::Instant::now());
         let target = match argument {
-            Some(group) => format!("接续老群 {group} 的记录"),
-            None => "开始新的记录".to_owned(),
+            Some(group) => format!("to go on with old group {group}'s history"),
+            None => "to start a new history".to_owned(),
         };
         let how = command::how(ConversationKind::Group, &self.place.my_name, "/bind");
         Ok(format!(
-            "已生成绑定码：在要绑的群里发送 {how} {code}，{target}\n有效期 10 分钟，只能用一次"
+            "code issued: send {how} {code} in the group to bind, {target}\nvalid for 10 minutes, once"
         ))
     }
+}
+
+/// The jobs `/kill` or `/stop` stopped, as a line of its answer.
+fn stopped_jobs(jobs: &[u32]) -> String {
+    let jobs: Vec<String> = jobs.iter().map(|job| format!("job#{job}")).collect();
+    format!("jobs stopped: {}", jobs.join(", "))
 }
 
 /// A model as `/status` shows it: its reference, and the effort if set.

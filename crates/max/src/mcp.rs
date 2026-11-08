@@ -19,6 +19,7 @@ mod web_search;
 pub(crate) mod work;
 
 pub use forward::api;
+pub use mute_member::MuteMember;
 pub use service::{Grant, Sessions, serve, serve_with};
 
 #[cfg(test)]
