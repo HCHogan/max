@@ -11,19 +11,21 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use color_eyre::eyre::{Result, bail, ensure};
+use futures_util::StreamExt;
+use futures_util::stream::FuturesUnordered;
 use russh::client::{self, Handle, Msg};
 use russh::keys::{PrivateKey, PrivateKeyWithHashAlg, PublicKeyOrCertificate};
 use russh::{Channel, ChannelMsg};
 use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::UnixStream;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use tokio::time::timeout;
+use tokio::time::{Instant, timeout, timeout_at};
 use tracing::warn;
 
-/// How long a command stopped by [`Command::stop`] has to end: past the
-/// 90 seconds systemd gives a unit from SIGTERM to SIGKILL, so a guest
-/// that answers has ended it by then. One that doesn't answer leaves it
-/// to the stopper, and the turn goes on.
+/// How long the guest has to stop a unit, for [`Command::stop`] and the
+/// stopper each: past the 90 seconds systemd gives a unit from SIGTERM to
+/// SIGKILL, so a guest that answers has ended it by then. One that doesn't
+/// answer leaves it to the stopper, and the turn goes on.
 const STOP_WAIT: Duration = Duration::from_secs(120);
 /// The most of a control command's stderr its error keeps.
 const STDERR_KEPT: usize = 1024;
@@ -160,30 +162,43 @@ impl Command {
         Ok(waited)
     }
 
-    /// Stops the unit now and waits for the channel to close, at most
-    /// `STOP_WAIT`. If that fails, it says so in the log, and the unit
-    /// goes to the stopper as the command is dropped: the run that stopped
-    /// it still reports what it got.
-    pub async fn stop(mut self, connection: &Connection) {
-        let stopped = timeout(STOP_WAIT, async {
-            if let Some(unit) = &self.unit {
-                stop(connection, unit).await?;
+    /// Stops the unit now, and waits for the channel to close, all in
+    /// `STOP_WAIT`: whether the guest said it stopped. If it didn't, the
+    /// unit goes to the stopper as the command is dropped, and the run that
+    /// stopped it still reports what it got, and that the stop is
+    /// unconfirmed.
+    pub async fn stop(mut self, connection: &Connection) -> Stopped {
+        let deadline = Instant::now() + STOP_WAIT;
+        if let Some(unit) = &self.unit {
+            let error = match timeout_at(deadline, stop(connection, unit)).await {
+                Ok(Ok(())) => None,
+                Ok(Err(error)) => Some(format!("{error:#}")),
+                Err(_) => Some(format!("no answer in {} seconds", STOP_WAIT.as_secs())),
+            };
+            if let Some(error) = error {
+                warn!(%unit, %error, "couldn't stop a command in a VM; the stopper tries again");
+                return Stopped::Unconfirmed(error);
             }
-            while self.channel.wait().await.is_some() {}
-            Result::<()>::Ok(())
-        })
-        .await;
-        let error = match stopped {
-            Ok(Ok(())) => {
-                self.unit = None;
-                return;
-            }
-            Ok(Err(error)) => format!("{error:#}"),
-            Err(_) => format!("still running {} seconds after", STOP_WAIT.as_secs()),
-        };
-        let unit = self.unit.as_deref().unwrap_or_default();
-        warn!(%unit, %error, "couldn't stop a command in a VM; the stopper tries again");
+        }
+        // The unit is gone; the channel brings the last of what it said.
+        self.unit = None;
+        let drained = async { while self.channel.wait().await.is_some() {} };
+        if timeout_at(deadline, drained).await.is_err() {
+            warn!("a stopped command's channel stayed open");
+        }
+        Stopped::Confirmed
     }
+}
+
+/// How [`Command::stop`] went.
+#[derive(Debug, PartialEq, Eq)]
+#[must_use]
+pub enum Stopped {
+    /// The guest said the unit stopped, or was gone already.
+    Confirmed,
+    /// It was asked to, but didn't say so, as this says: the unit may
+    /// still run, and the stopper asks again.
+    Unconfirmed(String),
 }
 
 impl Drop for Command {
@@ -259,11 +274,42 @@ pub enum Stream {
     Err,
 }
 
-/// Stops each unit sent to it, until every sender is gone.
-pub async fn stopper(connection: Arc<Connection>, mut units: UnboundedReceiver<String>) {
-    while let Some(unit) = units.recv().await {
-        if let Err(error) = stop(&connection, &unit).await {
+/// Stops each unit sent to it, until every sender is gone and every stop
+/// is over: all at once, each for at most `STOP_WAIT`, so that one the
+/// guest doesn't answer holds up no other.
+pub async fn stopper(connection: Arc<Connection>, units: UnboundedReceiver<String>) {
+    stop_each(units, |unit| {
+        let connection = Arc::clone(&connection);
+        async move { stop(&connection, &unit).await }
+    })
+    .await;
+}
+
+/// [`stopper`]'s work, each unit stopped with `stop`.
+async fn stop_each<F>(mut units: UnboundedReceiver<String>, stop: impl Fn(String) -> F)
+where
+    F: Future<Output = Result<()>>,
+{
+    let in_time = |unit: String| {
+        let stopped = timeout(STOP_WAIT, stop(unit.clone()));
+        async move {
+            let error = match stopped.await {
+                Ok(Ok(())) => return,
+                Ok(Err(error)) => format!("{error:#}"),
+                Err(_) => format!("no answer in {} seconds", STOP_WAIT.as_secs()),
+            };
             warn!(%unit, %error, "couldn't stop a command in a VM");
+        }
+    };
+    let mut stopping = FuturesUnordered::new();
+    let mut open = true;
+    while open || !stopping.is_empty() {
+        tokio::select! {
+            unit = units.recv(), if open => match unit {
+                Some(unit) => stopping.push(in_time(unit)),
+                None => open = false,
+            },
+            Some(()) = stopping.next(), if !stopping.is_empty() => {}
         }
     }
 }
@@ -346,6 +392,38 @@ mod tests {
             self.0.push((stream, data.to_vec()));
             Ok(())
         }
+    }
+
+    /// A stop the guest doesn't answer holds up no other, and ends at
+    /// `STOP_WAIT`.
+    #[tokio::test(start_paused = true)]
+    async fn the_stopper_waits_on_no_one_unit() {
+        let (units, received) = unbounded_channel();
+        for unit in ["hung", "next"] {
+            units.send(unit.to_owned()).unwrap();
+        }
+        drop(units);
+        let begun = Instant::now();
+        let asked = std::sync::Mutex::new(Vec::new());
+        stop_each(received, |unit| {
+            asked.lock().unwrap().push((unit.clone(), begun.elapsed()));
+            async move {
+                if unit == "hung" {
+                    std::future::pending::<()>().await;
+                }
+                Ok(())
+            }
+        })
+        .await;
+        assert_eq!(begun.elapsed(), STOP_WAIT);
+        let asked = asked.into_inner().unwrap();
+        assert_eq!(
+            asked,
+            [
+                ("hung".to_owned(), Duration::ZERO),
+                ("next".to_owned(), Duration::ZERO)
+            ]
+        );
     }
 
     /// What stops a wait does so between pieces of output, never in the

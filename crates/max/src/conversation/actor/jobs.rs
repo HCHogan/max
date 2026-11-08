@@ -406,7 +406,9 @@ fn headline(task: &str) -> String {
 fn report(job: u32, title: &str, finished: &Finished, single: u32) -> Item {
     let mut text = match &finished.ending.how {
         How::Done => format!("[{} 完成] {title}", name(job)),
-        How::OutOfTime => format!("[{} 到点停了，下面是做到一半的] {title}", name(job)),
+        // Whether a command stopped is in its text: the guest may not have
+        // said so.
+        How::OutOfTime => format!("[{} 到点了，下面是做到一半的] {title}", name(job)),
         How::Failed(why) => format!("[{} 失败] {title}：{why}", name(job)),
     };
     let words = finished
@@ -508,7 +510,7 @@ mod tests {
         let half = finished(How::OutOfTime, Some("查了一半"), None);
         assert_eq!(
             shown(&report(3, "查票价", &half, 2000)),
-            "[job#3 到点停了，下面是做到一半的] 查票价\n查了一半"
+            "[job#3 到点了，下面是做到一半的] 查票价\n查了一半"
         );
         let failed = finished(How::Failed("429".into()), None, None);
         assert_eq!(

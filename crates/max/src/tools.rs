@@ -29,7 +29,7 @@ use crate::conversation::Poster;
 use crate::job::{self, Ending, Finished, How, Reply, Request};
 use crate::mcp::{self, Grant};
 use crate::tokens;
-use crate::vm::ssh::{Command, Sink, Stream, Waited, quote};
+use crate::vm::ssh::{Command, Sink, Stopped, Stream, Waited, quote};
 use crate::vm::{Vm, Vms};
 use max_core::limits::{
     BACKGROUND_TIME, BACKGROUND_TIME_MAX, MOVE_AFTER, RUN_TIME, RUN_TIME_MAX, SHOWN_BYTES,
@@ -245,8 +245,8 @@ async fn run_code(
             None => (with("runner 没有退出码，可能被杀了".into(), &result), true),
         },
         Waited::Interrupted(()) => {
-            running.stop(vm.connection()).await;
-            let head = format!("{} 秒内没跑完，已经停了", limit.as_secs());
+            let stopped = running.stop(vm.connection()).await;
+            let head = format!("{} 秒内没跑完，{}", limit.as_secs(), stopping(&stopped));
             (with(head, &result), true)
         }
     };
@@ -329,8 +329,8 @@ async fn shell(
     let shown = output.shown();
     let (mut shown, error) = match ran {
         Ran::Exited(status) => (with(exited(status), &shown), false),
-        Ran::OutOfTime => {
-            let head = format!("{} 秒内没跑完，已经停了", limit.as_secs());
+        Ran::OutOfTime(stopped) => {
+            let head = format!("{} 秒内没跑完，{}", limit.as_secs(), stopping(&stopped));
             (with(head, &shown), true)
         }
     };
@@ -342,8 +342,19 @@ async fn shell(
 enum Ran {
     /// With its exit status, if the guest sent one.
     Exited(Option<u32>),
-    /// Stopped at its limit.
-    OutOfTime,
+    /// At its limit, when it was stopped, as this says.
+    OutOfTime(Stopped),
+}
+
+/// What the model is told of a command stopped at its limit: that it
+/// stopped only if the guest said so.
+fn stopping(stopped: &Stopped) -> String {
+    match stopped {
+        Stopped::Confirmed => "已经停了".to_owned(),
+        Stopped::Unconfirmed(why) => {
+            format!("叫它停了，但没等到 VM 确认（{why}），可能还在跑")
+        }
+    }
 }
 
 /// Starts `command` as the unit `unit`, for at most `limit`, which the
@@ -397,10 +408,7 @@ async fn ended<T>(
     output.finish().await?;
     match waited? {
         Waited::Exited(status) => Ok(Ran::Exited(status)),
-        Waited::Interrupted(_) => {
-            running.stop(vm.connection()).await;
-            Ok(Ran::OutOfTime)
-        }
+        Waited::Interrupted(_) => Ok(Ran::OutOfTime(running.stop(vm.connection()).await)),
     }
 }
 
@@ -662,9 +670,13 @@ fn finished(ran: Result<Ran>, output: &Output, begun: Instant, limit: Duration) 
             How::Done,
             format!("{}，跑了 {}", exited(status), took(begun.elapsed())),
         ),
-        Ok(Ran::OutOfTime) => (
+        Ok(Ran::OutOfTime(stopped)) => (
             How::OutOfTime,
-            format!("{} 分钟内没跑完，已经停了", limit.as_secs().div_ceil(60)),
+            format!(
+                "{} 分钟内没跑完，{}",
+                limit.as_secs().div_ceil(60),
+                stopping(&stopped)
+            ),
         ),
     };
     Finished {
