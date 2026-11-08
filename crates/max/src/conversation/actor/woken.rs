@@ -61,7 +61,9 @@ impl Conversation {
             return Ok(());
         }
         if self.settings.stopped {
-            let _ = reply.send(Err("Max 在这里停用了，没叫醒".to_owned()));
+            let _ = reply.send(Err(
+                "Max is stopped here (/stop), so it wasn't woken".to_owned()
+            ));
             return Ok(());
         }
         let count = self.woken.count(Instant::now());

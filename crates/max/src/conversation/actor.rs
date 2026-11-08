@@ -57,7 +57,7 @@ const MOST_RESTARTS: u32 = 3;
 const REASON_CHARS: usize = 300;
 /// What a program is told when it would act in a conversation `/stop`
 /// stopped.
-const STOPPED: &str = "Max 在这里停用了，没做";
+const STOPPED: &str = "Max is stopped here (/stop), so this wasn't done";
 
 /// What every conversation's actor shares.
 pub struct Shared {

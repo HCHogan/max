@@ -1208,7 +1208,8 @@ async fn stop_ends_the_turn_and_its_jobs_and_nothing_starts_until_start(pool: Pg
     let (reply, woke) = oneshot::channel();
     let text_ = "CI 挂了".to_owned();
     h.mailbox.send(Event::Woken { text: text_, reply }).unwrap();
-    assert!(woke.await.unwrap().is_err());
+    let refused = "Max is stopped here (/stop), so it wasn't woken".to_owned();
+    assert_eq!(woke.await.unwrap(), Err(refused));
     h.mailbox
         .send(Event::VmNotice("VM 起不来了".into()))
         .unwrap();
