@@ -3,6 +3,7 @@
 //! MCP service, which its plugin calls; its model calls on the record as
 //! the forwarder tells them; and its report saved in /work.
 
+use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -10,6 +11,7 @@ use chrono::Utc;
 use color_eyre::eyre::Result;
 use max_core::ids::ConversationId;
 use max_core::item::{Protocol, Usage};
+use max_core::limits::JOB_NOTES_BYTES;
 use max_db::{PgPool, usage};
 use serde_json::json;
 use tokio::io::AsyncWriteExt;
@@ -31,8 +33,13 @@ const SYSTEM: &str = "你是 Max 的后台 agent。Max 是一个群聊里的 AI 
 - 你不能在群里说话。你最后一条消息就是交给 Max 的报告：先说结论，再给要点和出处，写给 Max 看，不用客套，尽量在 2000 字以内。做出来的文件放在 /work 下，报告里写路径。
 - 做的过程中 Max 可能补充要求，会出现在对话里。卡在只有 Max 或群友才知道的事上（他们的意思、偏好、没说清的要求），用 ask_max 问 Max，它会等 Max 答复；能自己查到、试出来的别问。
 - 环境：NixOS，root，能上公网，/work 是本群的持久目录，也是家目录（~），群里的程序也用；缺什么用 nix shell nixpkgs#包名 -c 命令 临时装。/nix/store 是宿主的整个 store，几百万个文件：要某个包里的文件，用 nix build --no-link --print-out-paths nixpkgs#包名 拿到它的路径再进去找，不在 /nix/store 下 find、ls 或用通配符。
-- 在具体项目目录下工作时，先读并按需更新该项目的 AGENTS.md（没有就建，已有 CLAUDE.md 也先读），把构建测试方式、关键架构约定、踩坑结论和当前进度留在项目里，让后续进同一项目的 agent 继承经验；保留已有约定，只记核实过、以后用得上的内容，报告给 Max 留结论和路径，不把项目细节全塞回它的记忆。
 - 有时间限制，快到点时会提醒你收尾，到点会被叫停。只做交给你的事。";
+
+/// Where agents keep their notes, a file for each directory they start
+/// in; see [`notes_file`].
+const NOTES: &str = "/work/.max/projects";
+/// The most of a notes file read: past that, none of it is shown.
+const NOTES_READ: u64 = 1 << 20;
 
 /// The version of the contract with the harness; see "Decoupling from the
 /// harness" in docs/rust-rewrite.md.
@@ -118,6 +125,8 @@ pub async fn run(start: Start, mut steers: UnboundedReceiver<String>) -> Finishe
     // environment.
     let limit = start.deadline.saturating_duration_since(Instant::now()) + 2 * GRACE;
     let line = unit_line(&unit, limit, &start.workdir);
+    let notes_file = notes_file(&start.workdir);
+    let notes = notes(&vm, &notes_file).await;
     info!(%conversation, job = start.number, %unit, model = start.upstream.reference(), "a job starts");
     let (mut command, mut input) = match vm.open(unit, &line).await {
         Ok(opened) => opened,
@@ -137,7 +146,7 @@ pub async fn run(start: Start, mut steers: UnboundedReceiver<String>) -> Finishe
         "window": upstream.window,
         "max_output": upstream.max_output,
         "effort": upstream.effort,
-        "system": SYSTEM,
+        "system": system(&start.workdir, &notes_file, &notes),
     });
     // The job is all the harness reads.
     let given = async {
@@ -209,15 +218,83 @@ pub async fn run(start: Start, mut steers: UnboundedReceiver<String>) -> Finishe
     Finished { ending, file }
 }
 
-/// Starts the harness in `workdir`, one quoted word for the guest's
-/// shell, as `shell`'s commands do.
+/// Starts the harness in `workdir`, made first if it isn't there, as is
+/// the notes' directory; `workdir` one quoted word for the guest's shell,
+/// as in `shell`'s commands.
 fn unit_line(unit: &str, limit: Duration, workdir: &str) -> String {
+    let workdir = quote(workdir);
     format!(
-        "SYSTEMD_ADJUST_TERMINAL_TITLE=0 exec systemd-run --quiet --pipe --wait --collect \
-         --unit={unit} --property=RuntimeDirectory={unit} --property=RuntimeMaxSec={} \
-         --working-directory={} -- bash -lc 'exec max-pi'",
+        "mkdir -p -- {workdir} {NOTES} && SYSTEMD_ADJUST_TERMINAL_TITLE=0 exec systemd-run \
+         --quiet --pipe --wait --collect --unit={unit} --property=RuntimeDirectory={unit} \
+         --property=RuntimeMaxSec={} --working-directory={workdir} -- bash -lc 'exec max-pi'",
         limit.as_secs(),
-        quote(workdir),
+    )
+}
+
+/// Appended to pi's system prompt: [`SYSTEM`], then the agents' notes
+/// for `workdir`, kept in `file`, as [`notes`] shows them.
+fn system(workdir: &str, file: &str, notes: &str) -> String {
+    format!(
+        "{SYSTEM}\n- 你在 {workdir} 下干活。后台 agent 给这个目录记的笔记在 {file}，下面的 [笔记] 是它现在的内容，以后在这个目录干活的 agent 都会读到。写报告之前更新它：这次核实过、以后用得上的构建和测试命令、架构约定、踩过的坑和结论，没做完的写明做到哪、下一步做什么；过时的改掉或删掉，别只往后加，整份 {} KiB 以内。项目自己的 AGENTS.md、CLAUDE.md 是项目的文件，别往里记笔记，除非任务就是改它们。\n\n[笔记]\n{notes}",
+        JOB_NOTES_BYTES >> 10,
+    )
+}
+
+/// The agents' notes for `workdir`, in [`NOTES`]: named after its path
+/// the way Claude Code names its projects, with letters and digits kept
+/// and the rest made `-`; short enough for a file's name.
+fn notes_file(workdir: &str) -> String {
+    let parts: Vec<_> = Path::new(workdir)
+        .components()
+        .filter_map(|component| match component {
+            Component::Normal(name) => Some(name.to_string_lossy()),
+            Component::ParentDir => Some("..".into()),
+            _ => None,
+        })
+        .collect();
+    let mut name: String = parts
+        .join("-")
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '-' })
+        .collect();
+    name.truncate(name.floor_char_boundary(200));
+    if name.is_empty() {
+        name.push_str("root");
+    }
+    format!("{NOTES}/{name}.md")
+}
+
+/// What the system prompt shows of the notes in `file`, read from the
+/// host's side of /work.
+async fn notes(vm: &Vm, file: &str) -> String {
+    let work = vm.work().to_owned();
+    let relative = PathBuf::from(file.strip_prefix("/work/").unwrap_or(file));
+    let read =
+        tokio::task::spawn_blocking(move || mcp::work::read(&work, &relative, NOTES_READ)).await;
+    match read {
+        Ok(Ok(bytes)) => shown(&String::from_utf8_lossy(&bytes)),
+        Ok(Err(failure)) if failure.code == "not_found" => "（还没有，这次新建。）".to_owned(),
+        Ok(Err(failure)) => format!("（没读到：{}。）", failure.message),
+        Err(error) => {
+            warn!(%error, "couldn't read a job's notes");
+            "（没读到。）".to_owned()
+        }
+    }
+}
+
+/// `text` up to [`JOB_NOTES_BYTES`], cut at a line.
+fn shown(text: &str) -> String {
+    let text = text.trim_end();
+    let most = usize::try_from(JOB_NOTES_BYTES).unwrap_or(usize::MAX);
+    if text.len() <= most {
+        return text.to_owned();
+    }
+    let end = text.floor_char_boundary(most);
+    let cut = text[..end].rfind('\n').unwrap_or(end);
+    format!(
+        "{}\n（笔记超过 {} KiB，后面的没加载：更新时精简一下。）",
+        &text[..cut],
+        JOB_NOTES_BYTES >> 10
     )
 }
 

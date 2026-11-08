@@ -168,7 +168,7 @@ const WARNING: Duration = Duration::from_secs(5 * 60);
 /// What the agent is told at [`WARNING`].
 fn wrap_up_message() -> String {
     format!(
-        "还剩 {} 分钟就到点了。别再查新的，现在就把已经查到的写成报告交给 Max，没做完的写明做到哪了。",
+        "还剩 {} 分钟就到点了。别再查新的：现在先更新笔记，再把已经查到的写成报告交给 Max，没做完的写明做到哪了。",
         WARNING.as_secs() / 60
     )
 }

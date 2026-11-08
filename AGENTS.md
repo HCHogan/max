@@ -23,22 +23,12 @@ The dev shell's Postgres (port 5434, database `max`, role `max`) runs under
 `devenv up`, the dev shell's own: a `devenv` installed elsewhere reads some
 other project. Without a terminal, start it with `PC_TUI_ENABLED=0 devenv up`.
 
-## Background jobs
+## Background agents' harness
 
-`tools.agent` is an MCP tool in `crates/max/src/mcp/agent.rs`, not one of
-max-core's two model tools. Its checked `workdir` goes through
-`job::Request::Start`, the conversation actor, and `job::Start` to
-systemd-run's working directory. The harness's stdin contract stays at 1;
-`nix/max-pi.sh` does not choose the directory. pi loads the project's
-`AGENTS.md` or `CLAUDE.md` and its parents even with `--no-approve`, but
-project `.pi/` configuration and extensions stay untrusted. Sessions and
-reports stay in `/work/.max/jobs`. Keep project experience here; Max's
-foreground memory only needs the project name, path and one-line summary.
-
-After changing the wrapper or pi integration, run `scripts/check-pi-job`
-in the dev shell as well. It uses the pinned pi and a fake host, without
-real model calls, and covers steering, stopping, questions, cwd, context
-files and project trust.
+After moving pi's pin, or changing `nix/max-pi.sh`, `nix/max-job.ts` or
+the job part of `client.js`, run `scripts/check-pi-job` in the dev shell
+as well. It runs the pinned pi against a fake host, without real model
+calls.
 
 ## Queries
 

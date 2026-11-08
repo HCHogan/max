@@ -357,15 +357,22 @@ async fn start_in(
     token: Option<&str>,
     limit: Duration,
 ) -> Result<Command> {
-    let workdir = match workdir {
-        Some(dir) if dir.starts_with('/') => dir.to_owned(),
-        Some(dir) => format!("/work/{dir}"),
-        None => "/work".to_owned(),
-    };
+    let workdir = guest_dir(workdir);
     // systemd-run hands the unit its own output, so 2>&1 merges the
     // command's.
     let line = unit_line(&unit, limit, &workdir, command, token) + " 2>&1";
     vm.command(unit, &line, &[]).await
+}
+
+/// A command's or an agent's directory in the guest: `dir` if absolute,
+/// else under /work. A guest path, left to the guest to resolve: the VM,
+/// not the directory, is the boundary.
+pub fn guest_dir(dir: Option<&str>) -> String {
+    match dir {
+        Some(dir) if dir.starts_with('/') => dir.to_owned(),
+        Some(dir) => format!("/work/{dir}"),
+        None => "/work".to_owned(),
+    }
 }
 
 /// Waits for `running` until `deadline`, its output into `output`; then

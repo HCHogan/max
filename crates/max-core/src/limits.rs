@@ -69,6 +69,9 @@ pub const JOB_TIME: Duration = Duration::from_secs(2 * 60 * 60);
 /// How long an agent's question waits for Max's answer; then it goes on by
 /// itself.
 pub const QUESTION_WAIT: Duration = Duration::from_secs(10 * 60);
+/// The most of its directory's notes an agent is shown; past this, the
+/// rest isn't, and it is asked to trim them.
+pub const JOB_NOTES_BYTES: u64 = 16 << 10;
 
 // Memory.
 

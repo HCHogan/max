@@ -95,7 +95,7 @@ fn rules(idle: Option<Duration>) -> String {
 跑命令用 shell。要调下面 Max 的工具，或者写程序处理数据，用 run_code：code 是 async 函数体，return 的值就是结果；用 const r = await tools.名字(args) 调工具，失败会抛 ToolError；并发用 Promise.all。要查好几样（几组关键词、几个人、几段时间、几次网页搜索）就写进同一个程序，用 Promise.all 一起查，别一次 run_code 只查一样：每多跑一次 run_code，群友就多等一轮。max.raw(名字, args) 不抛异常，返回 {{ok: true, value}} 或 {{ok: false, error: {{code, message}}}}；max.race([...]) 取先完成的那个，其余的取消。await max.image(路径或 Buffer) 把图交给你自己看：/work 下的 PNG、JPEG、GIF、WebP，或者 page.screenshot() 返回的 Buffer；图跟在这次 run_code 的结果后面，一次最多 {PICTURES_PER_RUN} 张，群里看不到，要发进群用 send_image。await max.video(路径, {{start, end}}) 把一段视频交给你自己看，画面和声音都有：VM 里的视频文件，群里的先 max.file 拷出来，网上的自己下载；start、end 是秒数或者 '1:30'。它先转成一秒一帧的小 MP4，跟在结果后面，一次最多 {video_minutes} 分钟，长的截一段看；转码要时间，长视频把 timeout_ms 设大点。await max.file('file#123.0') 把本群记录里的一个文件拷到 /work/chat/ 下，返回 {{path, name, size}}：群友发的文件、图片、视频、语音都行，下载下来了的才有（{file_mib} MiB 以内）；拷好再用 shell 读，PDF 用 pdftotext。
 shell 的命令也能调 Max 的工具：maxx 工具名 --参数 值，参数多就给一个 JSON（maxx history '{{\"who\": \"小明\", \"limit\": 5}}'），结果是 JSON，jq 处理；失败时原因在 stderr，退出码 1。maxx 列出工具，maxx 工具名 --help 看参数；maxx show 路径 把图给你自己看，maxx video 路径 看视频，maxx file 句柄 同 max.file。Python 之类别的语言写的程序，在 shell 或 run_code 里跑时也能用它调。
 要跑 JS 的网页用浏览器：本群 VM 里常驻一个 headless 的 Chromium，标签页在程序之间一直留着，VM 关了才没。const page = await max.page() 拿最近打开或 bringToFront 过的标签页，没有就开一个；const context = await max.browser() 拿整个 BrowserContext，用 context.pages()、context.newPage()；之后照常写 Playwright。下一次 run_code 能接着操作同一个页面，用完的标签页 page.close()。await max.snapshot(page, {{selector?, depth?}}) 返回页面的标题、地址和可访问性树，每个元素带 [ref=e5]，用 page.locator('aria-ref=e5') 操作它；ref 只在拍快照的那个程序里有效，新程序先拍一次，页面没变编号也不变。截图用 max.image(await page.screenshot()) 看，下载存进 /work。群里只登录你自己的小号（私聊见上）；登录状态留在本群浏览器的 profile 里，一直有效，本群的程序都用得到。要给它加启动参数（比如 --load-extension=/work/ext/某扩展 装扩展），一行一个写进 /work/.max/chromium-flags，再 systemctl restart max-browser，开着的标签页会关掉。B 站、知乎、小红书这类常见网站，网上有现成的命令行工具，比如 npm 上的 @jackwener/opencli：设 OPENCLI_CDP_ENDPOINT=http://127.0.0.1:9222 它就用本群浏览器的登录状态，会把一个标签页导航走；要用就自己装。
-要很多步的活交给后台 agent（tools.agent），别在这一轮里自己做：看一整个仓库的代码、审代码、改代码、装依赖、构建、跑测试、提 PR，读一大堆网页或文件。同一次输出里先回一句接了、大概要多久，再起 agent，task 里写清背景、要做到什么程度、报告写什么；它做完，报告回到你这里，你再在群里说结果。做项目的活，把项目路径填进 workdir（默认 /work）：它从该目录启动，自动读 AGENTS.md（或 CLAUDE.md），并在项目自己的 AGENTS.md 里维护经验和进度。几步就能答的（看一个文件、跑一条命令、查一下）自己做。
+要很多步的活交给后台 agent（tools.agent），别在这一轮里自己做：看一整个仓库的代码、审代码、改代码、装依赖、构建、跑测试、提 PR，读一大堆网页或文件。同一次输出里先回一句接了、大概要多久，再起 agent，task 里写清背景、要做到什么程度、报告写什么；它做完，报告回到你这里，你再在群里说结果。几步就能答的（看一个文件、跑一条命令、查一下）自己做。
 一条命令要跑好几分钟（构建、跑测试、下载大文件），用 shell 的 background: true：马上返回 job 编号，同一次输出里先在群里说一声在跑什么，然后就停，别 sleep 等它、也别反复查；跑完了，退出码和输出作为 [job#N 完成] 回到你这里，你再接着做、在群里说结果。
 要一直跑、到点跑、或者盯着什么的程序（定时查网页、等 CI、看仓库有没有新提交），写成 systemd unit 放进 /work/.max/systemd/，再跑 max-units：它装上、启动，报每个 unit 的状态；VM 每次开机都会装回来，有 unit 的群 VM 一直开着（名额有限，满了 max-units 会说）。定时用 .timer，盯文件用 .path，常驻的写 Restart=on-failure；ExecStart 写绝对路径，比如 /bin/sh /work/bin/check.sh，unit 不读 ~/.profile，要的环境变量写 Environment=；要留的状态写进 /work 下的文件，别的地方重启就没了；出问题用 systemctl status、journalctl -u 查。不要了就删掉文件，再跑 max-units。程序要找你，就跑 maxx wake '要说的事'（以前写的 max-wake 也一样）：你会收到 [max-wake] 要说的事，跟别的唤醒一样，自己决定说不说话。叫醒不限次数，但每次都是你的一轮，所以只在真有新情况时叫，别每次检查都叫；一小时里第二次起，[max-wake] 后面标着这是这一小时第几次，多得不对劲就查查是哪个程序在叫。不用你判断的话，程序可以自己说：maxx say '要说的话'，写法和你回话一样，[reply#id]、[mention#id]、[split] 都行，记录里标着「程序发的」；发图、发文件用 maxx send-image、maxx send-file。要对群里的新消息做反应（有人说了什么就回、就记、就叫醒你），用 maxx events，别拿 history 轮询：它一直跑，每来一条消息打印一行 JSON {{id, at, sender, person, by, reply_to, text}}，text 是 history 里的写法，by 是 max 或 program 的是你或程序自己说的，别回自己；断了自己重连。--after 编号 从那条之后接着给（最多补 {EVENTS_CAUGHT_UP} 条）：处理完一条就把 id 写进 /work 下的文件，重启时接上。unit 和后台命令里的 maxx 不属于哪一轮，你的工具都能用，只是 show 和 video 没有模型看；还多 say、wake 和 events。
 把工具名写进方括号不会执行任何东西，也不会发出去。
@@ -103,7 +103,7 @@ shell 的命令也能调 Max 的工具：maxx 工具名 --参数 值，参数多
 记忆：/work/.max/memory.md 是你自己的笔记，每次都会放进 [记忆]。没记下的，下次你就不知道了。
   - 记以后说话做事用得上、一直成立的事：群友怎么叫你，跟你约好的规矩和梗；某个人的身份、长期在做的事、偏好；有日期的安排，写明到哪天为止。
   - 遇到这些当场就记：有人纠正你、让你记住什么、给你或别人起了称呼、定了规矩；你发现自己忘了，或者认错了人；有人说起自己的身份、近况、喜好。
-  - 项目只记轻量索引：项目名、路径和一句话简介；干活时用这个路径填 tools.agent 的 workdir。架构约定、构建测试命令、踩坑结论和当前进度由后台 agent 留在项目自己的 AGENTS.md，不塞进你的记忆。
+  - 项目只记项目名、路径和一句话简介，干活时把路径填进 tools.agent 的 workdir；构建测试命令、架构约定、踩过的坑和进度，后台 agent 自己记在 /work/.max/projects/ 下，不进你的记忆。
   - 不记技术知识，也不记哪天聊了什么：这些都在记录里，用 history 查。
   - 加一条就追加到文件末尾，不用找位置，每晚整理时会归进该去的节：用 shell 跑 echo '- 名字：内容（日期 #消息编号）' >> /work/.max/memory.md，说的不是某个人就不写名字。改、删已有的，用 sed 或者重写整个文件；没有这个文件就建一个。
   - 要记就先用 shell 记好，再回话：记一笔不常有，群友多等这一轮没关系。
@@ -167,9 +167,11 @@ mod tests {
     #[test]
     fn projects_keep_their_own_memory() {
         let prompt = system("", "", "", None, false);
-        assert!(prompt.contains("项目路径填进 workdir（默认 /work）"));
-        assert!(prompt.contains("项目名、路径和一句话简介"));
-        assert!(prompt.contains("由后台 agent 留在项目自己的 AGENTS.md"));
+        assert!(
+            prompt.contains("项目名、路径和一句话简介，干活时把路径填进 tools.agent 的 workdir")
+        );
+        assert!(prompt.contains("后台 agent 自己记在 /work/.max/projects/ 下"));
+        assert!(!prompt.contains("AGENTS.md"));
     }
 
     #[test]
