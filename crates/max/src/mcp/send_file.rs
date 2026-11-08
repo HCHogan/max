@@ -1,18 +1,23 @@
 //! `send_file`: a file a program made or fetched in /work, sent to its
 //! group as a file. See "Sending files".
 
+use std::fs::File;
+use std::path::Path;
+
 use chrono::Utc;
+use max_core::limits::SENT_FILE_BYTES;
 use max_core::message::{Draft, DraftNode};
 use max_db::media::{self, Blob};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use tokio::io::AsyncReadExt;
 use tokio::task::spawn_blocking;
 use tracing::warn;
 
 use super::tool::Tool;
-use super::work::{beneath_work, read};
+use super::work::{beneath_work, open, shown, too_big};
 use super::{Context, Failure, internal};
-use max_core::limits::FILE_BYTES;
+use crate::media::store::Store;
 
 /// The longest name, in characters.
 const LONGEST_NAME: usize = 100;
@@ -45,9 +50,9 @@ impl Tool for SendFile {
     fn guide() -> String {
         format!(
             "把 /work 下的一个文件发到本群，群里显示成文件，点开能下载：文档、表格、PDF、压缩包、代码都行。最大 {} MiB，不能是空的；路径上不能有符号链接。\n  \
-            name 是群里显示的文件名，默认用路径里的。发出去了才返回，handle 是这个文件的句柄。\n  \
+            name 是群里显示的文件名，默认用路径里的。文件存好、排上队就返回，handle 是这个文件的句柄；上传在后面接着做，大文件要一两分钟才到群里，你之后说的话排在它后面。没发出去的话，记录里这条标着（没发出去）。\n  \
             要大家直接看到的图用 send_image，别当文件发。记录里已有的文件要再发，先 max.file 拷到 /work 再发。",
-            FILE_BYTES >> 20
+            SENT_FILE_BYTES >> 20
         )
     }
 
@@ -74,17 +79,11 @@ async fn send(context: &Context, Args { path, name }: Args) -> Result<Sent, Fail
     };
     let name = named(&name)?;
     let work = work.clone();
-    let bytes = spawn_blocking(move || read(&work, &relative, FILE_BYTES))
+    let opened = relative.clone();
+    let (file, _) = spawn_blocking(move || open(&work, &opened, SENT_FILE_BYTES))
         .await
         .map_err(|_| internal())??;
-    if bytes.is_empty() {
-        return Err(Failure::new("empty", format!("{path} 是空的")));
-    }
-    let size = bytes.len() as u64;
-    let sha256 = store.put(bytes).await.map_err(|error| {
-        warn!(%error, "couldn't store a file to send");
-        internal()
-    })?;
+    let (sha256, size) = keep(store, file, &relative).await?;
     let blob = Blob {
         sha256: sha256.clone(),
         mime: None,
@@ -101,12 +100,45 @@ async fn send(context: &Context, Args { path, name }: Args) -> Result<Sent, Fail
         nodes: vec![DraftNode::File { sha256, name, size }],
     };
     let id = poster
-        .post(draft)
+        .queue(draft)
         .await
         .map_err(|error| Failure::new("not_sent", format!("没发出去：{error}")))?;
     Ok(Sent {
         handle: format!("file#{id}.0"),
     })
+}
+
+/// Copies `file`, `relative` under /work, into the store as it reads it:
+/// its SHA-256 and size. Not past `SENT_FILE_BYTES`, though the guest may
+/// write more after it was opened; not an empty one.
+async fn keep(store: &Store, file: File, relative: &Path) -> Result<(String, u64), Failure> {
+    let stored = |error: std::io::Error| {
+        warn!(%error, "couldn't store a file to send");
+        internal()
+    };
+    let mut partial = store.partial().await.map_err(stored)?;
+    let mut file = tokio::fs::File::from_std(file).take(SENT_FILE_BYTES + 1);
+    let mut piece = vec![0; 1 << 20];
+    let mut size = 0;
+    loop {
+        let read = file.read(&mut piece).await.map_err(|error| {
+            let shown = shown(relative);
+            Failure::new("unreadable", format!("读不了 {shown}：{error}"))
+        })?;
+        if read == 0 {
+            break;
+        }
+        size += read as u64;
+        if size > SENT_FILE_BYTES {
+            return Err(too_big(relative, SENT_FILE_BYTES));
+        }
+        partial.write(&piece[..read]).await.map_err(stored)?;
+    }
+    if size == 0 {
+        let shown = shown(relative);
+        return Err(Failure::new("empty", format!("{shown} 是空的")));
+    }
+    partial.finish().await.map_err(stored)
 }
 
 /// The name a file is shown and saved under: one path component, without

@@ -20,8 +20,8 @@ web_search(args: { query: string; limit?: number }): Promise<{ results: { title:
   记录里已有的图和表情包不用这个，直接在回复里写它的句柄。 */
 send_image(args: { path: string; caption?: string }): Promise<{ handle: string }>;
 
-/** 把 /work 下的一个文件发到本群，群里显示成文件，点开能下载：文档、表格、PDF、压缩包、代码都行。最大 64 MiB，不能是空的；路径上不能有符号链接。
-  name 是群里显示的文件名，默认用路径里的。发出去了才返回，handle 是这个文件的句柄。
+/** 把 /work 下的一个文件发到本群，群里显示成文件，点开能下载：文档、表格、PDF、压缩包、代码都行。最大 200 MiB，不能是空的；路径上不能有符号链接。
+  name 是群里显示的文件名，默认用路径里的。文件存好、排上队就返回，handle 是这个文件的句柄；上传在后面接着做，大文件要一两分钟才到群里，你之后说的话排在它后面。没发出去的话，记录里这条标着（没发出去）。
   要大家直接看到的图用 send_image，别当文件发。记录里已有的文件要再发，先 max.file 拷到 /work 再发。 */
 send_file(args: { path: string; name?: string }): Promise<{ handle: string }>;
 

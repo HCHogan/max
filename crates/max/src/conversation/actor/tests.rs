@@ -777,6 +777,40 @@ async fn a_post_hears_how_its_sending_went(pool: PgPool) {
     assert!(h.outbound.try_recv().is_err());
 }
 
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn a_queued_post_hears_its_row_before_it_is_sent(pool: PgPool) {
+    let mut h = Harness::unprompted(pool, 300).await;
+    let queue = |nodes: Vec<DraftNode>| {
+        let draft = Draft {
+            reply_to: None,
+            nodes,
+        };
+        post(Act::Queue(draft))
+    };
+    let (file, committed) = queue(vec![DraftNode::Text {
+        text: "录像.mp4".into(),
+    }]);
+    h.mailbox.send(Event::Post(file)).unwrap();
+    let id = tokio::time::timeout(PATIENCE, committed)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    // The sender has it to send, and nobody to tell.
+    let outgoing = tokio::time::timeout(PATIENCE, h.outbound.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(outgoing.message.id, id);
+    assert!(outgoing.receipt.is_none());
+
+    let (empty, committed) = queue(Vec::new());
+    h.mailbox.send(Event::Post(empty)).unwrap();
+    assert!(committed.await.unwrap().is_err());
+    h.stop().await;
+    assert!(h.outbound.try_recv().is_err());
+}
+
 /// A post that waits to hear how it went.
 fn post(act: Act) -> (Post, oneshot::Receiver<Result<MessageId, String>>) {
     let (receipt, sent) = oneshot::channel();

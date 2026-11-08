@@ -5,7 +5,7 @@
 //! found a link the guest put at /work/.max/out would send them anywhere
 //! the maxx user can write.
 
-use std::fs::File;
+use std::fs::{File, Metadata};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::time::SystemTime;
@@ -53,7 +53,28 @@ pub(crate) fn read_stamped(
     relative: &Path,
     most: u64,
 ) -> Result<(Vec<u8>, SystemTime), Failure> {
-    let shown = Path::new("/work").join(relative).display().to_string();
+    let (mut file, metadata) = open(work, relative, most)?;
+    let shown = shown(relative);
+    let unreadable =
+        |error: std::io::Error| Failure::new("unreadable", format!("读不了 {shown}：{error}"));
+    // As large as the file says: through Take, the read wouldn't know.
+    let mut bytes = Vec::with_capacity(usize::try_from(metadata.len()).unwrap_or(0));
+    (&mut file)
+        .take(most + 1)
+        .read_to_end(&mut bytes)
+        .map_err(unreadable)?;
+    if bytes.len() as u64 > most {
+        return Err(too_big(relative, most));
+    }
+    let modified = metadata.modified().map_err(unreadable)?;
+    Ok((bytes, modified))
+}
+
+/// Opens `relative` under `work` as [`read`] does, if it is a file of at
+/// most `most` bytes: the file, and what it said of itself. It may grow
+/// while it's read, the guest writing it. Blocking.
+pub(super) fn open(work: &Path, relative: &Path, most: u64) -> Result<(File, Metadata), Failure> {
+    let shown = shown(relative);
     let failed = |errno: Errno| match errno {
         Errno::NOENT => Failure::new("not_found", format!("{shown} 不存在")),
         Errno::LOOP | Errno::NOTDIR | Errno::MLINK => Failure::new(
@@ -76,28 +97,30 @@ pub(crate) fn read_stamped(
     // Without blocking, so that a FIFO can't hold the open.
     let file =
         rustix::fs::openat(&dir, *last, flags | OFlags::NONBLOCK, Mode::empty()).map_err(failed)?;
-    let mut file = File::from(file);
-    let unreadable =
-        |error: std::io::Error| Failure::new("unreadable", format!("读不了 {shown}：{error}"));
-    let metadata = file.metadata().map_err(unreadable)?;
+    let file = File::from(file);
+    let metadata = file
+        .metadata()
+        .map_err(|error| Failure::new("unreadable", format!("读不了 {shown}：{error}")))?;
     if !metadata.is_file() {
         return Err(Failure::new("bad_path", format!("{shown} 不是普通文件")));
     }
-    let too_big = || Failure::new("too_big", format!("{shown} 超过 {} MiB 了", most >> 20));
     if metadata.len() > most {
-        return Err(too_big());
+        return Err(too_big(relative, most));
     }
-    // As large as the file says: through Take, the read wouldn't know.
-    let mut bytes = Vec::with_capacity(usize::try_from(metadata.len()).unwrap_or(0));
-    (&mut file)
-        .take(most + 1)
-        .read_to_end(&mut bytes)
-        .map_err(unreadable)?;
-    if bytes.len() as u64 > most {
-        return Err(too_big());
-    }
-    let modified = metadata.modified().map_err(unreadable)?;
-    Ok((bytes, modified))
+    Ok((file, metadata))
+}
+
+/// `relative` as the guest sees it.
+pub(super) fn shown(relative: &Path) -> String {
+    Path::new("/work").join(relative).display().to_string()
+}
+
+/// `relative` is past `most` bytes.
+pub(super) fn too_big(relative: &Path, most: u64) -> Failure {
+    Failure::new(
+        "too_big",
+        format!("{} 超过 {} MiB 了", shown(relative), most >> 20),
+    )
 }
 
 /// Copies the host's file `from` to `dir/name` under `work`, as [`write`]

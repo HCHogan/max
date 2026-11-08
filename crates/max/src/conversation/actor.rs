@@ -59,6 +59,8 @@ const REASON_CHARS: usize = 300;
 /// What a program is told when it would act in a conversation `/stop`
 /// stopped.
 const STOPPED: &str = "Max is stopped here (/stop), so this wasn't done";
+/// Why a draft wasn't said: nothing in it could be.
+const NOTHING_TO_SAY: &str = "没有能发的东西";
 
 /// What every conversation's actor shares.
 pub struct Shared {
@@ -301,7 +303,7 @@ impl Conversation {
                 let said = self
                     .say(segment.draft, Some(turn), Some(index), By::Max, None)
                     .await?;
-                if let Some(at) = said
+                if let Some((_, at)) = said
                     && let Some(a) = self.core.as_mut()
                 {
                     a.last_at = Some(at);
@@ -974,18 +976,24 @@ impl Conversation {
             }
             return Ok(());
         }
+        let by = if origin.is_none() {
+            By::Program
+        } else {
+            By::Max
+        };
         let committed = match act {
-            Act::Say(draft) => {
-                let by = if origin.is_none() {
-                    By::Program
-                } else {
-                    By::Max
-                };
-                self.say(draft, origin, None, by, receipt).await?
+            Act::Say(draft) => self.say(draft, origin, None, by, receipt).await?,
+            Act::Queue(draft) => {
+                let said = self.say(draft, origin, None, by, None).await?;
+                if let Some(receipt) = receipt {
+                    let row = said.map(|(id, _)| id);
+                    let _ = receipt.send(row.ok_or_else(|| NOTHING_TO_SAY.to_owned()));
+                }
+                said
             }
             Act::Unsend(target) => self.unsend(target, origin, receipt).await?,
         };
-        if let Some(at) = committed
+        if let Some((_, at)) = committed
             && let Some(a) = self.core.as_mut()
             && Some(a.turn) == origin
         {
@@ -995,7 +1003,7 @@ impl Conversation {
     }
 
     /// Commits what Max's account says, `by` whom, and hands it to the
-    /// sender; when it was committed, if it was. The running core isn't fed it: its own words are in its
+    /// sender; the row and when it was committed, if it was. The running core isn't fed it: its own words are in its
     /// transcript, and words from outside it, such as a command's answer,
     /// are in the next core's tail.
     async fn say(
@@ -1005,7 +1013,7 @@ impl Conversation {
         segment: Option<i32>,
         by: By,
         receipt: Option<Receipt>,
-    ) -> Result<Option<DateTime<Utc>>> {
+    ) -> Result<Option<(MessageId, DateTime<Utc>)>> {
         let mut conn = self.shared.services.pool.acquire().await?;
         let said = ingest::said(
             &mut conn,
@@ -1019,7 +1027,7 @@ impl Conversation {
         )
         .await?;
         drop(conn);
-        Ok(self.hand_over(said, receipt, "没有能发的东西"))
+        Ok(self.hand_over(said, receipt, NOTHING_TO_SAY))
     }
 
     /// Takes back `target`, as `say` says something.
@@ -1028,7 +1036,7 @@ impl Conversation {
         target: MessageId,
         turn: Option<TurnId>,
         receipt: Option<Receipt>,
-    ) -> Result<Option<DateTime<Utc>>> {
+    ) -> Result<Option<(MessageId, DateTime<Utc>)>> {
         let mut conn = self.shared.services.pool.acquire().await?;
         let unsend = ingest::unsend(
             &mut conn,
@@ -1043,14 +1051,14 @@ impl Conversation {
         Ok(self.hand_over(unsend, receipt, "这里没有这条消息"))
     }
 
-    /// A row of Max's that was committed, for the sender, and when it
-    /// was; if none was, the receipt hears `why` at once.
+    /// A row of Max's that was committed, for the sender: the row and
+    /// when it was committed; if none was, the receipt hears `why` at once.
     fn hand_over(
         &mut self,
         committed: Option<Message>,
         receipt: Option<Receipt>,
         why: &str,
-    ) -> Option<DateTime<Utc>> {
+    ) -> Option<(MessageId, DateTime<Utc>)> {
         let Some(message) = committed else {
             if let Some(receipt) = receipt {
                 let _ = receipt.send(Err(why.to_owned()));
@@ -1068,7 +1076,7 @@ impl Conversation {
         if self.shared.outbound.send(outgoing).is_err() {
             warn!(message = %id, "the sender is gone");
         }
-        Some(at)
+        Some((id, at))
     }
 }
 

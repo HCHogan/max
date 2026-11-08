@@ -54,11 +54,15 @@ pub const PICTURE_BYTES: u64 = 10 << 20;
 /// 3.8 MB, and an ordinary one 1.2 MB.
 pub const VIDEO_BYTES: u64 = 32 << 20;
 
-/// The largest file kept from the chat, or sent to it. QQ takes up to
-/// 200 MiB, but a call has `CALL_TIME`, and 32 MiB took 14 seconds to
-/// upload from tank on 2026-10-29. Past it, only what QQ said of a file is
-/// kept.
-pub const FILE_BYTES: u64 = 64 << 20;
+/// The largest file kept from the chat; past it, only what QQ said of a
+/// file is kept. A download has a minute, and the store keeps what it
+/// gets for good.
+pub const KEPT_FILE_BYTES: u64 = 64 << 20;
+/// The largest file sent to the chat: 200 MiB to start with, on
+/// 2026-11-08; QQ is said to take more. It is read from disk a piece at a
+/// time. 32 MiB took 14 seconds to upload from tank on 2026-10-29, so one
+/// this big takes a minute or two, and what Max says after it waits.
+pub const SENT_FILE_BYTES: u64 = 200 << 20;
 
 // Background agents and commands.
 

@@ -28,7 +28,7 @@ use super::prepare::{SNIFF, is_picture, prepare};
 use super::store::Store;
 use crate::scope::Scope;
 use crate::worker::Row;
-use max_core::limits::FILE_BYTES;
+use max_core::limits::KEPT_FILE_BYTES;
 
 /// How far back a scan looks. QQ's addresses expire: the Haskell version
 /// tried hundreds of dead ones again on every restart (9f27fa7).
@@ -148,7 +148,7 @@ impl Download {
     /// whole to be prepared; anything else, a video or a file of up to
     /// 64 MiB, goes into the store as it comes.
     async fn receive(&self, url: &str) -> Result<(Got, Option<String>), Failed> {
-        let (mut body, mime) = fetch::open(&self.http, url, FILE_BYTES).await?;
+        let (mut body, mime) = fetch::open(&self.http, url, KEPT_FILE_BYTES).await?;
         let mut head = Vec::new();
         while head.len() < SNIFF {
             let Some(chunk) = body.chunk().await? else {

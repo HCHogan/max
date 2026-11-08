@@ -6,7 +6,8 @@
 use std::time::Duration;
 
 use crate::limits::{
-    EVENTS_CAUGHT_UP, FILE_BYTES, MEMORY_TOKENS, PICTURES_PER_RUN, VIDEO_SECONDS, WEBREAD_CHARS,
+    EVENTS_CAUGHT_UP, KEPT_FILE_BYTES, MEMORY_TOKENS, PICTURES_PER_RUN, VIDEO_SECONDS,
+    WEBREAD_CHARS,
 };
 use crate::render::span;
 
@@ -33,7 +34,7 @@ fn rules(idle: Option<Duration>) -> String {
         None => "VM 闲置一段时间会关".to_owned(),
     };
     let video_minutes = VIDEO_SECONDS / 60;
-    let file_mib = FILE_BYTES >> 20;
+    let file_mib = KEPT_FILE_BYTES >> 20;
     format!(
         "对话场景：多人群聊（也可能是私聊）。上下文里每行消息的开头 [HH:MM 名字 #编号] 标明谁在什么时候说的；大部分消息是成员之间的闲聊。行首标着“@你”“回复你”的才是在叫你；私聊里每条消息都是跟你说的，不另外标。你自己以前说的话也在记录里，行首是记录格式，回复直接从正文写起。
 

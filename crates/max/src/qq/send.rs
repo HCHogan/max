@@ -299,15 +299,12 @@ impl Shared {
             return Err("no content store".to_owned());
         };
         let Attached { sha256, name } = &key.1;
-        let bytes = tokio::fs::read(store.path(sha256))
-            .await
-            .map_err(|error| format!("reading {sha256}: {error}"))?;
+        // Read as it is uploaded: a file can be hundreds of MiB.
+        let path = store.path(sha256);
+        let content = api::Content::Path(&path);
         let media = match name {
-            Some(name) => Media::File {
-                name,
-                bytes: &bytes,
-            },
-            None => Media::Picture(&bytes),
+            Some(name) => Media::File { name, content },
+            None => Media::Picture(content),
         };
         let uploaded = self
             .api

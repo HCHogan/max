@@ -145,6 +145,10 @@ pub struct Post {
 #[derive(Debug)]
 pub enum Act {
     Say(Draft),
+    /// Say, but the receipt hears once the row is committed: it goes out
+    /// after what was said before it, and the records show if it didn't.
+    /// For a file, whose upload can take minutes.
+    Queue(Draft),
     /// Take back an earlier message of the timeline.
     Unsend(MessageId),
 }
@@ -166,7 +170,8 @@ pub type Receipt = oneshot::Sender<Result<MessageId, String>>;
 pub struct Sending(oneshot::Receiver<Result<MessageId, String>>);
 
 impl Sending {
-    /// Waits until it is sent: the row, or why it didn't go out.
+    /// Waits until it is sent, or only committed for [`Act::Queue`]: the
+    /// row, or why it didn't go out.
     pub async fn sent(self) -> Result<MessageId, String> {
         self.0.await.map_err(|_| "没等到发送的结果".to_owned())?
     }
@@ -217,6 +222,12 @@ impl Poster {
     /// anyone waits: what comes back is how the sending went.
     pub fn say(&self, draft: Draft) -> Result<Sending, String> {
         self.act(Act::Say(draft))
+    }
+
+    /// Hands `draft` to the conversation, and waits only until it is
+    /// committed, not sent: the row.
+    pub async fn queue(&self, draft: Draft) -> Result<MessageId, String> {
+        self.act(Act::Queue(draft))?.sent().await
     }
 
     /// Takes back `target`, and waits until the platform has.

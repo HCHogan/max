@@ -42,10 +42,15 @@ fn refused(code: i64) -> api::Error {
 impl Api for Recorder {
     fn upload<'a>(&'a self, _: Chat<'a>, media: Media<'a>) -> Answer<'a, Uploaded> {
         let mut uploaded = self.uploaded.lock().unwrap();
-        uploaded.push(match media {
-            Media::Picture(bytes) => (None, bytes.to_vec()),
-            Media::File { name, bytes } => (Some(name.to_owned()), bytes.to_vec()),
-        });
+        let (name, content) = match media {
+            Media::Picture(content) => (None, content),
+            Media::File { name, content } => (Some(name.to_owned()), content),
+        };
+        // The sender hands over where the bytes are, not the bytes.
+        let api::Content::Path(path) = content else {
+            panic!("uploaded from memory");
+        };
+        uploaded.push((name, std::fs::read(path).unwrap()));
         let file_info = format!("FI{}", uploaded.len());
         Box::pin(async move {
             Ok(Uploaded {

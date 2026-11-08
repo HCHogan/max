@@ -55,14 +55,16 @@ async fn a_report_goes_out_under_its_name(pool: PgPool) {
     let store = Arc::new(Store::open(&scratch.0.join("store")).await.unwrap());
     let mut conn = pool.acquire().await.unwrap();
     let place = Arc::new(group(&mut conn).await);
-    // The actor's part: commit what is posted, and say it went out.
+    // The actor's part: commit what is queued, and answer with the row.
     let (mailbox, mut posts) = mpsc::unbounded_channel();
     let committing = Arc::clone(&place);
     let mut scope = Scope::new();
     scope.spawn(move |_| async move {
         while let Some(event) = posts.recv().await {
             let Event::Post(post) = event else { continue };
-            let Act::Say(draft) = post.act else { continue };
+            let Act::Queue(draft) = post.act else {
+                continue;
+            };
             let said = ingest::said(
                 &mut conn,
                 &committing,
@@ -138,6 +140,10 @@ async fn a_report_goes_out_under_its_name(pool: PgPool) {
 
     let code = |result: Result<Value, Failure>| result.unwrap_err().code;
     assert_eq!(code(sent(json!({ "path": "empty.txt" })).await), "empty");
+    // Past the limit by what it says of itself, before it is read.
+    let big = std::fs::File::create(work.join("big.iso")).unwrap();
+    big.set_len(SENT_FILE_BYTES + 1).unwrap();
+    assert_eq!(code(sent(json!({ "path": "big.iso" })).await), "too_big");
     assert_eq!(code(sent(json!({ "path": "out" })).await), "bad_path");
     let renamed = json!({ "path": "out/report.pdf", "name": "../x" });
     assert_eq!(code(sent(renamed).await), "bad_name");
@@ -149,4 +155,22 @@ async fn a_report_goes_out_under_its_name(pool: PgPool) {
     assert_eq!(refused.unwrap_err().code, "unavailable");
     // The poster is gone, so the actor's part ends.
     scope.close(std::time::Duration::from_secs(5)).await;
+}
+
+#[tokio::test]
+async fn a_file_is_kept_a_piece_at_a_time() {
+    let scratch =
+        Scratch(std::env::temp_dir().join(format!("max-keep-file-{:016x}", rand::random::<u64>())));
+    std::fs::create_dir_all(&scratch.0).unwrap();
+    let store = Store::open(&scratch.0.join("store")).await.unwrap();
+    // A few pieces, the last one short.
+    let bytes: Vec<u8> = (0..(5 << 20) / 2 + 7)
+        .map(|i: u32| (i % 251) as u8)
+        .collect();
+    let path = scratch.0.join("video.mp4");
+    std::fs::write(&path, &bytes).unwrap();
+    let file = std::fs::File::open(&path).unwrap();
+    let (sha256, size) = keep(&store, file, Path::new("video.mp4")).await.unwrap();
+    assert_eq!(size, bytes.len() as u64);
+    assert_eq!(std::fs::read(store.path(&sha256)).unwrap(), bytes);
 }
