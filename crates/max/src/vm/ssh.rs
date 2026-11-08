@@ -4,7 +4,9 @@
 //! command; each command is a transient unit in the guest, so that it can
 //! be stopped by name.
 
+use std::convert::Infallible;
 use std::path::Path;
+use std::pin::pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -129,20 +131,33 @@ impl Command {
     }
 
     /// Hands each piece of output to `sink` until the channel closes: the
-    /// exit status, if the guest sent one. Cancel-safe: what was read
-    /// stays read.
+    /// exit status, if the guest sent one. Dropped, it may leave `sink` with
+    /// a piece half handed over; to stop waiting, use [`Self::wait_or`].
     pub async fn wait(&mut self, sink: &mut impl Sink) -> Result<Option<u32>> {
-        while let Some(message) = self.channel.wait().await {
-            match message {
-                ChannelMsg::Data { data } => sink.output(Stream::Out, &data).await?,
-                ChannelMsg::ExtendedData { data, .. } => sink.output(Stream::Err, &data).await?,
-                ChannelMsg::ExitStatus { exit_status } => self.status = Some(exit_status),
-                _ => {}
-            }
+        match self
+            .wait_or(sink, std::future::pending::<Infallible>())
+            .await?
+        {
+            Waited::Exited(status) => Ok(status),
+            Waited::Interrupted(never) => match never {},
         }
-        // The command is over, however it ended.
-        self.unit = None;
-        Ok(self.status)
+    }
+
+    /// Hands each piece of output to `sink`, as [`Self::wait`] does, until
+    /// the channel closes or `until` is done. `until` is checked only
+    /// between pieces, so `sink` never has one cut off halfway; what is
+    /// still to be read stays for the next wait.
+    pub async fn wait_or<T>(
+        &mut self,
+        sink: &mut impl Sink,
+        until: impl Future<Output = T>,
+    ) -> Result<Waited<T>> {
+        let waited = relay(&mut self.channel, &mut self.status, sink, until).await?;
+        if let Waited::Exited(_) = waited {
+            // The command is over, however it ended.
+            self.unit = None;
+        }
+        Ok(waited)
     }
 
     /// Stops the unit now and waits for the channel to close, at most
@@ -185,6 +200,56 @@ pub type Input = Box<dyn AsyncWrite + Send + Unpin>;
 /// Where a command's output goes as it arrives.
 pub trait Sink {
     fn output(&mut self, stream: Stream, data: &[u8]) -> impl Future<Output = Result<()>> + Send;
+}
+
+/// Where a command's messages come from: its channel, or a test's.
+trait Messages {
+    /// The next one; None once there are no more. Cancel-safe.
+    fn next(&mut self) -> impl Future<Output = Option<ChannelMsg>> + Send;
+}
+
+impl Messages for Channel<Msg> {
+    fn next(&mut self) -> impl Future<Output = Option<ChannelMsg>> + Send {
+        self.wait()
+    }
+}
+
+/// [`Command::wait_or`]'s work: hands the output in `messages` to `sink`
+/// until there is no more, or `until` is done, between pieces; the exit
+/// status goes to `status` as it comes.
+async fn relay<T>(
+    messages: &mut impl Messages,
+    status: &mut Option<u32>,
+    sink: &mut impl Sink,
+    until: impl Future<Output = T>,
+) -> Result<Waited<T>> {
+    let mut until = pin!(until);
+    loop {
+        // Receiving is cancel-safe; handing over isn't, so it is done
+        // outside the select. `until` first: once it is done, no more
+        // output is handed over, however much is waiting.
+        let message = tokio::select! {
+            biased;
+            interrupted = &mut until => return Ok(Waited::Interrupted(interrupted)),
+            message = messages.next() => message,
+        };
+        match message {
+            Some(ChannelMsg::Data { data }) => sink.output(Stream::Out, &data).await?,
+            Some(ChannelMsg::ExtendedData { data, .. }) => sink.output(Stream::Err, &data).await?,
+            Some(ChannelMsg::ExitStatus { exit_status }) => *status = Some(exit_status),
+            Some(_) => {}
+            None => return Ok(Waited::Exited(*status)),
+        }
+    }
+}
+
+/// How [`Command::wait_or`] ended.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Waited<T> {
+    /// The command is over: its exit status, if the guest sent one.
+    Exited(Option<u32>),
+    /// What it waited on besides came first; the command may still run.
+    Interrupted(T),
 }
 
 /// The command's stdout or stderr.
@@ -260,7 +325,75 @@ pub fn quote(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use tokio::sync::mpsc::unbounded_channel;
+    use tokio::time::{Instant, sleep, sleep_until};
+
     use super::*;
+
+    impl Messages for UnboundedReceiver<ChannelMsg> {
+        fn next(&mut self) -> impl Future<Output = Option<ChannelMsg>> + Send {
+            self.recv()
+        }
+    }
+
+    /// Takes a second over each piece, and keeps them.
+    #[derive(Default)]
+    struct Slow(Vec<(Stream, Vec<u8>)>);
+
+    impl Sink for Slow {
+        async fn output(&mut self, stream: Stream, data: &[u8]) -> Result<()> {
+            sleep(Duration::from_secs(1)).await;
+            self.0.push((stream, data.to_vec()));
+            Ok(())
+        }
+    }
+
+    /// What stops a wait does so between pieces of output, never in the
+    /// middle of one, and leaves the rest for the next wait.
+    #[tokio::test(start_paused = true)]
+    async fn a_wait_stops_between_pieces() {
+        let (messages, mut received) = unbounded_channel();
+        for data in [b"one", b"two"] {
+            let data = data.to_vec().into();
+            messages.send(ChannelMsg::Data { data }).unwrap();
+        }
+        let (mut status, mut sink) = (None, Slow::default());
+        // Due halfway through the first piece.
+        let half = Instant::now() + Duration::from_millis(500);
+        let waited = relay(&mut received, &mut status, &mut sink, sleep_until(half)).await;
+        assert_eq!(waited.unwrap(), Waited::Interrupted(()));
+        assert_eq!(sink.0, [(Stream::Out, b"one".to_vec())]);
+
+        let data = b"oops".to_vec().into();
+        messages
+            .send(ChannelMsg::ExtendedData { data, ext: 1 })
+            .unwrap();
+        let exit_status = 3;
+        messages
+            .send(ChannelMsg::ExitStatus { exit_status })
+            .unwrap();
+        drop(messages);
+        let waited = relay(
+            &mut received,
+            &mut status,
+            &mut sink,
+            std::future::pending::<()>(),
+        );
+        assert_eq!(waited.await.unwrap(), Waited::Exited(Some(3)));
+        let pieces: Vec<_> = sink
+            .0
+            .iter()
+            .map(|(stream, data)| (*stream, &data[..]))
+            .collect();
+        assert_eq!(
+            pieces,
+            [
+                (Stream::Out, &b"one"[..]),
+                (Stream::Out, b"two"),
+                (Stream::Err, b"oops")
+            ]
+        );
+    }
 
     #[test]
     fn quoted_words_stay_one() {

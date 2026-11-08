@@ -22,15 +22,14 @@ use serde::Serialize;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::watch;
-use tokio::time::error::Elapsed;
-use tokio::time::{Instant, sleep_until, timeout, timeout_at};
+use tokio::time::{Instant, sleep, sleep_until};
 use tracing::info;
 
 use crate::conversation::Poster;
 use crate::job::{self, Ending, Finished, How, Reply, Request};
 use crate::mcp::{self, Grant};
 use crate::tokens;
-use crate::vm::ssh::{Command, Sink, Stream, quote};
+use crate::vm::ssh::{Command, Sink, Stream, Waited, quote};
 use crate::vm::{Vm, Vms};
 use max_core::limits::{
     BACKGROUND_TIME, BACKGROUND_TIME_MAX, MOVE_AFTER, RUN_TIME, RUN_TIME_MAX, SHOWN_BYTES,
@@ -233,19 +232,19 @@ async fn run_code(
         err: Output::new(vm.work(), format!("{unit}.log")),
     };
     let mut running = vm.command(unit, &line, &input).await?;
-    let waited = timeout(limit, running.wait(&mut split)).await;
+    let waited = running.wait_or(&mut split, sleep(limit)).await;
     split.out.finish().await?;
     split.err.finish().await?;
     let result = split.out.shown();
-    let (head, error) = match waited {
-        Ok(status) => match status? {
+    let (head, error) = match waited? {
+        Waited::Exited(status) => match status {
             Some(0) if result.is_empty() => ("程序跑完了，没有返回值。".to_owned(), false),
             Some(0) => (format!("返回值：\n{result}"), false),
             Some(1) => (format!("程序出错了：\n{result}"), true),
             Some(code) => (with(format!("runner 的退出码 {code}"), &result), true),
             None => (with("runner 没有退出码，可能被杀了".into(), &result), true),
         },
-        Err(_) => {
+        Waited::Interrupted(()) => {
             running.stop(vm.connection()).await;
             let head = format!("{} 秒内没跑完，已经停了", limit.as_secs());
             (with(head, &result), true)
@@ -383,22 +382,22 @@ async fn wait_until(
     output: &mut Output,
     deadline: Instant,
 ) -> Result<Ran> {
-    let waited = timeout_at(deadline, running.wait(output)).await;
+    let waited = running.wait_or(output, sleep_until(deadline)).await;
     ended(vm, running, output, waited).await
 }
 
 /// How a command waited for ended, as `waited` says: stopped, if its time
-/// ran out.
-async fn ended(
+/// ran out, the only thing besides that a wait ends on here.
+async fn ended<T>(
     vm: &Vm,
     running: Command,
     output: &mut Output,
-    waited: Result<Result<Option<u32>>, Elapsed>,
+    waited: Result<Waited<T>>,
 ) -> Result<Ran> {
     output.finish().await?;
-    match waited {
-        Ok(status) => Ok(Ran::Exited(status?)),
-        Err(_) => {
+    match waited? {
+        Waited::Exited(status) => Ok(Ran::Exited(status)),
+        Waited::Interrupted(_) => {
             running.stop(vm.connection()).await;
             Ok(Ran::OutOfTime)
         }
@@ -417,6 +416,13 @@ struct Started {
     running: Command,
     begun: Instant,
     deadline: Instant,
+}
+
+/// What a command that could move stops waiting on, besides its end.
+enum Interrupt {
+    OutOfTime,
+    /// It moves.
+    Due,
 }
 
 /// Where a command that could move ended up.
@@ -442,12 +448,20 @@ async fn wait_or_move(
         begun,
         deadline,
     } = started;
-    tokio::select! {
-        waited = timeout_at(deadline, running.wait(&mut output)) => {
+    // Between pieces of output, so that none is half written when the
+    // command moves with its output.
+    let interrupt = async {
+        tokio::select! {
+            () = sleep_until(deadline) => Interrupt::OutOfTime,
+            () = due(movable.waiting, begun) => Interrupt::Due,
+        }
+    };
+    match running.wait_or(&mut output, interrupt).await {
+        Ok(Waited::Interrupted(Interrupt::Due)) => {}
+        waited => {
             let ran = ended(vm, running, &mut output, waited).await?;
             return Ok(Kept::Here(ran, Box::new(output)));
         }
-        () = due(movable.waiting, begun) => {}
     }
     let shown = output.shown();
     let file = format!("/work/{OUT}/{}", output.name);
@@ -792,6 +806,8 @@ impl Output {
 #[cfg(test)]
 mod tests {
     use std::pin::pin;
+
+    use tokio::time::timeout;
 
     use super::*;
 
