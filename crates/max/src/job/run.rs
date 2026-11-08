@@ -4,6 +4,7 @@
 //! the forwarder tells them; and its report saved in /work.
 
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 use chrono::Utc;
 use color_eyre::eyre::Result;
@@ -21,7 +22,7 @@ use tracing::{info, warn};
 use super::{Called, Ending, Exit, GRACE, Hook, How, Watch, drive};
 use crate::llm::Upstream;
 use crate::mcp;
-use crate::vm::ssh::{Sink, Stream};
+use crate::vm::ssh::{Sink, Stream, quote};
 use crate::vm::{Vm, Vms};
 
 /// Appended to pi's system prompt.
@@ -30,6 +31,7 @@ const SYSTEM: &str = "你是 Max 的后台 agent。Max 是一个群聊里的 AI 
 - 你不能在群里说话。你最后一条消息就是交给 Max 的报告：先说结论，再给要点和出处，写给 Max 看，不用客套，尽量在 2000 字以内。做出来的文件放在 /work 下，报告里写路径。
 - 做的过程中 Max 可能补充要求，会出现在对话里。卡在只有 Max 或群友才知道的事上（他们的意思、偏好、没说清的要求），用 ask_max 问 Max，它会等 Max 答复；能自己查到、试出来的别问。
 - 环境：NixOS，root，能上公网，/work 是本群的持久目录，也是家目录（~），群里的程序也用；缺什么用 nix shell nixpkgs#包名 -c 命令 临时装。/nix/store 是宿主的整个 store，几百万个文件：要某个包里的文件，用 nix build --no-link --print-out-paths nixpkgs#包名 拿到它的路径再进去找，不在 /nix/store 下 find、ls 或用通配符。
+- 在具体项目目录下工作时，先读并按需更新该项目的 AGENTS.md（没有就建，已有 CLAUDE.md 也先读），把构建测试方式、关键架构约定、踩坑结论和当前进度留在项目里，让后续进同一项目的 agent 继承经验；保留已有约定，只记核实过、以后用得上的内容，报告给 Max 留结论和路径，不把项目细节全塞回它的记忆。
 - 有时间限制，快到点时会提醒你收尾，到点会被叫停。只做交给你的事。";
 
 /// The version of the contract with the harness; see "Decoupling from the
@@ -46,6 +48,8 @@ pub struct Start {
     pub number: u32,
     pub title: String,
     pub task: String,
+    /// Its startup directory in the guest, already checked by `agent`.
+    pub workdir: String,
     pub vms: Vms,
     /// The job's own, for its session of the MCP service.
     pub context: mcp::Context,
@@ -113,12 +117,7 @@ pub async fn run(start: Start, mut steers: UnboundedReceiver<String>) -> Finishe
     // login shell, as `shell`'s commands have: the agent's run in the same
     // environment.
     let limit = start.deadline.saturating_duration_since(Instant::now()) + 2 * GRACE;
-    let line = format!(
-        "SYSTEMD_ADJUST_TERMINAL_TITLE=0 exec systemd-run --quiet --pipe --wait --collect \
-         --unit={unit} --property=RuntimeDirectory={unit} --property=RuntimeMaxSec={} \
-         --working-directory=/work -- bash -lc 'exec max-pi'",
-        limit.as_secs()
-    );
+    let line = unit_line(&unit, limit, &start.workdir);
     info!(%conversation, job = start.number, %unit, model = start.upstream.reference(), "a job starts");
     let (mut command, mut input) = match vm.open(unit, &line).await {
         Ok(opened) => opened,
@@ -210,6 +209,18 @@ pub async fn run(start: Start, mut steers: UnboundedReceiver<String>) -> Finishe
     Finished { ending, file }
 }
 
+/// Starts the harness in `workdir`, one quoted word for the guest's
+/// shell, as `shell`'s commands do.
+fn unit_line(unit: &str, limit: Duration, workdir: &str) -> String {
+    format!(
+        "SYSTEMD_ADJUST_TERMINAL_TITLE=0 exec systemd-run --quiet --pipe --wait --collect \
+         --unit={unit} --property=RuntimeDirectory={unit} --property=RuntimeMaxSec={} \
+         --working-directory={} -- bash -lc 'exec max-pi'",
+        limit.as_secs(),
+        quote(workdir),
+    )
+}
+
 /// Saves the report under /work/.max/jobs: its path in the VM.
 async fn save(vm: &Vm, number: u32, title: &str, text: &str) -> Option<String> {
     let name = format!("job-{number}-{}.md", Utc::now().format("%Y%m%d-%H%M%S"));
@@ -298,3 +309,6 @@ impl Watch for Asks {
         (self.0)(question.to_owned());
     }
 }
+
+#[cfg(test)]
+mod tests;

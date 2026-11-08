@@ -120,6 +120,7 @@ pub enum Request {
     Start {
         task: String,
         title: Option<String>,
+        workdir: String,
     },
     Shell(crate::tools::Background),
     Steer {

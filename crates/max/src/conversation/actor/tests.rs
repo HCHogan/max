@@ -711,6 +711,7 @@ async fn kill_stops_the_core_quietly(pool: PgPool) {
     let request = Request::Start {
         task: "查票价".into(),
         title: None,
+        workdir: "/work".into(),
     };
     let origin = Some(turn);
     h.mailbox
@@ -1091,6 +1092,7 @@ async fn nothing_starts_without_its_config(pool: PgPool) {
     let start = Request::Start {
         task: "查一下".into(),
         title: None,
+        workdir: "/work".into(),
     };
     assert_eq!(ask(&h, start).await.unwrap_err(), "没配后台 agent 用的模型");
     h.stop().await;
@@ -1123,6 +1125,7 @@ async fn commands_dont_count_against_agents(pool: PgPool) {
     let start = Request::Start {
         task: "查一下".into(),
         title: None,
+        workdir: "/work/max".into(),
     };
     assert_eq!(ask(&h, start).await.unwrap_err(), "没配后台 agent 用的模型");
     h.stop().await;

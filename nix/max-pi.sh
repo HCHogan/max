@@ -60,7 +60,8 @@ export MAX_JOB_TOKEN MAXX_TOKEN PI_CODING_AGENT_DIR=$dir PI_OFFLINE=1 PI_SKIP_VE
 
 args=(
   --print
-  # .pi/ in /work is the group's to write: not trusted.
+  # The project's .pi/ is the group's to write: not trusted. Context
+  # files (AGENTS.md or CLAUDE.md in cwd and its parents) still load.
   --no-approve
   --session-dir /work/.max/jobs
   --provider max

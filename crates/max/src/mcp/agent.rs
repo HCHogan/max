@@ -2,6 +2,8 @@
 //! background agents, which the conversation's actor keeps. See "Background
 //! agents" in docs/rust-rewrite.md.
 
+use std::path::{Component, Path, PathBuf};
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -25,6 +27,11 @@ pub struct Start {
     task: String,
     #[schemars(length(max = TITLE), description = "一句话的标题")]
     title: Option<String>,
+    #[schemars(
+        length(min = 1),
+        description = "启动目录，默认 /work；绝对路径或 /work 下的相对路径"
+    )]
+    workdir: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -81,17 +88,34 @@ impl Tool for Agent {
         format!(
             "起一个后台 agent，去做一件要花时间的事：查一堆资料、读很多网页或文件、写代码跑实验。它在本群的 VM 里跑，和你共用 /work，自己有 shell、读写文件、history、web_search；不能在群里说话，也不能发图发文件、撤回、禁言。\n  \
             它看不到群里的对话，只看得到 task，所以背景、要做什么、做到什么程度、报告要写什么都写进去。title 是一句话的标题，agent_status 里显示。\n  \
+            workdir 是启动目录，默认 /work；可写绝对路径，或 /work 下的相对路径，不能用相对路径越出 /work。做项目的活就填项目路径：它自动读该目录和上级的 AGENTS.md（或 CLAUDE.md），并在项目自己的 AGENTS.md 里维护经验和进度；你的记忆只留项目名、路径和一句话简介。\n  \
             马上返回 {{ job: \"job#3\" }}，你接着聊。它卡在只有你或群友才知道的事上会问你：问题作为 [job#3 问] 出现，它在等，用 agent_steer 回答。它做完了，报告作为 [job#3 完成] 出现在你的新消息里，全文另存在 /work/.max/jobs/ 下，由你决定在群里怎么说。同时最多 {} 个，每个最多 {} 小时，到点停下、交出做到一半的结果。",
             limits::JOBS_AT_ONCE,
             limits::JOB_TIME.as_secs() / 3600,
         )
     }
 
-    async fn run(context: &Context, Start { task, title }: Start) -> Result<Named, Failure> {
+    async fn run(
+        context: &Context,
+        Start {
+            task,
+            title,
+            workdir: dir,
+        }: Start,
+    ) -> Result<Named, Failure> {
         if task.trim().is_empty() {
             return Err(Failure::new("bad_arguments", "task 是空的"));
         }
-        named(context, Request::Start { task, title }).await
+        let workdir = workdir(dir.as_deref())?;
+        named(
+            context,
+            Request::Start {
+                task,
+                title,
+                workdir,
+            },
+        )
+        .await
     }
 }
 
@@ -179,6 +203,41 @@ impl Job {
     }
 }
 
+/// The guest's startup directory: like `shell`, relative to /work, but
+/// a relative path cannot go above it. These are guest paths, not paths
+/// to resolve on the host; the VM, not the directory, is the boundary.
+fn workdir(dir: Option<&str>) -> Result<String, Failure> {
+    let Some(dir) = dir else {
+        return Ok("/work".to_owned());
+    };
+    if dir.trim().is_empty() || dir.chars().any(char::is_control) {
+        return Err(Failure::new(
+            "bad_arguments",
+            "workdir 不能是空的，也不能有控制字符",
+        ));
+    }
+    if dir.starts_with('/') {
+        return Ok(dir.to_owned());
+    }
+    let mut path = PathBuf::from("/work");
+    for component in Path::new(dir).components() {
+        match component {
+            Component::Normal(name) => path.push(name),
+            Component::CurDir => {}
+            Component::ParentDir if path != Path::new("/work") => {
+                path.pop();
+            }
+            _ => {
+                return Err(Failure::new(
+                    "bad_arguments",
+                    "workdir 的相对路径不能越出 /work",
+                ));
+            }
+        }
+    }
+    Ok(path.to_string_lossy().into_owned())
+}
+
 /// The job `request` was about.
 async fn named(context: &Context, request: Request) -> Result<Named, Failure> {
     match ask(context, request).await? {
@@ -205,6 +264,65 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
+
+    #[test]
+    fn a_start_may_name_its_directory() {
+        for value in [
+            json!({ "task": "查票价" }),
+            json!({ "task": "查票价", "workdir": null }),
+        ] {
+            let start: Start = serde_json::from_value(value).unwrap();
+            assert_eq!(workdir(start.workdir.as_deref()).unwrap(), "/work");
+        }
+        let start: Start = serde_json::from_value(json!({
+            "task": "跑测试", "workdir": "max"
+        }))
+        .unwrap();
+        assert_eq!(workdir(start.workdir.as_deref()).unwrap(), "/work/max");
+        assert!(
+            serde_json::from_value::<Start>(json!({ "task": "跑测试", "workdir": 3 })).is_err()
+        );
+    }
+
+    #[test]
+    fn directories_are_absolute_or_relative_to_work() {
+        for (dir, expected) in [
+            ("/work/max", "/work/max"),
+            ("/tmp/project", "/tmp/project"),
+            ("/", "/"),
+            ("max", "/work/max"),
+            ("./max//src/..", "/work/max"),
+            ("max/../other", "/work/other"),
+            (".", "/work"),
+            (
+                "项目's $(printf injected); --flag",
+                "/work/项目's $(printf injected); --flag",
+            ),
+        ] {
+            assert_eq!(workdir(Some(dir)).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn bad_directories_are_refused_before_starting() {
+        for dir in [
+            "",
+            "  ",
+            "../max",
+            "max/../../tmp",
+            "../work/max",
+            "/work/\0max",
+            "max\nother",
+            "max\r",
+            "max\t",
+        ] {
+            assert_eq!(
+                workdir(Some(dir)).unwrap_err().code,
+                "bad_arguments",
+                "{dir:?}"
+            );
+        }
+    }
 
     #[test]
     fn a_job_is_named_either_way() {
