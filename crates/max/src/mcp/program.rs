@@ -16,41 +16,6 @@ use super::{Context, Failure};
 /// The longest text either takes, in characters.
 const LONGEST: u32 = 4000;
 
-/// The kinds of marker that carry an id.
-const MARKERS: [&str; 4] = ["reply", "mention", "sticker", "image"];
-
-/// A marker whose id a program didn't fill in, as written: `[reply#]`,
-/// `[mention#undefined]`, `[reply#${id}]`. It isn't a marker, so it would
-/// go out as text; the shell swallowing a script's `${…}` as Max writes
-/// it does this (2026-11-05). A placeholder in prose, `[reply#id]`, isn't
-/// one.
-fn unfilled(text: &str) -> Option<&str> {
-    let mut rest = text;
-    while let Some(at) = rest.find('[') {
-        let from = &rest[at..];
-        rest = &from[1..];
-        let Some((kind, after)) = from[1..].split_once('#') else {
-            continue;
-        };
-        if !MARKERS.contains(&kind) {
-            continue;
-        }
-        let Some(end) = after.find(']') else {
-            continue;
-        };
-        let id = &after[..end];
-        let lost = id.is_empty()
-            || id.starts_with(['$', '{'])
-            || ["undefined", "null", "NaN"]
-                .iter()
-                .any(|word| id.starts_with(word));
-        if lost {
-            return Some(&from[..kind.len() + end + 3]);
-        }
-    }
-    None
-}
-
 pub struct Say;
 
 #[derive(Deserialize, JsonSchema)]
@@ -87,12 +52,6 @@ impl Tool for Say {
         let Some(poster) = context.caller.poster() else {
             return Err(Failure::new("unavailable", "这里说不了话。"));
         };
-        if let Some(marker) = unfilled(&text) {
-            return Err(Failure::new(
-                "unfilled",
-                format!("{marker} 的编号是空的：程序里的变量没填进去？这条没发。"),
-            ));
-        }
         // As the model's output is read: a handle of someone the group
         // doesn't know stays text.
         let mentioned: Vec<PrincipalId> = project::mentioned(&text).into_iter().collect();
@@ -105,6 +64,16 @@ impl Tool for Say {
         segments.extend(segmenter.finish());
         if segments.is_empty() {
             return Err(Failure::new("nothing", "没有能发的东西"));
+        }
+        // Outside code, where it would be a placeholder; the shell
+        // swallowing a script's `${…}` as Max writes it does this
+        // (2026-11-05).
+        let unfilled = segments.iter().flat_map(|segment| &segment.unfilled);
+        if let Some(marker) = unfilled.into_iter().next() {
+            return Err(Failure::new(
+                "unfilled",
+                format!("{marker} 的编号是空的或者不是数字：程序里的变量没填进去？这条没发。"),
+            ));
         }
         // All handed over before any is waited for: a say goes out whole,
         // as Max's own reply does, even once the program has stopped
@@ -180,32 +149,5 @@ impl Tool for Wake {
             .await
             .map_err(|why| Failure::new("not_woken", why))?;
         Ok(Woken { said })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::unfilled;
-
-    #[test]
-    fn a_marker_without_its_id_is_caught() {
-        assert_eq!(unfilled("[reply#] pong"), Some("[reply#]"));
-        assert_eq!(unfilled("[reply#] "), Some("[reply#]"));
-        assert_eq!(
-            unfilled("[reply#12] [mention#undefined] 好"),
-            Some("[mention#undefined]")
-        );
-        assert_eq!(unfilled("[reply#${id}] 好"), Some("[reply#${id}]"));
-        assert_eq!(unfilled("[reply#$ID] 好"), Some("[reply#$ID]"));
-        assert_eq!(unfilled("[image#NaN.0]"), Some("[image#NaN.0]"));
-        assert_eq!(unfilled("[sticker#null.1]"), Some("[sticker#null.1]"));
-    }
-
-    #[test]
-    fn markers_with_ids_and_prose_go() {
-        assert_eq!(unfilled("[reply#12] [mention#3] 好 [sticker#4.0]"), None);
-        assert_eq!(unfilled("写 `[reply#id]` 引用一条，[split] 分条"), None);
-        assert_eq!(unfilled("数组 a[0]、[链接#] 和 [reply"), None);
-        assert_eq!(unfilled("[[reply#5]]"), None);
     }
 }

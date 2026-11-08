@@ -59,6 +59,10 @@ pub struct Segment {
     /// sources of the segments that went out are what Max said.
     pub source: String,
     pub draft: Draft,
+    /// Markers in it whose id isn't one, `[reply#]` or `[mention#${id}]`:
+    /// outside code, where they would be placeholders, they are text, and
+    /// go out as written.
+    pub unfilled: Vec<String>,
 }
 
 /// Streamed model text in, messages to say out.
@@ -92,8 +96,12 @@ impl Segmenter {
         chunks
             .into_iter()
             .filter_map(|source| {
-                let draft = parse::parse(&source, &self.known)?;
-                Some(Segment { source, draft })
+                let (draft, unfilled) = parse::parse(&source, &self.known)?;
+                Some(Segment {
+                    source,
+                    draft,
+                    unfilled,
+                })
             })
             .collect()
     }

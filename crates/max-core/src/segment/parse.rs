@@ -5,9 +5,11 @@
 //! Max writes quotes, mentions and pictures (`[sticker#7405.0]`, a chunk
 //! of its own); forms that are only for reading (`[face: 吃瓜]`,
 //! `[unsend#7405]`, `[video#7405.0]`) are dropped when echoed, and so is
-//! a copied row header. Anything else that doesn't parse stays text. Code
-//! fences and inline code spans are left alone: a placeholder there is
-//! Max showing what one looks like.
+//! a copied row header. Anything else that doesn't parse stays text, and a
+//! marker among it whose id isn't one, `[reply#${id}]`, is noted, for a
+//! program whose variable wasn't filled in. Code fences and inline code
+//! spans are left alone: a placeholder there is Max showing what one looks
+//! like.
 
 use std::collections::BTreeSet;
 
@@ -15,8 +17,12 @@ use super::chunk::{self, Kind};
 use crate::ids::{MessageId, PrincipalId};
 use crate::message::{Draft, DraftNode};
 
-/// The message one chunk of model output says, if any.
-pub(super) fn parse(chunk: &str, known: &BTreeSet<PrincipalId>) -> Option<Draft> {
+/// The kinds of placeholder whose id Max fills in.
+const MARKERS: [&str; 4] = ["reply", "mention", "sticker", "image"];
+
+/// The message one chunk of model output says, if any, and the markers in
+/// it whose id isn't one, which it has as text.
+pub(super) fn parse(chunk: &str, known: &BTreeSet<PrincipalId>) -> Option<(Draft, Vec<String>)> {
     let mut parsed = Parsed::default();
     let mut in_fence = false;
     for (i, line) in chunk.split('\n').enumerate() {
@@ -89,6 +95,7 @@ fn without_header(line: &str) -> &str {
 struct Parsed {
     reply_to: Option<MessageId>,
     nodes: Vec<DraftNode>,
+    unfilled: Vec<String>,
 }
 
 impl Parsed {
@@ -126,6 +133,9 @@ impl Parsed {
                     rest = &rest[len..];
                 }
                 None => {
+                    if let Some(marker) = unfilled(rest) {
+                        self.unfilled.push(marker.to_owned());
+                    }
                     self.text("[");
                     rest = &rest[1..];
                 }
@@ -165,7 +175,7 @@ impl Parsed {
         }
     }
 
-    fn finish(mut self) -> Option<Draft> {
+    fn finish(mut self) -> Option<(Draft, Vec<String>)> {
         if let Some(DraftNode::Text { text }) = self.nodes.first_mut() {
             *text = text.trim_start().to_owned();
         }
@@ -174,11 +184,21 @@ impl Parsed {
         }
         self.nodes
             .retain(|node| !matches!(node, DraftNode::Text { text } if text.is_empty()));
-        (!self.nodes.is_empty()).then_some(Draft {
+        let draft = Draft {
             reply_to: self.reply_to,
             nodes: self.nodes,
-        })
+        };
+        (!draft.nodes.is_empty()).then_some((draft, self.unfilled))
     }
+}
+
+/// The marker `s` starts with, to its `]`, if it is a kind that carries an
+/// id but isn't a placeholder: its id is missing or no number, as when a
+/// program's variable wasn't filled in.
+fn unfilled(s: &str) -> Option<&str> {
+    let (word, _) = s.strip_prefix('[')?.split_once('#')?;
+    let end = s.find(']')?;
+    MARKERS.contains(&word).then(|| &s[..=end])
 }
 
 enum Token<'a> {
@@ -270,7 +290,40 @@ mod tests {
     use super::*;
 
     fn parsed(chunk: &str) -> Option<Draft> {
+        parse(chunk, &[PrincipalId(12)].into()).map(|(draft, _)| draft)
+    }
+
+    /// The markers in `chunk` whose id isn't one.
+    fn unfilled_in(chunk: &str) -> Vec<String> {
         parse(chunk, &[PrincipalId(12)].into())
+            .map(|(_, unfilled)| unfilled)
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn a_marker_without_its_id_is_noted() {
+        assert_eq!(unfilled_in("[reply#] pong"), ["[reply#]"]);
+        assert_eq!(
+            unfilled_in("[reply#12] [mention#undefined] 好"),
+            ["[mention#undefined]"]
+        );
+        assert_eq!(unfilled_in("[reply#${id}] 好"), ["[reply#${id}]"]);
+        assert_eq!(
+            unfilled_in("[image#NaN.0] [sticker#.1]"),
+            ["[image#NaN.0]", "[sticker#.1]"]
+        );
+        assert_eq!(unfilled_in("引用写成 [reply#id]"), ["[reply#id]"]);
+        // Still sent as written.
+        assert_eq!(say("[reply#] pong").nodes, vec![text("[reply#] pong")]);
+    }
+
+    #[test]
+    fn markers_with_ids_code_and_prose_are_not() {
+        assert!(unfilled_in("[reply#12] [mention#3] 好 [sticker#4.0]").is_empty());
+        assert!(unfilled_in("写 `[reply#${id}]` 引用一条，[split] 分条").is_empty());
+        assert!(unfilled_in("例子：\n```\nsay(`[reply#${id}] 好`)\n```").is_empty());
+        assert!(unfilled_in("数组 a[0]、[链接#] 和 [reply").is_empty());
+        assert!(unfilled_in("[[reply#5]] [image: 吃瓜]").is_empty());
     }
 
     fn say(chunk: &str) -> Draft {

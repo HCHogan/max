@@ -896,6 +896,53 @@ async fn a_program_call_nobody_waits_for_ends(pool: PgPool) {
     h.stop().await;
 }
 
+/// A marker whose id a program didn't fill in stops its say; in code, it
+/// is an example, and goes out.
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn a_program_says_nothing_with_an_unfilled_id(pool: PgPool) {
+    let mut h = Harness::new(pool, 300).await;
+    let (reply, refused) = oneshot::channel();
+    let call = Event::Call {
+        tool: "say".into(),
+        args: serde_json::json!({ "text": "[reply#${id}] 构建好了" }),
+        reply,
+    };
+    h.mailbox.send(call).unwrap();
+    let refused = tokio::time::timeout(PATIENCE, refused).await.unwrap();
+    assert_eq!(refused.unwrap().unwrap_err().code, "unfilled");
+    assert!(h.outbound.try_recv().is_err());
+
+    let example = "回复写成 `[reply#${id}]`";
+    let (reply, result) = oneshot::channel();
+    let call = Event::Call {
+        tool: "say".into(),
+        args: serde_json::json!({ "text": example }),
+        reply,
+    };
+    h.mailbox.send(call).unwrap();
+    let outgoing = tokio::time::timeout(PATIENCE, h.outbound.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        outgoing.message.content,
+        Content::Message {
+            reply_to: None,
+            nodes: vec![Node::Text {
+                text: example.into()
+            }],
+        }
+    );
+    outgoing
+        .receipt
+        .unwrap()
+        .send(Ok(outgoing.message.id))
+        .unwrap();
+    let said = tokio::time::timeout(PATIENCE, result).await.unwrap();
+    assert!(said.unwrap().is_ok());
+    h.stop().await;
+}
+
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
 async fn a_program_says_things_marked_as_its_own(pool: PgPool) {
     let mut h = Harness::new(pool, 300).await;
