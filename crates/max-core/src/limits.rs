@@ -83,6 +83,13 @@ pub const QUESTION_WAIT: Duration = Duration::from_secs(10 * 60);
 /// rest isn't, and it is asked to trim them.
 pub const JOB_NOTES_BYTES: u64 = 16 << 10;
 
+// Asking another conversation.
+
+/// The most characters of a question put to Max in another conversation,
+/// and of its answer; a longer one is refused, not cut. Both are said in
+/// two chats.
+pub const ASK_CHARS: u32 = 2_000;
+
 // Memory.
 
 /// The most tokens of the memory file a core is shown.

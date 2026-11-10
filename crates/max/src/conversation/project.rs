@@ -15,6 +15,7 @@ use max_core::project::{self, Budgets, Volatile};
 use max_core::render::{Mark, Render};
 use max_core::run::{Context, Input, Wake};
 use max_db::ledger::{self, Delivery, Row};
+use max_db::links::{self, Peer};
 use max_db::platform::{self, ConversationKind};
 use max_db::turns::{self, TailEnd};
 use sqlx::PgConnection;
@@ -150,9 +151,11 @@ impl Projection<'_> {
 
         let mut roster: BTreeSet<PrincipalId> = people.values().copied().collect();
         roster.insert(self.place.me.principal);
+        let askable = links::asked(conn, conversation).await?;
         let volatile = Volatile {
             now: self.now,
             roster: roster_lines(conn, self.place, &roster, project::roster_line).await?,
+            askable: askable.iter().map(Peer::to_string).collect(),
             memory: self.memory,
             quoted: quoted_text,
             first: first_text,

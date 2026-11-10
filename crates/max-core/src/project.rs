@@ -99,6 +99,8 @@ pub struct Volatile {
     pub now: DateTime<Utc>,
     /// Roster lines, one per person in the context.
     pub roster: Vec<String>,
+    /// The conversations Max here may ask, a line each: `c#9 名字`.
+    pub askable: Vec<String>,
     /// Max's memory file, as [`memory`] shows it; empty without one.
     pub memory: String,
     /// Rendered rows the context refers to but doesn't show, such as the
@@ -112,11 +114,17 @@ pub struct Volatile {
 impl Volatile {
     pub fn render(&self, offset: FixedOffset) -> String {
         let mut out = now_line(self.now, offset);
-        if !self.roster.is_empty() {
-            out.push_str("\n[上下文里的人]\n");
-            for line in &self.roster {
-                out.push_str(line);
-                out.push('\n');
+        let lists = [
+            ("[上下文里的人]", &self.roster),
+            ("[能问的会话]", &self.askable),
+        ];
+        for (label, lines) in lists {
+            if !lines.is_empty() {
+                let _ = writeln!(out, "\n{label}");
+                for line in lines {
+                    out.push_str(line);
+                    out.push('\n');
+                }
             }
         }
         let blocks = [

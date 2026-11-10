@@ -17,6 +17,7 @@ use serde_json::{Map, Value};
 use tracing::warn;
 
 use super::agent::{Agent, AgentCancel, AgentStatus, AgentSteer};
+use super::ask::{Answer, Ask};
 use super::config::Config;
 use super::find_stickers::FindStickers;
 use super::history::History;
@@ -42,6 +43,9 @@ pub trait Tool: 'static {
     /// turn's programs that call them call as those. See "Resident programs" in
     /// docs/rust-rewrite.md.
     const TURN: bool = true;
+    /// Whether a program Max keeps in the group's VM may call it, outside
+    /// any turn; all but `ask` and `answer`.
+    const PROGRAM: bool = true;
 
     type Args: DeserializeOwned + JsonSchema;
     type Output: Serialize + JsonSchema;
@@ -63,6 +67,7 @@ pub struct Spec {
     pub description: &'static str,
     pub job: bool,
     pub turn: bool,
+    pub program: bool,
     /// JSON Schemas.
     pub input: Map<String, Value>,
     pub output: Map<String, Value>,
@@ -87,6 +92,8 @@ pub static TOOLS: LazyLock<Vec<Spec>> = LazyLock::new(|| {
         spec::<AgentSteer>(),
         spec::<AgentCancel>(),
         spec::<AgentStatus>(),
+        spec::<Ask>(),
+        spec::<Answer>(),
         spec::<Config>(),
         spec::<Say>(),
         spec::<Wake>(),
@@ -130,6 +137,7 @@ fn spec<T: Tool>() -> Spec {
         description: T::DESCRIPTION,
         job: T::JOB,
         turn: T::TURN,
+        program: T::PROGRAM,
         input,
         output,
         declaration,

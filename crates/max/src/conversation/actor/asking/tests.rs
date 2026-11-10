@@ -215,6 +215,8 @@ async fn a_question_and_its_answer_are_said_in_both_conversations(pool: PgPool) 
         format!("#{question} 系统发的]: ```text ⏎ c#{c} asks: ⏎ 明天的活动几点开始？ ⏎ ```\n");
     assert!(shown.ends_with(&line), "{shown}");
     assert_eq!(shown.matches("asks:").count(), 1, "{shown}");
+    // The group may ask nobody, and is told of no list.
+    assert!(!shown.contains("[能问的会话]"), "{shown}");
     let waiting = p.jobs(&chat, Request::Status { job: None }).await.unwrap();
     let Reply::Running(jobs) = waiting else {
         panic!("{waiting:?}");
@@ -251,6 +253,9 @@ async fn a_question_and_its_answer_are_said_in_both_conversations(pool: PgPool) 
     assert!(shown.ends_with(&answer), "{shown}");
     // What the private chat asked is in its tail, not among the new rows.
     assert_eq!(shown.matches("answered:").count(), 1, "{shown}");
+    // Whom it may ask comes after its people.
+    let askable = format!("（你）\n\n[能问的会话]\nc#{r}\n\n[新消息]\n");
+    assert!(shown.contains(&askable), "{shown}");
     let waiting = p.jobs(&chat, Request::Status { job: None }).await.unwrap();
     assert_eq!(waiting, Reply::Running(Vec::new()));
 

@@ -2,6 +2,7 @@
 //! service; see "The MCP channel". Each declares itself as a [`tool::Tool`].
 
 mod agent;
+mod ask;
 mod chat_file;
 mod config;
 mod find_stickers;
@@ -104,11 +105,13 @@ impl Caller {
     }
 
     /// Whether it may make `call`. A program Max keeps in the VM may use
-    /// all of Max's tools, as the turn that wrote it could: Max decides
-    /// what its programs do (2026-11-05).
+    /// Max's tools, as the turn that wrote it could: Max decides what its
+    /// programs do (2026-11-05). All but asking another conversation and
+    /// answering one, which stay a turn's.
     pub fn allows(&self, call: Call) -> bool {
         match (self, call) {
             (Caller::Job(_), Call::Tool(tool)) => tool.job,
+            (Caller::Program(_), Call::Tool(tool)) => tool.program,
             (_, Call::Tool(_)) => true,
             (Caller::Turn(_) | Caller::Check, _) => true,
             // A program kept in the VM reads the chat's files, but has no
