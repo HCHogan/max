@@ -101,6 +101,9 @@ pub struct Volatile {
     pub roster: Vec<String>,
     /// The conversations Max here may ask, a line each: `c#9 名字`.
     pub askable: Vec<String>,
+    /// The questions other conversations asked before this core started
+    /// and still wait on, a line each: `ask#5 c#7 名字：问题`.
+    pub asked: Vec<String>,
     /// Max's memory file, as [`memory`] shows it; empty without one.
     pub memory: String,
     /// Rendered rows the context refers to but doesn't show, such as the
@@ -117,6 +120,7 @@ impl Volatile {
         let lists = [
             ("[上下文里的人]", &self.roster),
             ("[能问的会话]", &self.askable),
+            ("[等你回答的问题]", &self.asked),
         ];
         for (label, lines) in lists {
             if !lines.is_empty() {

@@ -498,9 +498,13 @@ async fn a_program_in_the_vm_wakes_a_group_nobody_has_written_in(pool: PgPool) {
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
 async fn a_question_starts_the_conversation_it_is_for(pool: PgPool) {
     let mut s = Setup::new(pool).await;
-    // The group was bound before max started, and nobody has written since.
+    // The group was bound, and talked in, before max started.
     let mut conn = s.pool.acquire().await.unwrap();
     let place = testing::group(&mut conn).await;
+    let said = from_xiaoming(0, vec![text("明天有活动")]);
+    ingest::inbound(&mut conn, &place, said, Utc::now(), offset())
+        .await
+        .unwrap();
     drop(conn);
     let question = |conversation| {
         let (answer, answered) = oneshot::channel();
@@ -521,12 +525,11 @@ async fn a_question_starts_the_conversation_it_is_for(pool: PgPool) {
     s.script.push(Answer::says("我看看"));
     let (ask, mut answered) = question(place.conversation);
     s.signals.send(ask).unwrap();
-    let asks = command::fenced("text", "c#7 hank asks:\n几点开始？");
-    assert_eq!(s.said().await, ("group:GROUP1".into(), asks));
-    assert_eq!(s.said().await.1, "我看看");
+    // Only what Max says is said: the question is its to read.
+    assert_eq!(s.said().await, ("group:GROUP1".into(), "我看看".into()));
     let shown = s.request_tail(0);
     assert!(
-        shown.contains("系统发的]: ```text ⏎ c#7 hank asks:"),
+        shown.contains("[ask#1 问] c#7 hank\n几点开始？\n"),
         "{shown}"
     );
     // Max there hasn't called `answer`: the asker waits on.
@@ -538,7 +541,7 @@ async fn a_question_starts_the_conversation_it_is_for(pool: PgPool) {
     let answered = tokio::time::timeout(PATIENCE, answered).await.unwrap();
     assert_eq!(
         answered.unwrap(),
-        Err("Max serves no chat of that conversation".to_owned())
+        Err("Max 已经不在那个会话的聊天里了".to_owned())
     );
     s.stop().await;
 }

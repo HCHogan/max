@@ -315,10 +315,9 @@ impl Handler {
             "ping" => Ok(Answer::Value(json!({}))),
             "tools/list" => {
                 let session = self.session(authorization)?;
-                // Without a session, a program Max keeps in the VM.
                 let allows = |spec: &&'static Spec| match &session {
                     Some(session) => session.context.caller.allows(Call::Tool(spec)),
-                    None => spec.program,
+                    None => true,
                 };
                 let tools = tool::TOOLS.iter().filter(allows).map(listed).collect();
                 Ok(Answer::Tools { tools })

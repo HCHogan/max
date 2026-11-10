@@ -89,12 +89,14 @@ fn the_base_context() {
         now: utc(10, 28, 6, 5),
         roster: vec!["[mention#12] 小明".into()],
         askable: Vec::new(),
+        asked: Vec::new(),
         memory: "# 记忆\n- 群友叫你小鲨鲨（2026-08-28 #3）".into(),
         quoted: String::new(),
         first: "[14:04 小明 #9 @你]: 在吗\n".into(),
     };
     let linked = Volatile {
         askable: vec!["c#9 示波器同好会".into(), "c#12".into()],
+        asked: vec!["ask#5 c#7 hank：几点开始？".into()],
         ..volatile.clone()
     };
     let volatile = volatile.render(china());
@@ -102,12 +104,13 @@ fn the_base_context() {
         volatile,
         "[现在] 2026-10-28 周三 14:05\n\n[上下文里的人]\n[mention#12] 小明\n\n[记忆]\n# 记忆\n- 群友叫你小鲨鲨（2026-08-28 #3）\n\n[新消息]\n[14:04 小明 #9 @你]: 在吗\n"
     );
-    // Whom Max here may ask, after the people.
+    // Whom Max here may ask, and what it was asked and hasn't answered,
+    // after the people.
     assert_eq!(
         linked.render(china()),
         volatile.replace(
             "小明\n\n[记忆]",
-            "小明\n\n[能问的会话]\nc#9 示波器同好会\nc#12\n\n[记忆]"
+            "小明\n\n[能问的会话]\nc#9 示波器同好会\nc#12\n\n[等你回答的问题]\nask#5 c#7 hank：几点开始？\n\n[记忆]"
         )
     );
     let context = context(

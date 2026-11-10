@@ -43,9 +43,6 @@ pub trait Tool: 'static {
     /// turn's programs that call them call as those. See "Resident programs" in
     /// docs/rust-rewrite.md.
     const TURN: bool = true;
-    /// Whether a program Max keeps in the group's VM may call it, outside
-    /// any turn; all but `ask` and `answer`.
-    const PROGRAM: bool = true;
 
     type Args: DeserializeOwned + JsonSchema;
     type Output: Serialize + JsonSchema;
@@ -67,7 +64,6 @@ pub struct Spec {
     pub description: &'static str,
     pub job: bool,
     pub turn: bool,
-    pub program: bool,
     /// JSON Schemas.
     pub input: Map<String, Value>,
     pub output: Map<String, Value>,
@@ -137,7 +133,6 @@ fn spec<T: Tool>() -> Spec {
         description: T::DESCRIPTION,
         job: T::JOB,
         turn: T::TURN,
-        program: T::PROGRAM,
         input,
         output,
         declaration,

@@ -1,7 +1,7 @@
 //! Two actors against the real database: 小明's private chat and the
-//! group, with a scripted model and a sender that only queues. A task
-//! plays the conversation table's part and hands a question to the actor
-//! it is for.
+//! group, each with a row to start from, with a scripted model and a
+//! sender that only queues. A task plays the conversation table's part and
+//! hands a question to the actor it is for.
 
 use std::time::Duration;
 
@@ -12,7 +12,9 @@ use max_db::PgPool;
 use tokio::sync::mpsc::{self, UnboundedReceiver};
 
 use super::*;
-use crate::conversation::testing::{from_xiaohong, group, private, shared, text};
+use crate::conversation::testing::{
+    from_xiaohong, from_xiaoming, group, offset, private, privately, shared, text,
+};
 use crate::inbound::InNode;
 use crate::job::{Reply, Request};
 use crate::llm::testing::{Answer, Script};
@@ -34,6 +36,13 @@ impl Pair {
         let mut conn = pool.acquire().await.unwrap();
         let chat = Arc::new(private(&mut conn).await);
         let room = Arc::new(group(&mut conn).await);
+        // As a conversation with an edge has: the /link that made it.
+        let said = from_xiaoming(0, vec![text("明天有活动")]);
+        for (place, said) in [(&chat, privately(said.clone())), (&room, said)] {
+            ingest::inbound(&mut conn, place, said, Utc::now(), offset())
+                .await
+                .unwrap();
+        }
         drop(conn);
         let script = Arc::new(Script::default());
         let (mut shared, outbound) = shared(&pool, &script, 300, BTreeSet::new());
@@ -64,7 +73,7 @@ impl Pair {
                 };
                 match routes.get(&conversation) {
                     Some(mailbox) => mailbox.send(Event::Asked(question)).unwrap(),
-                    None => question.refuse("Max serves no chat of that conversation"),
+                    None => question.refuse("Max 已经不在那个会话的聊天里了"),
                 }
             }
         });
@@ -109,7 +118,7 @@ impl Pair {
     }
 
     /// Max in `place` calls `answer`.
-    async fn answer(&self, place: &Place, to: MessageId, text: &str) -> Result<String, String> {
+    async fn answer(&self, place: &Place, to: u32, text: &str) -> Result<String, String> {
         let (reply, taken) = oneshot::channel();
         let answer = Event::Answer {
             to,
@@ -138,8 +147,8 @@ impl Pair {
             .unwrap()
     }
 
-    /// The next thing Max's account says: where, the row, and its text.
-    async fn said(&mut self) -> (ConversationId, Arc<Message>, String) {
+    /// The next thing said: where, and its text.
+    async fn said(&mut self) -> (ConversationId, String) {
         let outgoing = tokio::time::timeout(PATIENCE, self.outbound.recv())
             .await
             .expect("nothing was said")
@@ -154,27 +163,13 @@ impl Pair {
                 other => format!("{other:?}"),
             })
             .collect();
-        (outgoing.place.conversation, outgoing.message, text)
+        (outgoing.place.conversation, text)
     }
 
-    /// A line maxx says in `place`: the row, which quotes `quoting`.
-    async fn line(&mut self, place: &Place, body: &str, quoting: Option<MessageId>) -> MessageId {
-        let (conversation, message, text) = self.said().await;
-        assert_eq!(text, command::fenced("text", body));
-        assert_eq!(conversation, place.conversation, "{text}");
-        assert_eq!(ingest::by(&message), By::Host, "{text}");
-        let Content::Message { reply_to, .. } = &message.content else {
-            unreachable!("said() saw a message");
-        };
-        assert_eq!(*reply_to, quoting, "{text}");
-        message.id
-    }
-
-    /// What Max says in `place` itself.
+    /// What Max says in `place`.
     async fn says(&mut self, place: &Place, words: &str) {
-        let (conversation, message, text) = self.said().await;
+        let (conversation, text) = self.said().await;
         assert_eq!((conversation, text.as_str()), (place.conversation, words));
-        assert_eq!(ingest::by(&message), By::Max);
     }
 
     /// Nothing more is said for a moment.
@@ -191,10 +186,17 @@ impl Pair {
             other => panic!("{other:?}"),
         }
     }
+
+    async fn count(&self, query: &'static str) -> i64 {
+        sqlx::query_scalar(query)
+            .fetch_one(&self.pool)
+            .await
+            .unwrap()
+    }
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn a_question_and_its_answer_are_said_in_both_conversations(pool: PgPool) {
+async fn a_question_and_its_answer_reach_the_two_maxes_and_no_chat(pool: PgPool) {
     let mut p = Pair::new(pool).await;
     let (chat, room) = (Arc::clone(&p.chat), Arc::clone(&p.room));
     let (c, r) = (chat.conversation, room.conversation);
@@ -204,19 +206,15 @@ async fn a_question_and_its_answer_are_said_in_both_conversations(pool: PgPool) 
     p.script.push(Answer::says("我问问大家"));
     let asked = p.ask(&chat, r, " 明天的活动几点开始？\n").await;
     assert_eq!(asked, Ok(1));
-    let asking = format!("asked c#{r}:\n明天的活动几点开始？");
-    let said = p.line(&chat, &asking, None).await;
-    let put = format!("c#{c} asks:\n明天的活动几点开始？");
-    let question = p.line(&room, &put, None).await;
     p.says(&room, "我问问大家").await;
-    // Among the group's new rows, as a line maxx said, and once.
     let shown = p.request_tail(0);
-    let line =
-        format!("#{question} 系统发的]: ```text ⏎ c#{c} asks: ⏎ 明天的活动几点开始？ ⏎ ```\n");
-    assert!(shown.ends_with(&line), "{shown}");
-    assert_eq!(shown.matches("asks:").count(), 1, "{shown}");
-    // The group may ask nobody, and is told of no list.
+    let put =
+        format!("[新消息]\n[ask#1 问] c#{c}\n明天的活动几点开始？\n（那个会话的 Max 在等你回答：");
+    assert!(shown.contains(&put), "{shown}");
+    // The group may ask nobody, and is told of no list; and the question
+    // that woke it is shown once, not listed as one from before.
     assert!(!shown.contains("[能问的会话]"), "{shown}");
+    assert!(!shown.contains("[等你回答的问题]"), "{shown}");
     let waiting = p.jobs(&chat, Request::Status { job: None }).await.unwrap();
     let Reply::Running(jobs) = waiting else {
         panic!("{waiting:?}");
@@ -227,62 +225,38 @@ async fn a_question_and_its_answer_are_said_in_both_conversations(pool: PgPool) 
         ("job#1", title.as_str())
     );
 
-    // The answer names the line; it wakes Max in the private chat.
+    // The answer names the question; it wakes Max in the private chat,
+    // whose new core is told what it had asked.
     p.script.push(Answer::says("群里说晚上八点"));
-    let answered = p.answer(&room, question, "晚上八点\n").await;
+    let answered = p.answer(&room, 1, "晚上八点\n").await;
     assert_eq!(answered, Ok(format!("c#{c}")));
-    let (mut lines, mut words) = (Vec::new(), Vec::new());
-    for _ in 0..3 {
-        let (conversation, message, text) = p.said().await;
-        match ingest::by(&message) {
-            By::Host => lines.push((conversation, text, project::quotes(&message))),
-            _ => words.push((conversation, text)),
-        }
-    }
-    lines.sort();
-    let mut expected = [
-        (r, format!("answered c#{c}:\n晚上八点"), Some(question)),
-        (c, format!("c#{r} answered:\n晚上八点"), Some(said)),
-    ]
-    .map(|(conversation, body, quoting)| (conversation, command::fenced("text", &body), quoting));
-    expected.sort();
-    assert_eq!(lines, expected);
-    assert_eq!(words, [(c, "群里说晚上八点".to_owned())]);
+    p.says(&chat, "群里说晚上八点").await;
     let shown = p.request_tail(1);
-    let answer = format!("系统发的]: [reply#{said}] ```text ⏎ c#{r} answered: ⏎ 晚上八点 ⏎ ```\n");
-    assert!(shown.ends_with(&answer), "{shown}");
-    // What the private chat asked is in its tail, not among the new rows.
-    assert_eq!(shown.matches("answered:").count(), 1, "{shown}");
+    let heard = format!("[job#1 回答] c#{r}\n问：明天的活动几点开始？\n答：晚上八点\n");
+    assert!(shown.ends_with(&heard), "{shown}");
     // Whom it may ask comes after its people.
-    let askable = format!("（你）\n\n[能问的会话]\nc#{r}\n\n[新消息]\n");
+    let askable = format!("\n\n[能问的会话]\nc#{r}\n\n[新消息]\n");
     assert!(shown.contains(&askable), "{shown}");
     let waiting = p.jobs(&chat, Request::Status { job: None }).await.unwrap();
     assert_eq!(waiting, Reply::Running(Vec::new()));
 
-    // Answered, nobody waits on the line any more: nothing is said.
-    let again = p.answer(&room, question, "九点").await.unwrap_err();
-    assert!(again.contains("没有人在等"), "{again}");
-    let never = p.answer(&room, said, "九点").await.unwrap_err();
-    assert!(never.contains("没有人在等"), "{never}");
+    // Answered, nobody waits on it any more.
+    let again = p.answer(&room, 1, "九点").await.unwrap_err();
+    assert!(again.contains("没有人在等 ask#1"), "{again}");
     p.quiet().await;
 
     // The group's core still runs: the next question is new input to it.
     p.script.push(Answer::says("这个我知道"));
     assert_eq!(p.ask(&chat, r, "在哪办？").await, Ok(2));
-    p.line(&chat, &format!("asked c#{r}:\n在哪办？"), None)
-        .await;
-    let second = p.line(&room, &format!("c#{c} asks:\n在哪办？"), None).await;
     p.says(&room, "这个我知道").await;
     let fed = p.request_tail(2);
-    let line = format!("#{second} 系统发的]: ```text ⏎ c#{c} asks: ⏎ 在哪办？ ⏎ ```");
-    assert!(fed.ends_with(&line), "{fed}");
-    assert!(!fed.contains("明天的活动"), "{fed}");
-    let turns: i64 = sqlx::query_scalar("select count(*) from turns where conversation_id = $1")
-        .bind(r.0)
-        .fetch_one(&p.pool)
-        .await
-        .unwrap();
-    assert_eq!(turns, 1, "one core took both questions");
+    let put = format!("[新消息]\n[ask#2 问] c#{c}\n在哪办？\n");
+    assert!(fed.starts_with(&put), "{fed}");
+    let turns = "select count(*) from turns t join conversations c on c.id = t.conversation_id where c.kind = 'group'";
+    assert_eq!(p.count(turns).await, 1, "one core took both questions");
+    // Nothing of it is a row: maxx said nothing in either chat.
+    let lines = "select count(*) from messages where raw ->> 'said_by' = 'host'";
+    assert_eq!(p.count(lines).await, 0);
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
@@ -293,7 +267,7 @@ async fn a_question_goes_only_along_an_edge(pool: PgPool) {
     p.link(&chat, &room).await;
 
     // The edge runs one way; no edge, no such conversation and itself
-    // are refused alike, and nothing is said.
+    // are refused alike, and nobody is woken.
     for (asker, to) in [(&room, c), (&chat, ConversationId(999)), (&chat, c)] {
         let refused = p.ask(asker, to, "在吗").await.unwrap_err();
         let alike = format!("问不了 c#{to}：这里没有连到它，或者没有这个会话。");
@@ -309,13 +283,10 @@ async fn a_question_that_gets_no_answer_says_why(pool: PgPool) {
     let (chat, room) = (Arc::clone(&p.chat), Arc::clone(&p.room));
     let (c, r) = (chat.conversation, room.conversation);
     p.link(&chat, &room).await;
-    p.link(&room, &chat).await;
 
     // Withdrawn, the answer finds nobody, and neither side hears more.
     p.script.push(Answer::says("等我想想"));
     assert_eq!(p.ask(&chat, r, "有空吗").await, Ok(1));
-    p.line(&chat, &format!("asked c#{r}:\n有空吗"), None).await;
-    let question = p.line(&room, &format!("c#{c} asks:\n有空吗"), None).await;
     p.says(&room, "等我想想").await;
     let steered = Request::Steer {
         job: 1,
@@ -327,8 +298,8 @@ async fn a_question_that_gets_no_answer_says_why(pool: PgPool) {
         p.jobs(&chat, Request::Cancel { job: 1 }).await,
         Ok(Reply::Job(1))
     );
-    let late = p.answer(&room, question, "有").await.unwrap_err();
-    assert!(late.contains("没有人在等"), "{late}");
+    let late = p.answer(&room, 1, "有").await.unwrap_err();
+    assert!(late.contains("没有人在等 ask#1"), "{late}");
     p.quiet().await;
 
     // A conversation Max serves no chat of: the group's core, still
@@ -346,53 +317,40 @@ async fn a_question_that_gets_no_answer_says_why(pool: PgPool) {
     drop(conn);
     p.script.push(Answer::says("那算了"));
     assert_eq!(p.ask(&room, unknown, "有人吗").await, Ok(1));
-    let said = format!("asked c#{unknown}:\n有人吗");
-    let said = p.line(&room, &said, None).await;
-    let unserved = format!("c#{unknown} didn't answer: Max serves no chat of that conversation");
-    p.line(&room, &unserved, Some(said)).await;
     p.says(&room, "那算了").await;
-    let fed = p.request_tail(1);
-    let line = format!("系统发的]: [reply#{said}] ```text ⏎ {unserved} ⏎ ```");
-    assert!(fed.ends_with(&line), "{fed}");
+    let unserved = "[新消息]\n[job#1 没答成] c#999：Max 已经不在那个会话的聊天里了\n问：有人吗";
+    assert_eq!(p.request_tail(1), unserved);
 
     // /stop there ends the wait of a question not yet answered.
     p.script.push(Answer::says("稍等"));
     assert_eq!(p.ask(&chat, r, "还在吗").await, Ok(2));
-    let said = p.line(&chat, &format!("asked c#{r}:\n还在吗"), None).await;
-    p.line(&room, &format!("c#{c} asks:\n还在吗"), None).await;
     p.says(&room, "稍等").await;
     p.script.push(Answer::says("好吧"));
     let me = InNode::MentionMe {
         display: "maxx".into(),
     };
-    let stop = Event::Inbound(from_xiaohong(0, vec![me, text("/stop")]));
+    let stop = Event::Inbound(from_xiaohong(1, vec![me, text("/stop")]));
     p.mailboxes[&r].send(stop).unwrap();
-    let mut heard = Vec::new();
-    for _ in 0..3 {
-        let (conversation, _, text) = p.said().await;
-        heard.push((conversation, text));
-    }
+    let mut heard = vec![p.said().await, p.said().await];
     heard.sort();
     let stopped = "stopped: messages are still recorded, but Max won't reply until @maxx /start";
-    let unanswered = format!("c#{r} didn't answer: Max was stopped there (/stop)");
     let mut expected = [
         (r, command::answer("stop", stopped)),
-        (c, command::fenced("text", &unanswered)),
         (c, "好吧".to_owned()),
     ];
     expected.sort();
     assert_eq!(heard, expected);
+    let unanswered = format!("[job#2 没答成] c#{r}：那边被 /stop 停了，Max 不回话\n问：还在吗\n");
+    let shown = p.request_tail(3);
+    assert!(shown.ends_with(&unanswered), "{shown}");
 
-    // Stopped, the group isn't told of a question, and the asker hears
+    // Stopped, Max there isn't told of a question, and the asker hears
     // why at once.
     p.script.push(Answer::says("嗯"));
     assert_eq!(p.ask(&chat, r, "真的不在？").await, Ok(3));
-    let again = p
-        .line(&chat, &format!("asked c#{r}:\n真的不在？"), None)
-        .await;
-    let unanswered = format!("c#{r} didn't answer: Max is stopped there (/stop)");
-    p.line(&chat, &unanswered, Some(again)).await;
     p.says(&chat, "嗯").await;
+    let again =
+        format!("[新消息]\n[job#3 没答成] c#{r}：那边被 /stop 停了，Max 不回话\n问：真的不在？");
+    assert_eq!(p.request_tail(4), again);
     p.quiet().await;
-    assert!(said < again);
 }

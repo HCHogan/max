@@ -31,8 +31,8 @@ pub enum Reason {
     /// A program in the group's VM ran `max-wake`, or the VM service has
     /// something to say about the VM: the wake's item says what.
     Program,
-    /// Max in another conversation asks Max here: the wake's row is the
-    /// question, a line maxx says.
+    /// Max in another conversation asks Max here: the wake's item is the
+    /// question.
     Asked,
 }
 

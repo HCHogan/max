@@ -1600,8 +1600,8 @@ fn question(text: &str) -> (Event, oneshot::Receiver<Result<String, String>>) {
     (Event::Asked(question), answered)
 }
 
-/// Max calls `answer` for the question of line `to`.
-async fn answer(h: &Harness, to: MessageId, text: &str) -> Result<String, String> {
+/// Max calls `answer` for question `to`.
+async fn answer(h: &Harness, to: u32, text: &str) -> Result<String, String> {
     let (reply, taken) = oneshot::channel();
     let answer = Event::Answer {
         to,
@@ -1617,84 +1617,33 @@ async fn answer(h: &Harness, to: MessageId, text: &str) -> Result<String, String
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn another_conversations_question_wakes_max_who_answers_it(pool: PgPool) {
-    let mut h = Harness::unprompted(pool, 300).await;
-    let line = |body: &str| command::fenced("text", body);
-    h.script.push(Answer::says("我问问大家"));
-    let (asked, mut answered) = question("明天的活动几点开始？");
+async fn a_new_core_is_shown_the_questions_still_waiting(pool: PgPool) {
+    // An idle window too short to outlast the question.
+    let mut h = Harness::unprompted(pool, 1).await;
+    h.send(from_xiaoming(0, vec![text("明天有活动")]));
+    h.script.push(Answer::says("谁知道明天几点开始？"));
+    let (asked, answered) = question("明天的活动\n几点开始？");
     h.mailbox.send(asked).unwrap();
-    let (first, said) = h.said().await;
-    assert_eq!(said, line("c#7 hank asks:\n明天的活动几点开始？"));
-    assert_eq!(ingest::by(&first), By::Host);
-    assert_eq!(h.said().await.1, "我问问大家");
-    // Among the new rows, as a line maxx said, and once.
-    let shown = h.request_tail(0);
-    let row = format!(
-        "#{} 系统发的]: ```text ⏎ c#7 hank asks: ⏎ 明天的活动几点开始？ ⏎ ```\n",
-        first.id
-    );
-    assert!(shown.ends_with(&row), "{shown}");
-    assert_eq!(shown.matches("asks:").count(), 1, "{shown}");
-    assert!(answered.try_recv().is_err(), "nobody answered yet");
-    h.send(at_max(0, "/status"));
+    assert_eq!(h.said().await.1, "谁知道明天几点开始？");
+    h.send(at_max(1, "/status"));
     let status = h.said().await.1;
-    let waiting = format!("\nto answer #{} from c#7 hank\n", first.id);
-    assert!(status.contains(&waiting), "{status}");
-
-    // The answer names the line, and a line here says what it was.
-    let taken = answer(&h, first.id, " 晚上八点\n").await;
-    assert_eq!(taken, Ok("c#7 hank".to_owned()));
-    assert_eq!(answered.await.unwrap(), Ok("晚上八点".to_owned()));
-    let (answering, said) = h.said().await;
-    assert_eq!(said, line("answered c#7 hank:\n晚上八点"));
-    assert_eq!(ingest::by(&answering), By::Host);
-    assert_eq!(project::quotes(&answering), Some(first.id));
-    // Answered, nobody waits on it; nor on a line that asked nothing.
-    for to in [first.id, answering.id] {
-        let nobody = answer(&h, to, "九点").await.unwrap_err();
-        assert!(nobody.contains("没有人在等"), "{nobody}");
+    assert!(
+        status.contains("\nto answer ask#1 from c#7 hank\n"),
+        "{status}"
+    );
+    let deadline = std::time::Instant::now() + PATIENCE;
+    while h.turns().await.first().is_none_or(|turn| turn.1.is_none()) {
+        assert!(std::time::Instant::now() < deadline, "the core didn't end");
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
-
-    // The core still runs: the next question is new input to it.
-    h.script.push(Answer::says("这个我知道"));
-    let (asked, answered) = question("在哪办？");
-    h.mailbox.send(asked).unwrap();
-    let (second, _) = h.said().await;
-    assert_eq!(h.said().await.1, "这个我知道");
-    let fed = h.request_tail(1);
-    let row = format!(
-        "#{} 系统发的]: ```text ⏎ c#7 hank asks: ⏎ 在哪办？ ⏎ ```",
-        second.id
-    );
-    assert!(fed.ends_with(&row), "{fed}");
-    assert!(!fed.contains("明天的活动"), "{fed}");
-    // Its asker withdrew it: the answer finds nobody.
-    drop(answered);
-    let withdrawn = answer(&h, second.id, "老地方").await.unwrap_err();
-    assert!(withdrawn.contains("没有人在等"), "{withdrawn}");
-
-    // /stop ends the wait of what isn't answered, and then nobody here
-    // is told of a question.
-    h.script.push(Answer::says("稍等"));
-    let (asked, waiting) = question("还在吗");
-    h.mailbox.send(asked).unwrap();
-    h.said().await;
-    assert_eq!(h.said().await.1, "稍等");
-    h.send(from_xiaohong(1, vec![me(), text("/stop")]));
-    let stopped = "stopped: messages are still recorded, but Max won't reply until @maxx /start";
-    assert_eq!(h.said().await.1, command::answer("stop", stopped));
-    assert_eq!(
-        waiting.await.unwrap(),
-        Err("Max was stopped there (/stop)".to_owned())
-    );
-    let (asked, refused) = question("真的不在？");
-    h.mailbox.send(asked).unwrap();
-    assert_eq!(
-        refused.await.unwrap(),
-        Err("Max is stopped there (/stop)".to_owned())
-    );
+    // Someone here knows; the core that hears them never saw the question.
+    h.script.push(Answer::says("好，我告诉它"));
+    h.send(from_xiaohong(2, vec![me(), text("八点")]));
+    assert_eq!(h.said().await.1, "好，我告诉它");
+    let shown = h.request_tail(1);
+    let waiting = "\n\n[等你回答的问题]\nask#1 c#7 hank：明天的活动 ⏎ 几点开始？\n\n[新消息]\n";
+    assert!(shown.contains(waiting), "{shown}");
+    assert_eq!(answer(&h, 1, "八点").await, Ok("c#7 hank".to_owned()));
+    assert_eq!(answered.await.unwrap(), Ok("八点".to_owned()));
     h.stop().await;
-    assert_eq!(h.turns().await.len(), 1, "one core took every question");
-    let rows = "select count(*) from messages where raw ->> 'said_by' = 'host'";
-    assert_eq!(h.count(rows).await, 6, "3 questions, 1 answer, 2 commands");
 }

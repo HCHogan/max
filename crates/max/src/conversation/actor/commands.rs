@@ -130,7 +130,7 @@ impl Conversation {
         // the classifier, wake nobody now.
         self.intent.forget();
         // Nor is anything another conversation asked answered.
-        self.asked.refuse("Max was stopped there (/stop)");
+        self.asked.refuse(asking::STOPPED_THERE);
         let jobs = self.kill(committed, "stop").await?;
         let how = command::how(self.place.kind, &self.place.my_name, "/start");
         let mut answer =

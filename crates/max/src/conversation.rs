@@ -118,10 +118,10 @@ pub enum Event {
     },
     /// Max in another conversation asks Max here, from the table.
     Asked(Question),
-    /// Max's `answer` tool: the answer to the question of line `to`. Whom
-    /// it went to, or why it wasn't taken.
+    /// Max's `answer` tool: the answer to question `to`, as it was
+    /// numbered here. Whom it went to, or why it wasn't taken.
     Answer {
-        to: MessageId,
+        to: u32,
         text: String,
         origin: Option<TurnId>,
         reply: oneshot::Sender<Result<String, String>>,
@@ -322,9 +322,9 @@ impl Poster {
         answer.await.map_err(|_| "没等到回答".to_owned())?
     }
 
-    /// Answers the question of line `to`, which Max in another
-    /// conversation asked: whom it went to, or why it wasn't taken.
-    pub async fn answer(&self, to: MessageId, text: String) -> Result<String, String> {
+    /// Answers question `to`, which Max in another conversation asked:
+    /// whom it went to, or why it wasn't taken.
+    pub async fn answer(&self, to: u32, text: String) -> Result<String, String> {
         let (reply, answer) = oneshot::channel();
         self.mailbox
             .send(Event::Answer {

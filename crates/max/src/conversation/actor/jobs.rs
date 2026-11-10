@@ -42,11 +42,11 @@ struct Running {
 enum Kind {
     Agent(Agent),
     Command,
-    /// A question put to Max in another conversation: which, and the line
-    /// here that says it was asked.
+    /// A question put to Max in another conversation: which, and what
+    /// was asked, for the core that hears the answer.
     Question {
         to: Peer,
-        line: MessageId,
+        question: String,
     },
 }
 
@@ -271,14 +271,12 @@ impl Conversation {
         number
     }
 
-    /// Waits for the answer to `question`, put to Max in `to` and said
-    /// here in `line`, as a job: its number. The wait ends with the
-    /// answer, or with why none comes; withdrawn, nobody is told, and an
-    /// answer finds nobody waiting.
+    /// Waits for the answer to `question`, put to Max in `to`, as a job:
+    /// its number. The wait ends with the answer, or with why none comes;
+    /// withdrawn, nobody is told, and an answer finds nobody waiting.
     pub(super) fn question_job(
         &mut self,
         to: Peer,
-        line: MessageId,
         question: &str,
         answered: oneshot::Receiver<Result<String, String>>,
     ) -> u32 {
@@ -291,9 +289,9 @@ impl Conversation {
                 Ok(Ok(answer)) => answer,
                 // The question was dropped on its way, or with the actor
                 // that held it.
-                Ok(Err(_)) => Err("Max there stopped before answering".to_owned()),
+                Ok(Err(_)) => Err("那边的 Max 没回答就停了".to_owned()),
                 Err(_) => Err(format!(
-                    "no answer in {} hours",
+                    "等了 {} 小时没有回答",
                     limits::JOB_TIME.as_secs() / 3600
                 )),
             };
@@ -305,7 +303,10 @@ impl Conversation {
         let running = Running {
             title: format!("? {to}: {}", headline(question)),
             started: Instant::now(),
-            kind: Kind::Question { to, line },
+            kind: Kind::Question {
+                to,
+                question: question.to_owned(),
+            },
             _task: task,
         };
         self.jobs.running.insert(number, running);
@@ -313,15 +314,16 @@ impl Conversation {
     }
 
     /// Ends the wait of question job `job`: whom it was put to, and the
-    /// line that says so. None if it was withdrawn since.
-    pub(super) fn question_over(&mut self, job: u32) -> Option<(Peer, MessageId)> {
+    /// question. None if it was withdrawn since.
+    pub(super) fn question_over(&mut self, job: u32) -> Option<(Peer, String)> {
         let running = self.jobs.running.get(&job)?;
-        let Kind::Question { to, line } = &running.kind else {
+        if !matches!(running.kind, Kind::Question { .. }) {
             return None;
-        };
-        let asked = (to.clone(), *line);
-        self.jobs.running.remove(&job);
-        Some(asked)
+        }
+        match self.jobs.running.remove(&job)?.kind {
+            Kind::Question { to, question } => Some((to, question)),
+            Kind::Agent(_) | Kind::Command => None,
+        }
     }
 
     /// A job asks Max: its question wakes Max, who answers with

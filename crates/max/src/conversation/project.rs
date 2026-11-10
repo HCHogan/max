@@ -34,6 +34,9 @@ pub struct Projection<'a> {
     pub cleared_upto: Option<MessageId>,
     /// Max's memory file, as the core is shown it.
     pub memory: String,
+    /// The questions other conversations still wait on, asked before this
+    /// core started: a line each.
+    pub asked: Vec<String>,
     pub now: DateTime<Utc>,
     pub offset: FixedOffset,
 }
@@ -123,7 +126,7 @@ impl Projection<'_> {
 
         let mut first_lines = Vec::new();
         for row in &triggers {
-            let mark = self.trigger_mark(conn, row).await?;
+            let mark = self.trigger_mark(conn, &row.message).await?;
             let line = shown_line(&render, &row.message, mark, budgets.single);
             first_lines.push((&row.message, line));
         }
@@ -156,6 +159,7 @@ impl Projection<'_> {
             now: self.now,
             roster: roster_lines(conn, self.place, &roster, project::roster_line).await?,
             askable: askable.iter().map(Peer::to_string).collect(),
+            asked: self.asked,
             memory: self.memory,
             quoted: quoted_text,
             first: first_text,
@@ -184,17 +188,12 @@ impl Projection<'_> {
     }
 
     /// How a trigger row is marked: an @ of Max or a reply to Max. Rows in
-    /// a private chat aren't marked; everything there is for Max. A row
-    /// of Max's own account, such as another conversation's question, is
-    /// marked as in the tail: maxx said it.
-    async fn trigger_mark(&self, conn: &mut PgConnection, row: &Row) -> sqlx::Result<Mark> {
-        if row.message.sender.identity == self.place.me.identity {
-            return Ok(own_mark(row));
-        }
+    /// a private chat aren't marked; everything there is for Max.
+    async fn trigger_mark(&self, conn: &mut PgConnection, message: &Message) -> sqlx::Result<Mark> {
         if self.place.kind == ConversationKind::Direct {
             return Ok(Mark::None);
         }
-        direct_mark(conn, self.place, &row.message).await
+        direct_mark(conn, self.place, message).await
     }
 }
 
