@@ -28,7 +28,7 @@ use tracing::{info, warn};
 use self::machine::{BOOT, Booted, Guest, Machine};
 use self::ssh::{Command, Connection, Input};
 use crate::config;
-use crate::conversation::Subscription;
+use crate::conversation::{Question, Subscription};
 use crate::mcp::api::{self, Apis};
 use crate::mcp::{self, Sessions};
 use crate::scope::Scope;
@@ -54,7 +54,10 @@ pub fn work(dir: &Path, conversation: ConversationId) -> PathBuf {
     dir.join(conversation.0.to_string()).join("work")
 }
 
-/// What the VM service has for a conversation's actor.
+/// What goes to a conversation's actor by its conversation, whatever chat
+/// it is in, through the conversation table, which starts the actor if it
+/// isn't running: what the VM service has for it, and a question from
+/// another conversation's actor.
 #[derive(Debug)]
 pub enum Signal {
     /// A program Max keeps in the VM calls a tool, outside any turn: the
@@ -74,6 +77,12 @@ pub enum Signal {
     Subscribe {
         conversation: ConversationId,
         reply: oneshot::Sender<Subscription>,
+    },
+    /// Max in another conversation asks Max in this one. See "Asking
+    /// another conversation" in docs/rust-rewrite.md.
+    Ask {
+        conversation: ConversationId,
+        question: Question,
     },
 }
 

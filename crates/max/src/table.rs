@@ -8,7 +8,7 @@
 //!
 //! What the VM service has for a conversation, such as a `max-wake` from
 //! a program in its VM, goes to its actor too, started if it isn't
-//! running.
+//! running; and so does what Max in another conversation asks its Max.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -80,7 +80,7 @@ impl Table {
                 }
                 Some(signal) = signals.recv() => {
                     if let Err(error) = self.signal(signal).await {
-                        error!(%error, "lost what the VM service had for a conversation");
+                        error!(%error, "lost something for a conversation");
                     }
                 }
             }
@@ -191,6 +191,10 @@ impl Table {
                 conversation,
                 reply,
             } => (conversation, Event::Subscribe(reply)),
+            Signal::Ask {
+                conversation,
+                question,
+            } => (conversation, Event::Asked(question)),
         };
         if let Some(key) = self.chats.get(&conversation)
             && let Some(actor) = self.actors.get(key)
@@ -214,10 +218,13 @@ impl Table {
         }
         drop(conn);
         let Some((key, endpoint, me)) = found else {
-            warn!(%conversation, "what the VM service had for a conversation Max isn't in");
+            warn!(%conversation, "something for a conversation Max isn't in");
+            if let Event::Asked(question) = event {
+                question.refuse("Max serves no chat of that conversation");
+            }
             return Ok(());
         };
-        info!(%conversation, "starting a conversation for its VM");
+        info!(%conversation, "starting a conversation for what came for it");
         let mailbox = self.start(key, endpoint, me).await?;
         let _ = mailbox.send(event);
         Ok(())

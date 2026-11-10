@@ -122,7 +122,7 @@ impl Projection<'_> {
 
         let mut first_lines = Vec::new();
         for row in &triggers {
-            let mark = self.trigger_mark(conn, &row.message).await?;
+            let mark = self.trigger_mark(conn, row).await?;
             let line = shown_line(&render, &row.message, mark, budgets.single);
             first_lines.push((&row.message, line));
         }
@@ -181,12 +181,17 @@ impl Projection<'_> {
     }
 
     /// How a trigger row is marked: an @ of Max or a reply to Max. Rows in
-    /// a private chat aren't marked; everything there is for Max.
-    async fn trigger_mark(&self, conn: &mut PgConnection, message: &Message) -> sqlx::Result<Mark> {
+    /// a private chat aren't marked; everything there is for Max. A row
+    /// of Max's own account, such as another conversation's question, is
+    /// marked as in the tail: maxx said it.
+    async fn trigger_mark(&self, conn: &mut PgConnection, row: &Row) -> sqlx::Result<Mark> {
+        if row.message.sender.identity == self.place.me.identity {
+            return Ok(own_mark(row));
+        }
         if self.place.kind == ConversationKind::Direct {
             return Ok(Mark::None);
         }
-        direct_mark(conn, self.place, message).await
+        direct_mark(conn, self.place, &row.message).await
     }
 }
 

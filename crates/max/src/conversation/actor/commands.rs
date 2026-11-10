@@ -129,6 +129,8 @@ impl Conversation {
         // An @ held for the rest of its sentence, and chatter waiting for
         // the classifier, wake nobody now.
         self.intent.forget();
+        // Nor is anything another conversation asked answered.
+        self.asked.refuse("Max was stopped there (/stop)");
         let jobs = self.kill(committed, "stop").await?;
         let how = command::how(self.place.kind, &self.place.my_name, "/start");
         let mut answer =
@@ -219,6 +221,9 @@ impl Conversation {
         }
         if let Some(peers) = asked_by {
             line("asked by", peers);
+        }
+        if let Some(questions) = self.asked.summary() {
+            line("to answer", questions);
         }
         line(
             "core",

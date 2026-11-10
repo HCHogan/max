@@ -207,8 +207,8 @@ fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
                         continue;
                     }
                     Signal::Notice { text, .. } => (text, None),
-                    // vm-check has no timeline.
-                    Signal::Subscribe { .. } => continue,
+                    // vm-check has no timeline, and one conversation.
+                    Signal::Subscribe { .. } | Signal::Ask { .. } => continue,
                 };
                 // Noted before maxx wake hears back, and vm-check goes on.
                 noted

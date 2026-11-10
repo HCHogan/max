@@ -20,6 +20,7 @@ use max_core::item::{ModelOutput, Timing, ToolOutput};
 use max_core::limits::Setting;
 use max_core::message::{Draft, Message, Platform};
 use max_core::segment::Segment;
+use max_db::links::Peer;
 use max_db::platform::{Account, ConversationKind};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{broadcast, oneshot};
@@ -107,6 +108,16 @@ pub enum Event {
     },
     /// A program in the group's VM follows the timeline: `maxx events`.
     Subscribe(oneshot::Sender<Subscription>),
+    /// Max in another conversation asks Max here, from the table.
+    Asked(Question),
+    /// Max's `answer` tool: the answer to the question of line `to`. Whom
+    /// it went to, or why it wasn't taken.
+    Answer {
+        to: MessageId,
+        text: String,
+        origin: Option<TurnId>,
+        reply: oneshot::Sender<Result<String, String>>,
+    },
     /// Max restarts: end the core, within a grace, then stop.
     Stop,
 }
@@ -127,6 +138,23 @@ impl fmt::Debug for Subscription {
             .field("conversation", &self.place.conversation)
             .field("head", &self.head)
             .finish_non_exhaustive()
+    }
+}
+
+/// What Max in one conversation asks Max in another, on its way there.
+#[derive(Debug)]
+pub struct Question {
+    /// The conversation that asks, as the one asked names it.
+    pub from: Peer,
+    pub text: String,
+    /// Where the answer goes; or why there won't be one.
+    pub answer: oneshot::Sender<Result<String, String>>,
+}
+
+impl Question {
+    /// Tells the asker there won't be an answer, and why.
+    pub fn refuse(self, why: &str) {
+        let _ = self.answer.send(Err(why.to_owned()));
     }
 }
 
@@ -259,6 +287,21 @@ impl Poster {
         self.mailbox
             .send(Event::Configure {
                 changes,
+                origin: self.origin,
+                reply,
+            })
+            .map_err(|_| "这个群的会话已经停了".to_owned())?;
+        answer.await.map_err(|_| "没等到回答".to_owned())?
+    }
+
+    /// Answers the question of line `to`, which Max in another
+    /// conversation asked: whom it went to, or why it wasn't taken.
+    pub async fn answer(&self, to: MessageId, text: String) -> Result<String, String> {
+        let (reply, answer) = oneshot::channel();
+        self.mailbox
+            .send(Event::Answer {
+                to,
+                text,
                 origin: self.origin,
                 reply,
             })

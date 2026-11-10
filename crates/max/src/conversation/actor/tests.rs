@@ -10,15 +10,16 @@ use max_core::limits::Setting;
 use max_core::message::{Content, Node};
 use max_core::run::Outcome;
 use max_db::PgPool;
+use max_db::links::Peer;
 use max_db::platform::ConversationKind::{self, Direct, Group};
 use tokio::sync::{mpsc, oneshot};
 
 use super::*;
 use crate::command;
-use crate::conversation::Configured;
 use crate::conversation::testing::{
     from_xiaohong, from_xiaoming, group, private, privately, shared, text,
 };
+use crate::conversation::{Configured, Question};
 use crate::inbound::{InNode, Quote};
 use crate::job::{Ending, Finished, How, Reply, Request};
 use crate::llm::testing::{Answer, Script};
@@ -1583,4 +1584,117 @@ async fn a_program_call_ends_at_the_conversations_call_time(pool: PgPool) {
         failed.message
     );
     h.stop().await;
+}
+
+/// What Max in conversation 7 asks Max here, and where its answer goes.
+fn question(text: &str) -> (Event, oneshot::Receiver<Result<String, String>>) {
+    let (answer, answered) = oneshot::channel();
+    let question = Question {
+        from: Peer {
+            conversation: ConversationId(7),
+            title: Some("hank".into()),
+        },
+        text: text.to_owned(),
+        answer,
+    };
+    (Event::Asked(question), answered)
+}
+
+/// Max calls `answer` for the question of line `to`.
+async fn answer(h: &Harness, to: MessageId, text: &str) -> Result<String, String> {
+    let (reply, taken) = oneshot::channel();
+    let answer = Event::Answer {
+        to,
+        text: text.to_owned(),
+        origin: None,
+        reply,
+    };
+    h.mailbox.send(answer).unwrap();
+    tokio::time::timeout(PATIENCE, taken)
+        .await
+        .unwrap()
+        .unwrap()
+}
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn another_conversations_question_wakes_max_who_answers_it(pool: PgPool) {
+    let mut h = Harness::unprompted(pool, 300).await;
+    let line = |body: &str| command::fenced("text", body);
+    h.script.push(Answer::says("我问问大家"));
+    let (asked, mut answered) = question("明天的活动几点开始？");
+    h.mailbox.send(asked).unwrap();
+    let (first, said) = h.said().await;
+    assert_eq!(said, line("c#7 hank asks:\n明天的活动几点开始？"));
+    assert_eq!(ingest::by(&first), By::Host);
+    assert_eq!(h.said().await.1, "我问问大家");
+    // Among the new rows, as a line maxx said, and once.
+    let shown = h.request_tail(0);
+    let row = format!(
+        "#{} 系统发的]: ```text ⏎ c#7 hank asks: ⏎ 明天的活动几点开始？ ⏎ ```\n",
+        first.id
+    );
+    assert!(shown.ends_with(&row), "{shown}");
+    assert_eq!(shown.matches("asks:").count(), 1, "{shown}");
+    assert!(answered.try_recv().is_err(), "nobody answered yet");
+    h.send(at_max(0, "/status"));
+    let status = h.said().await.1;
+    let waiting = format!("\nto answer #{} from c#7 hank\n", first.id);
+    assert!(status.contains(&waiting), "{status}");
+
+    // The answer names the line, and a line here says what it was.
+    let taken = answer(&h, first.id, " 晚上八点\n").await;
+    assert_eq!(taken, Ok("c#7 hank".to_owned()));
+    assert_eq!(answered.await.unwrap(), Ok("晚上八点".to_owned()));
+    let (answering, said) = h.said().await;
+    assert_eq!(said, line("answered c#7 hank:\n晚上八点"));
+    assert_eq!(ingest::by(&answering), By::Host);
+    assert_eq!(project::quotes(&answering), Some(first.id));
+    // Answered, nobody waits on it; nor on a line that asked nothing.
+    for to in [first.id, answering.id] {
+        let nobody = answer(&h, to, "九点").await.unwrap_err();
+        assert!(nobody.contains("没有人在等"), "{nobody}");
+    }
+
+    // The core still runs: the next question is new input to it.
+    h.script.push(Answer::says("这个我知道"));
+    let (asked, answered) = question("在哪办？");
+    h.mailbox.send(asked).unwrap();
+    let (second, _) = h.said().await;
+    assert_eq!(h.said().await.1, "这个我知道");
+    let fed = h.request_tail(1);
+    let row = format!(
+        "#{} 系统发的]: ```text ⏎ c#7 hank asks: ⏎ 在哪办？ ⏎ ```",
+        second.id
+    );
+    assert!(fed.ends_with(&row), "{fed}");
+    assert!(!fed.contains("明天的活动"), "{fed}");
+    // Its asker withdrew it: the answer finds nobody.
+    drop(answered);
+    let withdrawn = answer(&h, second.id, "老地方").await.unwrap_err();
+    assert!(withdrawn.contains("没有人在等"), "{withdrawn}");
+
+    // /stop ends the wait of what isn't answered, and then nobody here
+    // is told of a question.
+    h.script.push(Answer::says("稍等"));
+    let (asked, waiting) = question("还在吗");
+    h.mailbox.send(asked).unwrap();
+    h.said().await;
+    assert_eq!(h.said().await.1, "稍等");
+    h.send(from_xiaohong(1, vec![me(), text("/stop")]));
+    let stopped = "stopped: messages are still recorded, but Max won't reply until @maxx /start";
+    assert_eq!(h.said().await.1, command::answer("stop", stopped));
+    assert_eq!(
+        waiting.await.unwrap(),
+        Err("Max was stopped there (/stop)".to_owned())
+    );
+    let (asked, refused) = question("真的不在？");
+    h.mailbox.send(asked).unwrap();
+    assert_eq!(
+        refused.await.unwrap(),
+        Err("Max is stopped there (/stop)".to_owned())
+    );
+    h.stop().await;
+    assert_eq!(h.turns().await.len(), 1, "one core took every question");
+    let rows = "select count(*) from messages where raw ->> 'said_by' = 'host'";
+    assert_eq!(h.count(rows).await, 6, "3 questions, 1 answer, 2 commands");
 }

@@ -6,13 +6,14 @@ use std::collections::BTreeSet;
 use max_core::ids::MessageId;
 use max_core::item::ItemKind;
 use max_core::message::{Content, Node, Role};
+use max_db::links::Peer;
 use qqbot::api::{GroupInfo, Mute, Muted};
 use tokio::sync::oneshot;
 
 use super::*;
 use crate::command;
 use crate::conversation::testing::{self, from_xiaoming, offset, shared, text};
-use crate::conversation::{Outgoing, ingest};
+use crate::conversation::{Outgoing, Question, ingest};
 use crate::inbound::{Chat, InNode, Person};
 use crate::llm::testing::{Answer, Script};
 use crate::mcp::Services;
@@ -488,6 +489,54 @@ async fn a_program_in_the_vm_wakes_a_group_nobody_has_written_in(pool: PgPool) {
     s.signals.send(subscribe).unwrap();
     let subscription = tokio::time::timeout(PATIENCE, subscribed).await.unwrap();
     assert_eq!(subscription.unwrap().head, MessageId(head));
+    s.stop().await;
+}
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn a_question_starts_the_conversation_it_is_for(pool: PgPool) {
+    let mut s = Setup::new(pool).await;
+    // The group was bound before max started, and nobody has written since.
+    let mut conn = s.pool.acquire().await.unwrap();
+    let place = testing::group(&mut conn).await;
+    drop(conn);
+    let question = |conversation| {
+        let (answer, answered) = oneshot::channel();
+        let question = Question {
+            from: Peer {
+                conversation: ConversationId(7),
+                title: Some("hank".into()),
+            },
+            text: "几点开始？".into(),
+            answer,
+        };
+        let ask = Signal::Ask {
+            conversation,
+            question,
+        };
+        (ask, answered)
+    };
+    s.script.push(Answer::says("我看看"));
+    let (ask, mut answered) = question(place.conversation);
+    s.signals.send(ask).unwrap();
+    let asks = command::fenced("text", "c#7 hank asks:\n几点开始？");
+    assert_eq!(s.said().await, ("group:GROUP1".into(), asks));
+    assert_eq!(s.said().await.1, "我看看");
+    let shown = s.request_tail(0);
+    assert!(
+        shown.contains("系统发的]: ```text ⏎ c#7 hank asks:"),
+        "{shown}"
+    );
+    // Max there hasn't called `answer`: the asker waits on.
+    assert!(answered.try_recv().is_err());
+
+    // Max serves no chat of this one: the asker hears so at once.
+    let (ask, answered) = question(ConversationId(999));
+    s.signals.send(ask).unwrap();
+    let answered = tokio::time::timeout(PATIENCE, answered).await.unwrap();
+    assert_eq!(
+        answered.unwrap(),
+        Err("Max serves no chat of that conversation".to_owned())
+    );
     s.stop().await;
 }
 
