@@ -278,7 +278,7 @@ async fn a_lost_answer_is_neither_resent_nor_failed(pool: PgPool) {
     assert_eq!(bodies, [Body::Markdown("一".into())]);
     assert_eq!(s.delivery(&message).await, (Delivery::Unknown, None, None));
     let told = told.await.unwrap().unwrap_err();
-    assert!(told.starts_with("没等到 QQ 的回答"), "{told}");
+    assert!(told.starts_with("QQ never answered"), "{told}");
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
@@ -446,7 +446,13 @@ async fn an_unsend_recalls_what_its_message_went_out_or_came_in_as(pool: PgPool)
     assert_eq!(s.delivery(&unsends[1]).await.0, Delivery::Failed);
     assert_eq!(s.delivery(&unsends[2]).await.0, Delivery::Sent);
     assert_eq!(s.delivery(&unsends[3]).await.0, Delivery::Failed);
-    assert!(refusal.await.unwrap().unwrap_err().contains("群管理员"));
+    assert!(
+        refusal
+            .await
+            .unwrap()
+            .unwrap_err()
+            .contains("the group's admin")
+    );
 }
 
 #[tokio::test(start_paused = true)]

@@ -32,7 +32,7 @@ function sleep(ms, signal) {
 
 class ToolError extends Error {
   constructor(tool, error) {
-    super(`${tool}: ${error.message}（${error.code}）`);
+    super(`${tool}: ${error.message} (${error.code})`);
     this.name = "ToolError";
     this.code = error.code;
   }
@@ -72,8 +72,8 @@ function connect({ url = MCP, token }) {
       reply = JSON.parse(await response.text());
     } catch (error) {
       // As the host says when it cancels a call.
-      if (error.name === "AbortError") return { ok: false, error: { code: "cancelled", message: "调用取消了；会动群的操作可能已经生效，先看记录再决定要不要再来" } };
-      return { ok: false, error: { code: "unreachable", message: `连不上 Max 的 MCP 服务：${error.message}` } };
+      if (error.name === "AbortError") return { ok: false, error: { code: "cancelled", message: "the call was cancelled; what acts in the chat may have taken effect: look at the records before trying again" } };
+      return { ok: false, error: { code: "unreachable", message: `can't reach Max's MCP service: ${error.message}` } };
     }
     if (reply.error) return { ok: false, error: { code: "refused", message: reply.error.message } };
     return { ok: true, value: reply.result };
@@ -119,8 +119,8 @@ function job({ url = MCP, token }) {
       if (!response.ok) return { ok: false, error: { code: "refused", message: await refused(response) } };
       return { ok: true, value: await response.text() };
     } catch (error) {
-      if (error.name === "AbortError") return { ok: false, error: { code: "cancelled", message: "撤回了" } };
-      return { ok: false, error: { code: "unreachable", message: `连不上 Max 的 MCP 服务：${error.message}` } };
+      if (error.name === "AbortError") return { ok: false, error: { code: "cancelled", message: "withdrawn" } };
+      return { ok: false, error: { code: "unreachable", message: `can't reach Max's MCP service: ${error.message}` } };
     }
   }
 
@@ -137,7 +137,7 @@ function job({ url = MCP, token }) {
     const outcome = await post("/job/ask", { question }, signal);
     if (!outcome.ok) return outcome;
     const line = first(outcome.value);
-    if (line === undefined) return { ok: false, error: { code: "unreachable", message: "Max 的 MCP 服务没给答复就断了" } };
+    if (line === undefined) return { ok: false, error: { code: "unreachable", message: "Max's MCP service hung up without answering" } };
     return { ok: true, value: JSON.parse(line).answer ?? null };
   }
 
@@ -225,9 +225,9 @@ async function* events({ url = new URL("/events", MCP).href, after, told = () =>
         }
         listen();
       }
-      why = "断了";
+      why = "the connection dropped";
     } catch (error) {
-      why = quiet.signal.aborted ? `${QUIET / 1000} 秒没有动静` : error.message;
+      why = quiet.signal.aborted ? `nothing for ${QUIET / 1000} seconds` : error.message;
     } finally {
       clearTimeout(timer);
     }

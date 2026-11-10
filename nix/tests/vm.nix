@@ -67,7 +67,7 @@ pkgs.testers.runNixOSTest {
     machine.wait_until_succeeds("ip -br address show maxx-vm1 | grep -q 10.235.0.5/30")
     machine.succeed("systemctl start maxx-vm-check.service")
     shown = machine.succeed("journalctl -u maxx-vm-check.service -o cat")
-    assert "退出码 0" in shown and "Linux max" in shown, shown
+    assert "exit status 0" in shown and "Linux max" in shown, shown
     assert '"mcp":"not_found"' in shown, shown
     # The page's accessibility tree, with refs.
     assert '"tree":"检查\\n' in shown and 'button \\"搜索\\" [ref=e4]' in shown, shown
@@ -80,13 +80,13 @@ pkgs.testers.runNixOSTest {
     assert '{"seconds":3}' in shown, shown
     # maxx calls the MCP service from a command, as the program did, and
     # lists the tools.
-    assert "（not_found）\nmaxx 退出码 1\n1\n" in shown, shown
+    assert " (not_found)\nmaxx 退出码 1\n1\n" in shown, shown
     # A background command's output is in its file while it runs.
-    assert "后台命令：Done\n退出码 0，跑了" in shown, shown
+    assert "后台命令：Done\nexit status 0, ran for" in shown, shown
     # A command someone waits on moves to the background once it has run
     # a while, and its job's output has what it printed before and after.
-    assert "转到后台接着跑了，是 job#1，" in shown and "到现在的输出：\n前台起了\n" in shown, shown
-    assert "转到后台的命令：退出码 0，跑了" in shown and "前台起了\n后台跑完了" in shown, shown
+    assert "moved to the background as job#1," in shown and "Its output so far:\n前台起了\n" in shown, shown
+    assert "转到后台的命令：exit status 0, ran for" in shown and "前台起了\n后台跑完了" in shown, shown
     # A unit in /work/.max/systemd, started by max-units, with the
     # system's commands on its PATH.
     assert "boot-note.service：active" in shown, shown
@@ -97,7 +97,7 @@ pkgs.testers.runNixOSTest {
     # max-units tells the VM service, which keeps the VM on; max-wake, from
     # the background command, calls as a program and reaches vm-check,
     # standing in for the group's actor.
-    assert "这个群的 VM 会一直开着" in shown, shown
+    assert "This chat's VM stays on" in shown, shown
     assert "后台起了\n1\nvm-check 收到了" in shown and "叫醒：vm-check 叫醒了自己" in shown, shown
     # The next boot starts it before vm-check runs max-units.
     machine.succeed("systemctl start maxx-vm-check.service")

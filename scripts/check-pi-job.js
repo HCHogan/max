@@ -184,7 +184,7 @@ const checks = {
   },
   ask({ seen }) {
     assert.deepEqual(seen.asks, ["选火锅还是烧烤？"]);
-    assert.deepEqual(seen.calls[1], ["tool: Max 答复：火锅"]);
+    assert.deepEqual(seen.calls[1], ["tool: Max answered: 火锅"]);
     assert.deepEqual(seen.reports, [{ text: "订了火锅", error: null }]);
   },
   agents: project,

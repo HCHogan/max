@@ -19,7 +19,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use color_eyre::eyre::Result;
 use max_core::ids::ConversationId;
-use max_core::render::span;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot;
 use tokio::time::{Instant, MissedTickBehavior, interval, timeout};
@@ -154,7 +153,7 @@ impl Vms {
     /// isn't one.
     pub async fn get(&self, conversation: ConversationId) -> Result<Vm, String> {
         let (reply, answer) = oneshot::channel();
-        let gone = || "VM 服务停了".to_owned();
+        let gone = || "the VM service has stopped".to_owned();
         self.requests
             .send(Request {
                 conversation,
@@ -372,7 +371,9 @@ impl Service {
             })
         }) else {
             for reply in waiting {
-                let _ = reply.send(Err("同时开着的 VM 太多了，过一会儿再试。".into()));
+                let _ = reply.send(Err(
+                    "too many VMs are running at once; try again in a while".into(),
+                ));
             }
             return;
         };
@@ -442,7 +443,7 @@ impl Service {
                     self.kept.remove(&conversation);
                 }
                 for reply in waiting {
-                    let _ = reply.send(Err(format!("VM 没起来：{error}")));
+                    let _ = reply.send(Err(format!("the VM didn't start: {error}")));
                 }
                 return;
             }
@@ -553,17 +554,19 @@ impl Service {
     /// for max-units to show. Failures stay counted: max-units runs at
     /// every boot, before a unit has had the time to fail.
     fn units(&mut self, conversation: ConversationId, count: u32) -> String {
-        let idle = span(self.idle);
+        let idle = self.idle.as_secs() / 60;
         match keep(&mut self.kept, self.config.kept, conversation, count) {
             Kept::On => {
                 info!(%conversation, count, "a VM is kept on for its units");
-                "这个群的 VM 会一直开着，unit 一直跑；重启、部署之后也会自己开起来。".to_owned()
+                "This chat's VM stays on and its units keep running; after a restart or a deploy it starts by itself again.".to_owned()
             }
             Kept::Full => format!(
-                "常开的群满了（{} 个）：这个群的 VM 闲 {idle}还是会关，unit 跟着停，下次开机再起。",
+                "The chats whose VMs stay on are full ({} of them): this chat's VM still stops after idling {idle} minutes, and its units with it; they start again when it next boots.",
                 self.config.kept
             ),
-            Kept::Off => format!("没有 unit 了：VM 闲 {idle}会关。"),
+            Kept::Off => {
+                format!("There are no units any more: the VM stops after idling {idle} minutes.")
+            }
         }
     }
 }

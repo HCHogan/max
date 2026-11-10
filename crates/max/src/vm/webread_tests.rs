@@ -141,11 +141,11 @@ async fn pages_pdfs_and_text_and_what_isnt() {
         assert_eq!(read.status, 0, "{}", read.stderr);
         let (first, text) = read.stdout.split_once('\n').unwrap();
         let header = format!(
-            "URL: {} | 示波器探头补偿 | text/html | 第 0–",
+            "URL: {} | 示波器探头补偿 | text/html | characters 0–",
             url("/article")
         );
         assert!(first.starts_with(&header), "{first}");
-        assert!(first.contains("全文在"), "{first}");
+        assert!(first.contains("the whole text in"), "{first}");
         for kept in [
             "## 步骤",
             "- 先接地夹",
@@ -161,7 +161,7 @@ async fn pages_pdfs_and_text_and_what_isnt() {
         let read = webread(&dir, &[&url("/hop"), "--offset", "10", "--max", "5"]).await;
         let first = read.stdout.lines().next().unwrap();
         assert!(
-            first.starts_with(&header.replace("第 0–", "第 10–15 字")),
+            first.starts_with(&header.replace("characters 0–", "characters 10–15 of")),
             "{first}"
         );
         let (_, shown) = read.stdout.split_once('\n').unwrap();
@@ -174,16 +174,16 @@ async fn pages_pdfs_and_text_and_what_isnt() {
             "{}",
             read.stdout
         );
-        assert!(read.stdout.contains("| （无标题） | application/pdf |"));
+        assert!(read.stdout.contains("| (no title) | application/pdf |"));
 
         let read = webread(&dir, &[&url("/data.json")]).await;
         assert!(read.stdout.ends_with("{\"a\":1}\n"), "{}", read.stdout);
 
         for (path, why) in [
-            ("/a.png", "不是网页、PDF 或文本，是 image/png"),
+            ("/a.png", "not a web page, a PDF or text but image/png"),
             ("/gone", "HTTP 404"),
-            ("/loop", "跳转超过 5 次"),
-            ("/big", "太大了"),
+            ("/loop", "more than 5 redirects"),
+            ("/big", "too big"),
         ] {
             let read = webread(&dir, &[&url(path)]).await;
             assert_eq!(read.status, 1, "{path}");

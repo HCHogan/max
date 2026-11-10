@@ -48,14 +48,14 @@ async function main() {
       get(target, key) {
         if (key === "then" || key === "catch" || key === "finally") return target[key].bind(target);
         if (typeof key === "symbol") return target[key];
-        throw new TypeError("工具调用返回的是 Promise，先 await：const r = await tools.名字(args)");
+        throw new TypeError("a tool call returns a Promise: await it first, as in const r = await tools.name(args)");
       },
     });
     controllers.set(proxy, controller);
     return proxy;
   };
   const raw = (tool, args = {}) => {
-    if (!args || typeof args !== "object" || Array.isArray(args)) throw new TypeError("工具的参数要是一个对象");
+    if (!args || typeof args !== "object" || Array.isArray(args)) throw new TypeError("a tool's arguments must be an object");
     const controller = new AbortController();
     return tracked(request(tool, args, controller.signal), controller);
   };
@@ -90,7 +90,7 @@ async function main() {
       await writeFile(written, src);
       path = `/work/.max/shown/${name}`;
     } else if (typeof src !== "string") {
-      throw new TypeError("max.image 要 /work 下图片的路径，或者图片的 Buffer");
+      throw new TypeError("max.image takes the path of a picture under /work, or a picture's Buffer");
     }
     try {
       const outcome = await request("max.image", { path });
@@ -104,8 +104,8 @@ async function main() {
   // A video for the model to watch after the result, or a part of it: a
   // file in the VM, under /work unless the path says otherwise.
   const video = async (path, options = {}) => {
-    if (typeof path !== "string") throw new TypeError("max.video 要视频的路径，比如 /work/chat/a.mp4");
-    if (!options || typeof options !== "object") throw new TypeError("max.video 的第二个参数是 {start, end}");
+    if (typeof path !== "string") throw new TypeError("max.video takes a video's path, such as /work/chat/a.mp4");
+    if (!options || typeof options !== "object") throw new TypeError("max.video's second argument is {start, end}");
     const outcome = await watch(request, work, path, options);
     if (!outcome.ok) throw new ToolError("max.video", outcome.error);
     return outcome.value;
@@ -114,7 +114,7 @@ async function main() {
   // A file of the chat's record, by its handle, which the host copies
   // into /work/chat.
   const file = async handle => {
-    if (typeof handle !== "string") throw new TypeError("max.file 要记录里的句柄，比如 'file#123.0'");
+    if (typeof handle !== "string") throw new TypeError("max.file takes a handle from the records, such as 'file#123.0'");
     const outcome = await request("max.file", { handle });
     if (!outcome.ok) throw new ToolError("max.file", outcome.error);
     return outcome.value;
@@ -141,11 +141,11 @@ function shown(value) {
 // The error and the program's own frames, by its own line numbers: the
 // function's header takes two lines.
 function failure(error) {
-  if (!(error instanceof Error)) return `抛出了 ${shown(error)}`;
+  if (!(error instanceof Error)) return `threw ${shown(error)}`;
   const [first, ...frames] = String(error.stack ?? error).split("\n");
   const own = frames.flatMap(line => {
     const at = /<anonymous>:(\d+):(\d+)\)$/.exec(line);
-    return at ? [`    at 程序第 ${at[1] - 2} 行第 ${at[2]} 列`] : [];
+    return at ? [`    at the program's line ${at[1] - 2}, column ${at[2]}`] : [];
   });
   return [first, ...own].join("\n");
 }

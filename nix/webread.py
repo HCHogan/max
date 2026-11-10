@@ -56,25 +56,25 @@ def fetch(url):
         with opener.open(request, timeout=CONNECT) as response:
             length = response.headers.get("Content-Length")
             if length and length.isdigit() and int(length) > MOST:
-                raise Failed(f"太大了：{int(length) >> 20} MiB，最多 {MOST >> 20} MiB；要下载就用 curl")
+                raise Failed(f"too big: {int(length) >> 20} MiB, and at most {MOST >> 20} MiB is read; to download it use curl")
             body = bytearray()
             while chunk := response.read(CHUNK):
                 body += chunk
                 if len(body) > MOST:
-                    raise Failed(f"太大了：超过 {MOST >> 20} MiB；要下载就用 curl")
+                    raise Failed(f"too big: over {MOST >> 20} MiB; to download it use curl")
                 if time.monotonic() > deadline:
-                    raise Failed(f"{SECONDS} 秒内没下载完")
+                    raise Failed(f"not downloaded in {SECONDS} seconds")
             kind = response.headers.get_content_type()
             charset = response.headers.get_content_charset()
             return response.geturl(), kind, charset, bytes(body)
     except urllib.error.HTTPError as error:
         if error.code in (301, 302, 303, 307, 308):
-            raise Failed(f"跳转超过 {REDIRECTS} 次") from None
+            raise Failed(f"more than {REDIRECTS} redirects") from None
         raise Failed(f"HTTP {error.code} {error.reason}") from None
     except urllib.error.URLError as error:
-        raise Failed(f"连不上：{error.reason}") from None
+        raise Failed(f"can't connect: {error.reason}") from None
     except TimeoutError:
-        raise Failed(f"{CONNECT} 秒内没有回应") from None
+        raise Failed(f"no response in {CONNECT} seconds") from None
 
 
 def decoded(body, charset):
@@ -98,7 +98,7 @@ def html(body, url):
         # Too little for the main text: all of it, plain.
         text = trafilatura.html2txt(body)
     if not text or not text.strip():
-        raise Failed("页面上没有字：可能要跑 JavaScript 才有内容")
+        raise Failed("the page has no text: it may need JavaScript to have any")
     metadata = trafilatura.extract_metadata(body)
     return (metadata.title if metadata else None) or "", text.strip()
 
@@ -113,10 +113,10 @@ def pdf(body):
             timeout=SECONDS,
         )
     if done.returncode != 0:
-        raise Failed("PDF 读不出来：" + decoded(done.stderr, None).strip()[:200])
+        raise Failed("can't read the PDF: " + decoded(done.stderr, None).strip()[:200])
     text = decoded(done.stdout, None).strip()
     if not text:
-        raise Failed("PDF 里没有文字：可能是扫描的图片")
+        raise Failed("the PDF has no text: it may be scanned pictures")
     return text
 
 
@@ -133,18 +133,18 @@ def read(url):
     elif TEXT.match(kind):
         title, text = "", decoded(body, charset)
     else:
-        raise Failed(f"不是网页、PDF 或文本，是 {kind}；要下载就用 curl")
+        raise Failed(f"not a web page, a PDF or text but {kind}; to download it use curl")
     return final, title, kind, text
 
 
 def main():
-    parser = argparse.ArgumentParser(prog="webread", description="读一个网页的正文")
+    parser = argparse.ArgumentParser(prog="webread", description="Reads the main text of a web page")
     parser.add_argument("url")
-    parser.add_argument("--offset", type=int, default=0, help="从第几个字开始")
-    parser.add_argument("--max", type=int, default=12000, help="最多打印几个字")
+    parser.add_argument("--offset", type=int, default=0, help="the character to start from")
+    parser.add_argument("--max", type=int, default=12000, help="how many characters to print at most")
     args = parser.parse_args()
     if not re.match(r"^https?://", args.url):
-        print("webread：地址要以 http:// 或 https:// 开头", file=sys.stderr)
+        print("webread: the address must start with http:// or https://", file=sys.stderr)
         return 2
     name = hashlib.sha256(args.url.encode()).hexdigest()[:16]
     saved = os.path.join(WEB, name + ".md")
@@ -154,7 +154,7 @@ def main():
                 header, _, text = file.read().partition("\n\n")
         else:
             final, title, kind, text = read(args.url)
-            header = f"URL: {final} | {title or '（无标题）'} | {kind}"
+            header = f"URL: {final} | {title or '(no title)'} | {kind}"
             os.makedirs(WEB, exist_ok=True)
             with open(saved, "w", encoding="utf-8") as file:
                 file.write(f"{header}\n\n{text}")
@@ -164,7 +164,7 @@ def main():
     start = max(args.offset, 0)
     shown = text[start : start + max(args.max, 0)]
     end = start + len(shown)
-    print(f"{header} | 第 {start}–{end} 字，共 {len(text)} 字，全文在 {saved}")
+    print(f"{header} | characters {start}–{end} of {len(text)}, the whole text in {saved}")
     print(shown)
     return 0
 

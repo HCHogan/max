@@ -13,7 +13,7 @@ else
   text=$(cat)
 fi
 if [ -z "${text//[[:space:]]/}" ]; then
-  echo "用法：max-wake 要说的事，或者从标准输入给" >&2
+  echo "usage: max-wake <what to say>, or give it on standard input" >&2
   exit 2
 fi
 answer=$(maxx wake --text "$text") || exit

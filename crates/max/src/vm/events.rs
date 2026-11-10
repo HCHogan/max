@@ -101,7 +101,7 @@ fn beating(
 
 async fn events(State(events): State<Events>, uri: Uri) -> Response {
     let Some(after) = after(uri.query()) else {
-        return refuse(StatusCode::BAD_REQUEST, "只认 ?after=编号");
+        return refuse(StatusCode::BAD_REQUEST, "only ?after=<number> is taken");
     };
     let conversation = events.conversation;
     let (reply, subscribed) = oneshot::channel();
@@ -113,10 +113,13 @@ async fn events(State(events): State<Events>, uri: Uri) -> Response {
         })
         .is_err()
     {
-        return refuse(StatusCode::SERVICE_UNAVAILABLE, "Max 正在停");
+        return refuse(StatusCode::SERVICE_UNAVAILABLE, "Max is stopping");
     }
     let Ok(Ok(subscription)) = timeout(WAIT, subscribed).await else {
-        return refuse(StatusCode::SERVICE_UNAVAILABLE, "这个群的会话没回话");
+        return refuse(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "this chat's conversation didn't answer",
+        );
     };
     let head = subscription.head;
     let backlog = match after {
@@ -124,7 +127,7 @@ async fn events(State(events): State<Events>, uri: Uri) -> Response {
             Ok(backlog) => backlog,
             Err(error) => {
                 warn!(%conversation, %error, "couldn't read the rows a program missed");
-                return refuse(StatusCode::INTERNAL_SERVER_ERROR, "读不了记录");
+                return refuse(StatusCode::INTERNAL_SERVER_ERROR, "can't read the records");
             }
         },
         _ => VecDeque::new(),
@@ -140,7 +143,12 @@ async fn events(State(events): State<Events>, uri: Uri) -> Response {
         .header(header::CONTENT_TYPE, "application/x-ndjson")
         .header(HEAD, head.0)
         .body(Body::from_stream(following.lines()))
-        .unwrap_or_else(|_| refuse(StatusCode::INTERNAL_SERVER_ERROR, "回答做不出来"))
+        .unwrap_or_else(|_| {
+            refuse(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "the answer couldn't be made",
+            )
+        })
 }
 
 /// The id `?after=<id>` asks for: Some(None) without a query, None for

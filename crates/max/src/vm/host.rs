@@ -65,7 +65,7 @@ async fn units(State(host): State<Host>, body: Bytes) -> impl IntoResponse {
 async fn answered(host: &Host, body: &[u8]) -> Answer {
     let units = match serde_json::from_slice::<Units>(body) {
         Ok(Units { units }) => units,
-        Err(error) => return Answer::refused(format!("看不懂的请求：{error}")),
+        Err(error) => return Answer::refused(format!("can't make out the request: {error}")),
     };
     let (reply, said) = oneshot::channel();
     let asked = Internal::Units {
@@ -74,12 +74,12 @@ async fn answered(host: &Host, body: &[u8]) -> Answer {
         reply,
     };
     if host.service.send(asked).is_err() {
-        return Answer::refused("Max 正在停");
+        return Answer::refused("Max is stopping");
     }
     match timeout(WAIT, said).await {
         Ok(Ok(Ok(said))) => Answer { ok: true, said },
         Ok(Ok(Err(said))) => Answer::refused(said),
-        _ => Answer::refused("没等到 Max 的回答"),
+        _ => Answer::refused("Max never answered"),
     }
 }
 
@@ -117,7 +117,7 @@ mod tests {
         let refused = client.post(&url).json(&serde_json::json!({"sleep": 1}));
         let refused = refused.send().await.unwrap().text().await.unwrap();
         assert!(
-            refused.starts_with("{\"ok\":false,\"said\":\"看不懂的请求"),
+            refused.starts_with("{\"ok\":false,\"said\":\"can't make out the request"),
             "{refused}"
         );
         scope.close(Duration::from_secs(1)).await;

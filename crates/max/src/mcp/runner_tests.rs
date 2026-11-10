@@ -164,7 +164,11 @@ async fn programs_call_max_tools_and_return(pool: PgPool) {
         "{}",
         ran.stdout
     );
-    assert!(ran.stdout.contains("at 程序第 1 行"), "{}", ran.stdout);
+    assert!(
+        ran.stdout.contains("at the program's line 1,"),
+        "{}",
+        ran.stdout
+    );
 
     let raw = format!(
         "const [a, b] = await Promise.all([max.raw('history', {{around: {id}}}), \
@@ -182,7 +186,7 @@ async fn programs_call_max_tools_and_return(pool: PgPool) {
     )
     .await;
     assert_eq!(ran.status, 1);
-    assert!(ran.stdout.contains("先 await"), "{}", ran.stdout);
+    assert!(ran.stdout.contains("await it first"), "{}", ran.stdout);
 
     let ran = run(&mcp, token, "return (").await;
     assert_eq!(ran.status, 1);
@@ -203,7 +207,7 @@ async fn the_browser_sdk_without_a_browser() {
         let ran = run(nowhere, "-", &format!("await {open}")).await;
         assert_eq!(ran.status, 1);
         assert!(
-            ran.stdout.starts_with("Error: 这里没有浏览器"),
+            ran.stdout.starts_with("Error: there is no browser here"),
             "{}",
             ran.stdout
         );
@@ -281,7 +285,7 @@ async fn programs_show_the_model_pictures(pool: PgPool) {
     let ran = run_with(input(code, json!({ "pngs": pngs(&[2]) }))).await;
     assert_eq!(
         ran.stdout,
-        r#"[{"width":3,"height":1},{"width":2,"height":1},"max.image: /work/notes.txt isn't a PNG, JPEG, GIF or WebP that decodes（not_a_picture）","TypeError"]"#,
+        r#"[{"width":3,"height":1},{"width":2,"height":1},"max.image: /work/notes.txt isn't a PNG, JPEG, GIF or WebP that decodes (not_a_picture)","TypeError"]"#,
         "{}",
         ran.stderr
     );
@@ -382,9 +386,9 @@ async fn programs_show_the_model_videos(pool: PgPool) {
             { "seconds": 3 },
             { "seconds": 1 },
             [
-                "max.video: notes.bin 读不出来：Invalid data found when processing input（not_a_video）",
-                "max.video: 这段 601 秒，一次最多看 10 分钟；用 start、end 截一段（too_long）",
-                "max.video: start、end 要秒数，或者 \"1:30\"、\"1:02:03.5\" 这样的时间（bad_time）",
+                "max.video: can't read notes.bin: Invalid data found when processing input (not_a_video)",
+                "max.video: this is 601 seconds, and at most 10 minutes are shown at a time: cut a piece with start and end (too_long)",
+                "max.video: start and end take seconds, or a time such as \"1:30\" or \"1:02:03.5\" (bad_time)",
             ],
             "TypeError",
         ])
@@ -438,7 +442,9 @@ async fn programs_show_the_model_videos(pool: PgPool) {
     .await;
     assert_eq!(again.status, 1);
     assert!(
-        again.stderr.contains("start 过了结尾：clip.mkv 只有 3 秒"),
+        again
+            .stderr
+            .contains("start is past the end: clip.mkv is only 3 seconds long"),
         "{}",
         again.stderr
     );
@@ -459,7 +465,7 @@ async fn programs_show_the_model_videos(pool: PgPool) {
     let ran = run_with(input(blind.token(), "await max.video('clip.mkv')")).await;
     assert!(
         ran.stdout
-            .starts_with("ToolError: max.video: this model doesn't watch videos（unavailable）"),
+            .starts_with("ToolError: max.video: this model doesn't watch videos (unavailable)"),
         "{}",
         ran.stdout
     );
@@ -522,7 +528,7 @@ async fn programs_fetch_the_chats_files(pool: PgPool) {
     let code = "const fetched = await max.file(`[file#${args.ids[0]}.0: 周报.pdf]`); \
          const failed = []; \
          for (const h of [`file#${args.ids[1]}.0`, 'file#1.5', 'report.pdf']) \
-           try { await max.file(h) } catch (e) { failed.push(e.message.match(/（(\\w+)）$/)[1]) } \
+           try { await max.file(h) } catch (e) { failed.push(e.message.match(/ \\((\\w+)\\)$/)[1]) } \
          return { fetched, failed }";
     let input = json!({ "code": code, "args": { "ids": ids }, "token": grant.token(), "mcp": mcp, "work": work });
     let ran = run_with(input).await;
@@ -646,7 +652,7 @@ async fn commands_call_max_tools_with_maxx(pool: PgPool) {
     let help = maxx(&mcp, token, &["history", "--help"], "").await;
     assert!(
         help.stdout
-            .contains("\n  --around（整数）：read around this message: 123 for #123\n"),
+            .contains("\n  --around (integer): read around this message: 123 for #123\n"),
         "{}",
         help.stdout
     );
@@ -672,22 +678,25 @@ async fn commands_call_max_tools_with_maxx(pool: PgPool) {
     assert_eq!(missing.status, 1);
     assert!(
         missing.stderr.starts_with("history: there is no message #")
-            && missing.stderr.ends_with("（not_found）\n"),
+            && missing.stderr.ends_with(" (not_found)\n"),
         "{}",
         missing.stderr
     );
     let search = maxx(&mcp, token, &["web-search", "示波器"], "").await;
     assert_eq!(search.status, 1);
     assert!(
-        search.stderr.ends_with("（unavailable）\n"),
+        search.stderr.ends_with(" (unavailable)\n"),
         "{}",
         search.stderr
     );
     for (words, said) in [
-        (&["history", "--nope", "1"][..], "没有 --nope 这个参数"),
-        (&["history", "--before", "x"][..], "--before 要一个数"),
-        (&["nosuch"][..], "没有 nosuch 这个工具"),
-        (&["history", "{"][..], "参数不是 JSON"),
+        (
+            &["history", "--nope", "1"][..],
+            "there is no argument --nope",
+        ),
+        (&["history", "--before", "x"][..], "--before takes a number"),
+        (&["nosuch"][..], "there is no tool named nosuch"),
+        (&["history", "{"][..], "the argument isn't JSON"),
     ] {
         let ran = maxx(&mcp, token, words, "").await;
         assert_eq!(ran.status, 2, "{words:?}");

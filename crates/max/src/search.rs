@@ -49,9 +49,11 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::RateLimited => write!(f, "搜得太快了，等一会儿再搜。"),
-            Self::BadQuery(why) => write!(f, "搜索服务不收这个查询：{why}"),
-            Self::Unavailable(why) => write!(f, "搜索服务暂时用不了：{why}"),
+            Self::RateLimited => write!(f, "searching too fast: wait a while and search again"),
+            Self::BadQuery(why) => write!(f, "the search service doesn't take this query: {why}"),
+            Self::Unavailable(why) => {
+                write!(f, "the search service can't be used right now: {why}")
+            }
         }
     }
 }

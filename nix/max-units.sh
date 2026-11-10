@@ -31,12 +31,12 @@ for file in "$dir"/*; do
     *) continue ;;
   esac
   if [ -L "$file" ]; then
-    echo "$name：是链接，没装，把文件本身放进来"
+    echo "$name: a link, not installed; put the file itself here"
     continue
   fi
   [ -f "$file" ] || continue
   if [ -e "/etc/systemd/system/$name" ]; then
-    echo "$name：和系统的 unit 重名，没装，换个名字"
+    echo "$name: named like one of the system's units, not installed; give it another name"
     continue
   fi
   wanted+=("$name")
@@ -49,7 +49,7 @@ for file in "$installed"/*; do
   [ -n "${keep[$name]:-}" ] && continue
   systemctl disable --runtime --now --no-block --quiet "$name" 2> /dev/null || true
   rm -rf "${run:?}/$name" "${run:?}/$name.d" "${installed:?}/$name"
-  echo "$name：停了，去掉了"
+  echo "$name: stopped and removed"
 done
 
 changed=()
@@ -93,7 +93,7 @@ for _ in $(seq 50); do
 done
 
 if [ ${#wanted[@]} -eq 0 ]; then
-  echo "$dir 里没有 unit"
+  echo "there are no units in $dir"
 fi
 for name in "${wanted[@]}"; do
   state=$(systemctl is-active "$name" || true)

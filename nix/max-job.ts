@@ -26,7 +26,7 @@ type Job = {
 type Client = { job(options: { url?: string; token?: string }): Job };
 
 const UNANSWERED =
-  "Max 这次没有答复。按你自己的判断继续，在报告里写明你做了哪些假设。";
+  "Max didn't answer this time. Go on by your own judgement, and say in your report what you assumed.";
 
 // client.js is CommonJS: its exports, named or as the default.
 async function connect(): Promise<Job> {
@@ -77,7 +77,7 @@ export default function (pi: ExtensionAPI) {
     if (message.role !== "assistant") return;
     const wrote = written(message);
     if (wrote) text = wrote;
-    error = message.stopReason === "error" ? (message.errorMessage ?? "模型调用失败") : null;
+    error = message.stopReason === "error" ? (message.errorMessage ?? "the model call failed") : null;
   });
 
   // pi takes the steers in once this has run, before the next call.
@@ -106,10 +106,10 @@ export default function (pi: ExtensionAPI) {
     name: "ask_max",
     label: "Ask Max",
     description:
-      "问 Max 一个只有它或群友才知道的问题：他们的意思、偏好、没说清的要求。会等到 Max 答复，等不到就自己判断。能自己查到、试出来的别问。",
+      "Asks Max something only it or the people in the chat know: what they mean, what they prefer, what they left unclear. It waits for Max's answer; without one, go on by your own judgement. Don't ask what you can look up or try out yourself.",
     parameters: Type.Object({
       question: Type.String({
-        description: "问题，连同 Max 回答要知道的背景，写全",
+        description: "the question, with the background Max needs to answer it, in full",
       }),
     }),
     executionMode: "sequential",
@@ -119,9 +119,9 @@ export default function (pi: ExtensionAPI) {
       const answer = outcome.ok ? outcome.value?.trim() : undefined;
       const text = outcome.ok
         ? answer
-          ? `Max 答复：${answer}`
+          ? `Max answered: ${answer}`
           : UNANSWERED
-        : `问不了 Max：${outcome.error.message}。按你自己的判断继续，在报告里写明你做了哪些假设。`;
+        : `Max couldn't be asked: ${outcome.error.message}. Go on by your own judgement, and say in your report what you assumed.`;
       return { content: [{ type: "text", text }], details: {} };
     },
   });

@@ -25,7 +25,7 @@ async function watch(request, work, path, { start, end } = {}) {
   const failed = (code, message) => ({ ok: false, error: { code, message } });
   const from = time(start);
   const to = time(end);
-  if (from === null || to === null) return failed("bad_time", 'start、end 要秒数，或者 "1:30"、"1:02:03.5" 这样的时间');
+  if (from === null || to === null) return failed("bad_time", 'start and end take seconds, or a time such as "1:30" or "1:02:03.5"');
   // As the host reads paths: relative ones are under /work.
   const local = path.startsWith("/") ? path.replace(/^\/work(?=\/|$)/, work) : `${work}/${path}`;
   let length;
@@ -33,14 +33,14 @@ async function watch(request, work, path, { start, end } = {}) {
     const { stdout } = await run("ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", local]);
     length = Number(stdout.trim());
   } catch (error) {
-    return failed("not_a_video", `${path} 读不出来：${said(error, local)}`);
+    return failed("not_a_video", `can't read ${path}: ${said(error, local)}`);
   }
   const begin = from ?? 0;
   const stop = to ?? length;
-  if (Number.isFinite(length) && begin >= length) return failed("bad_time", `start 过了结尾：${path} 只有 ${Math.round(length)} 秒`);
-  if (stop <= begin) return failed("bad_time", "end 要在 start 之后");
+  if (Number.isFinite(length) && begin >= length) return failed("bad_time", `start is past the end: ${path} is only ${Math.round(length)} seconds long`);
+  if (stop <= begin) return failed("bad_time", "end must come after start");
   if (stop - begin > MOST) {
-    return failed("too_long", `这段 ${Math.round(stop - begin)} 秒，一次最多看 ${MOST / 60} 分钟；用 start、end 截一段`);
+    return failed("too_long", `this is ${Math.round(stop - begin)} seconds, and at most ${MOST / 60} minutes are shown at a time: cut a piece with start and end`);
   }
   await mkdir(`${work}/.max/shown`, { recursive: true });
   const name = `${randomUUID()}.mp4`;
@@ -55,7 +55,7 @@ async function watch(request, work, path, { start, end } = {}) {
         "-c:a", "aac", "-ac", "1", "-b:a", "32k", "-movflags", "+faststart", written,
       ]);
     } catch (error) {
-      return failed("not_a_video", `${path} 转不了：${said(error, local)}`);
+      return failed("not_a_video", `can't convert ${path}: ${said(error, local)}`);
     }
     return await request("max.video", { path: `/work/.max/shown/${name}` });
   } finally {

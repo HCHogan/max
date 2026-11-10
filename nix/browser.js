@@ -48,7 +48,7 @@ async function connect() {
     ({ chromium } = require("playwright-core"));
   } catch (error) {
     if (error.code !== "MODULE_NOT_FOUND") throw error;
-    throw new Error("这里没有浏览器，只有群 VM 里的 runner 带着它");
+    throw new Error("there is no browser here: only the runner in a chat's VM has one");
   }
   // Returns once the browser takes connections.
   await promisify(execFile)("systemctl", ["start", "max-browser.service"]);
@@ -62,9 +62,9 @@ async function connect() {
 // the same ones. A selector narrows it to an element, depth to so many
 // levels.
 async function snapshot(page, { selector, depth } = {}) {
-  if (typeof page?.ariaSnapshot !== "function") throw new TypeError("max.snapshot 要一个 Playwright 的 page");
-  if (selector !== undefined && typeof selector !== "string") throw new TypeError("selector 要是选择器");
-  if (depth !== undefined && (!Number.isInteger(depth) || depth < 1)) throw new TypeError("depth 要是正整数");
+  if (typeof page?.ariaSnapshot !== "function") throw new TypeError("max.snapshot takes a Playwright page");
+  if (selector !== undefined && typeof selector !== "string") throw new TypeError("selector must be a selector");
+  if (depth !== undefined && (!Number.isInteger(depth) || depth < 1)) throw new TypeError("depth must be a positive integer");
   const target = selector === undefined ? page : page.locator(selector).first();
   const tree = await target.ariaSnapshot({ mode: "ai", depth });
   return `${await page.title()}\n${page.url()}\n${tree}`;

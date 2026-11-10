@@ -214,7 +214,7 @@ impl Shared {
         let native = ledger::native(&mut conn, target, endpoint).await?;
         drop(conn);
         let Some((native_id, _)) = native else {
-            return Ok(Err(Unsent::Refused("QQ 上没有这条消息".to_owned())));
+            return Ok(Err(Unsent::Refused("QQ has no such message".to_owned())));
         };
         Ok(self.api.recall(chat, &native_id).await.map_err(|error| {
             warn!(message = %id, %target, %error, "QQ didn't recall a message");
@@ -387,7 +387,9 @@ impl Unsent {
     fn told(self) -> String {
         match self {
             Self::Refused(text) => text,
-            Self::Unknown(text) => format!("没等到 QQ 的回答，不知道发没发出去：{text}"),
+            Self::Unknown(text) => {
+                format!("QQ never answered, so it isn't known whether it was sent: {text}")
+            }
         }
     }
 }
@@ -396,14 +398,14 @@ impl Unsent {
 fn refusal(error: &api::Error) -> String {
     match error {
         api::Error::Api { code: 40062003, .. } => {
-            "QQ 说没有权限（40062003）：别人的消息要机器人是群管理员才能撤，群主和管理员的撤不了"
+            "QQ says there is no permission (40062003): someone else's message can be recalled only by a bot that is the group's admin, and the owner's and the admins' not at all"
                 .to_owned()
         }
         api::Error::Api { code: 40064004, .. } => {
-            "发出超过 2 分钟了，QQ 不让撤（40064004）".to_owned()
+            "it was sent over 2 minutes ago, and QQ no longer lets it be recalled (40064004)".to_owned()
         }
-        api::Error::Api { code, message, .. } => format!("QQ 没撤：{code} {message}"),
-        error => format!("没收到 QQ 的回答，不知道撤没撤：{error}"),
+        api::Error::Api { code, message, .. } => format!("QQ didn't recall it: {code} {message}"),
+        error => format!("QQ never answered, so it isn't known whether it was recalled: {error}"),
     }
 }
 

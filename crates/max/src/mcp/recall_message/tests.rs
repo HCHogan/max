@@ -76,7 +76,7 @@ async fn what_qq_would_refuse_is_refused_here(pool: PgPool) {
     let mut scope = Scope::new();
     scope.spawn(move |_| async move {
         let mut conn = actor_pool.acquire().await.unwrap();
-        let mut answers = [Ok(()), Err("QQ 说没有权限".to_owned())].into_iter();
+        let mut answers = [Ok(()), Err("QQ says there is no permission".to_owned())].into_iter();
         while let Some(Event::Post(post)) = posts.recv().await {
             let Act::Unsend(target) = post.act else {
                 continue;
@@ -110,7 +110,7 @@ async fn what_qq_would_refuse_is_refused_here(pool: PgPool) {
     let more = heard(&pool, &place, false, 1, now).await;
     let failure = run(&context, json!({ "id": more.0 })).await.unwrap_err();
     assert_eq!(failure.code, "not_recalled");
-    assert!(failure.message.contains("没有权限"), "{failure:?}");
+    assert!(failure.message.contains("no permission"), "{failure:?}");
     // An admin's, or anyone's too old: no unsend is even tried.
     let admins = heard(&pool, &place, true, 2, now).await;
     assert_eq!(code(&context, admins).await, "refused");

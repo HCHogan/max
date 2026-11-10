@@ -248,7 +248,10 @@ async fn a_stream_from_now_ends_with_the_service(pool: PgPool) {
     let answer = answer.unwrap();
     assert_eq!(answer.status(), StatusCode::SERVICE_UNAVAILABLE);
     let said = answer.text().await.unwrap();
-    assert!(said.contains("这个群的会话没回话"), "{said}");
+    assert!(
+        said.contains("this chat's conversation didn't answer"),
+        "{said}"
+    );
 
     // The service stops: the stream ends, and doesn't hold it up.
     // Well within the grace, which would end it anyway.
@@ -300,6 +303,9 @@ async fn maxx_prints_the_rows_and_opens_the_stream_again(pool: PgPool) {
     let mut told = String::new();
     let mut stderr = maxx.stderr.take().unwrap();
     stderr.read_to_string(&mut told).await.unwrap();
-    assert_eq!(told, "maxx events: 断了，1 秒后重连\n");
+    assert_eq!(
+        told,
+        "maxx events: the connection dropped; reconnecting in 1 seconds\n"
+    );
     scope.close(PATIENCE).await;
 }
