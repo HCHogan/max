@@ -195,8 +195,6 @@ struct Active {
     restarts: u32,
     /// When the core last said something.
     said_at: Option<Instant>,
-    /// The people the model has been shown.
-    roster: BTreeSet<PrincipalId>,
     /// The snapshot position: the base context is projected from the
     /// rows up to here; later ones are fed, with their pictures.
     from: MessageId,
@@ -536,7 +534,7 @@ impl Conversation {
             &mut conn,
             &self.place,
             rows,
-            &a.roster,
+            a.run.roster(),
             a.last_at,
             a.chosen.window,
             self.shared.services.offset,
@@ -555,8 +553,7 @@ impl Conversation {
                 quoted.push(row.message);
             }
         }
-        if let Input::Messages { people, item, .. } = &mut input {
-            a.roster.extend(people.iter());
+        if let Input::Messages { item, .. } = &mut input {
             let messages = rows.iter().map(|(message, _)| *message).chain(&quoted);
             max_core::project::attach(item, messages);
         }
@@ -769,7 +766,6 @@ impl Conversation {
             max_output: chosen.max_output,
         };
         let base: u32 = context.items.iter().map(|item| item.tokens).sum();
-        let roster = context.roster.clone();
         info!(conversation = %self.place.conversation, turn = %started.turn, ordinal = started.ordinal, model = %chosen.reference(), base, "a core starts");
         self.core = Some(Active {
             turn: started.turn,
@@ -783,7 +779,6 @@ impl Conversation {
             calling: None,
             restarts: 0,
             said_at: None,
-            roster,
             from,
             waiting: watch::Sender::new(false),
             last_at: Some(now),

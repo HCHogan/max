@@ -189,7 +189,8 @@ pub struct Run {
     /// The wakes since the run was last waiting, the first ones included:
     /// the model hasn't finished with them.
     unhandled: Vec<Wake>,
-    /// The base roster and everyone shown since.
+    /// The base roster and everyone a later input brought a roster line
+    /// for: whom the model can mention at its next call.
     roster: BTreeSet<PrincipalId>,
     /// Tool calls since the model last said something to the group, or
     /// since the last reminder.
@@ -398,11 +399,14 @@ impl Run {
     /// effect: after the tool batch in flight, before the next model call.
     pub fn input(&mut self, input: Input) -> Result<(), Rejected> {
         self.open()?;
-        if let Input::Wake(wake) = &input {
-            self.unhandled.push(wake.clone());
-            if matches!(self.phase, Phase::Waiting) {
-                self.phase = Phase::ModelDue;
+        match &input {
+            Input::Wake(wake) => {
+                self.unhandled.push(wake.clone());
+                if matches!(self.phase, Phase::Waiting) {
+                    self.phase = Phase::ModelDue;
+                }
             }
+            Input::Messages { people, .. } => self.roster.extend(people),
         }
         self.pending.push(input);
         Ok(())
@@ -480,6 +484,12 @@ impl Run {
         self.round
     }
 
+    /// Everyone the run has a roster line for, in its base or an input:
+    /// a later input needn't bring theirs again.
+    pub fn roster(&self) -> &BTreeSet<PrincipalId> {
+        &self.roster
+    }
+
     pub fn record(&self) -> RunRecord<'_> {
         RunRecord {
             spec: &self.spec,
@@ -528,11 +538,6 @@ impl Run {
                 Input::Wake(wake) => wake.item.as_ref(),
             })
             .collect();
-        for input in &self.pending {
-            if let Input::Messages { people, .. } = input {
-                self.roster.extend(people);
-            }
-        }
         if !items.is_empty() {
             let mut text = "[新消息]".to_owned();
             let mut images = Vec::new();

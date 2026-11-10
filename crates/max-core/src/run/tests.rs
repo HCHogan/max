@@ -159,6 +159,8 @@ fn people_shown_mid_run_can_be_mentioned() {
     };
     let people = vec![PrincipalId(30)];
     run.input(Input::Messages { ids, item, people }).unwrap();
+    // Known to the run at once: the next rows needn't bring their line.
+    assert_eq!(run.roster(), &[PrincipalId(12), PrincipalId(30)].into());
     run.input(Input::Wake(wake(2))).unwrap();
     run.model_output(says("[mention#30] 你好")).unwrap();
     assert_eq!(
