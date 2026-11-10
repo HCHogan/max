@@ -39,6 +39,11 @@ pub enum Command {
     /// `/bind`, `/bind <legacy group>` in a private chat, `/bind <code>` in
     /// a group.
     Bind(Option<String>),
+    /// `/link`, where Max is to ask, or `/link <code>`, where it is to be
+    /// asked.
+    Link(Option<String>),
+    /// `/unlink c#N`.
+    Unlink(Option<String>),
 }
 
 impl Command {
@@ -57,6 +62,8 @@ impl Command {
             Command::Unclear => "unclear",
             Command::Config { .. } => "config",
             Command::Bind(_) => "bind",
+            Command::Link(_) => "link",
+            Command::Unlink(_) => "unlink",
         }
     }
 }
@@ -156,6 +163,8 @@ pub fn parse(text: &str) -> Option<Command> {
             Command::Config { name, value }
         }
         "bind" => Command::Bind(argument),
+        "link" => Command::Link(argument),
+        "unlink" => Command::Unlink(argument),
         _ => return None,
     })
 }
@@ -219,6 +228,15 @@ mod tests {
             parse("/bind 123456"),
             Some(Command::Bind(Some("123456".into())))
         );
+        assert_eq!(parse("/link"), Some(Command::Link(None)));
+        assert_eq!(
+            parse("/link 123456"),
+            Some(Command::Link(Some("123456".into())))
+        );
+        assert_eq!(
+            parse("/unlink c#7"),
+            Some(Command::Unlink(Some("c#7".into())))
+        );
         for chatter in [
             "/help",
             "!status",
@@ -230,6 +248,7 @@ mod tests {
             "kill",
             "/killall",
             "/stopwatch",
+            "/linked",
             "",
         ] {
             assert_eq!(parse(chatter), None, "{chatter:?}");

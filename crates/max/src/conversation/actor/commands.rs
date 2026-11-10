@@ -18,8 +18,8 @@ use crate::conversation::ingest::Committed;
 
 /// Who may run what. Commands that change one conversation are also its
 /// group's owner's and admins'; those that cost money are also the other
-/// person's in a private chat, which is theirs; binding a group is only
-/// for Max's owners.
+/// person's in a private chat, which is theirs; binding a group, and
+/// linking two conversations, is only for Max's owners.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Rank {
     Anyone,
@@ -57,7 +57,7 @@ impl Conversation {
             | Command::Unclear
             | Command::Config { .. } => Rank::Admin,
             Command::Model(_) | Command::Effort(_) | Command::Proactive(_) => Rank::ChatOwner,
-            Command::Bind(_) => Rank::Owner,
+            Command::Bind(_) | Command::Link(_) | Command::Unlink(_) => Rank::Owner,
         };
         let name = command.name();
         if rank < needs {
@@ -69,7 +69,7 @@ impl Conversation {
             return self.answer(name, &format!("refused: {who} only")).await;
         }
         let answer = match command {
-            Command::Status => self.status(),
+            Command::Status => self.status().await?,
             Command::Kill => {
                 let jobs = self.kill(committed, name).await?;
                 if jobs.is_empty() {
@@ -99,6 +99,8 @@ impl Conversation {
                 self.config(name.as_deref(), value.as_deref(), by).await?
             }
             Command::Bind(argument) => self.bind(committed, argument.as_deref()).await?,
+            Command::Link(code) => self.link(code.as_deref()).await?,
+            Command::Unlink(handle) => self.unlink(handle.as_deref()).await?,
         };
         self.answer(name, &answer).await
     }
@@ -185,7 +187,8 @@ impl Conversation {
     /// A card like the Haskell version's `!version`, in English: maxx and
     /// its commit, then a key and its value a line. `/model` and
     /// `/persona` show those.
-    fn status(&self) -> String {
+    async fn status(&self) -> Result<String> {
+        let [may_ask, asked_by] = self.linked().await?;
         let settings = &self.settings;
         let mut lines = vec![format!("maxx {}", crate::COMMIT)];
         let mut line = |key: &str, value: String| lines.push(format!("{key:<10}{value}"));
@@ -210,6 +213,12 @@ impl Conversation {
         }
         if let Some(set) = self.config_status() {
             line("config", set);
+        }
+        if let Some(peers) = may_ask {
+            line("may ask", peers);
+        }
+        if let Some(peers) = asked_by {
+            line("asked by", peers);
         }
         line(
             "core",
@@ -250,7 +259,7 @@ impl Conversation {
             let _ = write!(up, " · host {}", span(host));
         }
         line("uptime", up);
-        lines.join("\n")
+        Ok(lines.join("\n"))
     }
 
     async fn model(&mut self, argument: Option<&str>) -> Result<String> {

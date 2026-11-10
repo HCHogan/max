@@ -603,6 +603,7 @@ async fn serve(config: Config) -> Result<()> {
         stop_grace: STOP_GRACE,
         owners,
         binds: Arc::default(),
+        links: Arc::default(),
         rows,
         vms,
         vm_dir,

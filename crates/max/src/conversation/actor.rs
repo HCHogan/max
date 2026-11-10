@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use color_eyre::eyre::{Report, Result};
-use max_core::ids::{IdentityId, MessageId, PrincipalId, TurnId};
+use max_core::ids::{ConversationId, IdentityId, MessageId, PrincipalId, TurnId};
 use max_core::intent::{Decision, Entry, EntryKind, Intent, Reason};
 use max_core::item::{Item, ItemKind, ModelOutput, Timing};
 use max_core::message::{Content, Draft, DraftNode, Message, Node};
@@ -31,6 +31,7 @@ use super::{
     Act, Event, Place, Post, Poster, Receipt, Subscription, TaskId, classify, model, tool,
 };
 use crate::bind::Binds;
+use crate::code::Codes;
 use crate::command;
 use crate::config::Limits;
 use crate::inbound::Inbound;
@@ -73,6 +74,9 @@ pub struct Shared {
     /// Max's owners, who may run every command.
     pub owners: BTreeSet<PrincipalId>,
     pub binds: Arc<Binds>,
+    /// The codes of `/link`: each is for the conversation whose Max is to
+    /// ask.
+    pub links: Arc<Codes<ConversationId>>,
     /// The derived-data workers, which hear of every committed row.
     pub rows: Rows,
     /// None when no VMs are configured: the tools say so.
@@ -1115,6 +1119,7 @@ fn failure(what: &str, reason: &str, stopped: &[u32]) -> String {
 
 mod commands;
 mod jobs;
+mod links;
 mod program;
 mod settings;
 #[cfg(test)]

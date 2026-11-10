@@ -51,6 +51,7 @@ pub fn shared(
         stop_grace: Duration::from_millis(200),
         owners,
         binds: Arc::default(),
+        links: Arc::default(),
         rows: Rows::default(),
         pictures: None,
         vms: None,

@@ -6,6 +6,7 @@ use std::collections::BTreeSet;
 use max_core::ids::MessageId;
 use max_core::item::ItemKind;
 use max_core::message::{Content, Node, Role};
+use qqbot::api::{GroupInfo, Mute, Muted};
 use tokio::sync::oneshot;
 
 use super::*;
@@ -14,6 +15,8 @@ use crate::conversation::testing::{self, from_xiaoming, offset, shared, text};
 use crate::conversation::{Outgoing, ingest};
 use crate::inbound::{Chat, InNode, Person};
 use crate::llm::testing::{Answer, Script};
+use crate::mcp::Services;
+use crate::qq::admin::Admin;
 
 const PATIENCE: Duration = Duration::from_secs(5);
 
@@ -32,6 +35,11 @@ impl Setup {
     /// Max on QQ, owned by the person who writes from the private chat
     /// `c2c:OWNER`.
     async fn new(pool: PgPool) -> Self {
+        Self::with_qq(pool, None).await
+    }
+
+    /// With `qq` to ask what a group is called.
+    async fn with_qq(pool: PgPool, qq: Option<Arc<dyn Admin>>) -> Self {
         let mut conn = pool.acquire().await.unwrap();
         let account = platform::account(&mut conn, Platform::Qq, "BOT", "maxx")
             .await
@@ -41,7 +49,11 @@ impl Setup {
             .unwrap();
         drop(conn);
         let script = Arc::new(Script::default());
-        let (shared, outbound) = shared(&pool, &script, 300, BTreeSet::from([owner.principal]));
+        let (mut shared, outbound) = shared(&pool, &script, 300, BTreeSet::from([owner.principal]));
+        shared.services = Arc::new(Services {
+            admin: qq,
+            ..Services::bare(pool.clone())
+        });
         let me = Me {
             account,
             name: "maxx".into(),
@@ -124,6 +136,39 @@ impl Setup {
             .fetch_one(&mut *conn)
             .await
             .unwrap()
+    }
+
+    /// The conversation of a chat.
+    async fn conversation(&self, native_id: &str) -> i64 {
+        sqlx::query_scalar("select conversation_id from endpoints where native_id = $1")
+            .bind(native_id)
+            .fetch_one(&self.pool)
+            .await
+            .unwrap()
+    }
+}
+
+/// QQ, asked only what GROUP1 is called.
+struct Named(&'static str);
+
+impl Admin for Named {
+    fn muted<'a>(&'a self, _: &'a str) -> crate::qq::send::Answer<'a, Vec<Muted>> {
+        unreachable!("nobody is muted here")
+    }
+
+    fn mute<'a>(&'a self, _: &'a str, _: &'a Mute<'a>) -> crate::qq::send::Answer<'a, ()> {
+        unreachable!("nobody is muted here")
+    }
+
+    fn info<'a>(&'a self, group: &'a str) -> crate::qq::send::Answer<'a, GroupInfo> {
+        Box::pin(async move {
+            assert_eq!(group, "GROUP1");
+            Ok(GroupInfo {
+                group_name: self.0.to_owned(),
+                group_finger_memo: String::new(),
+                group_member_num: 3,
+            })
+        })
     }
 }
 
@@ -270,6 +315,84 @@ async fn a_group_goes_on_from_an_old_one(pool: PgPool) {
     let endpoints = "select count(*) from endpoints where native_id = 'group:GROUP2'";
     assert_eq!(s.count(endpoints).await, 0);
     s.stop().await;
+}
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn an_owner_links_two_conversations_one_way(pool: PgPool) {
+    let mut s = Setup::with_qq(pool, Some(Arc::new(Named("示波器同好会")))).await;
+    let code = s.code(0, "/bind").await;
+    s.send(owner_in_group(1, &format!("/bind {code}")));
+    s.said().await;
+    let chat = s.conversation("c2c:OWNER").await;
+    let group = s.conversation("group:GROUP1").await;
+    let answer = |body: &str| command::answer("link", body);
+
+    // Not for the group's own people, its owner and admins among them.
+    let me = InNode::MentionMe {
+        display: "maxx".into(),
+    };
+    s.send(from_xiaoming(2, vec![me, text("/link")]));
+    assert_eq!(s.said().await.1, answer("refused: Max's owners only"));
+
+    // Max in the private chat is to ask Max in the group.
+    let code = s.code(3, "/link").await;
+    // Said where it was issued, the code isn't used up.
+    s.send(private(4, &format!("/link {code}")));
+    let here = "error: that code was issued here; send it in the conversation Max here is to ask";
+    assert_eq!(s.said().await.1, answer(here));
+    s.send(owner_in_group(5, &format!("/link {code}")));
+    let linked = format!(
+        "linked: Max in c#{chat} hank may ask Max here now, and not the other way\n\
+         @maxx /unlink c#{chat} removes it"
+    );
+    assert_eq!(s.said().await, ("group:GROUP1".into(), answer(&linked)));
+    s.send(owner_in_group(6, &format!("/link {code}")));
+    let gone = "error: no such code, or it has run out";
+    assert_eq!(s.said().await.1, answer(gone));
+    let code = s.code(7, "/link").await;
+    s.send(owner_in_group(8, &format!("/link {code}")));
+    let already = format!("skipped: Max in c#{chat} hank may ask Max here already");
+    assert_eq!(s.said().await.1, answer(&already));
+    let edges: Vec<(i64, i64)> = sqlx::query_as("select asker_id, asked_id from links")
+        .fetch_all(&s.pool)
+        .await
+        .unwrap();
+    assert_eq!(edges, [(chat, group)]);
+
+    // The group asked QQ what it is called when it was given the code.
+    let deadline = std::time::Instant::now() + PATIENCE;
+    let titled = "select count(*) from conversations where title = '示波器同好会'";
+    while s.count(titled).await == 0 {
+        assert!(std::time::Instant::now() < deadline, "no title");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    s.send(private(9, "/status"));
+    let status = s.said().await.1;
+    let may_ask = format!("\nmay ask   c#{group} 示波器同好会\n");
+    assert!(status.contains(&may_ask), "{status}");
+    assert!(!status.contains("asked by"), "{status}");
+    s.send(owner_in_group(10, "/status"));
+    let status = s.said().await.1;
+    let asked_by = format!("\nasked by  c#{chat} hank\n");
+    assert!(status.contains(&asked_by), "{status}");
+    assert!(!status.contains("may ask"), "{status}");
+
+    // Either side cuts it.
+    let answer = |body: &str| command::answer("unlink", body);
+    s.send(owner_in_group(11, "/unlink"));
+    let which = "error: say which conversation, as @maxx /unlink c#N; @maxx /status lists them";
+    assert_eq!(s.said().await.1, answer(which));
+    s.send(private(12, &format!("/unlink c#{group}")));
+    let unlinked = format!(
+        "unlinked: Max here and Max in c#{group} 示波器同好会 can't ask each other any more"
+    );
+    assert_eq!(s.said().await.1, answer(&unlinked));
+    s.send(owner_in_group(13, &format!("/unlink c#{chat}")));
+    let none = format!("skipped: no link with c#{chat}");
+    assert_eq!(s.said().await.1, answer(&none));
+    assert_eq!(s.count("select count(*) from links").await, 0);
+    s.stop().await;
+    assert_eq!(s.script.calls(), 0);
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
