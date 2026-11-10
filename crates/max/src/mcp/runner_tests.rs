@@ -23,12 +23,12 @@ use tokio::net::TcpListener;
 use tokio::process::Command;
 
 use super::{Context, Services, Sessions, serve};
+use crate::conversation::Signal;
 use crate::conversation::ingest;
 use crate::conversation::testing::{from_xiaoming, group, group_named, offset, text};
 use crate::inbound::InNode;
 use crate::media::store::Store;
 use crate::scope::Scope;
-use crate::vm::Signal;
 
 const RUNNER: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../nix/runner.js");
 const MAXX: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../nix/maxx.js");

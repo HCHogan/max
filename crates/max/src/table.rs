@@ -28,10 +28,9 @@ use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tracing::{debug, error, info, warn};
 
 use crate::command::{self, Command};
-use crate::conversation::{Conversation, Event, Place, Shared};
+use crate::conversation::{Conversation, Event, Place, Shared, Signal};
 use crate::inbound::Inbound;
 use crate::scope::Scope;
-use crate::vm::Signal;
 
 /// Max's account on a platform.
 #[derive(Clone, Debug)]

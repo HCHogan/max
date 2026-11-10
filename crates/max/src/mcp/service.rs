@@ -31,7 +31,7 @@ use tracing::warn;
 
 use super::tool::{self, Spec};
 use super::{Call, Caller, Context, Failure, chat_file, forward, harness, lock, show};
-use crate::vm::Signal;
+use crate::conversation::Signal;
 use max_core::limits::{CALLS_AT_ONCE, Setting};
 
 /// What a call that didn't finish may still have done. Nothing is retried

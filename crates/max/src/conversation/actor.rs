@@ -28,7 +28,7 @@ use tracing::{debug, info, warn};
 use super::ingest::{self, By};
 use super::project::{self, Projection};
 use super::{
-    Act, Event, Place, Post, Poster, Receipt, Subscription, TaskId, classify, model, tool,
+    Act, Event, Place, Post, Poster, Receipt, Signal, Subscription, TaskId, classify, model, tool,
 };
 use crate::bind::Binds;
 use crate::code::Codes;
@@ -41,7 +41,7 @@ use crate::mcp;
 use crate::media::pictures::Pictures;
 use crate::scope::Scope;
 use crate::tokens;
-use crate::vm::{self, Signal, Vms};
+use crate::vm::{self, Vms};
 use crate::worker::Rows;
 use max_core::limits::MEMORY_FILE_BYTES;
 

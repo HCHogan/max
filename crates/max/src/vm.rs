@@ -28,7 +28,7 @@ use tracing::{info, warn};
 use self::machine::{BOOT, Booted, Guest, Machine};
 use self::ssh::{Command, Connection, Input};
 use crate::config;
-use crate::conversation::{Question, Subscription};
+use crate::conversation::Signal;
 use crate::mcp::api::{self, Apis};
 use crate::mcp::{self, Sessions};
 use crate::scope::Scope;
@@ -52,38 +52,6 @@ const UNIT_KINDS: [&str; 5] = ["service", "socket", "timer", "path", "target"];
 /// whether or not its VM runs.
 pub fn work(dir: &Path, conversation: ConversationId) -> PathBuf {
     dir.join(conversation.0.to_string()).join("work")
-}
-
-/// What goes to a conversation's actor by its conversation, whatever chat
-/// it is in, through the conversation table, which starts the actor if it
-/// isn't running: what the VM service has for it, and a question from
-/// another conversation's actor.
-#[derive(Debug)]
-pub enum Signal {
-    /// A program Max keeps in the VM calls a tool, outside any turn: the
-    /// conversation's actor runs it, and says how it went.
-    Call {
-        conversation: ConversationId,
-        tool: String,
-        args: serde_json::Value,
-        reply: oneshot::Sender<Result<serde_json::Value, mcp::Failure>>,
-    },
-    /// Something about the VM Max should hear.
-    Notice {
-        conversation: ConversationId,
-        text: String,
-    },
-    /// A program in the VM follows the conversation's timeline.
-    Subscribe {
-        conversation: ConversationId,
-        reply: oneshot::Sender<Subscription>,
-    },
-    /// Max in another conversation asks Max in this one. See "Asking
-    /// another conversation" in docs/rust-rewrite.md.
-    Ask {
-        conversation: ConversationId,
-        question: Question,
-    },
 }
 
 /// What a VM's own route asks of the service.

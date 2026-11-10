@@ -32,7 +32,7 @@ use tokio::time::{sleep, timeout};
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
-use super::Signal;
+use crate::conversation::Signal;
 use crate::conversation::{Subscription, ingest, project};
 use max_core::limits::EVENTS_CAUGHT_UP;
 

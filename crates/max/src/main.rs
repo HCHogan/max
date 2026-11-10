@@ -27,6 +27,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
 use max::config::{self, Config};
+use max::conversation::Signal;
 use max::conversation::{Event, Place, Poster, Shared};
 use max::dreamer::Dreamer;
 use max::embedding::Embedder;
@@ -46,7 +47,7 @@ use max::scope::Scope;
 use max::search::{self, Search};
 use max::table::{self, Me, Table};
 use max::tools;
-use max::vm::{Signal, Vm, Vms};
+use max::vm::{Vm, Vms};
 use max::worker::Rows;
 
 // Stopping, in order, within systemd's TimeoutStopSec of 60 seconds.
