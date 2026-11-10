@@ -735,14 +735,12 @@ impl Conversation {
                         let task = TaskId(self.next_task);
                         a.live.insert(task);
                         let vms = self.shared.vms.clone();
+                        let caller = mcp::Caller::Turn(Poster::new(self.mailbox.clone(), a.turn));
+                        let pages = Budgets::for_window(a.chosen.window).single;
+                        let services = &self.shared.services;
                         let context = mcp::Context {
-                            services: Arc::clone(&self.shared.services),
-                            place: Arc::clone(&self.place),
-                            page_tokens: Budgets::for_window(a.chosen.window).single,
                             video: a.chosen.video,
-                            work: None,
-                            call_time,
-                            caller: mcp::Caller::Turn(Poster::new(self.mailbox.clone(), a.turn)),
+                            ..mcp::Context::new(services, &self.place, caller, pages, call_time)
                         };
                         let mailbox = self.mailbox.clone();
                         let waiting = a.waiting.subscribe();

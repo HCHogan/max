@@ -138,20 +138,15 @@ impl Conversation {
         let (called, calls) = unbounded_channel();
         let (hooks, hooked) = unbounded_channel();
         let stop = CancellationToken::new();
-        let context = mcp::Context {
-            services: Arc::clone(&self.shared.services),
-            place: Arc::clone(&self.place),
-            page_tokens: Budgets::for_window(upstream.window).single,
-            video: false,
-            work: None,
-            call_time: self.call_time(),
-            caller: mcp::Caller::Job(Arc::new(job::Link {
-                upstream: Arc::clone(&upstream),
-                called,
-                hooks,
-                stop: stop.clone(),
-            })),
-        };
+        let caller = mcp::Caller::Job(Arc::new(job::Link {
+            upstream: Arc::clone(&upstream),
+            called,
+            hooks,
+            stop: stop.clone(),
+        }));
+        let pages = Budgets::for_window(upstream.window).single;
+        let services = &self.shared.services;
+        let context = mcp::Context::new(services, &self.place, caller, pages, self.call_time());
         let (steers, steered) = unbounded_channel();
         let progress = Arc::<Mutex<Progress>>::default();
         let asking = self.mailbox.clone();

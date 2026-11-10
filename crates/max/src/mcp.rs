@@ -78,6 +78,29 @@ pub struct Context {
     pub caller: Caller,
 }
 
+impl Context {
+    /// A call's context in `place`, for `caller`: a page of `page_tokens`,
+    /// `call_time` on the clock, no videos and no /work. A turn whose
+    /// model watches videos, and a program run in the VM, say so.
+    pub fn new(
+        services: &Arc<Services>,
+        place: &Arc<Place>,
+        caller: Caller,
+        page_tokens: u32,
+        call_time: Duration,
+    ) -> Self {
+        Self {
+            services: Arc::clone(services),
+            place: Arc::clone(place),
+            page_tokens,
+            video: false,
+            work: None,
+            call_time,
+            caller,
+        }
+    }
+}
+
 /// Who calls, which decides the tools it has.
 pub enum Caller {
     /// A turn's program or command: the tools marked `turn`, and what it
@@ -200,15 +223,8 @@ impl Services {
 impl Context {
     /// A check's in `place`: pages of 2000 tokens, no videos, no /work.
     pub fn check(services: Services, place: Arc<Place>) -> Self {
-        Self {
-            services: Arc::new(services),
-            place,
-            page_tokens: 2000,
-            video: false,
-            work: None,
-            call_time: max_core::limits::CALL_TIME,
-            caller: Caller::Check,
-        }
+        let call_time = max_core::limits::CALL_TIME;
+        Self::new(&Arc::new(services), &place, Caller::Check, 2000, call_time)
     }
 }
 
