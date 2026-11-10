@@ -58,9 +58,17 @@ impl Conversation {
         let running = self.jobs.running.get(&job).ok_or_else(|| over(job))?;
         let agent = match &running.kind {
             Kind::Agent(agent) => agent,
-            Kind::Command => return Err(format!("{} 是后台命令，补不了话", name(job))),
+            Kind::Command => {
+                return Err(format!(
+                    "{} is a background command: there is nobody to steer",
+                    name(job)
+                ));
+            }
             Kind::Question { .. } => {
-                return Err(format!("{} 是在等别的会话回答的问题，补不了话", name(job)));
+                return Err(format!(
+                    "{} is a question waiting for another conversation's answer: there is nobody to steer",
+                    name(job)
+                ));
             }
         };
         agent.steers.send(message).map_err(|_| over(job))
@@ -104,25 +112,22 @@ impl Conversation {
         title: Option<String>,
         workdir: String,
     ) -> Result<u32, String> {
-        if self.stopping.is_some() {
-            return Err("Max 正在重启，起不了新的后台 agent".to_owned());
-        }
         if self.jobs.agents() >= limits::JOBS_AT_ONCE {
             return Err(format!(
-                "已经有 {} 个后台 agent 在跑了，等一个做完，或者停掉一个",
+                "{} background agents run already: wait for one to end, or cancel one",
                 limits::JOBS_AT_ONCE
             ));
         }
         let upstream = match self.shared.models.job() {
-            None => return Err("没配后台 agent 用的模型".to_owned()),
+            None => return Err("no model is configured for background agents".to_owned()),
             Some(Err(error)) => {
                 warn!(%error, "no model for jobs");
-                return Err("后台 agent 的模型配置有问题".to_owned());
+                return Err("the model configured for background agents can't be used".to_owned());
             }
             Some(Ok(upstream)) => Arc::new(upstream),
         };
         let Some(vms) = self.shared.vms.clone() else {
-            return Err("这里没有 VM，后台 agent 没地方跑".to_owned());
+            return Err("there are no VMs here for a background agent to run in".to_owned());
         };
         self.jobs.last += 1;
         let number = self.jobs.last;
@@ -195,7 +200,7 @@ impl Conversation {
     pub(super) fn start_command(&mut self, shell: Background) -> Result<u32, String> {
         self.room_for_command()?;
         let Some(vms) = self.shared.vms.clone() else {
-            return Err("这里没有配 VM，shell 用不了。".to_owned());
+            return Err("there are no VMs here, so shell can't run".to_owned());
         };
         let conversation = self.place.conversation;
         let command = shell.command.clone();
@@ -219,13 +224,10 @@ impl Conversation {
 
     /// Whether another background command may run now.
     fn room_for_command(&self) -> Result<(), String> {
-        if self.stopping.is_some() {
-            return Err("Max 正在重启，起不了后台命令".to_owned());
-        }
         let most = self.commands_at_once();
         if self.jobs.commands() >= most {
             return Err(format!(
-                "已经有 {most} 个后台命令在跑了，等一个跑完，或者用 agent_cancel 停掉一个"
+                "{most} background commands run already: wait for one to end, or stop one with agent_cancel"
             ));
         }
         Ok(())
@@ -277,9 +279,9 @@ impl Conversation {
                 Ok(Ok(answer)) => answer,
                 // The question was dropped on its way, or with the actor
                 // that held it.
-                Ok(Err(_)) => Err("那边的 Max 没回答就停了".to_owned()),
+                Ok(Err(_)) => Err("Max there stopped before answering".to_owned()),
                 Err(_) => Err(format!(
-                    "等了 {} 小时没有回答",
+                    "no answer in {} hours",
                     limits::JOB_TIME.as_secs() / 3600
                 )),
             };
@@ -465,7 +467,10 @@ impl Running {
 }
 
 fn over(job: u32) -> String {
-    format!("{} 不在跑了：做完了、停掉了，或者没有这个", name(job))
+    format!(
+        "{} isn't running: it ended, was cancelled, or never was",
+        name(job)
+    )
 }
 
 /// A title from the task's first line, when none was given.

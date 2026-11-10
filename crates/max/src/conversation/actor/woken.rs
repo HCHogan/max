@@ -2,8 +2,6 @@
 //! there, and what the VM service says about the VM. See "Resident programs" in
 //! docs/rust-rewrite.md.
 
-use tokio::sync::oneshot;
-
 use super::*;
 use max_core::limits::HOUR;
 
@@ -32,32 +30,19 @@ impl Woken {
 }
 
 impl Conversation {
-    /// `max-wake` from a program in the group's VM.
-    pub(super) async fn woken(
-        &mut self,
-        text: String,
-        reply: oneshot::Sender<Result<String, String>>,
-    ) -> Result<()> {
-        if self.stopping.is_some() {
-            let _ = reply.send(Err("Max 正在重启，没叫醒".to_owned()));
-            return Ok(());
-        }
-        if self.settings.stopped {
-            let _ = reply.send(Err(
-                "Max is stopped here (/stop), so it wasn't woken".to_owned()
-            ));
-            return Ok(());
-        }
+    /// `maxx wake` from a program in the group's VM: what the program is
+    /// told.
+    pub(super) async fn woken(&mut self, text: &str) -> Result<String> {
         let count = self.woken.count(Instant::now());
-        let _ = reply.send(Ok("叫醒了 Max".to_owned()));
         info!(conversation = %self.place.conversation, count, "a program wakes Max");
-        let item = Notice::Woken { text: &text, count }.item(self.single());
-        self.wake_with(Reason::Program, item).await
+        let item = Notice::Woken { text, count }.item(self.single());
+        self.wake_with(Reason::Program, item).await?;
+        Ok("woke Max".to_owned())
     }
 
     /// The VM service on the group's VM. Stopped, Max isn't told.
     pub(super) async fn vm_notice(&mut self, text: String) -> Result<()> {
-        if self.stopping.is_some() || self.settings.stopped {
+        if self.refuses(None, Does::STARTS).is_some() {
             return Ok(());
         }
         let item = Notice::Vm { text: &text }.item(self.single());

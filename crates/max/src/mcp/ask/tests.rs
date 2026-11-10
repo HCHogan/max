@@ -77,11 +77,11 @@ async fn a_turn_asks_and_answers_through_its_conversation(pool: PgPool) {
             panic!("{request:?}");
         };
         reply
-            .send(Err("没有人在等 ask#5 的回答".to_owned()))
+            .send(Err("nobody waits for an answer to ask#5".to_owned()))
             .unwrap();
     };
     let (out, ()) = tokio::join!(answered, actor);
-    let refused = Failure::new("not_answered", "没有人在等 ask#5 的回答");
+    let refused = Failure::new("not_answered", "nobody waits for an answer to ask#5");
     assert_eq!(out.unwrap_err(), refused);
 }
 

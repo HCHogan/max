@@ -110,11 +110,14 @@ async fn what_cant_be_set_isnt_asked_for(pool: PgPool) {
     let refused = call(&context, json!({ "commands_at_once": 2 }));
     let (out, _) = tokio::join!(
         refused,
-        answer(&mut events, Err("这一轮已经结束了，没做".into()))
+        answer(
+            &mut events,
+            Err("this turn has ended, so this wasn't done".into())
+        )
     );
     assert_eq!(
         out.unwrap_err(),
-        Failure::new("not_configured", "这一轮已经结束了，没做")
+        Failure::new("not_configured", "this turn has ended, so this wasn't done")
     );
 
     let nobody = Context::check(Services::bare(pool.clone()), Arc::clone(&context.place));

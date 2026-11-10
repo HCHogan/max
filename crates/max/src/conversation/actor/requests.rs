@@ -1,12 +1,15 @@
-//! What tools and programs ask of the conversation: each is done here,
-//! or refused, and answered where the request says.
+//! What tools and programs ask of the conversation: each is refused by
+//! the one rule, or done here, and answered where the request says.
 
 use super::*;
 use crate::conversation::Request;
 
 impl Conversation {
     pub(super) async fn request(&mut self, request: Request, origin: Option<TurnId>) -> Result<()> {
-        let ended = self.ended(origin);
+        if let Some(refused) = self.refuses(origin, does(&request)) {
+            request.refuse(refused.why());
+            return Ok(());
+        }
         match request {
             Request::Agent {
                 task,
@@ -14,67 +17,66 @@ impl Conversation {
                 workdir,
                 reply,
             } => {
-                let refused = ended.or_else(|| self.stopped());
-                let started = match refused {
-                    Some(refused) => Err(refused),
-                    None => self.start_job(task, title, workdir),
-                };
-                let _ = reply.send(started);
+                let _ = reply.send(self.start_job(task, title, workdir));
             }
             Request::Shell { shell, reply } => {
-                let refused = ended.or_else(|| self.stopped());
-                let started = match refused {
-                    Some(refused) => Err(refused),
-                    None => self.start_command(shell),
-                };
-                let _ = reply.send(started);
+                let _ = reply.send(self.start_command(shell));
             }
             Request::Adopt { moved, reply } => {
-                let adopted = match ended {
-                    Some(refused) => Err((refused, moved)),
-                    None => self.adopt(moved),
-                };
-                let _ = reply.send(adopted);
+                let _ = reply.send(self.adopt(moved));
             }
             Request::Steer {
                 job,
                 message,
                 reply,
             } => {
-                let steered = ended.map_or_else(|| self.steer_job(job, message), Err);
-                let _ = reply.send(steered);
+                let _ = reply.send(self.steer_job(job, message));
             }
             Request::Cancel { job, reply } => {
-                let cancelled = ended.map_or_else(|| self.cancel_job(job), Err);
-                let _ = reply.send(cancelled);
+                let _ = reply.send(self.cancel_job(job));
             }
             Request::Status { job, reply } => {
-                let running = ended.map_or_else(|| self.jobs_running(job), Err);
-                let _ = reply.send(running);
+                let _ = reply.send(self.jobs_running(job));
             }
             Request::Configure { changes, reply } => {
-                let configured = match ended {
-                    Some(refused) => Err(refused),
-                    None => {
-                        self.configure(&changes, "Max").await?;
-                        Ok(self.configured())
-                    }
-                };
-                let _ = reply.send(configured);
+                self.configure(&changes, "Max").await?;
+                let _ = reply.send(Ok(self.configured()));
             }
             Request::Ask {
                 to,
                 question,
                 reply,
             } => {
-                let asked = self.ask(to, &question, origin).await?;
+                let asked = self.ask(to, &question).await?;
                 let _ = reply.send(asked);
             }
             Request::Answer { to, text, reply } => {
-                let _ = reply.send(self.answer_question(to, &text, origin));
+                let _ = reply.send(self.answer_question(to, &text));
             }
-            Request::Wake { text, reply } => self.woken(text, reply).await?,
+            Request::Wake { text, reply } => {
+                let woke = self.woken(&text).await?;
+                let _ = reply.send(Ok(woke));
+            }
+            Request::Act { reply } => {
+                let _ = reply.send(Ok(()));
+            }
         }
         Ok(())
+    }
+}
+
+/// What a request would have the conversation do.
+fn does(request: &Request) -> Does {
+    match request {
+        Request::Agent { .. }
+        | Request::Shell { .. }
+        | Request::Adopt { .. }
+        | Request::Ask { .. }
+        | Request::Wake { .. } => Does::STARTS,
+        Request::Answer { .. } | Request::Act { .. } => Does::ACTS,
+        Request::Steer { .. }
+        | Request::Cancel { .. }
+        | Request::Status { .. }
+        | Request::Configure { .. } => Does::LOOKS,
     }
 }

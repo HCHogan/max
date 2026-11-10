@@ -57,11 +57,56 @@ const MOST_RESTARTS: u32 = 3;
 /// The most of a reason a failure line shows: a provider's error page
 /// runs to kilobytes.
 const REASON_CHARS: usize = 300;
-/// What a program is told when it would act in a conversation `/stop`
-/// stopped.
-const STOPPED: &str = "Max is stopped here (/stop), so this wasn't done";
 /// Why a draft wasn't said: nothing in it could be.
-const NOTHING_TO_SAY: &str = "没有能发的东西";
+const NOTHING_TO_SAY: &str = "there was nothing in it to send";
+
+/// What an event would have the conversation do, as far as stopping
+/// goes: whether it has Max say or do something, which `/stop` forbids,
+/// and whether it starts work, which Max shutting down forbids.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Does {
+    acts: bool,
+    starts: bool,
+}
+
+impl Does {
+    /// Reads something, or changes a setting or a job already there.
+    pub(super) const LOOKS: Self = Self::new(false, false);
+    /// Has Max say or do something as part of what already runs.
+    pub(super) const ACTS: Self = Self::new(true, false);
+    /// Starts work that says and does nothing by itself: a program's call
+    /// of a tool, which is refused in its turn if it would act.
+    pub(super) const RUNS: Self = Self::new(false, true);
+    /// Starts something Max is to act on: a job, a question, a wake.
+    pub(super) const STARTS: Self = Self::new(true, true);
+
+    const fn new(acts: bool, starts: bool) -> Self {
+        Self { acts, starts }
+    }
+}
+
+/// Why the conversation won't do what an event asks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Refusal {
+    /// The turn the event comes from has ended, by `/kill` or otherwise,
+    /// though its call was on the way.
+    Ended,
+    /// `/stop` stopped Max here.
+    Stopped,
+    /// Max is shutting down.
+    Stopping,
+}
+
+impl Refusal {
+    /// As whoever asked is told.
+    pub(super) fn why(self) -> &'static str {
+        match self {
+            Refusal::Ended => "this turn has ended, so this wasn't done",
+            Refusal::Stopped => "Max is stopped here (/stop), so this wasn't done",
+            Refusal::Stopping => "Max is restarting, so this wasn't done",
+        }
+    }
+}
 
 /// What every conversation's actor shares.
 pub struct Shared {
@@ -685,7 +730,7 @@ impl Conversation {
     }
 
     async fn start_core(&mut self, wake: Wake) -> Result<()> {
-        if self.stopping.is_some() || self.settings.stopped {
+        if self.refuses(None, Does::STARTS).is_some() {
             return Ok(());
         }
         let settings = &self.settings;
@@ -945,23 +990,22 @@ impl Conversation {
         Ok(())
     }
 
-    /// Why a tool of `origin`'s can no longer act: its turn has ended, by
-    /// `/kill` or otherwise, though its call was on the way. Only the
-    /// running core's tools act so far; a program's, outside any turn,
-    /// always do.
-    fn ended(&self, origin: Option<TurnId>) -> Option<String> {
-        let turn = origin?;
-        if self.core.as_ref().is_some_and(|a| a.turn == turn) {
-            return None;
+    /// Whether the conversation refuses what an event of `origin`'s turn
+    /// asks, a program's being of no turn: the one place that says what
+    /// goes on after `/stop`, as Max shuts down, and for a turn that has
+    /// ended. Only the running core's tools act; `/stop` ends the turn and
+    /// starts none.
+    pub(super) fn refuses(&self, origin: Option<TurnId>, does: Does) -> Option<Refusal> {
+        if let Some(turn) = origin
+            && !self.core.as_ref().is_some_and(|a| a.turn == turn)
+        {
+            debug!(%turn, "refused a tool of a turn that has ended");
+            return Some(Refusal::Ended);
         }
-        debug!(%turn, "refused a tool of a turn that has ended");
-        Some("这一轮已经结束了，没做".to_owned())
-    }
-
-    /// Why a program can't post or act in the group: `/stop`. A turn's
-    /// tools can't either: `/stop` ended the turn, and starts none.
-    fn stopped(&self) -> Option<String> {
-        self.settings.stopped.then(|| STOPPED.to_owned())
+        if does.acts && self.settings.stopped {
+            return Some(Refusal::Stopped);
+        }
+        (does.starts && self.stopping.is_some()).then_some(Refusal::Stopping)
     }
 
     /// What a tool says or does: a running core's, whose programs' results
@@ -972,9 +1016,9 @@ impl Conversation {
             origin,
             receipt,
         } = post;
-        if let Some(refused) = self.ended(origin).or_else(|| self.stopped()) {
+        if let Some(refused) = self.refuses(origin, Does::ACTS) {
             if let Some(receipt) = receipt {
-                let _ = receipt.send(Err(refused));
+                let _ = receipt.send(Err(refused.why().to_owned()));
             }
             return Ok(());
         }
@@ -1050,7 +1094,7 @@ impl Conversation {
         )
         .await?;
         drop(conn);
-        Ok(self.hand_over(unsend, receipt, "这里没有这条消息"))
+        Ok(self.hand_over(unsend, receipt, "no such message here"))
     }
 
     /// A row of Max's that was committed, for the sender: the row and

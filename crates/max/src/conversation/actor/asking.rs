@@ -60,21 +60,14 @@ impl Conversation {
         &mut self,
         to: ConversationId,
         question: &str,
-        origin: Option<TurnId>,
     ) -> Result<Result<u32, String>> {
-        if let Some(refused) = self.ended(origin).or_else(|| self.stopped()) {
-            return Ok(Err(refused));
-        }
-        if self.stopping.is_some() {
-            return Ok(Err("Max 正在重启，问不了".to_owned()));
-        }
         let here = self.place.conversation;
         let mut conn = self.shared.services.pool.acquire().await?;
         // A conversation there is no edge to and one that doesn't exist
         // are refused alike: asking tells nothing of which there are.
         if !links::linked(&mut conn, here, to).await? {
             return Ok(Err(format!(
-                "问不了 c#{to}：这里没有连到它，或者没有这个会话。能问的列在 [能问的会话] 里"
+                "can't ask c#{to}: there is no link from here to it, or no such conversation; whom Max here may ask is listed under [能问的会话]"
             )));
         }
         let from = peer(&mut conn, here).await?;
@@ -101,12 +94,11 @@ impl Conversation {
     /// in the running core or a new one, and the asker waits until
     /// `answer` names it. Stopped, Max here isn't told.
     pub(super) async fn take_question(&mut self, question: Question) -> Result<()> {
-        if self.stopping.is_some() {
-            question.refuse("那边的 Max 正在重启");
-            return Ok(());
-        }
-        if self.settings.stopped {
-            question.refuse(STOPPED_THERE);
+        if let Some(refused) = self.refuses(None, Does::STARTS) {
+            question.refuse(match refused {
+                Refusal::Stopped => STOPPED_THERE,
+                _ => "Max is restarting there",
+            });
             return Ok(());
         }
         let Question { from, text, answer } = question;
@@ -131,18 +123,10 @@ impl Conversation {
 
     /// Max's `answer` to question `to`: it goes to whoever waits on it.
     /// Whom it went to, or why it wasn't taken.
-    pub(super) fn answer_question(
-        &mut self,
-        to: u32,
-        text: &str,
-        origin: Option<TurnId>,
-    ) -> Result<String, String> {
-        if let Some(refused) = self.ended(origin).or_else(|| self.stopped()) {
-            return Err(refused);
-        }
+    pub(super) fn answer_question(&mut self, to: u32, text: &str) -> Result<String, String> {
         let nobody = || {
             format!(
-                "没有人在等 {} 的回答：没有这个编号，或者已经答过了、对方撤回了、等到点了、Max 重启过。这次没送出去",
+                "nobody waits for an answer to {}: there is no such question, or it was answered, withdrawn or out of time, or Max has restarted since; nothing was sent",
                 ask_name(to)
             )
         };
@@ -184,7 +168,7 @@ impl Conversation {
 }
 
 /// Why a conversation that is stopped doesn't answer.
-pub(super) const STOPPED_THERE: &str = "那边被 /stop 停了，Max 不回话";
+pub(super) const STOPPED_THERE: &str = "Max is stopped there (/stop)";
 
 #[cfg(test)]
 mod tests;

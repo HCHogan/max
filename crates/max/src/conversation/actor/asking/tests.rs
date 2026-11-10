@@ -72,7 +72,7 @@ impl Pair {
                 };
                 match routes.get(&conversation) {
                     Some(mailbox) => mailbox.send(Event::Asked(question)).unwrap(),
-                    None => question.refuse("Max 已经不在那个会话的聊天里了"),
+                    None => question.refuse("Max serves no chat of that conversation"),
                 }
             }
         });
@@ -174,7 +174,8 @@ async fn one_max_asks_another_and_no_chat_hears_of_it(pool: PgPool) {
     // are refused alike.
     for (asker, to) in [(&room, c), (&chat, ConversationId(999)), (&chat, c)] {
         let refused = p.ask(asker, to, "在吗").await.unwrap_err();
-        let alike = format!("问不了 c#{to}：这里没有连到它，或者没有这个会话。");
+        let alike =
+            format!("can't ask c#{to}: there is no link from here to it, or no such conversation;");
         assert!(refused.starts_with(&alike), "{refused}");
     }
 
@@ -193,7 +194,10 @@ async fn one_max_asks_another_and_no_chat_hears_of_it(pool: PgPool) {
     let jobs = p.max(&chat).status(None).await.unwrap();
     assert_eq!(jobs[0].title, format!("? c#{r}: 明天几点开始？"));
     let not_an_agent = p.max(&chat).steer(1, "快点".into()).await.unwrap_err();
-    assert!(not_an_agent.contains("补不了话"), "{not_an_agent}");
+    assert!(
+        not_an_agent.contains("there is nobody to steer"),
+        "{not_an_agent}"
+    );
 
     // The answer names the question; it wakes Max in the private chat,
     // whose new core is told what it had asked and whom it may ask.
@@ -206,7 +210,10 @@ async fn one_max_asks_another_and_no_chat_hears_of_it(pool: PgPool) {
     let askable = format!("\n\n[能问的会话]\nc#{r}\n\n[新消息]\n");
     assert!(shown.contains(&askable), "{shown}");
     let again = p.answer(&room, 1, "九点").await.unwrap_err();
-    assert!(again.contains("没有人在等 ask#1"), "{again}");
+    assert!(
+        again.contains("nobody waits for an answer to ask#1"),
+        "{again}"
+    );
 
     // Withdrawn, an answer finds nobody, and neither side hears more.
     p.script.push(Answer::says("等我想想"));
@@ -214,7 +221,10 @@ async fn one_max_asks_another_and_no_chat_hears_of_it(pool: PgPool) {
     p.says(&room, "等我想想").await;
     assert_eq!(p.max(&chat).cancel(2).await, Ok(()));
     let late = p.answer(&room, 2, "有").await.unwrap_err();
-    assert!(late.contains("没有人在等 ask#2"), "{late}");
+    assert!(
+        late.contains("nobody waits for an answer to ask#2"),
+        "{late}"
+    );
     p.quiet().await;
 
     // /stop there ends the wait of a question not yet answered: both
@@ -237,7 +247,7 @@ async fn one_max_asks_another_and_no_chat_hears_of_it(pool: PgPool) {
     ];
     expected.sort();
     assert_eq!(heard, expected);
-    let why = format!("c#{r}：那边被 /stop 停了，Max 不回话");
+    let why = format!("c#{r}：Max is stopped there (/stop)");
     let unanswered = format!("[新消息]\n[job#3 没答成] {why}\n问：还在吗");
     assert_eq!(p.request_tail(4), unanswered);
 

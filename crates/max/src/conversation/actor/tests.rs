@@ -1041,7 +1041,7 @@ async fn a_jobs_report_wakes_max(pool: PgPool) {
     );
     // It ended: no more steering it.
     let steered = h.poster().steer(1, "再查查".into()).await;
-    assert!(steered.unwrap_err().contains("job#1 不在跑了"));
+    assert!(steered.unwrap_err().contains("job#1 isn't running"));
     h.stop().await;
 }
 
@@ -1099,7 +1099,7 @@ async fn a_background_command_is_a_job_that_wakes_max_when_it_ends(pool: PgPool)
     .await;
     assert_eq!(
         h.poster().steer(1, "快点".into()).await.unwrap_err(),
-        "job#1 是后台命令，补不了话"
+        "job#1 is a background command: there is nobody to steer"
     );
     h.send(from_xiaoming(0, vec![me(), text(" /status")]));
     let (_, status) = h.said().await;
@@ -1138,13 +1138,16 @@ async fn nothing_starts_without_its_config(pool: PgPool) {
     };
     assert_eq!(
         h.poster().shell(shell).await.unwrap_err(),
-        "这里没有配 VM，shell 用不了。"
+        "there are no VMs here, so shell can't run"
     );
     let start = h
         .poster()
         .agent("查一下".into(), None, "/work".into())
         .await;
-    assert_eq!(start.unwrap_err(), "没配后台 agent 用的模型");
+    assert_eq!(
+        start.unwrap_err(),
+        "no model is configured for background agents"
+    );
     h.stop().await;
 }
 
@@ -1170,11 +1173,17 @@ async fn commands_dont_count_against_agents(pool: PgPool) {
         unit: "max-9".into(),
     };
     let refused = h.poster().shell(shell).await.unwrap_err();
-    let full = format!("已经有 {} 个后台命令", max_core::limits::COMMANDS_AT_ONCE);
+    let full = format!(
+        "{} background commands run already",
+        max_core::limits::COMMANDS_AT_ONCE
+    );
     assert!(refused.starts_with(&full), "{refused}");
     let poster = h.poster();
     let start = poster.agent("查一下".into(), None, "/work/max".into());
-    assert_eq!(start.await.unwrap_err(), "没配后台 agent 用的模型");
+    assert_eq!(
+        start.await.unwrap_err(),
+        "no model is configured for background agents"
+    );
     h.stop().await;
 }
 
@@ -1230,11 +1239,15 @@ async fn stop_ends_the_turn_and_its_jobs_and_nothing_starts_until_start(pool: Pg
             text: "CI 挂了".into(),
         }],
     };
+    let stopped = Refusal::Stopped.why().to_owned();
+    assert_eq!(stopped, "Max is stopped here (/stop), so this wasn't done");
     let (say, sent) = post(Act::Say(draft));
     h.mailbox.send(Event::Post(say)).unwrap();
-    assert_eq!(sent.await.unwrap(), Err(STOPPED.to_owned()));
-    let refused = "Max is stopped here (/stop), so it wasn't woken".to_owned();
-    assert_eq!(h.poster().wake("CI 挂了".into()).await, Err(refused));
+    assert_eq!(sent.await.unwrap(), Err(stopped.clone()));
+    assert_eq!(
+        h.poster().wake("CI 挂了".into()).await,
+        Err(stopped.clone())
+    );
     h.mailbox
         .send(Event::VmNotice("VM 起不来了".into()))
         .unwrap();
@@ -1245,12 +1258,13 @@ async fn stop_ends_the_turn_and_its_jobs_and_nothing_starts_until_start(pool: Pg
         reply,
     };
     h.mailbox.send(call).unwrap();
-    assert_eq!(muted.await.unwrap().unwrap_err().code, "stopped");
+    let refused = mcp::Failure::new("refused", stopped.clone());
+    assert_eq!(muted.await.unwrap().unwrap_err(), refused);
     let start = h
         .poster()
         .agent("查一下".into(), None, "/work".into())
         .await;
-    assert_eq!(start.unwrap_err(), STOPPED);
+    assert_eq!(start.unwrap_err(), stopped);
     assert_eq!(h.poster().status(None).await, Ok(Vec::new()));
     assert_eq!(h.turns().await.len(), 1);
 
@@ -1353,7 +1367,7 @@ async fn max_sets_the_idle_window_of_the_running_turn(pool: PgPool) {
         vec![(Setting::IdleWindowSecs, Some(1))],
         Some(TurnId(999)),
     );
-    assert_eq!(refused.await.unwrap_err(), "这一轮已经结束了，没做");
+    assert_eq!(refused.await.unwrap_err(), Refusal::Ended.why());
     assert_eq!(h.turns().await[0].1, None, "the turn goes on");
 
     // Below what the tool allows, so the test is short: the actor
@@ -1483,7 +1497,10 @@ async fn a_conversation_runs_as_many_commands_as_it_set(pool: PgPool) {
         unit: "max-9".into(),
     };
     let refused = h.poster().shell(shell).await.unwrap_err();
-    assert!(refused.starts_with("已经有 2 个后台命令"), "{refused}");
+    assert!(
+        refused.starts_with("2 background commands run already"),
+        "{refused}"
+    );
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
@@ -1561,4 +1578,36 @@ async fn a_new_core_is_shown_the_questions_still_waiting(pool: PgPool) {
     assert_eq!(answer(&h, 1, "八点").await, Ok("c#7 hank".to_owned()));
     assert_eq!(answered.await.unwrap(), Ok("八点".to_owned()));
     h.stop().await;
+}
+
+/// What goes on after `/stop`, as Max shuts down, and for a turn that
+/// has ended: by what an event would do, not by which event it is.
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn one_rule_says_what_is_refused(pool: PgPool) {
+    let mut conn = pool.acquire().await.unwrap();
+    let place = Arc::new(group(&mut conn).await);
+    drop(conn);
+    let script = Arc::new(Script::default());
+    let (shared, _outbound) = shared(&pool, &script, 300, BTreeSet::new());
+    let (mailbox, _events) = mpsc::unbounded_channel();
+    let mut actor = Conversation::new(Arc::new(shared), place, mailbox)
+        .await
+        .unwrap();
+    let kinds = [Does::LOOKS, Does::ACTS, Does::RUNS, Does::STARTS];
+    let refused = |actor: &Conversation, origin| kinds.map(|does| actor.refuses(origin, does));
+    let (stopped, stopping) = (Some(Refusal::Stopped), Some(Refusal::Stopping));
+
+    // A program, of no turn, is refused nothing; a tool of a turn that
+    // isn't running is refused everything.
+    assert_eq!(refused(&actor, None), [None; 4]);
+    assert_eq!(refused(&actor, Some(TurnId(1))), [Some(Refusal::Ended); 4]);
+    // After /stop, what has Max say or do something.
+    actor.settings.stopped = true;
+    assert_eq!(refused(&actor, None), [None, stopped, None, stopped]);
+    // As Max shuts down, what starts work.
+    actor.settings.stopped = false;
+    actor.stopping = Some(Instant::now());
+    assert_eq!(refused(&actor, None), [None, None, stopping, stopping]);
+    actor.settings.stopped = true;
+    assert_eq!(refused(&actor, None), [None, stopped, stopping, stopped]);
 }

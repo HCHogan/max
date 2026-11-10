@@ -219,7 +219,7 @@ impl Table {
         let Some((key, endpoint, me)) = found else {
             warn!(%conversation, "something for a conversation Max isn't in");
             if let Event::Asked(question) = event {
-                question.refuse("Max 已经不在那个会话的聊天里了");
+                question.refuse("Max serves no chat of that conversation");
             }
             return Ok(());
         };

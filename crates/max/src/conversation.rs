@@ -216,6 +216,32 @@ pub enum Request {
         text: String,
         reply: Reply<String>,
     },
+    /// Whether the tool may go on to act in the chat by itself, as a mute
+    /// does, not through the actor: it may unless Max is stopped here.
+    Act {
+        reply: Reply<()>,
+    },
+}
+
+impl Request {
+    /// Answers that it wasn't done, and why.
+    pub fn refuse(self, why: &str) {
+        let why = why.to_owned();
+        match self {
+            Request::Agent { reply, .. }
+            | Request::Shell { reply, .. }
+            | Request::Ask { reply, .. } => drop(reply.send(Err(why))),
+            Request::Adopt { moved, reply } => drop(reply.send(Err((why, moved)))),
+            Request::Steer { reply, .. }
+            | Request::Cancel { reply, .. }
+            | Request::Act { reply } => drop(reply.send(Err(why))),
+            Request::Status { reply, .. } => drop(reply.send(Err(why))),
+            Request::Configure { reply, .. } => drop(reply.send(Err(why))),
+            Request::Answer { reply, .. } | Request::Wake { reply, .. } => {
+                drop(reply.send(Err(why)));
+            }
+        }
+    }
 }
 
 /// What Max in one conversation asks Max in another, on its way there.
@@ -278,14 +304,14 @@ impl Sending {
     /// Waits until it is sent, or only committed for [`Act::Queue`]: the
     /// row, or why it didn't go out.
     pub async fn sent(self) -> Result<MessageId, String> {
-        self.0.await.map_err(|_| "没等到发送的结果".to_owned())?
+        self.0.await.map_err(|_| UNANSWERED.to_owned())?
     }
 }
 
 /// What a tool is told when its conversation's actor is gone...
-const GONE: &str = "这个群的会话已经停了";
+const GONE: &str = "this conversation's actor has stopped";
 /// ...or went before it answered.
-const UNANSWERED: &str = "没等到回答";
+const UNANSWERED: &str = "the conversation stopped before answering";
 
 /// Lets a tool act in its conversation: say something, or run a
 /// background agent, for its turn, or for a program Max keeps in the
@@ -408,6 +434,12 @@ impl Poster {
     pub async fn answer(&self, to: u32, text: String) -> Result<String, String> {
         self.request(|reply| Request::Answer { to, text, reply })
             .await
+    }
+
+    /// Asks whether the tool may act in the chat by itself: `/stop`
+    /// forbids it, and a turn that has ended.
+    pub async fn act_alone(&self) -> Result<(), String> {
+        self.request(|reply| Request::Act { reply }).await
     }
 
     /// Hands a turn's command to the conversation as a background job:

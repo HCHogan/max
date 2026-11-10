@@ -461,7 +461,7 @@ async fn a_program_in_the_vm_wakes_a_group_nobody_has_written_in(pool: PgPool) {
     let answered = tokio::time::timeout(PATIENCE, answered).await.unwrap();
     assert_eq!(
         answered.unwrap(),
-        Ok(serde_json::json!({ "said": "叫醒了 Max" }))
+        Ok(serde_json::json!({ "said": "woke Max" }))
     );
     assert_eq!(
         s.said().await,
@@ -541,7 +541,7 @@ async fn a_question_starts_the_conversation_it_is_for(pool: PgPool) {
     let answered = tokio::time::timeout(PATIENCE, answered).await.unwrap();
     assert_eq!(
         answered.unwrap(),
-        Err("Max 已经不在那个会话的聊天里了".to_owned())
+        Err("Max serves no chat of that conversation".to_owned())
     );
     s.stop().await;
 }
