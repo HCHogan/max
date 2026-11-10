@@ -1,13 +1,14 @@
-//! Max here is asked by Max in another conversation: the question that
-//! comes through the conversation table, and the two lines that say here
-//! what was asked and what was answered. See "Asking another
-//! conversation" in docs/rust-rewrite.md.
+//! Max here asks Max in another conversation, and is asked by one: the
+//! question's way between the two actors, and the four lines that say so,
+//! two in each conversation. See "Asking another conversation" in
+//! docs/rust-rewrite.md.
 
 use std::collections::BTreeMap;
 
-use max_db::links::Peer;
+use max_db::links::{self, Peer};
 use tokio::sync::oneshot;
 
+use super::links::peer;
 use super::*;
 use crate::conversation::Question;
 
@@ -43,6 +44,54 @@ impl Asked {
 }
 
 impl Conversation {
+    /// Max's `ask`: a line says here what is asked of whom, the question
+    /// goes to that conversation's actor, and a job waits for the answer.
+    /// The job's number, or why nothing was asked.
+    pub(super) async fn ask(
+        &mut self,
+        to: ConversationId,
+        question: &str,
+        origin: Option<TurnId>,
+    ) -> Result<Result<u32, String>> {
+        if let Some(refused) = self.ended(origin).or_else(|| self.stopped()) {
+            return Ok(Err(refused));
+        }
+        if self.stopping.is_some() {
+            return Ok(Err("Max 正在重启，问不了".to_owned()));
+        }
+        let here = self.place.conversation;
+        let mut conn = self.shared.services.pool.acquire().await?;
+        // A conversation there is no edge to and one that doesn't exist
+        // are refused alike: asking tells nothing of which there are.
+        if !links::linked(&mut conn, here, to).await? {
+            return Ok(Err(format!(
+                "问不了 c#{to}：这里没有连到它，或者没有这个会话。能问的列在 [能问的会话] 里"
+            )));
+        }
+        let from = peer(&mut conn, here).await?;
+        let to = peer(&mut conn, to).await?;
+        drop(conn);
+        let question = question.trim();
+        let said = format!("asked {to}:\n{question}");
+        let Some(line) = self.host_line(said, None, origin).await? else {
+            return Ok(Err(NOTHING_TO_SAY.to_owned()));
+        };
+        let (answer, answered) = oneshot::channel();
+        let asked = Signal::Ask {
+            conversation: to.conversation,
+            question: Question {
+                from,
+                text: question.to_owned(),
+                answer,
+            },
+        };
+        // The table is gone only as Max stops: the wait then ends at once.
+        let _ = self.shared.signals.send(asked);
+        let job = self.question_job(to, line.id, question, answered);
+        info!(conversation = %here, job, line = %line.id, "Max asks another conversation");
+        Ok(Ok(job))
+    }
+
     /// Max in another conversation asks Max here: a line says so and
     /// wakes Max, and the asker waits until `answer` names the line.
     /// Stopped, nobody here is told.
@@ -103,6 +152,28 @@ impl Conversation {
         Ok(Ok(from.to_string()))
     }
 
+    /// The wait of question job `job` is over: a line says here what
+    /// was answered, or that nothing was and why, and wakes Max with it.
+    pub(super) async fn question_answered(
+        &mut self,
+        job: u32,
+        answer: Result<String, String>,
+    ) -> Result<()> {
+        // Withdrawn since.
+        let Some((to, asked)) = self.question_over(job) else {
+            return Ok(());
+        };
+        info!(conversation = %self.place.conversation, job, answered = answer.is_ok(), "a question's wait is over");
+        let said = match answer {
+            Ok(text) => format!("{to} answered:\n{text}"),
+            Err(why) => format!("{to} didn't answer: {why}"),
+        };
+        let Some(line) = self.host_line(said, Some(asked), None).await? else {
+            return Ok(());
+        };
+        self.wake_at(&line, Reason::Job { job }).await
+    }
+
     /// A line maxx says here on Max's account, in a text code block as a
     /// command's answer is: the row. What it shows was written in another
     /// conversation, so nothing in it is read as Markdown.
@@ -121,3 +192,6 @@ impl Conversation {
         self.say_row(draft, turn, None, By::Host, None).await
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -41,7 +41,7 @@ use crate::mcp;
 use crate::media::pictures::Pictures;
 use crate::scope::Scope;
 use crate::tokens;
-use crate::vm::{self, Vms};
+use crate::vm::{self, Signal, Vms};
 use crate::worker::Rows;
 use max_core::limits::MEMORY_FILE_BYTES;
 
@@ -77,6 +77,9 @@ pub struct Shared {
     /// The codes of `/link`: each is for the conversation whose Max is to
     /// ask.
     pub links: Arc<Codes<ConversationId>>,
+    /// To the conversation table, for another conversation's actor: a
+    /// question for its Max.
+    pub signals: UnboundedSender<Signal>,
     /// The derived-data workers, which hear of every committed row.
     pub rows: Rows,
     /// None when no VMs are configured: the tools say so.
@@ -409,6 +412,16 @@ impl Conversation {
                 let _ = reply.send(subscription);
                 Ok(())
             }
+            Event::Ask {
+                to,
+                question,
+                origin,
+                reply,
+            } => {
+                let asked = self.ask(to, &question, origin).await?;
+                let _ = reply.send(asked);
+                Ok(())
+            }
             Event::Asked(question) => self.take_question(question).await,
             Event::Answer {
                 to,
@@ -420,6 +433,7 @@ impl Conversation {
                 let _ = reply.send(taken);
                 Ok(())
             }
+            Event::Answered { job, answer } => self.question_answered(job, answer).await,
             Event::Stop => {
                 self.stop();
                 Ok(())

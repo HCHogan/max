@@ -572,8 +572,10 @@ async fn serve(config: Config) -> Result<()> {
         (Some(_), None) => info!("no dreamer model: memory files aren't tidied"),
         (None, _) => {}
     }
-    // What the VMs have for the conversations, such as max-wake.
+    // What the VMs have for the conversations, such as max-wake, and what
+    // one conversation's actor has for another: a question for its Max.
     let (signals, signals_rx) = mpsc::unbounded_channel();
+    let asking = signals.clone();
     // Their secrets are read now, so a missing one stops max here.
     let apis = Arc::new(mcp::api::Apis::load(&config.api)?);
     let vms = match config.vm {
@@ -604,6 +606,7 @@ async fn serve(config: Config) -> Result<()> {
         owners,
         binds: Arc::default(),
         links: Arc::default(),
+        signals: asking,
         rows,
         vms,
         vm_dir,

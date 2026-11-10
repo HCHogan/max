@@ -55,13 +55,16 @@ impl Setup {
             admin: qq,
             ..Services::bare(pool.clone())
         });
+        // As in main: the actors' questions and the VMs' signals come to
+        // the table on one channel.
+        let (signals, signals_rx) = mpsc::unbounded_channel();
+        shared.signals = signals.clone();
         let me = Me {
             account,
             name: "maxx".into(),
         };
         let table = Table::new(Arc::new(shared), HashMap::from([(Platform::Qq, me)]));
         let (inbound, rx) = mpsc::unbounded_channel();
-        let (signals, signals_rx) = mpsc::unbounded_channel();
         let (done_tx, done) = oneshot::channel();
         let mut scope = Scope::new();
         scope.spawn(move |_| async move {

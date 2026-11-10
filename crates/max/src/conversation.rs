@@ -108,6 +108,14 @@ pub enum Event {
     },
     /// A program in the group's VM follows the timeline: `maxx events`.
     Subscribe(oneshot::Sender<Subscription>),
+    /// Max's `ask` tool: a question for Max in conversation `to`. The job
+    /// that waits for the answer, or why it wasn't asked.
+    Ask {
+        to: ConversationId,
+        question: String,
+        origin: Option<TurnId>,
+        reply: oneshot::Sender<Result<u32, String>>,
+    },
     /// Max in another conversation asks Max here, from the table.
     Asked(Question),
     /// Max's `answer` tool: the answer to the question of line `to`. Whom
@@ -117,6 +125,11 @@ pub enum Event {
         text: String,
         origin: Option<TurnId>,
         reply: oneshot::Sender<Result<String, String>>,
+    },
+    /// The question job `job` waits on was answered, or won't be, and why.
+    Answered {
+        job: u32,
+        answer: Result<String, String>,
     },
     /// Max restarts: end the core, within a grace, then stop.
     Stop,
@@ -287,6 +300,21 @@ impl Poster {
         self.mailbox
             .send(Event::Configure {
                 changes,
+                origin: self.origin,
+                reply,
+            })
+            .map_err(|_| "这个群的会话已经停了".to_owned())?;
+        answer.await.map_err(|_| "没等到回答".to_owned())?
+    }
+
+    /// Asks Max in conversation `to`: the job that waits for the answer,
+    /// or why it wasn't asked.
+    pub async fn ask(&self, to: ConversationId, question: String) -> Result<u32, String> {
+        let (reply, answer) = oneshot::channel();
+        self.mailbox
+            .send(Event::Ask {
+                to,
+                question,
                 origin: self.origin,
                 reply,
             })

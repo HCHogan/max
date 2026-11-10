@@ -111,7 +111,10 @@ impl Conversation {
 }
 
 /// `conversation` as another one names it.
-async fn peer(conn: &mut max_db::PgConnection, conversation: ConversationId) -> Result<Peer> {
+pub(super) async fn peer(
+    conn: &mut max_db::PgConnection,
+    conversation: ConversationId,
+) -> Result<Peer> {
     let peer = links::peer(conn, conversation).await?;
     Ok(peer.unwrap_or(Peer {
         conversation,

@@ -29,7 +29,8 @@ pub fn at(minute: u32) -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 10, 29, 4, minute, 0).unwrap()
 }
 
-/// What actors share: a scripted model, and a sender that only queues.
+/// What actors share: a scripted model, a sender that only queues, and no
+/// table to take what one conversation has for another.
 pub fn shared(
     pool: &PgPool,
     script: &Arc<Script>,
@@ -52,6 +53,7 @@ pub fn shared(
         owners,
         binds: Arc::default(),
         links: Arc::default(),
+        signals: mpsc::unbounded_channel().0,
         rows: Rows::default(),
         pictures: None,
         vms: None,
