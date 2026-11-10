@@ -37,7 +37,8 @@ use max_core::limits::{CALLS_AT_ONCE, Setting};
 /// What a call that didn't finish may still have done. Nothing is retried
 /// or classified by its effects: what acts on the group goes through the
 /// timeline, where the model sees whether it happened.
-const MAYBE_DONE: &str = "会动群的操作可能已经生效，先看记录再决定要不要再来";
+const MAYBE_DONE: &str =
+    "what acts in the chat may have taken effect: look at the records before trying again";
 /// The protocol versions `initialize` agrees to, newest first: a client
 /// gets its own if it is here, else the newest. The runner's client
 /// speaks 2026-07-28, which needs no `initialize`; pi's 2025-11-25.
@@ -266,7 +267,7 @@ enum Answer {
 
 async fn rpc(State(handler): State<Handler>, headers: HeaderMap, body: Bytes) -> Response {
     let Ok(request) = serde_json::from_slice::<Request>(&body) else {
-        let error = Refusal::new(PARSE_ERROR, "不是 JSON-RPC 请求");
+        let error = Refusal::new(PARSE_ERROR, "not a JSON-RPC request");
         let answer = Envelope {
             jsonrpc: "2.0",
             id: Value::Null,
@@ -329,7 +330,10 @@ impl Handler {
                 let session = self.session(authorization)?;
                 let Called { name, arguments } =
                     serde_json::from_value(params).map_err(|error| {
-                        Refusal::new(INVALID_PARAMS, format!("tools/call 的参数不对：{error}"))
+                        Refusal::new(
+                            INVALID_PARAMS,
+                            format!("tools/call's parameters are wrong: {error}"),
+                        )
                     })?;
                 let args = Value::Object(arguments.unwrap_or_default());
                 Ok(Answer::Called(called(
@@ -338,7 +342,7 @@ impl Handler {
             }
             _ => Err(Refusal::new(
                 METHOD_NOT_FOUND,
-                format!("没有 {method} 这个方法"),
+                format!("there is no method {method}"),
             )),
         }
     }
@@ -353,7 +357,9 @@ impl Handler {
         self.sessions
             .bearer(Some(authorization), self.conversation)
             .map(Some)
-            .ok_or_else(|| Refusal::new(INVALID_REQUEST, "token 不对，或者这次运行已经结束了"))
+            .ok_or_else(|| {
+                Refusal::new(INVALID_REQUEST, "the token is wrong, or its run has ended")
+            })
     }
 
     /// Runs `name` in its session, or as a program's call outside any turn
@@ -383,7 +389,10 @@ impl Handler {
     /// actor stops it when this stops waiting.
     async fn program(&self, tool: &str, args: Value) -> Result<Value, Failure> {
         let Some(programs) = &self.sessions.programs else {
-            return Err(Failure::new("unavailable", "这里没有常驻程序的通道"));
+            return Err(Failure::new(
+                "unavailable",
+                "programs kept in the VM can't call from here",
+            ));
         };
         let call = async {
             let _slot = self.programs.acquire().await;
@@ -396,10 +405,10 @@ impl Handler {
             };
             programs
                 .send(call)
-                .map_err(|_| Failure::new("closed", "Max 正在停"))?;
+                .map_err(|_| Failure::new("closed", "Max is stopping"))?;
             result
                 .await
-                .unwrap_or_else(|_| Err(Failure::new("closed", "Max 没做完就停了")))
+                .unwrap_or_else(|_| Err(Failure::new("closed", "Max stopped before it was done")))
         };
         // The actor holds the call to the conversation's own call time;
         // this is for one that never reaches the actor.
@@ -422,7 +431,7 @@ impl Session {
                     let _slot = self.slots.acquire().await;
                     timeout(self.context.call_time, self.dispatch(call, args)).await
                 } => outcome.unwrap_or_else(|_| Err(late(self.context.call_time))),
-                () = self.closed.cancelled() => Err(Failure::new("closed", "这次运行已经结束了")),
+                () = self.closed.cancelled() => Err(Failure::new("closed", "this run has ended")),
             },
         };
         if let Call::Tool(spec) = call {
@@ -447,7 +456,7 @@ impl Session {
 pub(super) fn late(limit: Duration) -> Failure {
     Failure::new(
         "timeout",
-        format!("{} 秒内没做完；{MAYBE_DONE}", limit.as_secs()),
+        format!("not done in {} seconds; {MAYBE_DONE}", limit.as_secs()),
     )
 }
 

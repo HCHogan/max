@@ -27,36 +27,39 @@ pub struct History;
 pub struct Args {
     #[schemars(
         length(min = 1),
-        description = format!("空格隔开的关键词，最多 {MOST_TERMS} 个；给了就是搜")
+        description = format!("keywords separated by spaces, at most {MOST_TERMS}; given, it searches")
     )]
     query: Option<String>,
-    #[schemars(length(min = 1), description = "发言人名字里的几个字")]
+    #[schemars(
+        length(min = 1),
+        description = "a few characters of the speaker's name"
+    )]
     who: Option<String>,
-    #[schemars(description = "YYYY-MM-DD、YYYY-MM-DD HH:MM 或 #编号，从这里起")]
+    #[schemars(description = "YYYY-MM-DD, YYYY-MM-DD HH:MM or #number: from here on")]
     from: Option<String>,
-    #[schemars(description = "YYYY-MM-DD、YYYY-MM-DD HH:MM 或 #编号，到这里为止")]
+    #[schemars(description = "YYYY-MM-DD, YYYY-MM-DD HH:MM or #number: up to here")]
     to: Option<String>,
-    #[schemars(description = "读这条消息前后，#123 就是 123")]
+    #[schemars(description = "read around this message: 123 for #123")]
     around: Option<i64>,
     #[schemars(
         range(min = 0, max = MOST_AROUND),
-        description = format!("around 前面几条，默认 {AROUND}")
+        description = format!("how many before around, {AROUND} by default")
     )]
     before: Option<u8>,
     #[schemars(
         range(min = 0, max = MOST_AROUND),
-        description = format!("around 后面几条，默认 {AROUND}")
+        description = format!("how many after around, {AROUND} by default")
     )]
     after: Option<u8>,
     #[schemars(
         range(min = 1, max = read::MOST),
         description = format!(
-            "搜的默认 {} 条、最多 {}；读的默认 {} 条、最多 {}",
+            "a search's is {} by default and at most {}; a read's is {} by default and at most {}",
             search::DEFAULT, search::MOST, read::DEFAULT, read::MOST
         )
     )]
     limit: Option<usize>,
-    #[schemars(range(min = 1), description = "读的第几页，默认 1")]
+    #[schemars(range(min = 1), description = "which page of a read, 1 by default")]
     page: Option<usize>,
 }
 
@@ -88,7 +91,7 @@ enum Bound {
 
 impl Tool for History {
     const NAME: &'static str = "history";
-    const DESCRIPTION: &'static str = "查本会话的聊天记录（连同图片和表情包的描述）：按内容、发言人、时间筛，或者看某条消息前后。给了 query 返回命中的片段，没给就按时间顺序返回原文。";
+    const DESCRIPTION: &'static str = "Looks through this conversation's chat records, with the descriptions of pictures and stickers: by content, speaker or time, or around one message. With query it returns the passages that match; without, the messages themselves in order of time.";
     const JOB: bool = true;
 
     type Args = Args;
@@ -96,12 +99,12 @@ impl Tool for History {
 
     fn guide() -> String {
         format!(
-            "查本会话的聊天记录，连同图片和表情包的描述。上下文里没有的旧事、谁以前说过什么、哪天聊了什么，先查再答。筛选可以一起用：\n  \
-            who 是发言人名字里的几个字（当时的群名片）；from、to 是 YYYY-MM-DD（整天，都含当天）、YYYY-MM-DD HH:MM 或 #编号（from 含这条，to 不含）。\n  \
-            给了 query 就是搜，返回 results：query 是空格隔开的关键词，最多 {MOST_TERMS} 个，每个词按原文找，不分大小写，中文词写短点（两三个字）；整个 query 也按意思找相近的说法。命中的词多的、意思近的在前，一样的新的在前；limit 默认 {}，最多 {}。text 是命中处附近的一段；read 原样传回来，就是读这条连同前后各 {AROUND} 条。撤回的消息不搜。\n  \
-            没给 query 就是读原文，按时间顺序一行一条，和上下文里一样，太长的只有开头：有 from 从 from 往后读，没有就读最新的（到 to 为止）；limit 默认 {}，最多 {}。还有更多时 next 是接着读的参数，原样传回来：从 from 读的往后接，读最新的往前接。who、from、to 至少给一个。\n  \
-            around 读这条消息连同前后各 before、after 条（默认 {AROUND}，最多 {MOST_AROUND}），不和别的筛选一起用；before、after 都是 0 就只读这一条，太长的也是全文。\n  \
-            读的结果按页给，一页不超过上下文里一条消息的上限，pages 是总页数，page 选第几页。/clear --all 清掉的只是不在上下文里，照样查得到。",
+            "Looks through this conversation's chat records, with the descriptions of pictures and stickers. For things from before the context, who said what, or what was talked about on a day, look before answering. The filters go together:\n  \
+            who is a few characters of the speaker's name (the group card at the time); from and to are YYYY-MM-DD (a whole day, the day itself included both ways), YYYY-MM-DD HH:MM, or #number (from includes that message, to doesn't).\n  \
+            With query it searches, and returns results: query is keywords separated by spaces, at most {MOST_TERMS}, each looked for as written, whatever its case; keep a Chinese keyword short, two or three characters. The whole query is also matched by meaning. Messages with more of the keywords, and nearer in meaning, come first, and of equals the newer; limit is {} by default and at most {}. text is a passage around the match; read, passed back as it is, reads that message with {AROUND} on each side. Recalled messages aren't searched.\n  \
+            Without query it reads the messages themselves, a line each in order of time, as in the context, the long ones only their beginning: with from, forward from there; without, the newest (up to to); limit is {} by default and at most {}. When there is more, next holds the arguments to go on with, passed back as they are: forward from a read with from, backward from a read of the newest. Give at least one of who, from and to.\n  \
+            around reads that message with before and after messages on each side ({AROUND} by default, at most {MOST_AROUND}), and goes with no other filter; with before and after both 0 it reads that one message alone, whole however long.\n  \
+            A read comes in pages, none longer than one message may be in the context: pages is how many there are, and page picks one. What /clear --all cleared is only out of the context, and is found all the same.",
             search::DEFAULT,
             search::MOST,
             read::DEFAULT,
@@ -119,22 +122,22 @@ async fn history(context: &Context, args: Args) -> Result<Found, Failure> {
     let filtered = args.who.is_some() || args.from.is_some() || args.to.is_some();
     if let Some(id) = args.around {
         if filtered || args.query.is_some() || args.limit.is_some() {
-            return wrong("around 不能和 query、who、from、to、limit 一起用");
+            return wrong("around doesn't go with query, who, from, to or limit");
         }
         let page = read::around(context, id, (args.before, args.after), args.page).await?;
         return Ok(Found::Read(page));
     }
     if args.before.is_some() || args.after.is_some() {
-        return wrong("before、after 只能和 around 一起用");
+        return wrong("before and after go only with around");
     }
     let filters = filters(context, &args).await?;
     match &args.query {
-        Some(_) if args.page.is_some() => wrong("搜的结果不分页，page 只用于读"),
+        Some(_) if args.page.is_some() => wrong("a search has no pages: page is for a read"),
         Some(query) => {
             let results = search::found(context, query, &filters, args.limit).await?;
             Ok(Found::Search { results })
         }
-        None if !filtered => wrong("history 要 query、who、from、to、around 里至少一个"),
+        None if !filtered => wrong("history needs at least one of query, who, from, to and around"),
         None => {
             let limit = args.limit.unwrap_or(read::DEFAULT);
             let newest = args.from.is_none();
@@ -182,7 +185,9 @@ fn bound(text: &str, offset: FixedOffset) -> Result<Bound, Failure> {
     let wrong = || {
         Failure::new(
             "bad_arguments",
-            format!("from、to 要写成 YYYY-MM-DD、YYYY-MM-DD HH:MM 或者 #编号，不是 {text:?}"),
+            format!(
+                "from and to are written YYYY-MM-DD, YYYY-MM-DD HH:MM or #number, not {text:?}"
+            ),
         )
     };
     if let Some(id) = text.strip_prefix('#') {

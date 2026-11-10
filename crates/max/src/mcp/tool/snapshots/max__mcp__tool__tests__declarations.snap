@@ -2,71 +2,71 @@
 source: crates/max/src/mcp/tool/tests.rs
 expression: DECLARATIONS.as_str()
 ---
-/** 查本会话的聊天记录，连同图片和表情包的描述。上下文里没有的旧事、谁以前说过什么、哪天聊了什么，先查再答。筛选可以一起用：
-  who 是发言人名字里的几个字（当时的群名片）；from、to 是 YYYY-MM-DD（整天，都含当天）、YYYY-MM-DD HH:MM 或 #编号（from 含这条，to 不含）。
-  给了 query 就是搜，返回 results：query 是空格隔开的关键词，最多 8 个，每个词按原文找，不分大小写，中文词写短点（两三个字）；整个 query 也按意思找相近的说法。命中的词多的、意思近的在前，一样的新的在前；limit 默认 10，最多 30。text 是命中处附近的一段；read 原样传回来，就是读这条连同前后各 10 条。撤回的消息不搜。
-  没给 query 就是读原文，按时间顺序一行一条，和上下文里一样，太长的只有开头：有 from 从 from 往后读，没有就读最新的（到 to 为止）；limit 默认 50，最多 100。还有更多时 next 是接着读的参数，原样传回来：从 from 读的往后接，读最新的往前接。who、from、to 至少给一个。
-  around 读这条消息连同前后各 before、after 条（默认 10，最多 50），不和别的筛选一起用；before、after 都是 0 就只读这一条，太长的也是全文。
-  读的结果按页给，一页不超过上下文里一条消息的上限，pages 是总页数，page 选第几页。/clear --all 清掉的只是不在上下文里，照样查得到。 */
+/** Looks through this conversation's chat records, with the descriptions of pictures and stickers. For things from before the context, who said what, or what was talked about on a day, look before answering. The filters go together:
+  who is a few characters of the speaker's name (the group card at the time); from and to are YYYY-MM-DD (a whole day, the day itself included both ways), YYYY-MM-DD HH:MM, or #number (from includes that message, to doesn't).
+  With query it searches, and returns results: query is keywords separated by spaces, at most 8, each looked for as written, whatever its case; keep a Chinese keyword short, two or three characters. The whole query is also matched by meaning. Messages with more of the keywords, and nearer in meaning, come first, and of equals the newer; limit is 10 by default and at most 30. text is a passage around the match; read, passed back as it is, reads that message with 10 on each side. Recalled messages aren't searched.
+  Without query it reads the messages themselves, a line each in order of time, as in the context, the long ones only their beginning: with from, forward from there; without, the newest (up to to); limit is 50 by default and at most 100. When there is more, next holds the arguments to go on with, passed back as they are: forward from a read with from, backward from a read of the newest. Give at least one of who, from and to.
+  around reads that message with before and after messages on each side (10 by default, at most 50), and goes with no other filter; with before and after both 0 it reads that one message alone, whole however long.
+  A read comes in pages, none longer than one message may be in the context: pages is how many there are, and page picks one. What /clear --all cleared is only out of the context, and is found all the same. */
 history(args: { query?: string; who?: string; from?: string; to?: string; around?: number; before?: number; after?: number; limit?: number; page?: number }): Promise<{ results: { ref: string; time: string; text: string; read: { around: number } }[] } | { text: string; page: number; pages: number; next?: object }>;
 
-/** 搜索网页，返回前几条结果的标题、链接、摘要和发布日期（知道的话）。事实、价格、新闻、剧情这类拿不准或可能过时的，先搜再答，别凭记忆。
-  limit 1 到 10，默认 5。要搜好几样就 Promise.all。要读全文，用 shell 跑 webread <url>。 */
+/** Searches the web: the first results' titles, links, summaries and publication dates, where known. For facts, prices, news, plots and whatever else you aren't sure of or may be out of date, search before answering, and don't go by memory.
+  limit is 1 to 10, 5 by default. For several searches use Promise.all. To read a page in full, run webread <url> with shell. */
 web_search(args: { query: string; limit?: number }): Promise<{ results: { title: string; url: string; snippet: string; published?: string }[] }>;
 
-/** 把 /work 下的一张图发到本群：画的图表、截的图、下载的图片。PNG、JPEG、GIF、WebP，最大 10 MiB；路径上不能有符号链接。
-  caption 是图下面的一句说明，和图在同一条消息里。发出去了才返回，handle 是这条消息里那张图的句柄。
-  记录里已有的图和表情包不用这个，直接在回复里写它的句柄。 */
+/** Sends a picture under /work to this chat: a chart you drew, a screenshot, a downloaded picture. PNG, JPEG, GIF or WebP, at most 10 MiB; no symlink on the path.
+  caption is a line under the picture, in the same message. It returns once the picture is sent, and handle is the handle of that picture in its message.
+  A picture or sticker the records already have needs none of this: write its handle in your reply. */
 send_image(args: { path: string; caption?: string }): Promise<{ handle: string }>;
 
-/** 把 /work 下的一个文件发到本群，群里显示成文件，点开能下载：文档、表格、PDF、压缩包、代码都行。最大 200 MiB，不能是空的；路径上不能有符号链接。
-  name 是群里显示的文件名，默认用路径里的。文件存好、排上队就返回，handle 是这个文件的句柄；上传在后面接着做，大文件要一两分钟才到群里，你之后说的话排在它后面。没发出去的话，记录里这条标着（没发出去）。
-  要大家直接看到的图用 send_image，别当文件发。记录里已有的文件要再发，先 max.file 拷到 /work 再发。 */
+/** Sends a file under /work to this chat, where it shows as a file that opens to download: documents, spreadsheets, PDFs, archives, code. At most 200 MiB, and not empty; no symlink on the path.
+  name is the file name shown in the chat, the path's by default. It returns once the file is stored and queued, and handle is the file's handle; the upload goes on after that, a big file takes a minute or two to reach the chat, and what you say afterwards waits behind it. If it doesn't go out, its row in the records is marked （没发出去）.
+  A picture for everyone to see goes with send_image, not as a file. To send again a file the records already have, copy it to /work with max.file first. */
 send_file(args: { path: string; name?: string }): Promise<{ handle: string }>;
 
-/** 撤回本群的一条消息，id 是行首 #编号 里的数字。撤不撤由你判断：刷屏、广告、违规内容，或者有人请你撤、理由正当时再用，撤完简短说一声。
-  QQ 只让撤发出 2 分钟内的：你自己说的（一段是一条，一次回复分成几段的要一段一段撤）；你是群管理员时还有普通成员的，群主和管理员的撤不了。私聊里只能撤你自己的。
-  QQ 撤了才返回；撤不了会抛错，说明原因。记录里会多一行你的 [unsend#id]，QQ 没撤的标着（没发出去）。 */
+/** Recalls a message of this chat; id is the number in the #number at the start of its line. Whether to is yours to judge: for flooding, ads or what breaks the rules, or when someone asks and the reason is sound; say so briefly afterwards.
+  QQ lets only messages sent within 2 minutes be recalled: what you said yourself (a segment is a message, so a reply sent in several is recalled one at a time), and, when you are an admin of the group, an ordinary member's; the owner's and the admins' can't be. In a private chat only your own.
+  It returns once QQ has recalled it; if QQ doesn't, the call fails and says why. The records gain a row of yours, [unsend#id], marked （没发出去） if QQ didn't recall it. */
 recall_message(args: { id: number }): Promise<{ recalled: number }>;
 
-/** 在本群禁言一个人，或者解除。member 是 [mention#编号] 里的数字；seconds 是从现在起禁多少秒，0 是解除，最多 2592000（30 天）。禁不禁、禁多久由你判断：刷屏、广告、骂人，或者有人请你禁、理由正当时再用，禁完或解完在群里简短说一声。
-  QQ 只让群管理员禁言普通成员：群主、管理员、你自己都禁不了，私聊里没有禁言；没在本群说过话的人也禁不了。对禁着的人再禁，是把结束时间改成从现在起 seconds 秒。
-  QQ 办了才返回，until 是禁到几点，解除时是 null；办不了会抛错，说明原因。记录里不会多一行。 */
+/** Mutes someone in this group, or lifts a mute. member is the number in [mention#number]; seconds is how long from now, 0 lifts it, at most 2592000 (30 days). Whether to mute, and for how long, is yours to judge: for flooding, ads or abuse, or when someone asks and the reason is sound; say so briefly in the chat afterwards.
+  QQ lets only a group's admins mute, and only ordinary members: the owner, the admins and yourself can't be muted, there is no muting in a private chat, and nobody who hasn't spoken in this group can be muted. Muting someone already muted moves the end to seconds from now.
+  It returns once QQ has done it: until is when the mute ends, null when lifted; if QQ doesn't, the call fails and says why. No row is added to the records. */
 mute_member(args: { member: number; seconds: number }): Promise<{ member: number; until: string | null }>;
 
-/** 在表情包库里按意思找表情包：库里是各个群里见过的表情包，按描述和 query 的意思远近排，近的在前。
-  只找不发：挑一个合适的，把 handle 照抄进回复，写成 [sticker#…]，就发出去了；都不合适就不发。limit 1 到 10，默认 5。 */
+/** Finds stickers in the library by meaning: the library holds the stickers seen in every chat, ranked by how near each description is to what query means, nearest first.
+  It finds and doesn't send: pick one that fits and copy its handle into your reply as [sticker#…], and it goes out; if none fits, send none. limit is 1 to 10, 5 by default. */
 find_stickers(args: { query: string; limit?: number }): Promise<{ stickers: { handle: string; description: string }[] }>;
 
-/** 起一个后台 agent，去做一件要花时间的事：查一堆资料、读很多网页或文件、写代码跑实验。它在本群的 VM 里跑，和你共用 /work，自己有 shell、读写文件、history、web_search；不能在群里说话，也不能发图发文件、撤回、禁言。
-  它看不到群里的对话，只看得到 task，所以背景、要做什么、做到什么程度、报告要写什么都写进去。title 是一句话的标题，agent_status 里显示。
-  workdir 是启动目录，默认 /work；绝对路径或 /work 下的相对路径，没有就建。做项目的活就填项目路径：它会读项目的 AGENTS.md（或 CLAUDE.md），还有后台 agent 给这个目录记的笔记（在 /work/.max/projects/ 下），做完更新笔记。
-  马上返回 { job: "job#3" }，你接着聊。它卡在只有你或群友才知道的事上会问你：问题作为 [job#3 问] 出现，它在等，用 agent_steer 回答。它做完了，报告作为 [job#3 完成] 出现在你的新消息里，全文另存在 /work/.max/jobs/ 下，由你决定在群里怎么说。同时最多 3 个，每个最多 2 小时，到点停下、交出做到一半的结果。 */
+/** Starts a background agent on something that takes time: looking up a pile of sources, reading many pages or files, writing code and running experiments. It runs in this chat's VM and shares /work with you; it has its own shell, file reading and writing, history and web_search; it can't speak in the chat, nor send pictures or files, recall or mute.
+  It doesn't see the conversation, only task: so put in the background, what to do, how far to take it, and what the report should say. title is a one-line title, shown by agent_status.
+  workdir is the directory it starts in, /work by default: an absolute path, or one relative to /work; made if it isn't there. For work on a project give the project's path: it reads the project's AGENTS.md (or CLAUDE.md) and the notes background agents keep for that directory (under /work/.max/projects/), and updates the notes when done.
+  Returns { job: "job#3" } at once, and you go on talking. Stuck on something only you or the people here know, it asks you: the question appears as [job#3 问], it waits, and you answer with agent_steer. When it is done, its report appears among your new messages as [job#3 完成], the whole of it saved under /work/.max/jobs/, and what to say of it in the chat is yours to decide. At most 3 at once, each for at most 2 hours; at its time it stops and hands over what it has. */
 agent(args: { task: string; title?: string; workdir?: string }): Promise<{ job: string }>;
 
-/** 给还在跑的后台 agent 补一句话：改方向、补充信息、转达群友的回答。它跑完手上这步工具、下一次想之前看到。job 是 "job#3" 或 3。
-  它问了你（[job#3 问]）还没得到答复时，下一句就是答复，它马上收到。你答不了就去群里问，问到了再转给它；10 分钟内没答复，它就自己判断着做下去，之后再说的照常当补充。 */
+/** Tells a running background agent something more: a change of direction, more information, what someone here answered. It sees it after the tool call it is on, before it next thinks. job is "job#3" or 3.
+  While it waits on a question it asked you ([job#3 问]), your next message is the answer, and it gets it at once. If you can't answer, ask in the chat and pass on what you hear; with no answer in 10 minutes it goes on by its own judgement, and what you say later is taken as more information. */
 agent_steer(args: { job: string | number; message: string }): Promise<{ job: string }>;
 
-/** 停掉一个后台 agent 或者 shell 的后台命令，不要它的结果了；它在 /work 里留下的东西还在。也用来撤回一个还在等答复的 ask：那边之后再答就答不上了。 */
+/** Stops a background agent, or a background command of shell's, whose result isn't wanted any more; what it left in /work stays. Also withdraws an ask still waiting for its answer: an answer given there afterwards finds nobody. */
 agent_cancel(args: { job: string | number }): Promise<{ job: string }>;
 
-/** 看还在跑的后台 agent 和后台命令：标题、跑了几分钟、调了几次模型（calls）和工具（tools）、最近用的工具；后台命令的标题是 $ 加命令，次数都是 0；问别的会话、还在等答复的 ask 也在里面，标题是 ? 加会话和问题，次数也是 0。job 不填就是全部；做完的、停掉的不在里面。 */
+/** Shows the background agents and commands that run: title, minutes run, model calls (calls) and tool calls (tools) made, and the tool last used. A background command's title is $ and the command, with both counts 0; an ask still waiting for another conversation's answer is there too, its title ? with the conversation and the question, counts 0 as well. Without job, all of them; those done or stopped aren't listed. */
 agent_status(args: { job?: string | number }): Promise<{ jobs: { job: string; title: string; minutes: number; calls: number; tools: number; tool: string | null }[] }>;
 
-/** 问另一个会话（别的群或私聊）里的 Max 一个问题。只能问 [能问的会话] 里列着的，to 填它的编号，c#9 就填 9；上下文里没有这一块，就是这里谁也问不了。
-  那边的 Max 用它自己的记录、记忆和工具，按它那边的规矩回答，答不答、答多少由它定。它看不到这边的对话，你也看不到它那边的，所以 question 要把背景和要问的事写全，最多 2000 字；这边的 [mention#…]、消息编号、图片句柄到那边没有意义，用名字和文字说。
-  问题和回答都不会发到任何一边的聊天里，只有两边的 Max 看得到：这边的人不知道你去问了，要不要说、怎么转述由你定。
-  马上返回 { job: "job#3" }，你接着聊。那边答了，回答作为 [job#3 回答] 出现在你的新消息里，带着你问的原话；没答成是 [job#3 没答成] 加原因。它可能要先问它那边的人，最多等 2 小时。等着的问题在 agent_status 里，标题以 ? 开头；不想等了用 agent_cancel 撤回。 */
+/** Asks Max in another conversation (another group, or a private chat) a question. Only those listed under [能问的会话] can be asked; to is the number, 9 for c#9. With no such block in the context, nobody can be asked from here.
+  Max there answers by its own rules, with its own records, memory and tools; whether to answer and how much is its to decide. It doesn't see this conversation, nor you its, so question has to carry the background and what is asked in full, in at most 2000 characters; a [mention#…], a message number or a picture's handle from here means nothing there: say it with names and words.
+  Neither the question nor the answer is sent to either chat; only the two Maxes see them. The people here don't know you asked: whether to say so, and how to pass the answer on, is yours to decide.
+  Returns { job: "job#3" } at once, and you go on talking. When it answers, the answer appears among your new messages as [job#3 回答], with what you asked; if no answer comes, as [job#3 没答成] and why. It may ask its own people first, and is waited for at most 2 hours. A question that waits shows in agent_status, its title starting with ?; to stop waiting, withdraw it with agent_cancel. */
 ask(args: { to: number; question: string }): Promise<{ job: string }>;
 
-/** 回答别的会话的 Max 问你的问题。它问你时，你的新消息里会有 [ask#5 问] c#7 名字 加问题；to 是那个编号，ask#5 就填 5，text 是回答，最多 2000 字。
-  问你的是那个会话的 Max，不是这边的人：它看不到这边的对话，只看得到你的 text。能说什么、说多少，按这边的规矩和记忆自己判断；要先问问这边的人也行，问到了再答，它最多等 2 小时。不想答可以不答，也可以回一句不方便说。
-  问题和你的回答都不会发到这边的聊天里，这边的人不知道有人来问过，要不要说由你定。这一轮结束时还没答的，下一轮列在 [等你回答的问题] 里。一个问题只能答一次；对方不等了（撤回了、等到点了、Max 重启过）就报错。返回 { to: "c#7 名字" }。 */
+/** Answers a question that Max in another conversation asked you. When it asks, your new messages have [ask#5 问] c#7 <name> and the question; to is that number, 5 for ask#5, and text is the answer, at most 2000 characters.
+  It is that conversation's Max who asks, not anyone here: it doesn't see this conversation, only your text. What may be said, and how much, is yours to judge by the rules and memory of this conversation; you may ask the people here first and answer once you know, and it waits at most 2 hours. You may leave it unanswered, or answer that you'd rather not say.
+  Neither the question nor your answer is sent to this chat, so the people here don't know anyone asked: whether to tell them is yours to decide. A question still unanswered when this turn ends is listed under [等你回答的问题] in the next. A question is answered once; if nobody waits any more (withdrawn, out of time, or Max has restarted), the call fails. Returns { to: "c#7 <name>" }. */
 answer(args: { to: number; text: string }): Promise<{ to: string }>;
 
-/** 看或改本群的几项设置。不给参数就只看；给了就改，0 是恢复默认。返回每项现在的值和默认值。改不改由你判断：有人请你改、理由说得通，或者你确实需要时再改，改完简短说一声。群管理员也能用 /config 改，谁后改算谁的。
-  idle_window_secs：你说完话后空闲多少秒结束这一轮（60–7200）。窗口里再被叫，你还拿着这一轮查到的东西；结束后再被叫是新的一轮，从记录重新读起。默认跟着模型走。马上生效，这一轮也算。
-  call_time_secs：程序和命令里每次调 Max 的工具（包括 max.video、max.file）最多等多少秒（10–600）。转长视频、拷大文件超时了就调大。从下一次 run_code、shell 起生效。
-  commands_at_once：最多同时跑几个后台命令（1–16）。马上生效。 */
+/** Shows or sets a few of this chat's settings. Without arguments it only shows; one given is set, and 0 puts it back to the default. Returns each one's value now and its default. Whether to change one is yours to judge: when someone asks and the reason holds, or when you do need it; say so briefly afterwards. A group's admins can set them too, with /config, and the last to set one wins.
+  idle_window_secs: how many seconds after you last spoke an idle turn ends (60–7200). Called again within the window, you still have what this turn found; called after it, a new turn starts and reads from the records again. The default follows the model. In force at once, for this turn too.
+  call_time_secs: how many seconds a program or a command waits at most for each call of a Max tool, max.video and max.file among them (10–600). Raise it when converting a long video or copying a big file runs out of time. In force from the next run_code or shell.
+  commands_at_once: how many background commands run at once at most (1–16). In force at once. */
 config(args: { idle_window_secs?: number; call_time_secs?: number; commands_at_once?: number }): Promise<{ idle_window_secs: { value: number; default: number }; call_time_secs: { value: number; default: number }; commands_at_once: { value: number; default: number } }>;

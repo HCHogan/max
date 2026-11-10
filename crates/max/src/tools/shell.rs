@@ -45,7 +45,11 @@ pub(super) async fn shell(
     let (mut shown, error) = match ran {
         Ran::Exited(status) => (with(exited(status), &shown), false),
         Ran::OutOfTime(stopped) => {
-            let head = format!("{} 秒内没跑完，{}", limit.as_secs(), stopping(&stopped));
+            let head = format!(
+                "not done in {} seconds; {}",
+                limit.as_secs(),
+                stopping(&stopped)
+            );
             (with(head, &shown), true)
         }
     };
@@ -157,15 +161,15 @@ async fn due(mut waiting: Waiting, begun: Instant) {
 fn moved_away(job: u32, ran: Duration, left: Duration, file: &str, shown: &str) -> String {
     let job = job::name(job);
     let mut text = format!(
-        "有人在等你回话：这条命令跑了 {} 秒还没完，转到后台接着跑了，是 {job}，还剩 {} 秒。{}",
+        "Someone is waiting for you to answer: this command had run {} seconds and wasn't done, so it moved to the background as {job}, with {} seconds left. {}",
         ran.as_secs(),
         left.as_secs(),
         follow(&job, file),
     );
     if shown.is_empty() {
-        text.push_str("到现在还没有输出。");
+        text.push_str(" No output so far.");
     } else {
-        text.push_str("到现在的输出：\n");
+        text.push_str(" Its output so far:\n");
         text.push_str(shown);
     }
     text
@@ -255,14 +259,24 @@ mod tests {
         let text = moved_away(4, ran, left, file, "编译中\n");
         assert!(
             text.starts_with(
-                "有人在等你回话：这条命令跑了 15 秒还没完，转到后台接着跑了，是 job#4，还剩 105 秒。\
-                 跑完了，退出码和输出作为 [job#4 完成] 回到你这里"
+                "Someone is waiting for you to answer: this command had run 15 seconds and wasn't \
+                 done, so it moved to the background as job#4, with 105 seconds left. When it ends, \
+                 its exit status and output come back to you as [job#4 完成]"
             ),
             "{text}"
         );
-        assert!(text.contains("写进 /work/.max/out/max-1.txt，"), "{text}");
-        assert!(text.ends_with("停掉。到现在的输出：\n编译中\n"), "{text}");
+        assert!(
+            text.contains("written to /work/.max/out/max-1.txt as it runs"),
+            "{text}"
+        );
+        assert!(
+            text.ends_with("agent_cancel. Its output so far:\n编译中\n"),
+            "{text}"
+        );
         let quiet = moved_away(4, ran, left, file, "");
-        assert!(quiet.ends_with("停掉。到现在还没有输出。"), "{quiet}");
+        assert!(
+            quiet.ends_with("agent_cancel. No output so far."),
+            "{quiet}"
+        );
     }
 }

@@ -17,7 +17,7 @@ pub struct WebSearch;
 pub struct Args {
     #[schemars(length(min = 1))]
     query: String,
-    #[schemars(range(min = 1, max = MOST), description = format!("几条，默认 {DEFAULT}"))]
+    #[schemars(range(min = 1, max = MOST), description = format!("how many, {DEFAULT} by default"))]
     limit: Option<u8>,
 }
 
@@ -28,7 +28,8 @@ pub struct Results {
 
 impl Tool for WebSearch {
     const NAME: &'static str = "web_search";
-    const DESCRIPTION: &'static str = "搜索网页，返回前几条结果的标题、链接、摘要和发布日期。";
+    const DESCRIPTION: &'static str =
+        "Searches the web: the first results' titles, links, summaries and publication dates.";
     const JOB: bool = true;
 
     type Args = Args;
@@ -38,18 +39,21 @@ impl Tool for WebSearch {
     // answered from memory instead, and got plots and prices wrong.
     fn guide() -> String {
         format!(
-            "搜索网页，返回前几条结果的标题、链接、摘要和发布日期（知道的话）。事实、价格、新闻、剧情这类拿不准或可能过时的，先搜再答，别凭记忆。\n  \
-            limit 1 到 {MOST}，默认 {DEFAULT}。要搜好几样就 Promise.all。要读全文，用 shell 跑 webread <url>。"
+            "Searches the web: the first results' titles, links, summaries and publication dates, where known. For facts, prices, news, plots and whatever else you aren't sure of or may be out of date, search before answering, and don't go by memory.\n  \
+            limit is 1 to {MOST}, {DEFAULT} by default. For several searches use Promise.all. To read a page in full, run webread <url> with shell."
         )
     }
 
     async fn run(context: &Context, Args { query, limit }: Args) -> Result<Results, Failure> {
         let Some(search) = &context.services.search else {
-            return Err(Failure::new("unavailable", "这里没有配网页搜索。"));
+            return Err(Failure::new(
+                "unavailable",
+                "web search isn't configured here",
+            ));
         };
         let query = query.trim();
         if query.is_empty() {
-            return Err(Failure::new("bad_arguments", "web_search 的 query 是空的"));
+            return Err(Failure::new("bad_arguments", "web_search: query is empty"));
         }
         match search.search(query, limit.unwrap_or(DEFAULT)).await {
             Ok(results) => Ok(Results { results }),

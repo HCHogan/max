@@ -22,10 +22,10 @@ pub struct FindStickers;
 pub struct Args {
     #[schemars(
         length(min = 1),
-        description = "想表达什么，比如“无语”“幸灾乐祸”“翻白眼的猫”"
+        description = "what to express, such as “无语”, “幸灾乐祸” or “翻白眼的猫”"
     )]
     query: String,
-    #[schemars(range(min = 1, max = MOST), description = format!("几条，默认 {DEFAULT}"))]
+    #[schemars(range(min = 1, max = MOST), description = format!("how many, {DEFAULT} by default"))]
     limit: Option<u8>,
 }
 
@@ -42,7 +42,7 @@ pub struct Sticker {
 
 impl Tool for FindStickers {
     const NAME: &'static str = "find_stickers";
-    const DESCRIPTION: &'static str = "在表情包库里按意思找表情包，返回句柄和描述，只找不发。";
+    const DESCRIPTION: &'static str = "Finds stickers in the library by meaning: their handles and descriptions. It finds, and doesn't send.";
     const JOB: bool = false;
 
     type Args = Args;
@@ -50,26 +50,32 @@ impl Tool for FindStickers {
 
     fn guide() -> String {
         format!(
-            "在表情包库里按意思找表情包：库里是各个群里见过的表情包，按描述和 query 的意思远近排，近的在前。\n  \
-            只找不发：挑一个合适的，把 handle 照抄进回复，写成 [sticker#…]，就发出去了；都不合适就不发。limit 1 到 {MOST}，默认 {DEFAULT}。"
+            "Finds stickers in the library by meaning: the library holds the stickers seen in every chat, ranked by how near each description is to what query means, nearest first.\n  \
+            It finds and doesn't send: pick one that fits and copy its handle into your reply as [sticker#…], and it goes out; if none fits, send none. limit is 1 to {MOST}, {DEFAULT} by default."
         )
     }
 
     async fn run(context: &Context, Args { query, limit }: Args) -> Result<Found, Failure> {
         let Some(embedder) = &context.services.embedder else {
-            return Err(Failure::new("unavailable", "这里没有表情包库。"));
+            return Err(Failure::new(
+                "unavailable",
+                "there is no sticker library here",
+            ));
         };
         let query = query.trim();
         if query.is_empty() {
             return Err(Failure::new(
                 "bad_arguments",
-                "find_stickers 的 query 是空的",
+                "find_stickers: query is empty",
             ));
         }
         let limit = limit.unwrap_or(DEFAULT);
         let vector = embedder.one(query).await.map_err(|error| {
             warn!(%error, "find_stickers couldn't embed its query");
-            Failure::new("unavailable", "表情包库暂时用不了，稍后再试。")
+            Failure::new(
+                "unavailable",
+                "the sticker library can't be used right now; try again later",
+            )
         })?;
         let mut conn = context.services.pool.acquire().await?;
         let found = embeddings::nearest(&mut conn, &embedder.model, &vector, limit).await?;

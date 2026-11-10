@@ -79,13 +79,15 @@ impl Apis {
         for (name, api) in configured {
             let loaded = Api::load(api).wrap_err_with(|| format!("in api.{name}"))?;
             table.insert(name.clone(), loaded);
-            let mut line = format!("- {name}（{}）：{}", api.base_url, api.about.trim());
+            let mut line = format!("- {name} ({}): {}", api.base_url, api.about.trim());
             if let Some(allow) = &api.allow {
                 let allow: Vec<String> = allow.iter().map(Rule::to_string).collect();
-                line.push_str(&format!("只许 {}。", allow.join("、")));
+                line.push_str(&format!(" Only {} allowed.", allow.join(", ")));
             }
             if let Some(per_hour) = api.per_hour {
-                line.push_str(&format!("所有群加起来一小时最多 {per_hour} 次。"));
+                line.push_str(&format!(
+                    " At most {per_hour} calls an hour, all chats together."
+                ));
             }
             lines.push(line);
         }
@@ -235,20 +237,23 @@ async fn call(
     let Some(api) = forward.apis.table.get(name) else {
         let names: Vec<&str> = forward.apis.table.keys().map(String::as_str).collect();
         let message = if names.is_empty() {
-            "宿主没配带 key 的 API".to_owned()
+            "the host has no keyed APIs configured".to_owned()
         } else {
-            format!("没有叫 {name} 的 API，有：{}", names.join("、"))
+            format!(
+                "there is no API named {name}; there are: {}",
+                names.join(", ")
+            )
         };
         return refuse(StatusCode::NOT_FOUND, &message);
     };
     let Some((url, below)) = api.url(path, uri.query()) else {
-        return refuse(StatusCode::BAD_REQUEST, &format!("{name} 下面没有这个路径"));
+        return refuse(StatusCode::BAD_REQUEST, &format!("{name} has no such path"));
     };
     if !api.allows(&method, &below) {
         info!(%conversation, api = name, %method, path = %below, "refused an API call");
         return refuse(
             StatusCode::FORBIDDEN,
-            &format!("{name} 不许 {method} {below}"),
+            &format!("{name} doesn't allow {method} {below}"),
         );
     }
     if !api.take(Instant::now()) {
@@ -256,7 +261,7 @@ async fn call(
         let per_hour = api.per_hour.unwrap_or_default();
         return refuse(
             StatusCode::TOO_MANY_REQUESTS,
-            &format!("{name} 这一小时的 {per_hour} 次用完了"),
+            &format!("{name}'s {per_hour} calls for this hour are used up"),
         );
     }
     let mut sent = headers;
@@ -276,10 +281,13 @@ async fn call(
         Ok(Err(error)) => {
             let error = error.without_url();
             info!(%conversation, api = name, %method, path = %below, %error, "an API call failed");
-            return refuse(StatusCode::BAD_GATEWAY, &format!("{name} 连不上：{error}"));
+            return refuse(
+                StatusCode::BAD_GATEWAY,
+                &format!("can't reach {name}: {error}"),
+            );
         }
         Err(_) => {
-            let quiet = format!("{name} {} 秒没回话", IDLE.as_secs());
+            let quiet = format!("{name} said nothing for {} seconds", IDLE.as_secs());
             return refuse(StatusCode::GATEWAY_TIMEOUT, &quiet);
         }
     };
@@ -293,7 +301,12 @@ async fn call(
     }
     response
         .body(Body::from_stream(chunks(answer, IDLE)))
-        .unwrap_or_else(|_| refuse(StatusCode::BAD_GATEWAY, &format!("{name} 的回答转不了")))
+        .unwrap_or_else(|_| {
+            refuse(
+                StatusCode::BAD_GATEWAY,
+                &format!("{name}'s answer couldn't be passed on"),
+            )
+        })
 }
 
 #[cfg(test)]

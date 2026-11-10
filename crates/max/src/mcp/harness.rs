@@ -63,7 +63,7 @@ fn beating(conversation: ConversationId, sessions: Sessions, heartbeat: Duration
         })
 }
 
-const OVER: &str = "这个 job 已经结束了";
+const OVER: &str = "this job has ended";
 
 /// Why a call isn't a job's: the status, and the message.
 type Refused = (StatusCode, &'static str);
@@ -76,11 +76,14 @@ fn job(harness: &Harness, headers: &HeaderMap) -> Result<(Arc<Session>, Arc<Link
     let Some(session) = harness.sessions.bearer(authorization, harness.conversation) else {
         return Err((
             StatusCode::UNAUTHORIZED,
-            "token 不对，或者这个 job 已经结束了",
+            "the token is wrong, or its job has ended",
         ));
     };
     let Caller::Job(link) = &session.context.caller else {
-        return Err((StatusCode::FORBIDDEN, "只有后台 agent 能用 /job"));
+        return Err((
+            StatusCode::FORBIDDEN,
+            "only a background agent may use /job",
+        ));
     };
     let link = Arc::clone(link);
     Ok((session, link))
@@ -132,7 +135,7 @@ async fn ask(State(harness): State<Harness>, headers: HeaderMap, body: Bytes) ->
         Err((status, why)) => return refuse(status, why),
     };
     let Ok(Asked { question }) = serde_json::from_slice(&body) else {
-        return refuse(StatusCode::BAD_REQUEST, r#"要 {"question": "问题"}"#);
+        return refuse(StatusCode::BAD_REQUEST, r#"expected {"question": "…"}"#);
     };
     let (answer, answered) = oneshot::channel();
     let asked = Question {
@@ -162,7 +165,7 @@ async fn report(State(harness): State<Harness>, headers: HeaderMap, body: Bytes)
     let Ok(report) = serde_json::from_slice::<Report>(&body) else {
         return refuse(
             StatusCode::BAD_REQUEST,
-            r#"要 {"text": "最后的文字", "error": null}"#,
+            r#"expected {"text": "the last text", "error": null}"#,
         );
     };
     if link.hooks.send(Hook::Report(report)).is_err() {
@@ -189,7 +192,12 @@ fn streamed(lines: impl Stream<Item = io::Result<Bytes>> + Send + 'static) -> Re
     Response::builder()
         .header(header::CONTENT_TYPE, "application/x-ndjson")
         .body(Body::from_stream(lines))
-        .unwrap_or_else(|_| refuse(StatusCode::INTERNAL_SERVER_ERROR, "回答做不出来"))
+        .unwrap_or_else(|_| {
+            refuse(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "the answer couldn't be made",
+            )
+        })
 }
 
 fn answer(status: StatusCode, body: &Value) -> Response {

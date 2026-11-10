@@ -34,23 +34,28 @@ pub static TOOLS: LazyLock<[ToolSpec; 2]> = LazyLock::new(|| {
         ToolSpec {
             name: "run_code",
             description: format!(
-                "在本群的 VM 里用 Node 运行一段 JavaScript。code 是 async 函数体，return 的值就是结果，\
-                console 输出另外带回。程序里用 tools.<名字>(args) 调 Max 的工具，见系统提示里的声明。\
-                默认限时 {run} 秒，timeout_ms 最多 {run_max}。结果和输出各自超过 {shown} KiB 只返回头尾，全文存在 /work/.max/out/ 下。"
+                "Runs JavaScript with Node in this chat's VM. code is the body of an async function: \
+                what it returns is the result, and console output comes back beside it. The program calls \
+                Max's tools as tools.<name>(args); see their declarations in the system prompt. \
+                {run} seconds by default, timeout_ms at most {run_max}. A result or an output over \
+                {shown} KiB comes back as its head and tail, the whole of it stored under /work/.max/out/."
             ),
-            parameters: r#"{"type":"object","properties":{"code":{"type":"string","description":"async 函数体"},"args":{"description":"程序里读到的 args"},"timeout_ms":{"type":"integer","minimum":1}},"required":["code"]}"#,
+            parameters: r#"{"type":"object","properties":{"code":{"type":"string","description":"the body of an async function"},"args":{"description":"what the program reads as args"},"timeout_ms":{"type":"integer","minimum":1}},"required":["code"]}"#,
         },
         ToolSpec {
             name: "shell",
             description: format!(
-                "在本群的 VM 里用 bash -lc 运行一条命令，返回退出码和合并的输出。\
-                默认限时 {run} 秒，timeout_ms 最多 {run_max}。输出超过 {shown} KiB 只返回头尾各 {half} KiB，\
-                全文存在结果里给出的 /work/.max/out/ 下的文件里。命令没有输入，别跑交互式程序。\
-                background 为 true 时命令在后台跑，马上返回一个 job 编号；默认限时 {background} 分钟，timeout_ms 最多 {background_max}；\
-                跑完了，退出码和输出作为 [job#N 完成] 回到你这里。\
-                前台命令跑着的时候有人找你，跑过 {move_after} 秒的会转到后台接着跑，限时不变，结果里给 job 编号。"
+                "Runs a command with bash -lc in this chat's VM: its exit status and its output, stdout and \
+                stderr together. {run} seconds by default, timeout_ms at most {run_max}. An output over \
+                {shown} KiB comes back as {half} KiB of its head and as much of its tail, the whole of it in \
+                the file under /work/.max/out/ that the result names. The command gets no input: run nothing \
+                interactive. With background true it runs in the background and a job number comes back at \
+                once; {background} minutes by default, timeout_ms at most {background_max}; when it ends, its \
+                exit status and output come back to you as [job#N 完成]. If someone addresses you while a \
+                foreground command runs, one that has run {move_after} seconds moves to the background and \
+                runs on with the same time limit, and the result names its job."
             ),
-            parameters: r#"{"type":"object","properties":{"command":{"type":"string"},"workdir":{"type":"string","description":"默认 /work"},"timeout_ms":{"type":"integer","minimum":1},"background":{"type":"boolean","description":"在后台跑，跑完再告诉你；默认 false"}},"required":["command"]}"#,
+            parameters: r#"{"type":"object","properties":{"command":{"type":"string"},"workdir":{"type":"string","description":"/work by default"},"timeout_ms":{"type":"integer","minimum":1},"background":{"type":"boolean","description":"run in the background and tell you when it ends; false by default"}},"required":["command"]}"#,
         },
     ]
 });
@@ -97,7 +102,7 @@ struct ShellArgs {
 /// The call, or what to tell the model about its mistake. A malformed call
 /// gets that as its result and is never run.
 pub fn parse(call: &ToolCall) -> Result<Call, String> {
-    let malformed = |e: serde_json::Error| format!("{} 的参数不对：{e}", call.name);
+    let malformed = |e: serde_json::Error| format!("{}'s arguments are wrong: {e}", call.name);
     let tool = match call.name.as_str() {
         "run_code" => {
             let RunCodeArgs {
@@ -106,7 +111,7 @@ pub fn parse(call: &ToolCall) -> Result<Call, String> {
                 timeout_ms,
             } = serde_json::from_str(&call.arguments).map_err(malformed)?;
             if code.trim().is_empty() {
-                return Err("run_code 的 code 是空的".to_owned());
+                return Err("run_code: code is empty".to_owned());
             }
             Tool::RunCode {
                 code,
@@ -122,7 +127,7 @@ pub fn parse(call: &ToolCall) -> Result<Call, String> {
                 background,
             } = serde_json::from_str(&call.arguments).map_err(malformed)?;
             if command.trim().is_empty() {
-                return Err("shell 的 command 是空的".to_owned());
+                return Err("shell: command is empty".to_owned());
             }
             Tool::Shell {
                 command,
@@ -131,7 +136,11 @@ pub fn parse(call: &ToolCall) -> Result<Call, String> {
                 background,
             }
         }
-        other => return Err(format!("没有 {other} 这个工具，只有 run_code 和 shell")),
+        other => {
+            return Err(format!(
+                "there is no tool named {other}: only run_code and shell"
+            ));
+        }
     };
     Ok(Call {
         id: call.id.clone(),

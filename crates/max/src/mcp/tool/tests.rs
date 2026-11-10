@@ -145,27 +145,27 @@ fn arguments_keep_to_their_bounds() {
         bounded(json!({ "name": "猫猫猫", "limit": 10, "at": 0 })),
         Ok(())
     );
-    assert_eq!(bounded(json!({ "name": "" })).unwrap_err(), "name 是空的");
+    assert_eq!(bounded(json!({ "name": "" })).unwrap_err(), "name is empty");
     assert_eq!(
         bounded(json!({ "name": "猫猫猫猫" })).unwrap_err(),
-        "name 最多 3 个字"
+        "name is at most 3 characters"
     );
     assert_eq!(
         bounded(json!({ "name": "猫", "limit": 11 })).unwrap_err(),
-        "limit 要在 1 到 10 之间"
+        "limit is from 1 to 10"
     );
     assert_eq!(
         bounded(json!({ "name": "猫", "at": -1 })).unwrap_err(),
-        "at 不能小于 0"
+        "at is at least 0"
     );
     assert_eq!(
         bounded(json!({ "name": "猫", "items": [{ "n": 5 }, { "n": 6 }] })).unwrap_err(),
-        "items[1].n 不能大于 5"
+        "items[1].n is at most 5"
     );
     // The variant that is the value's type; serde finds the wrong types.
     assert_eq!(
         bounded(json!({ "name": "猫", "which": -1 })).unwrap_err(),
-        "which 不能小于 0"
+        "which is at least 0"
     );
     assert_eq!(bounded(json!({ "name": "猫", "which": "job#3" })), Ok(()));
     assert_eq!(bounded(json!({ "name": 3, "limit": null, "x": 1 })), Ok(()));
@@ -174,7 +174,10 @@ fn arguments_keep_to_their_bounds() {
     let title =
         |title: String| super::bounded(agent, &json!({ "task": "查票价", "title": title }), "");
     assert_eq!(title("票".repeat(40)), Ok(()));
-    assert_eq!(title("票".repeat(41)).unwrap_err(), "title 最多 40 个字");
+    assert_eq!(
+        title("票".repeat(41)).unwrap_err(),
+        "title is at most 40 characters"
+    );
 }
 
 /// The keywords a tool's arguments' schema may use: those something

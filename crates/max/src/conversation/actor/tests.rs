@@ -1528,7 +1528,7 @@ async fn a_program_call_ends_at_the_conversations_call_time(pool: PgPool) {
         .unwrap_err();
     assert_eq!(failed.code, "timeout");
     assert!(
-        failed.message.starts_with("1 秒内没做完"),
+        failed.message.starts_with("not done in 1 seconds"),
         "{}",
         failed.message
     );

@@ -150,11 +150,11 @@ impl Caller {
     /// What a caller is told of a call that isn't its to make.
     pub fn refusal(&self, call: Call) -> Failure {
         let whose = match self {
-            Caller::Job(_) => "后台 agent",
-            Caller::Program(_) => "常驻程序",
-            Caller::Turn(_) | Caller::Check => "这一轮",
+            Caller::Job(_) => "a background agent",
+            Caller::Program(_) => "a program kept in the VM",
+            Caller::Turn(_) | Caller::Check => "a turn",
         };
-        Failure::new("not_allowed", format!("{whose}用不了 {}", call.name()))
+        Failure::new("not_allowed", format!("{whose} can't call {}", call.name()))
     }
 }
 
@@ -247,7 +247,7 @@ impl Failure {
 impl From<sqlx::Error> for Failure {
     fn from(error: sqlx::Error) -> Self {
         warn!(%error, "a Max tool's query failed");
-        Self::new("internal", "数据库出错了，稍后再试。")
+        Self::new("internal", "the database failed; try again later")
     }
 }
 
@@ -287,16 +287,20 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 /// What a caller is told of a name nothing answers to.
 fn unknown(name: &str) -> Failure {
-    Failure::new("unknown_tool", format!("没有 {name} 这个工具"))
+    Failure::new("unknown_tool", format!("there is no tool named {name}"))
 }
 
 fn internal() -> Failure {
-    Failure::new("internal", "出错了，稍后再试。")
+    Failure::new("internal", "something went wrong; try again later")
 }
 
 fn arguments<T: DeserializeOwned>(tool: &str, args: Value) -> Result<T, Failure> {
-    serde_json::from_value(args)
-        .map_err(|error| Failure::new("bad_arguments", format!("{tool} 的参数不对：{error}")))
+    serde_json::from_value(args).map_err(|error| {
+        Failure::new(
+            "bad_arguments",
+            format!("{tool}'s arguments are wrong: {error}"),
+        )
+    })
 }
 
 #[cfg(test)]
@@ -333,7 +337,9 @@ mod tests {
             let refused = program.refusal(call);
             assert_eq!(refused.code, "not_allowed");
             assert!(
-                refused.message.starts_with("常驻程序用不了 "),
+                refused
+                    .message
+                    .starts_with("a program kept in the VM can't call "),
                 "{refused:?}"
             );
         }

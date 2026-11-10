@@ -130,7 +130,7 @@ pub async fn run(start: Start, mut steers: UnboundedReceiver<String>) -> Finishe
     info!(%conversation, job = start.number, %unit, model = start.upstream.reference(), "a job starts");
     let (mut command, mut input) = match vm.open(unit, &line).await {
         Ok(opened) => opened,
-        Err(error) => return failed(format!("agent 没起来：{error}")),
+        Err(error) => return failed(format!("the agent didn't start: {error}")),
     };
     let upstream = &start.upstream;
     let api = match upstream.protocol {
@@ -154,7 +154,7 @@ pub async fn run(start: Start, mut steers: UnboundedReceiver<String>) -> Finishe
         input.shutdown().await
     };
     if let Err(error) = given.await {
-        return failed(format!("agent 没起来：{error}"));
+        return failed(format!("the agent didn't start: {error}"));
     }
     let mut out = Out::default();
     let (exit, mut exited) = oneshot::channel();

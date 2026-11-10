@@ -47,20 +47,20 @@ pub async fn image(
         if pictures >= PICTURES_PER_RUN {
             return Err(Failure::new(
                 "too_many",
-                format!("一次 run_code 最多交 {PICTURES_PER_RUN} 张图"),
+                format!("one run_code shows at most {PICTURES_PER_RUN} pictures"),
             ));
         }
         Ok(())
     };
     room(&lock(shown))?;
-    let (store, bytes) = read_work(context, &path, PICTURE_BYTES, "图").await?;
+    let (store, bytes) = read_work(context, &path, PICTURE_BYTES, "pictures").await?;
     let (prepared, bytes) = spawn_blocking(move || (prepare(&bytes), bytes))
         .await
         .map_err(|_| internal())?;
     let Ok(Some(prepared)) = prepared else {
         return Err(Failure::new(
             "not_a_picture",
-            format!("{path} 不是解得开的 PNG、JPEG、GIF、WebP"),
+            format!("{path} isn't a PNG, JPEG, GIF or WebP that decodes"),
         ));
     };
     let picture = |sha256| Part::Media {
@@ -79,13 +79,16 @@ pub async fn video(
 ) -> Result<Value, Failure> {
     let Args { path } = arguments(VIDEO, args)?;
     if !context.video {
-        return Err(Failure::new("unavailable", "这个模型看不了视频。"));
+        return Err(Failure::new(
+            "unavailable",
+            "this model doesn't watch videos",
+        ));
     }
-    let (store, bytes) = read_work(context, &path, VIDEO_BYTES, "视频").await?;
+    let (store, bytes) = read_work(context, &path, VIDEO_BYTES, "videos").await?;
     let Some(length) = mp4::length(&bytes) else {
         return Err(Failure::new(
             "not_a_video",
-            format!("{path} 不是解得开的 MP4"),
+            format!("{path} isn't an MP4 that decodes"),
         ));
     };
     // Whole seconds, at least one: the sound runs a little past the last
@@ -111,7 +114,7 @@ pub async fn video(
             return Err(Failure::new(
                 "too_long",
                 format!(
-                    "一次 run_code 最多交 {} 分钟视频，这段 {seconds} 秒，之前交了 {so_far} 秒；用 start、end 截一段",
+                    "one run_code shows at most {} minutes of video, and this is {seconds} seconds after {so_far} shown already: cut a piece with start and end",
                     VIDEO_SECONDS / 60
                 ),
             ));
@@ -136,7 +139,10 @@ async fn read_work(
     what: &str,
 ) -> Result<(Arc<Store>, Vec<u8>), Failure> {
     let (Some(work), Some(store)) = (&context.work, &context.services.store) else {
-        return Err(Failure::new("unavailable", format!("这里看不了{what}。")));
+        return Err(Failure::new(
+            "unavailable",
+            format!("{what} can't be shown here"),
+        ));
     };
     let relative = beneath_work(path)?;
     let work = work.clone();

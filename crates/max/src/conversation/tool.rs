@@ -23,7 +23,7 @@ pub async fn call(
     let report = Report::new(mailbox, move || Event::ToolDone {
         task,
         call: id,
-        out: ToolOutput::text("工具调用中途断了，没有结果。", true, 20),
+        out: ToolOutput::text("the tool call broke off without a result", true, 20),
     });
     let out = tools::run(call.tool, vms.as_ref(), context, Some(waiting)).await;
     report.send(Event::ToolDone {

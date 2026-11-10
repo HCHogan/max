@@ -322,14 +322,17 @@ async fn a_harness_with_no_plugin_reports_what_it_wrote() {
     .await;
     assert_eq!(
         ending.how,
-        How::Failed("agent 退出了，退出码 1：Error: No API key".into())
+        How::Failed("the agent exited with status 1: Error: No API key".into())
     );
 
     let ending = job(LONG, |mut agent| async move {
         agent.exit(None, "", "");
     })
     .await;
-    assert_eq!(ending.how, How::Failed("agent 意外退出了".into()));
+    assert_eq!(
+        ending.how,
+        How::Failed("the agent exited unexpectedly".into())
+    );
 }
 
 #[tokio::test]

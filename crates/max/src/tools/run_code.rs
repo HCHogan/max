@@ -52,22 +52,38 @@ pub(super) async fn run_code(
     let result = split.out.shown();
     let (head, error) = match waited? {
         Waited::Exited(status) => match status {
-            Some(0) if result.is_empty() => ("程序跑完了，没有返回值。".to_owned(), false),
-            Some(0) => (format!("返回值：\n{result}"), false),
-            Some(1) => (format!("程序出错了：\n{result}"), true),
-            Some(code) => (with(format!("runner 的退出码 {code}"), &result), true),
-            None => (with("runner 没有退出码，可能被杀了".into(), &result), true),
+            Some(0) if result.is_empty() => (
+                "the program finished and returned nothing".to_owned(),
+                false,
+            ),
+            Some(0) => (format!("returned:\n{result}"), false),
+            Some(1) => (format!("the program failed:\n{result}"), true),
+            Some(code) => (
+                with(format!("the runner's exit status {code}"), &result),
+                true,
+            ),
+            None => (
+                with(
+                    "the runner has no exit status: it may have been killed".into(),
+                    &result,
+                ),
+                true,
+            ),
         },
         Waited::Interrupted(()) => {
             let stopped = running.stop(vm.connection()).await;
-            let head = format!("{} 秒内没跑完，{}", limit.as_secs(), stopping(&stopped));
+            let head = format!(
+                "not done in {} seconds; {}",
+                limit.as_secs(),
+                stopping(&stopped)
+            );
             (with(head, &result), true)
         }
     };
     let mut shown = head;
     let console = split.err.shown();
     if !console.is_empty() {
-        shown.push_str("\nconsole 输出：\n");
+        shown.push_str("\nconsole output:\n");
         shown.push_str(&console);
     }
     shown.push_str(&called(&grant.calls()));

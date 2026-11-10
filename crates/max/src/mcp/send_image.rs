@@ -21,9 +21,12 @@ pub struct SendImage;
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Args {
-    #[schemars(length(min = 1), description = "/work 下的路径，相对路径从 /work 算")]
+    #[schemars(
+        length(min = 1),
+        description = "a path under /work; a relative one is from /work"
+    )]
     path: String,
-    #[schemars(description = "图下面的说明，可以不写")]
+    #[schemars(description = "a caption under the picture; may be left out")]
     caption: Option<String>,
 }
 
@@ -34,8 +37,7 @@ pub struct Sent {
 
 impl Tool for SendImage {
     const NAME: &'static str = "send_image";
-    const DESCRIPTION: &'static str =
-        "把 /work 下的一张图发到本群，比如画的图表、截的图、下载的图片。";
+    const DESCRIPTION: &'static str = "Sends a picture under /work to this chat, such as a chart you drew, a screenshot or a downloaded picture.";
     const JOB: bool = false;
 
     type Args = Args;
@@ -43,9 +45,9 @@ impl Tool for SendImage {
 
     fn guide() -> String {
         format!(
-            "把 /work 下的一张图发到本群：画的图表、截的图、下载的图片。PNG、JPEG、GIF、WebP，最大 {} MiB；路径上不能有符号链接。\n  \
-            caption 是图下面的一句说明，和图在同一条消息里。发出去了才返回，handle 是这条消息里那张图的句柄。\n  \
-            记录里已有的图和表情包不用这个，直接在回复里写它的句柄。",
+            "Sends a picture under /work to this chat: a chart you drew, a screenshot, a downloaded picture. PNG, JPEG, GIF or WebP, at most {} MiB; no symlink on the path.\n  \
+            caption is a line under the picture, in the same message. It returns once the picture is sent, and handle is the handle of that picture in its message.\n  \
+            A picture or sticker the records already have needs none of this: write its handle in your reply.",
             PICTURE_BYTES >> 20
         )
     }
@@ -61,7 +63,10 @@ async fn send(context: &Context, Args { path, caption }: Args) -> Result<Sent, F
         &context.services.store,
         context.caller.poster(),
     ) else {
-        return Err(Failure::new("unavailable", "这里发不了图。"));
+        return Err(Failure::new(
+            "unavailable",
+            "pictures can't be sent from here",
+        ));
     };
     let relative = beneath_work(&path)?;
     let work = work.clone();
@@ -72,7 +77,10 @@ async fn send(context: &Context, Args { path, caption }: Args) -> Result<Sent, F
         .await
         .map_err(|_| internal())?;
     let Ok(Some(prepared)) = prepared else {
-        return Err(Failure::new("not_a_picture", format!("{path} 解不开")));
+        return Err(Failure::new(
+            "not_a_picture",
+            format!("{path} doesn't decode"),
+        ));
     };
     let size = bytes.len() as u64;
     let stored = async {
@@ -115,7 +123,7 @@ async fn send(context: &Context, Args { path, caption }: Args) -> Result<Sent, F
     let id = poster
         .post(draft)
         .await
-        .map_err(|error| Failure::new("not_sent", format!("没发出去：{error}")))?;
+        .map_err(|error| Failure::new("not_sent", format!("not sent: {error}")))?;
     Ok(Sent {
         handle: format!("image#{id}.0"),
     })
@@ -124,7 +132,7 @@ async fn send(context: &Context, Args { path, caption }: Args) -> Result<Sent, F
 /// The picture as QQ takes it, and its type: PNG, JPEG and GIF as they
 /// are, WebP as PNG.
 async fn picture(bytes: Vec<u8>) -> Result<(Vec<u8>, &'static str), Failure> {
-    let not_one = || Failure::new("not_a_picture", "只发得了 PNG、JPEG、GIF、WebP");
+    let not_one = || Failure::new("not_a_picture", "only PNG, JPEG, GIF and WebP can be sent");
     match image::guess_format(&bytes).map_err(|_| not_one())? {
         ImageFormat::Png => Ok((bytes, "image/png")),
         ImageFormat::Jpeg => Ok((bytes, "image/jpeg")),
@@ -133,7 +141,8 @@ async fn picture(bytes: Vec<u8>) -> Result<(Vec<u8>, &'static str), Failure> {
             let converted = spawn_blocking(move || png(&bytes))
                 .await
                 .map_err(|_| internal())?;
-            let png = converted.map_err(|_| Failure::new("not_a_picture", "这张 WebP 解不开"))?;
+            let png =
+                converted.map_err(|_| Failure::new("not_a_picture", "this WebP doesn't decode"))?;
             Ok((png, "image/png"))
         }
         _ => Err(not_one()),

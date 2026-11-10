@@ -25,7 +25,7 @@ pub struct RecallMessage;
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Args {
-    #[schemars(description = "消息的编号，#123 就是 123")]
+    #[schemars(description = "the message's number: 123 for #123")]
     id: i64,
 }
 
@@ -36,8 +36,7 @@ pub struct Recalled {
 
 impl Tool for RecallMessage {
     const NAME: &'static str = "recall_message";
-    const DESCRIPTION: &'static str =
-        "撤回本群发出 2 分钟内的一条消息：你自己的，或者你是群管理员时普通成员的。";
+    const DESCRIPTION: &'static str = "Recalls a message sent in this chat within the last 2 minutes: your own, or an ordinary member's when you are an admin of the group.";
     const JOB: bool = false;
 
     type Args = Args;
@@ -45,9 +44,9 @@ impl Tool for RecallMessage {
 
     fn guide() -> String {
         format!(
-            "撤回本群的一条消息，id 是行首 #编号 里的数字。撤不撤由你判断：刷屏、广告、违规内容，或者有人请你撤、理由正当时再用，撤完简短说一声。\n  \
-            QQ 只让撤发出 {} 分钟内的：你自己说的（一段是一条，一次回复分成几段的要一段一段撤）；你是群管理员时还有普通成员的，群主和管理员的撤不了。私聊里只能撤你自己的。\n  \
-            QQ 撤了才返回；撤不了会抛错，说明原因。记录里会多一行你的 [unsend#id]，QQ 没撤的标着（没发出去）。",
+            "Recalls a message of this chat; id is the number in the #number at the start of its line. Whether to is yours to judge: for flooding, ads or what breaks the rules, or when someone asks and the reason is sound; say so briefly afterwards.\n  \
+            QQ lets only messages sent within {} minutes be recalled: what you said yourself (a segment is a message, so a reply sent in several is recalled one at a time), and, when you are an admin of the group, an ordinary member's; the owner's and the admins' can't be. In a private chat only your own.\n  \
+            It returns once QQ has recalled it; if QQ doesn't, the call fails and says why. The records gain a row of yours, [unsend#id], marked （没发出去） if QQ didn't recall it.",
             WINDOW.num_minutes()
         )
     }
@@ -61,7 +60,10 @@ impl Tool for RecallMessage {
 async fn recall(context: &Context, id: i64) -> Result<(), Failure> {
     let place = &context.place;
     let (Some(poster), Platform::Qq) = (context.caller.poster(), place.platform) else {
-        return Err(Failure::new("unavailable", "这里撤回不了消息。"));
+        return Err(Failure::new(
+            "unavailable",
+            "messages can't be recalled from here",
+        ));
     };
     let target = MessageId(id);
     let refused = |why: &str| Err(Failure::new("refused", why));
@@ -70,34 +72,36 @@ async fn recall(context: &Context, id: i64) -> Result<(), Failure> {
     let Some(row) = row.filter(|row| matches!(row.message.content, Content::Message { .. })) else {
         return Err(Failure::new(
             "not_found",
-            format!("本群没有 #{id} 这条消息"),
+            format!("there is no message #{id} in this chat"),
         ));
     };
     if ledger::unsent(&mut conn, target).await? {
-        return refused("这条已经撤回了");
+        return refused("it was recalled already");
     }
     if row.message.sender.identity == place.me.identity {
         match row.delivery {
-            Some(Delivery::Failed) => return refused("这条本来就没发出去"),
-            Some(Delivery::Unknown) => return refused("不知道这条发没发出去，撤不了"),
+            Some(Delivery::Failed) => return refused("it was never sent"),
+            Some(Delivery::Unknown) => {
+                return refused("it isn't known whether it was sent, so it can't be recalled");
+            }
             Some(Delivery::Sent) | None => {}
         }
     } else if place.kind == ConversationKind::Direct {
-        return refused("私聊里只能撤回你自己发的消息");
+        return refused("in a private chat only your own messages can be recalled");
     } else if matches!(row.message.sender.role, Some(Role::Owner | Role::Admin)) {
-        return refused("群主和管理员的消息，QQ 不让机器人撤");
+        return refused("QQ doesn't let a bot recall the owner's or an admin's message");
     }
     // Max's, still on its way out, counts from now.
     let native = ledger::native(&mut conn, target, row.endpoint).await?;
     drop(conn);
     let since = native.map_or_else(Utc::now, |(_, at)| at);
     if row.endpoint != place.endpoint || Utc::now() - since > WINDOW {
-        return refused("发出超过 2 分钟了，QQ 不让撤");
+        return refused("it was sent over 2 minutes ago, and QQ no longer lets it be recalled");
     }
     poster
         .unsend(target)
         .await
-        .map_err(|error| Failure::new("not_recalled", format!("没撤回：{error}")))?;
+        .map_err(|error| Failure::new("not_recalled", format!("not recalled: {error}")))?;
     Ok(())
 }
 

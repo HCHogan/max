@@ -74,11 +74,11 @@ async fn call(
     let Some(session) = forward.sessions.bearer(authorization, forward.conversation) else {
         return refuse(
             StatusCode::UNAUTHORIZED,
-            "token 不对，或者这个 job 已经结束了",
+            "the token is wrong, or its job has ended",
         );
     };
     let Caller::Job(job) = &session.context.caller else {
-        return refuse(StatusCode::FORBIDDEN, "这个会话不能调模型");
+        return refuse(StatusCode::FORBIDDEN, "this session may not call the model");
     };
     let upstream = &job.upstream;
     let endpoint = match upstream.protocol {
@@ -86,10 +86,13 @@ async fn call(
         Protocol::Responses => "responses",
     };
     if path != endpoint {
-        return refuse(StatusCode::NOT_FOUND, &format!("只有 /llm/{endpoint}"));
+        return refuse(
+            StatusCode::NOT_FOUND,
+            &format!("there is only /llm/{endpoint}"),
+        );
     }
     let Ok(Fields(mut fields)) = serde_json::from_slice::<Fields<'_>>(&body) else {
-        return refuse(StatusCode::BAD_REQUEST, "请求不是 JSON 对象");
+        return refuse(StatusCode::BAD_REQUEST, "the request isn't a JSON object");
     };
     let model = serde_json::value::to_raw_value(&upstream.model).expect("a string is JSON");
     match fields.iter_mut().find(|(name, _)| name == "model") {
@@ -110,17 +113,20 @@ async fn call(
     let sent = tokio::select! {
         sent = timeout(idle, sending.send()) => sent,
         () = session.closed.cancelled() => {
-            return refuse(StatusCode::GONE, "这个 job 已经结束了");
+            return refuse(StatusCode::GONE, "this job has ended");
         }
     };
     metering.arrived();
     let answer = match sent {
         Ok(Ok(answer)) => answer,
         Ok(Err(error)) => {
-            return refuse(StatusCode::BAD_GATEWAY, &format!("模型连不上：{error}"));
+            return refuse(
+                StatusCode::BAD_GATEWAY,
+                &format!("can't reach the model: {error}"),
+            );
         }
         Err(_) => {
-            let quiet = format!("模型 {} 秒没回话", idle.as_secs());
+            let quiet = format!("the model said nothing for {} seconds", idle.as_secs());
             return refuse(StatusCode::GATEWAY_TIMEOUT, &quiet);
         }
     };
@@ -136,7 +142,12 @@ async fn call(
             }
             chunk
         })))
-        .unwrap_or_else(|_| refuse(StatusCode::BAD_GATEWAY, "模型的回答转不了"))
+        .unwrap_or_else(|_| {
+            refuse(
+                StatusCode::BAD_GATEWAY,
+                "the model's answer couldn't be passed on",
+            )
+        })
 }
 
 /// A JSON object's fields in order, their values as they were written.

@@ -23,13 +23,16 @@ pub struct AgentStatus;
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Start {
-    #[schemars(length(min = 1), description = "要它做的事，连同背景，写全")]
+    #[schemars(
+        length(min = 1),
+        description = "what it is to do, with the background, in full"
+    )]
     task: String,
-    #[schemars(length(max = TITLE), description = "一句话的标题")]
+    #[schemars(length(max = TITLE), description = "a title in one line")]
     title: Option<String>,
     #[schemars(
         length(min = 1),
-        description = "启动目录，默认 /work；绝对路径或 /work 下的相对路径，没有就建"
+        description = "the directory it starts in, /work by default: an absolute path, or one relative to /work; made if it isn't there"
     )]
     workdir: Option<String>,
 }
@@ -37,7 +40,7 @@ pub struct Start {
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Steer {
-    #[schemars(description = "job#3 或 3")]
+    #[schemars(description = "job#3 or 3")]
     job: Job,
     #[schemars(length(min = 1))]
     message: String,
@@ -46,14 +49,14 @@ pub struct Steer {
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Which {
-    #[schemars(description = "job#3 或 3")]
+    #[schemars(description = "job#3 or 3")]
     job: Job,
 }
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Status {
-    #[schemars(description = "job#3 或 3；不填是全部")]
+    #[schemars(description = "job#3 or 3; left out, every job")]
     job: Option<Job>,
 }
 
@@ -78,7 +81,7 @@ pub struct Running {
 
 impl Tool for Agent {
     const NAME: &'static str = "agent";
-    const DESCRIPTION: &'static str = "交给一个后台 agent 去做一件要花时间的事，马上返回 job 编号；它做完了，报告作为 [job#N 完成] 回到你这里。";
+    const DESCRIPTION: &'static str = "Hands a background agent something that takes time, and returns its job number at once; when it is done, its report comes back to you as [job#N 完成].";
     const JOB: bool = false;
 
     type Args = Start;
@@ -86,10 +89,10 @@ impl Tool for Agent {
 
     fn guide() -> String {
         format!(
-            "起一个后台 agent，去做一件要花时间的事：查一堆资料、读很多网页或文件、写代码跑实验。它在本群的 VM 里跑，和你共用 /work，自己有 shell、读写文件、history、web_search；不能在群里说话，也不能发图发文件、撤回、禁言。\n  \
-            它看不到群里的对话，只看得到 task，所以背景、要做什么、做到什么程度、报告要写什么都写进去。title 是一句话的标题，agent_status 里显示。\n  \
-            workdir 是启动目录，默认 /work；绝对路径或 /work 下的相对路径，没有就建。做项目的活就填项目路径：它会读项目的 AGENTS.md（或 CLAUDE.md），还有后台 agent 给这个目录记的笔记（在 /work/.max/projects/ 下），做完更新笔记。\n  \
-            马上返回 {{ job: \"job#3\" }}，你接着聊。它卡在只有你或群友才知道的事上会问你：问题作为 [job#3 问] 出现，它在等，用 agent_steer 回答。它做完了，报告作为 [job#3 完成] 出现在你的新消息里，全文另存在 /work/.max/jobs/ 下，由你决定在群里怎么说。同时最多 {} 个，每个最多 {} 小时，到点停下、交出做到一半的结果。",
+            "Starts a background agent on something that takes time: looking up a pile of sources, reading many pages or files, writing code and running experiments. It runs in this chat's VM and shares /work with you; it has its own shell, file reading and writing, history and web_search; it can't speak in the chat, nor send pictures or files, recall or mute.\n  \
+            It doesn't see the conversation, only task: so put in the background, what to do, how far to take it, and what the report should say. title is a one-line title, shown by agent_status.\n  \
+            workdir is the directory it starts in, /work by default: an absolute path, or one relative to /work; made if it isn't there. For work on a project give the project's path: it reads the project's AGENTS.md (or CLAUDE.md) and the notes background agents keep for that directory (under /work/.max/projects/), and updates the notes when done.\n  \
+            Returns {{ job: \"job#3\" }} at once, and you go on talking. Stuck on something only you or the people here know, it asks you: the question appears as [job#3 问], it waits, and you answer with agent_steer. When it is done, its report appears among your new messages as [job#3 完成], the whole of it saved under /work/.max/jobs/, and what to say of it in the chat is yours to decide. At most {} at once, each for at most {} hours; at its time it stops and hands over what it has.",
             limits::JOBS_AT_ONCE,
             limits::JOB_TIME.as_secs() / 3600,
         )
@@ -104,7 +107,7 @@ impl Tool for Agent {
         }: Start,
     ) -> Result<Named, Failure> {
         if task.trim().is_empty() {
-            return Err(Failure::new("bad_arguments", "task 是空的"));
+            return Err(Failure::new("bad_arguments", "task is empty"));
         }
         let workdir = workdir(dir.as_deref())?;
         let started = conversation(context)?.agent(task, title, workdir).await;
@@ -114,8 +117,7 @@ impl Tool for Agent {
 
 impl Tool for AgentSteer {
     const NAME: &'static str = "agent_steer";
-    const DESCRIPTION: &'static str =
-        "给还在跑的后台 agent 补一句话：改方向、补信息，或者回答它的 [job#N 问]。";
+    const DESCRIPTION: &'static str = "Tells a running background agent something more: a change of direction, more information, or the answer to its [job#N 问].";
     const JOB: bool = false;
 
     type Args = Steer;
@@ -123,15 +125,15 @@ impl Tool for AgentSteer {
 
     fn guide() -> String {
         format!(
-            "给还在跑的后台 agent 补一句话：改方向、补充信息、转达群友的回答。它跑完手上这步工具、下一次想之前看到。job 是 \"job#3\" 或 3。\n  \
-            它问了你（[job#3 问]）还没得到答复时，下一句就是答复，它马上收到。你答不了就去群里问，问到了再转给它；{} 分钟内没答复，它就自己判断着做下去，之后再说的照常当补充。",
+            "Tells a running background agent something more: a change of direction, more information, what someone here answered. It sees it after the tool call it is on, before it next thinks. job is \"job#3\" or 3.\n  \
+            While it waits on a question it asked you ([job#3 问]), your next message is the answer, and it gets it at once. If you can't answer, ask in the chat and pass on what you hear; with no answer in {} minutes it goes on by its own judgement, and what you say later is taken as more information.",
             limits::QUESTION_WAIT.as_secs() / 60,
         )
     }
 
     async fn run(context: &Context, Steer { job, message }: Steer) -> Result<Named, Failure> {
         if message.trim().is_empty() {
-            return Err(Failure::new("bad_arguments", "message 是空的"));
+            return Err(Failure::new("bad_arguments", "message is empty"));
         }
         let job = job.number()?;
         let steered = conversation(context)?.steer(job, message).await;
@@ -141,15 +143,14 @@ impl Tool for AgentSteer {
 
 impl Tool for AgentCancel {
     const NAME: &'static str = "agent_cancel";
-    const DESCRIPTION: &'static str =
-        "停掉一个后台 agent 或后台命令，不要它的结果了；或者撤回一个还没答复的 ask。";
+    const DESCRIPTION: &'static str = "Stops a background agent or command whose result isn't wanted any more; or withdraws an ask that hasn't been answered.";
     const JOB: bool = false;
 
     type Args = Which;
     type Output = Named;
 
     fn guide() -> String {
-        "停掉一个后台 agent 或者 shell 的后台命令，不要它的结果了；它在 /work 里留下的东西还在。也用来撤回一个还在等答复的 ask：那边之后再答就答不上了。"
+        "Stops a background agent, or a background command of shell's, whose result isn't wanted any more; what it left in /work stays. Also withdraws an ask still waiting for its answer: an answer given there afterwards finds nobody."
             .into()
     }
 
@@ -162,14 +163,14 @@ impl Tool for AgentCancel {
 
 impl Tool for AgentStatus {
     const NAME: &'static str = "agent_status";
-    const DESCRIPTION: &'static str = "看还在跑的后台 agent、后台命令和还在等答复的 ask：标题、跑了几分钟、调了几次模型和工具、最近用的工具。";
+    const DESCRIPTION: &'static str = "Shows the background agents and commands that run and the asks still waiting: title, minutes run, model and tool calls made, and the tool last used.";
     const JOB: bool = false;
 
     type Args = Status;
     type Output = Running;
 
     fn guide() -> String {
-        "看还在跑的后台 agent 和后台命令：标题、跑了几分钟、调了几次模型（calls）和工具（tools）、最近用的工具；后台命令的标题是 $ 加命令，次数都是 0；问别的会话、还在等答复的 ask 也在里面，标题是 ? 加会话和问题，次数也是 0。job 不填就是全部；做完的、停掉的不在里面。".into()
+        "Shows the background agents and commands that run: title, minutes run, model calls (calls) and tool calls (tools) made, and the tool last used. A background command's title is $ and the command, with both counts 0; an ask still waiting for another conversation's answer is there too, its title ? with the conversation and the question, counts 0 as well. Without job, all of them; those done or stopped aren't listed.".into()
     }
 
     async fn run(context: &Context, Status { job }: Status) -> Result<Running, Failure> {
@@ -188,7 +189,7 @@ impl Job {
                 digits.parse().map_err(|_| {
                     Failure::new(
                         "bad_arguments",
-                        format!("{text} 不是 job 的编号，要 job#3 或 3"),
+                        format!("{text} isn't a job's number: write job#3 or 3"),
                     )
                 })
             }
@@ -202,7 +203,7 @@ fn workdir(dir: Option<&str>) -> Result<String, Failure> {
     if dir.is_some_and(|dir| dir.trim().is_empty() || dir.chars().any(char::is_control)) {
         return Err(Failure::new(
             "bad_arguments",
-            "workdir 不能是空的，也不能有控制字符",
+            "workdir can't be empty, nor have control characters",
         ));
     }
     Ok(guest_dir(dir))
@@ -218,7 +219,12 @@ fn named(job: u32) -> Named {
 /// those Max keeps in the VM, have one at hand.
 fn conversation(context: &Context) -> Result<&Poster, Failure> {
     let here = context.caller.poster();
-    here.ok_or_else(|| Failure::new("not_here", "这里管不了后台 agent"))
+    here.ok_or_else(|| {
+        Failure::new(
+            "not_here",
+            "there are no background jobs to manage from here",
+        )
+    })
 }
 
 fn failed(message: String) -> Failure {

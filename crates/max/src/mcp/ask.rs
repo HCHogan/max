@@ -21,12 +21,12 @@ pub struct Answer;
 pub struct Asking {
     #[schemars(
         range(min = 1),
-        description = "要问的会话的编号：[能问的会话] 里的 c#9 就填 9"
+        description = "the number of the conversation to ask: 9 for the c#9 listed under [能问的会话]"
     )]
     to: i64,
     #[schemars(
         length(min = 1, max = ASK_CHARS),
-        description = "问题，连同那边需要的背景写全：它看不到这边的对话"
+        description = "the question, with the background they need there, in full: it doesn't see this conversation"
     )]
     question: String,
 }
@@ -34,9 +34,12 @@ pub struct Asking {
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Answering {
-    #[schemars(range(min = 1), description = "那个问题的编号：[ask#5 问] 就填 5")]
+    #[schemars(
+        range(min = 1),
+        description = "the question's number: 5 for [ask#5 问]"
+    )]
     to: u32,
-    #[schemars(length(min = 1, max = ASK_CHARS), description = "回答")]
+    #[schemars(length(min = 1, max = ASK_CHARS), description = "the answer")]
     text: String,
 }
 
@@ -54,7 +57,7 @@ pub struct Answered {
 
 impl Tool for Ask {
     const NAME: &'static str = "ask";
-    const DESCRIPTION: &'static str = "问另一个会话里的 Max 一个问题，马上返回 job 编号；它的回答之后作为 [job#N 回答] 回到这里。";
+    const DESCRIPTION: &'static str = "Asks Max in another conversation a question, and returns a job number at once; its answer comes back here later as [job#N 回答].";
     const JOB: bool = false;
 
     type Args = Asking;
@@ -62,17 +65,17 @@ impl Tool for Ask {
 
     fn guide() -> String {
         format!(
-            "问另一个会话（别的群或私聊）里的 Max 一个问题。只能问 [能问的会话] 里列着的，to 填它的编号，c#9 就填 9；上下文里没有这一块，就是这里谁也问不了。\n  \
-            那边的 Max 用它自己的记录、记忆和工具，按它那边的规矩回答，答不答、答多少由它定。它看不到这边的对话，你也看不到它那边的，所以 question 要把背景和要问的事写全，最多 {ASK_CHARS} 字；这边的 [mention#…]、消息编号、图片句柄到那边没有意义，用名字和文字说。\n  \
-            问题和回答都不会发到任何一边的聊天里，只有两边的 Max 看得到：这边的人不知道你去问了，要不要说、怎么转述由你定。\n  \
-            马上返回 {{ job: \"job#3\" }}，你接着聊。那边答了，回答作为 [job#3 回答] 出现在你的新消息里，带着你问的原话；没答成是 [job#3 没答成] 加原因。它可能要先问它那边的人，最多等 {} 小时。等着的问题在 agent_status 里，标题以 ? 开头；不想等了用 agent_cancel 撤回。",
+            "Asks Max in another conversation (another group, or a private chat) a question. Only those listed under [能问的会话] can be asked; to is the number, 9 for c#9. With no such block in the context, nobody can be asked from here.\n  \
+            Max there answers by its own rules, with its own records, memory and tools; whether to answer and how much is its to decide. It doesn't see this conversation, nor you its, so question has to carry the background and what is asked in full, in at most {ASK_CHARS} characters; a [mention#…], a message number or a picture's handle from here means nothing there: say it with names and words.\n  \
+            Neither the question nor the answer is sent to either chat; only the two Maxes see them. The people here don't know you asked: whether to say so, and how to pass the answer on, is yours to decide.\n  \
+            Returns {{ job: \"job#3\" }} at once, and you go on talking. When it answers, the answer appears among your new messages as [job#3 回答], with what you asked; if no answer comes, as [job#3 没答成] and why. It may ask its own people first, and is waited for at most {} hours. A question that waits shows in agent_status, its title starting with ?; to stop waiting, withdraw it with agent_cancel.",
             limits::JOB_TIME.as_secs() / 3600,
         )
     }
 
     async fn run(context: &Context, Asking { to, question }: Asking) -> Result<Waiting, Failure> {
         if question.trim().is_empty() {
-            return Err(Failure::new("bad_arguments", "question 是空的"));
+            return Err(Failure::new("bad_arguments", "question is empty"));
         }
         let job = conversation(context)?
             .ask(ConversationId(to), question)
@@ -86,8 +89,7 @@ impl Tool for Ask {
 
 impl Tool for Answer {
     const NAME: &'static str = "answer";
-    const DESCRIPTION: &'static str =
-        "回答别的会话的 Max 问这里的问题；to 是那个问题的编号，[ask#5 问] 就填 5。";
+    const DESCRIPTION: &'static str = "Answers a question that Max in another conversation asked here; to is the question's number, 5 for [ask#5 问].";
     const JOB: bool = false;
 
     type Args = Answering;
@@ -95,9 +97,9 @@ impl Tool for Answer {
 
     fn guide() -> String {
         format!(
-            "回答别的会话的 Max 问你的问题。它问你时，你的新消息里会有 [ask#5 问] c#7 名字 加问题；to 是那个编号，ask#5 就填 5，text 是回答，最多 {ASK_CHARS} 字。\n  \
-            问你的是那个会话的 Max，不是这边的人：它看不到这边的对话，只看得到你的 text。能说什么、说多少，按这边的规矩和记忆自己判断；要先问问这边的人也行，问到了再答，它最多等 {} 小时。不想答可以不答，也可以回一句不方便说。\n  \
-            问题和你的回答都不会发到这边的聊天里，这边的人不知道有人来问过，要不要说由你定。这一轮结束时还没答的，下一轮列在 [等你回答的问题] 里。一个问题只能答一次；对方不等了（撤回了、等到点了、Max 重启过）就报错。返回 {{ to: \"c#7 名字\" }}。",
+            "Answers a question that Max in another conversation asked you. When it asks, your new messages have [ask#5 问] c#7 <name> and the question; to is that number, 5 for ask#5, and text is the answer, at most {ASK_CHARS} characters.\n  \
+            It is that conversation's Max who asks, not anyone here: it doesn't see this conversation, only your text. What may be said, and how much, is yours to judge by the rules and memory of this conversation; you may ask the people here first and answer once you know, and it waits at most {} hours. You may leave it unanswered, or answer that you'd rather not say.\n  \
+            Neither the question nor your answer is sent to this chat, so the people here don't know anyone asked: whether to tell them is yours to decide. A question still unanswered when this turn ends is listed under [等你回答的问题] in the next. A question is answered once; if nobody waits any more (withdrawn, out of time, or Max has restarted), the call fails. Returns {{ to: \"c#7 <name>\" }}.",
             limits::JOB_TIME.as_secs() / 3600,
         )
     }
@@ -107,7 +109,7 @@ impl Tool for Answer {
         Answering { to, text }: Answering,
     ) -> Result<Answered, Failure> {
         if text.trim().is_empty() {
-            return Err(Failure::new("bad_arguments", "text 是空的"));
+            return Err(Failure::new("bad_arguments", "text is empty"));
         }
         let to = conversation(context)?
             .answer(to, text)
@@ -120,7 +122,12 @@ impl Tool for Answer {
 /// The conversation the call comes from, a turn's or a program's.
 fn conversation(context: &Context) -> Result<&Poster, Failure> {
     let here = context.caller.poster();
-    here.ok_or_else(|| Failure::new("not_here", "这里问不了、也答不了别的会话"))
+    here.ok_or_else(|| {
+        Failure::new(
+            "not_here",
+            "another conversation can't be asked or answered from here",
+        )
+    })
 }
 
 #[cfg(test)]

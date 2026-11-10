@@ -93,27 +93,27 @@ async fn a_long_or_empty_question_never_leaves(pool: PgPool) {
         (
             Ask::NAME,
             json!({ "to": 9, "question": format!("{most}问") }),
-            "ask 的 question 最多 2000 个字",
+            "ask: question is at most 2000 characters",
         ),
         (
             Answer::NAME,
             json!({ "to": 5, "text": format!("{most}问") }),
-            "answer 的 text 最多 2000 个字",
+            "answer: text is at most 2000 characters",
         ),
         (
             Ask::NAME,
             json!({ "to": 9, "question": " \n" }),
-            "question 是空的",
+            "question is empty",
         ),
         (
             Answer::NAME,
             json!({ "to": 5, "text": "" }),
-            "answer 的 text 是空的",
+            "answer: text is empty",
         ),
         (
             Answer::NAME,
             json!({ "to": 0, "text": "八点" }),
-            "answer 的 to 不能小于 1",
+            "answer: to is at least 1",
         ),
     ] {
         let refused = crate::mcp::call(tool, &context, args).await.unwrap_err();

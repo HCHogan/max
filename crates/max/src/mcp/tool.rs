@@ -114,7 +114,7 @@ impl Spec {
     /// Runs it, once its arguments keep to its schema's bounds.
     pub async fn call(&self, context: &Context, args: Value) -> Result<Value, Failure> {
         bounded(&self.input, &args, "")
-            .map_err(|wrong| Failure::new("bad_arguments", format!("{} 的 {wrong}", self.name)))?;
+            .map_err(|wrong| Failure::new("bad_arguments", format!("{}: {wrong}", self.name)))?;
         (self.run)(context, args).await
     }
 }
@@ -285,14 +285,14 @@ fn bounded(schema: &Map<String, Value>, value: &Value, path: &str) -> Result<(),
                 && length < least
             {
                 return Err(match least {
-                    1 => format!("{path} 是空的"),
-                    _ => format!("{path} 至少要 {least} 个字"),
+                    1 => format!("{path} is empty"),
+                    _ => format!("{path} is at least {least} characters"),
                 });
             }
             if let Some(most) = most.and_then(Value::as_u64)
                 && length > most
             {
-                return Err(format!("{path} 最多 {most} 个字"));
+                return Err(format!("{path} is at most {most} characters"));
             }
         }
         Value::Number(number) => {
@@ -306,10 +306,10 @@ fn bounded(schema: &Map<String, Value>, value: &Value, path: &str) -> Result<(),
                 .is_some_and(|most| number > most);
             match (least, most) {
                 (Some(least), Some(most)) if below || above => {
-                    return Err(format!("{path} 要在 {least} 到 {most} 之间"));
+                    return Err(format!("{path} is from {least} to {most}"));
                 }
-                (Some(least), None) if below => return Err(format!("{path} 不能小于 {least}")),
-                (None, Some(most)) if above => return Err(format!("{path} 不能大于 {most}")),
+                (Some(least), None) if below => return Err(format!("{path} is at least {least}")),
+                (None, Some(most)) if above => return Err(format!("{path} is at most {most}")),
                 _ => {}
             }
         }

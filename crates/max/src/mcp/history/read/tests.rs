@@ -144,10 +144,7 @@ async fn the_rows_around_one(pool: PgPool) {
     .unwrap();
     assert_eq!(all["text"].as_str().unwrap().lines().count(), 6);
     let more = run(&context, json!({ "around": ids[1], "before": 51 })).await;
-    assert_eq!(
-        more.unwrap_err().message,
-        "history 的 before 要在 0 到 50 之间"
-    );
+    assert_eq!(more.unwrap_err().message, "history: before is from 0 to 50");
 
     let other = run(&context, json!({ "around": far.0, "after": 1 })).await;
     assert_eq!(other.unwrap_err().code, "not_found");
@@ -240,7 +237,7 @@ async fn a_stretch_by_time_and_sender(pool: PgPool) {
     let none = run(&context, json!({ "from": "2026-10-30" }))
         .await
         .unwrap();
-    assert_eq!(none["text"], "（没有这样的消息）");
+    assert_eq!(none["text"], "(no such messages)");
 
     for args in [
         json!({}),

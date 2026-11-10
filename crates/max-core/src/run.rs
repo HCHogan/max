@@ -523,7 +523,7 @@ impl Run {
             _ => Vec::new(),
         };
         for call in open {
-            self.synthesize(call, "已取消".to_owned());
+            self.synthesize(call, "cancelled".to_owned());
         }
         Ok(())
     }

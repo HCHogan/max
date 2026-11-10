@@ -95,7 +95,7 @@ async fn what_cant_be_set_isnt_asked_for(pool: PgPool) {
     assert_eq!(short.code, "bad_arguments");
     assert_eq!(
         short.message,
-        "call_time_secs 要么是 0（恢复默认），要么在 10 到 600 之间"
+        "call_time_secs is either 0 (back to the default) or from 10 to 600"
     );
     let long = call(&context, json!({ "commands_at_once": 17 }))
         .await

@@ -23,7 +23,7 @@ pub struct Say;
 pub struct SayArgs {
     #[schemars(
         length(min = 1, max = LONGEST),
-        description = "要说的话，写法和你自己回话一样：[reply#id]、[mention#id]、[sticker#id.n]、[image#id.n]、[split]，空行分条"
+        description = "what to say, written as your own replies are: [reply#id], [mention#id], [sticker#id.n], [image#id.n], [split], and a blank line between messages"
     )]
     text: String,
 }
@@ -36,8 +36,7 @@ pub struct Said {
 
 impl Tool for Say {
     const NAME: &'static str = "say";
-    const DESCRIPTION: &'static str =
-        "以 Max 的身份在本群说话，写法和 Max 回话一样；返回发出去的消息编号。";
+    const DESCRIPTION: &'static str = "Says something in this chat as Max, written as Max's replies are; returns the numbers of the messages sent.";
     const JOB: bool = false;
     const TURN: bool = false;
 
@@ -45,12 +44,12 @@ impl Tool for Say {
     type Output = Said;
 
     fn guide() -> String {
-        "以 Max 的身份在本群说话，写法和 Max 回话一样，分成几条就是几条消息。".to_owned()
+        "Says something in this chat as Max, written as Max's replies are; as many messages as it is split into.".to_owned()
     }
 
     async fn run(context: &Context, SayArgs { text }: SayArgs) -> Result<Said, Failure> {
         let Some(poster) = context.caller.poster() else {
-            return Err(Failure::new("unavailable", "这里说不了话。"));
+            return Err(Failure::new("unavailable", "nothing can be said from here"));
         };
         // As the model's output is read: a handle of someone the group
         // doesn't know stays text.
@@ -63,7 +62,7 @@ impl Tool for Say {
         let mut segments = segmenter.push(&text);
         segments.extend(segmenter.finish());
         if segments.is_empty() {
-            return Err(Failure::new("nothing", "没有能发的东西"));
+            return Err(Failure::new("nothing", "there was nothing in it to send"));
         }
         // Outside code, where it would be a placeholder; the shell
         // swallowing a script's `${…}` as Max writes it does this
@@ -72,7 +71,9 @@ impl Tool for Say {
         if let Some(marker) = unfilled.into_iter().next() {
             return Err(Failure::new(
                 "unfilled",
-                format!("{marker} 的编号是空的或者不是数字：程序里的变量没填进去？这条没发。"),
+                format!(
+                    "{marker} has an empty id, or one that isn't a number: a variable the program didn't fill in? Nothing was sent."
+                ),
             ));
         }
         // All handed over before any is waited for: a say goes out whole,
@@ -101,10 +102,10 @@ impl Tool for Say {
             return Ok(Said { messages });
         };
         if messages.is_empty() {
-            return Err(Failure::new("not_sent", format!("没发出去：{why}")));
+            return Err(Failure::new("not_sent", format!("not sent: {why}")));
         }
         let sent: Vec<String> = messages.iter().map(|id| format!("#{id}")).collect();
-        let message = format!("发了 {}，{unsent} 条没发出去：{why}", sent.join("、"));
+        let message = format!("sent {}; {unsent} not sent: {why}", sent.join(", "));
         Err(Failure::new("not_sent", message))
     }
 }
@@ -116,7 +117,7 @@ pub struct Wake;
 pub struct WakeArgs {
     #[schemars(
         length(min = 1, max = LONGEST),
-        description = "给 Max 看的话：发生了什么"
+        description = "what Max is shown: what happened"
     )]
     text: String,
 }
@@ -129,7 +130,8 @@ pub struct Woken {
 
 impl Tool for Wake {
     const NAME: &'static str = "wake";
-    const DESCRIPTION: &'static str = "叫醒 Max，给它看一段话；每次都是 Max 的一轮。";
+    const DESCRIPTION: &'static str =
+        "Wakes Max and shows it some text; each wake is a turn of Max's.";
     const JOB: bool = false;
     const TURN: bool = false;
 
@@ -137,12 +139,12 @@ impl Tool for Wake {
     type Output = Woken;
 
     fn guide() -> String {
-        "叫醒 Max，给它看一段话。".to_owned()
+        "Wakes Max and shows it some text.".to_owned()
     }
 
     async fn run(context: &Context, WakeArgs { text }: WakeArgs) -> Result<Woken, Failure> {
         let Some(poster) = context.caller.poster() else {
-            return Err(Failure::new("unavailable", "这里叫不醒 Max。"));
+            return Err(Failure::new("unavailable", "Max can't be woken from here"));
         };
         let said = poster
             .wake(text)

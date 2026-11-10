@@ -209,7 +209,7 @@ fn terms(query: &str) -> Result<Vec<String>, Failure> {
         if word.chars().count() > TERM_CHARS {
             return Err(Failure::new(
                 "bad_arguments",
-                format!("关键词太长了，一个最多 {TERM_CHARS} 个字"),
+                format!("a keyword is at most {TERM_CHARS} characters"),
             ));
         }
         if !terms.contains(&word) {
@@ -217,12 +217,12 @@ fn terms(query: &str) -> Result<Vec<String>, Failure> {
         }
     }
     if terms.is_empty() {
-        return Err(Failure::new("bad_arguments", "history 的 query 是空的"));
+        return Err(Failure::new("bad_arguments", "history: query is empty"));
     }
     if terms.len() > MOST_TERMS {
         return Err(Failure::new(
             "bad_arguments",
-            format!("关键词最多 {MOST_TERMS} 个"),
+            format!("at most {MOST_TERMS} keywords"),
         ));
     }
     Ok(terms)
@@ -234,7 +234,7 @@ pub(super) fn sender(who: &str) -> Result<String, Failure> {
     if who.is_empty() || who.chars().count() > TERM_CHARS {
         return Err(Failure::new(
             "bad_arguments",
-            format!("who 是名字里的几个字，最多 {TERM_CHARS} 个"),
+            format!("who is a few characters of a name, at most {TERM_CHARS}"),
         ));
     }
     Ok(pattern(&who))

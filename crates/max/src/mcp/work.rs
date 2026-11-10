@@ -29,13 +29,13 @@ pub(super) fn beneath_work(path: &str) -> Result<PathBuf, Failure> {
             _ => {
                 return Err(Failure::new(
                     "bad_path",
-                    "只能用 /work 下的文件，路径里不能有 ..",
+                    "only files under /work, and no .. in the path",
                 ));
             }
         }
     }
     if relative.as_os_str().is_empty() {
-        return Err(Failure::new("bad_path", "path 得是一个文件"));
+        return Err(Failure::new("bad_path", "path must name a file"));
     }
     Ok(relative)
 }
@@ -56,7 +56,7 @@ pub(crate) fn read_stamped(
     let (mut file, metadata) = open(work, relative, most)?;
     let shown = shown(relative);
     let unreadable =
-        |error: std::io::Error| Failure::new("unreadable", format!("读不了 {shown}：{error}"));
+        |error: std::io::Error| Failure::new("unreadable", format!("can't read {shown}: {error}"));
     // As large as the file says: through Take, the read wouldn't know.
     let mut bytes = Vec::with_capacity(usize::try_from(metadata.len()).unwrap_or(0));
     (&mut file)
@@ -76,19 +76,19 @@ pub(crate) fn read_stamped(
 pub(super) fn open(work: &Path, relative: &Path, most: u64) -> Result<(File, Metadata), Failure> {
     let shown = shown(relative);
     let failed = |errno: Errno| match errno {
-        Errno::NOENT => Failure::new("not_found", format!("{shown} 不存在")),
+        Errno::NOENT => Failure::new("not_found", format!("{shown} doesn't exist")),
         Errno::LOOP | Errno::NOTDIR | Errno::MLINK => Failure::new(
             "bad_path",
-            format!("{shown}：路径上有符号链接，或者有一段不是目录"),
+            format!("{shown}: a symlink is on the path, or part of it isn't a directory"),
         ),
-        errno => Failure::new("unreadable", format!("读不了 {shown}：{errno}")),
+        errno => Failure::new("unreadable", format!("can't read {shown}: {errno}")),
     };
     let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
     let mut dir =
         rustix::fs::open(work, flags | OFlags::DIRECTORY, Mode::empty()).map_err(failed)?;
     let names: Vec<_> = relative.iter().collect();
     let Some((last, parents)) = names.split_last() else {
-        return Err(Failure::new("bad_path", "path 得是一个文件"));
+        return Err(Failure::new("bad_path", "path must name a file"));
     };
     for name in parents {
         dir = rustix::fs::openat(&dir, *name, flags | OFlags::DIRECTORY, Mode::empty())
@@ -100,9 +100,12 @@ pub(super) fn open(work: &Path, relative: &Path, most: u64) -> Result<(File, Met
     let file = File::from(file);
     let metadata = file
         .metadata()
-        .map_err(|error| Failure::new("unreadable", format!("读不了 {shown}：{error}")))?;
+        .map_err(|error| Failure::new("unreadable", format!("can't read {shown}: {error}")))?;
     if !metadata.is_file() {
-        return Err(Failure::new("bad_path", format!("{shown} 不是普通文件")));
+        return Err(Failure::new(
+            "bad_path",
+            format!("{shown} isn't a regular file"),
+        ));
     }
     if metadata.len() > most {
         return Err(too_big(relative, most));
@@ -119,7 +122,7 @@ pub(super) fn shown(relative: &Path) -> String {
 pub(super) fn too_big(relative: &Path, most: u64) -> Failure {
     Failure::new(
         "too_big",
-        format!("{} 超过 {} MiB 了", shown(relative), most >> 20),
+        format!("{} is over {} MiB", shown(relative), most >> 20),
     )
 }
 
@@ -193,12 +196,15 @@ fn written<'a>(dir: &'a str, name: &'a str) -> impl Fn(Errno) -> Failure + 'a {
     move |errno| {
         let shown = format!("/work/{dir}/{name}");
         match errno {
-            Errno::LOOP | Errno::NOTDIR | Errno::MLINK | Errno::INVAL => {
-                Failure::new("bad_path", format!("/work/{dir} 不是目录，或者是符号链接"))
+            Errno::LOOP | Errno::NOTDIR | Errno::MLINK | Errno::INVAL => Failure::new(
+                "bad_path",
+                format!("/work/{dir} isn't a directory, or is a symlink"),
+            ),
+            Errno::ISDIR | Errno::NOTEMPTY => {
+                Failure::new("bad_path", format!("{shown} is a directory"))
             }
-            Errno::ISDIR | Errno::NOTEMPTY => Failure::new("bad_path", format!("{shown} 是个目录")),
-            Errno::EXIST => Failure::new("bad_path", format!("{shown} 已经有了")),
-            errno => Failure::new("unwritable", format!("写不了 {shown}：{errno}")),
+            Errno::EXIST => Failure::new("bad_path", format!("{shown} exists already")),
+            errno => Failure::new("unwritable", format!("can't write {shown}: {errno}")),
         }
     }
 }
@@ -228,7 +234,7 @@ fn place(
         }),
         Err(error) => Err(Failure::new(
             "unwritable",
-            format!("写不了 {shown}：{error}"),
+            format!("can't write {shown}: {error}"),
         )),
     };
     if renamed.is_err() {

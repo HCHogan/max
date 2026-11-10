@@ -136,7 +136,7 @@ async fn call(
         return (text(shown, error), BTreeMap::new());
     }
     let Some(vms) = vms else {
-        let shown = text(format!("这里没有配 VM，{name} 用不了。"), true);
+        let shown = text(format!("there are no VMs here, so {name} can't run"), true);
         return (shown, BTreeMap::new());
     };
     let vm = match vms.get(context.place.conversation).await {
@@ -165,7 +165,7 @@ async fn call(
     };
     let mut output = match ran {
         Ok((shown, error)) => text(shown, error),
-        Err(error) => text(format!("{name} 没跑成：{error:#}"), true),
+        Err(error) => text(format!("{name} didn't run: {error:#}"), true),
     };
     for part in grant.shown() {
         output.tokens += match part {
@@ -206,14 +206,14 @@ fn called(calls: &BTreeMap<String, (u32, u32)>) -> String {
     let each: Vec<String> = calls
         .iter()
         .map(|(tool, (succeeded, failed))| match failed {
-            0 => format!("{tool} {succeeded} 次"),
-            _ => format!("{tool} {} 次（失败 {failed} 次）", succeeded + failed),
+            0 => format!("{tool} {succeeded}"),
+            _ => format!("{tool} {} ({failed} failed)", succeeded + failed),
         })
         .collect();
     if each.is_empty() {
         String::new()
     } else {
-        format!("\n调了 Max 的工具：{}", each.join("，"))
+        format!("\nMax tools called: {}", each.join(", "))
     }
 }
 
@@ -229,9 +229,9 @@ enum Ran {
 /// stopped only if the guest said so.
 fn stopping(stopped: &Stopped) -> String {
     match stopped {
-        Stopped::Confirmed => "已经停了".to_owned(),
+        Stopped::Confirmed => "it was stopped".to_owned(),
         Stopped::Unconfirmed(why) => {
-            format!("叫它停了，但没等到 VM 确认（{why}），可能还在跑")
+            format!("it was told to stop, but the VM didn't confirm ({why}): it may still run")
         }
     }
 }
@@ -294,15 +294,17 @@ async fn ended<T>(
 /// How the model hears of a background command, `job`, writing to `file`.
 fn follow(job: &str, file: &str) -> String {
     format!(
-        "跑完了，退出码和输出作为 [{job} 完成] 回到你这里：别 sleep 等它，也别反复查。\
-         输出一边跑一边写进 {file}，要看进度就读它的末尾；不要了用 agent_cancel 停掉。"
+        "When it ends, its exit status and output come back to you as [{job} 完成]: don't sleep \
+         waiting for it, and don't keep checking. Its output is written to {file} as it runs: to \
+         see how far it is, read the end of that; if it isn't wanted any more, stop it with \
+         agent_cancel."
     )
 }
 
 fn exited(status: Option<u32>) -> String {
     match status {
-        Some(code) => format!("退出码 {code}"),
-        None => "没有退出码，命令可能被杀了".to_owned(),
+        Some(code) => format!("exit status {code}"),
+        None => "no exit status: the command may have been killed".to_owned(),
     }
 }
 
@@ -310,14 +312,14 @@ fn exited(status: Option<u32>) -> String {
 fn took(elapsed: Duration) -> String {
     let seconds = elapsed.as_secs();
     match seconds {
-        0..60 => format!("{seconds} 秒"),
-        _ => format!("{} 分 {} 秒", seconds / 60, seconds % 60),
+        0..60 => format!("{seconds} seconds"),
+        _ => format!("{} minutes {} seconds", seconds / 60, seconds % 60),
     }
 }
 
 fn with(head: String, shown: &str) -> String {
     if shown.is_empty() {
-        format!("{head}，没有输出。")
+        format!("{head}; no output")
     } else {
         format!("{head}\n{shown}")
     }
@@ -329,8 +331,8 @@ mod tests {
 
     #[test]
     fn a_run_time_is_in_seconds_or_minutes() {
-        assert_eq!(took(Duration::from_millis(5400)), "5 秒");
-        assert_eq!(took(Duration::from_secs(192)), "3 分 12 秒");
+        assert_eq!(took(Duration::from_millis(5400)), "5 seconds");
+        assert_eq!(took(Duration::from_secs(192)), "3 minutes 12 seconds");
     }
 
     #[test]
@@ -342,7 +344,7 @@ mod tests {
         ]);
         assert_eq!(
             called(&calls),
-            "\n调了 Max 的工具：history 4 次（失败 1 次），memory_list 1 次"
+            "\nMax tools called: history 4 (1 failed), memory_list 1"
         );
         assert_eq!(tally(&calls), "history 3/1, memory_list 1");
     }

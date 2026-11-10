@@ -84,7 +84,7 @@ pub(super) async fn stretch(
         ids.reverse();
     }
     let (Some(&first), Some(&last)) = (ids.first(), ids.last()) else {
-        return Ok((vec!["（没有这样的消息）".to_owned()], None));
+        return Ok((vec!["(no such messages)".to_owned()], None));
     };
     let next = more.then_some(if newest {
         Next::Before(first)
@@ -99,7 +99,10 @@ pub(super) fn paged(mut pages: Vec<String>, page: Option<usize>) -> Result<Page,
     let page = page.unwrap_or(1);
     let count = pages.len();
     let Some(index) = page.checked_sub(1).filter(|index| *index < count) else {
-        return Err(Failure::new("no_page", format!("只有 {count} 页")));
+        return Err(Failure::new(
+            "no_page",
+            format!("there are only {count} pages"),
+        ));
     };
     Ok(Page {
         text: pages.swap_remove(index),
@@ -110,7 +113,7 @@ pub(super) fn paged(mut pages: Vec<String>, page: Option<usize>) -> Result<Page,
 }
 
 fn not_found(id: i64) -> Failure {
-    Failure::new("not_found", format!("这里没有 #{id} 这条消息"))
+    Failure::new("not_found", format!("there is no message #{id} here"))
 }
 
 /// One row's whole line, cut evenly into pages.

@@ -94,8 +94,8 @@ async fn a_call_goes_on_with_the_key_and_comes_back_as_it_is() {
     assert_eq!(
         apis.prompt(),
         format!(
-            "- mail（{base}）：发邮件。只许 POST /emails、GET /emails/*、GET /moved。\
-             所有群加起来一小时最多 3 次。"
+            "- mail ({base}): 发邮件。 Only POST /emails, GET /emails/*, GET /moved allowed. \
+             At most 3 calls an hour, all chats together."
         )
     );
     let vm = served(&mut scope, apis).await;

@@ -17,17 +17,17 @@ pub struct Config;
 pub struct Args {
     #[schemars(
         range(min = 0, max = *Setting::IdleWindowSecs.range().end()),
-        description = "说完话后空闲多少秒结束这一轮；0 是恢复默认"
+        description = "seconds a turn idles after it last spoke before it ends; 0 is back to the default"
     )]
     idle_window_secs: Option<u64>,
     #[schemars(
         range(min = 0, max = *Setting::CallTimeSecs.range().end()),
-        description = "程序和命令每次调 Max 的工具最多等多少秒；0 是恢复默认"
+        description = "seconds a program or a command waits at most for each call of a Max tool; 0 is back to the default"
     )]
     call_time_secs: Option<u64>,
     #[schemars(
         range(min = 0, max = *Setting::CommandsAtOnce.range().end()),
-        description = "最多同时跑几个后台命令；0 是恢复默认"
+        description = "how many background commands run at once at most; 0 is back to the default"
     )]
     commands_at_once: Option<u64>,
 }
@@ -48,8 +48,7 @@ pub struct Shown {
 
 impl Tool for Config {
     const NAME: &'static str = "config";
-    const DESCRIPTION: &'static str =
-        "看或改本群的几项设置：一轮空闲多久结束、调工具最多等多久、最多同时跑几个后台命令。";
+    const DESCRIPTION: &'static str = "Shows or sets a few of this chat's settings: how long an idle turn lasts, how long a tool call may take, and how many background commands run at once.";
     const JOB: bool = false;
 
     type Args = Args;
@@ -61,10 +60,10 @@ impl Tool for Config {
             format!("{}–{}", range.start(), range.end())
         };
         format!(
-            "看或改本群的几项设置。不给参数就只看；给了就改，0 是恢复默认。返回每项现在的值和默认值。改不改由你判断：有人请你改、理由说得通，或者你确实需要时再改，改完简短说一声。群管理员也能用 /config 改，谁后改算谁的。\n  \
-            idle_window_secs：你说完话后空闲多少秒结束这一轮（{}）。窗口里再被叫，你还拿着这一轮查到的东西；结束后再被叫是新的一轮，从记录重新读起。默认跟着模型走。马上生效，这一轮也算。\n  \
-            call_time_secs：程序和命令里每次调 Max 的工具（包括 max.video、max.file）最多等多少秒（{}）。转长视频、拷大文件超时了就调大。从下一次 run_code、shell 起生效。\n  \
-            commands_at_once：最多同时跑几个后台命令（{}）。马上生效。",
+            "Shows or sets a few of this chat's settings. Without arguments it only shows; one given is set, and 0 puts it back to the default. Returns each one's value now and its default. Whether to change one is yours to judge: when someone asks and the reason holds, or when you do need it; say so briefly afterwards. A group's admins can set them too, with /config, and the last to set one wins.\n  \
+            idle_window_secs: how many seconds after you last spoke an idle turn ends ({}). Called again within the window, you still have what this turn found; called after it, a new turn starts and reads from the records again. The default follows the model. In force at once, for this turn too.\n  \
+            call_time_secs: how many seconds a program or a command waits at most for each call of a Max tool, max.video and max.file among them ({}). Raise it when converting a long video or copying a big file runs out of time. In force from the next run_code or shell.\n  \
+            commands_at_once: how many background commands run at once at most ({}). In force at once.",
             range(Setting::IdleWindowSecs),
             range(Setting::CallTimeSecs),
             range(Setting::CommandsAtOnce),
@@ -73,7 +72,10 @@ impl Tool for Config {
 
     async fn run(context: &Context, args: Args) -> Result<Limits, Failure> {
         let Some(poster) = context.caller.poster() else {
-            return Err(Failure::new("not_here", "这里改不了设置"));
+            return Err(Failure::new(
+                "not_here",
+                "settings can't be changed from here",
+            ));
         };
         let given = [
             (Setting::IdleWindowSecs, args.idle_window_secs),
@@ -90,7 +92,7 @@ impl Tool for Config {
                 return Err(Failure::new(
                     "bad_arguments",
                     format!(
-                        "{} 要么是 0（恢复默认），要么在 {} 到 {} 之间",
+                        "{} is either 0 (back to the default) or from {} to {}",
                         setting.name(),
                         range.start(),
                         range.end()

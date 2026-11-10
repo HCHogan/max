@@ -39,7 +39,7 @@ impl Output {
         let tail: Vec<u8> = self.tail.iter().copied().collect();
         let left_out = self.total - self.head.len() - tail.len();
         format!(
-            "{}\n…（中间省略 {left_out} 字节，全部输出在 /work/.max/out/{}）…\n{}",
+            "{}\n… ({left_out} bytes left out here; the whole output is in /work/.max/out/{}) …\n{}",
             head.trim_end_matches('\u{fffd}'),
             self.name,
             String::from_utf8_lossy(&tail).trim_start_matches('\u{fffd}'),

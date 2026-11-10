@@ -25,7 +25,10 @@ pub(super) async fn started(
     limit: Duration,
 ) -> (String, bool) {
     let Some(poster) = context.caller.poster() else {
-        return ("这里不能在后台跑命令。".to_owned(), true);
+        return (
+            "commands can't run in the background from here".to_owned(),
+            true,
+        );
     };
     let unit = Vm::unit();
     let file = format!("/work/{OUT}/{unit}.txt");
@@ -39,7 +42,7 @@ pub(super) async fn started(
         Ok(number) => {
             let job = job::name(number);
             let shown = format!(
-                "在后台跑了，是 {job}，限时 {} 分钟。{}",
+                "It runs in the background as {job}, for at most {} minutes. {}",
                 limit.as_secs().div_ceil(60),
                 follow(&job, &file),
             );
@@ -88,12 +91,12 @@ pub(super) fn finished(
         Err(error) => return failed(format!("{error:#}")),
         Ok(Ran::Exited(status)) => (
             How::Done,
-            format!("{}，跑了 {}", exited(status), took(begun.elapsed())),
+            format!("{}, ran for {}", exited(status), took(begun.elapsed())),
         ),
         Ok(Ran::OutOfTime(stopped)) => (
             How::OutOfTime,
             format!(
-                "{} 分钟内没跑完，{}",
+                "not done in {} minutes; {}",
                 limit.as_secs().div_ceil(60),
                 stopping(&stopped)
             ),

@@ -27,11 +27,11 @@ pub struct MuteMember;
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Args {
-    #[schemars(description = "[mention#编号] 里的数字")]
+    #[schemars(description = "the number in [mention#number]")]
     member: i64,
     #[schemars(
         range(min = 0, max = LONGEST),
-        description = format!("禁多少秒，0 是解除，最多 {} 天", LONGEST / DAY)
+        description = format!("seconds to mute for; 0 lifts the mute; at most {} days", LONGEST / DAY)
     )]
     seconds: i64,
 }
@@ -45,7 +45,7 @@ pub struct Muted {
 
 impl Tool for MuteMember {
     const NAME: &'static str = "mute_member";
-    const DESCRIPTION: &'static str = "在本群禁言一个普通成员，或者解除禁言；要你是群管理员。";
+    const DESCRIPTION: &'static str = "Mutes an ordinary member of this group, or lifts a mute; you have to be an admin of the group.";
     const JOB: bool = false;
 
     type Args = Args;
@@ -53,9 +53,9 @@ impl Tool for MuteMember {
 
     fn guide() -> String {
         format!(
-            "在本群禁言一个人，或者解除。member 是 [mention#编号] 里的数字；seconds 是从现在起禁多少秒，0 是解除，最多 {LONGEST}（{} 天）。禁不禁、禁多久由你判断：刷屏、广告、骂人，或者有人请你禁、理由正当时再用，禁完或解完在群里简短说一声。\n  \
-            QQ 只让群管理员禁言普通成员：群主、管理员、你自己都禁不了，私聊里没有禁言；没在本群说过话的人也禁不了。对禁着的人再禁，是把结束时间改成从现在起 seconds 秒。\n  \
-            QQ 办了才返回，until 是禁到几点，解除时是 null；办不了会抛错，说明原因。记录里不会多一行。",
+            "Mutes someone in this group, or lifts a mute. member is the number in [mention#number]; seconds is how long from now, 0 lifts it, at most {LONGEST} ({} days). Whether to mute, and for how long, is yours to judge: for flooding, ads or abuse, or when someone asks and the reason is sound; say so briefly in the chat afterwards.\n  \
+            QQ lets only a group's admins mute, and only ordinary members: the owner, the admins and yourself can't be muted, there is no muting in a private chat, and nobody who hasn't spoken in this group can be muted. Muting someone already muted moves the end to seconds from now.\n  \
+            It returns once QQ has done it: until is when the mute ends, null when lifted; if QQ doesn't, the call fails and says why. No row is added to the records.",
             LONGEST / DAY
         )
     }
@@ -74,14 +74,14 @@ async fn mute(context: &Context, Args { member, seconds }: Args) -> Result<Muted
     }
     let place = &context.place;
     let (Some(qq), Platform::Qq) = (&context.services.groups, place.platform) else {
-        return Err(Failure::new("unavailable", "这里禁言不了。"));
+        return Err(Failure::new("unavailable", "nobody can be muted from here"));
     };
     let refused = |why: &str| Err(Failure::new("refused", why));
     let Some(group) = place.native_id.strip_prefix("group:") else {
-        return refused("私聊里没有禁言");
+        return refused("there is no muting in a private chat");
     };
     if PrincipalId(member) == place.me.principal {
-        return refused("不能禁言你自己");
+        return refused("you can't mute yourself");
     }
     let mut conn = context.services.pool.acquire().await?;
     let speaker = platform::speaker(&mut conn, place.endpoint, PrincipalId(member)).await?;
@@ -89,14 +89,14 @@ async fn mute(context: &Context, Args { member, seconds }: Args) -> Result<Muted
     let Some(speaker) = speaker else {
         return Err(Failure::new(
             "not_found",
-            format!("[mention#{member}] 没在本群说过话，禁言不了"),
+            format!("[mention#{member}] hasn't spoken in this group, and can't be muted"),
         ));
     };
     if speaker.identity == place.me.identity {
-        return refused("不能禁言你自己");
+        return refused("you can't mute yourself");
     }
     if matches!(speaker.role, Some(Role::Owner | Role::Admin)) {
-        return refused("群主和管理员，QQ 不让机器人禁言");
+        return refused("QQ doesn't let a bot mute the owner or an admin");
     }
     let openid = speaker.native_user_id.as_str();
     let until = (seconds > 0).then(|| Utc::now() + TimeDelta::seconds(seconds));
@@ -141,10 +141,10 @@ fn qq_time() -> FixedOffset {
 fn not_muted(error: &api::Error) -> Failure {
     let why = match error {
         api::Error::Api { code: 40011030, .. } => {
-            "QQ 说机器人不是群管理员（40011030），禁言不了".to_owned()
+            "QQ says the bot isn't an admin of the group (40011030), so it can't mute".to_owned()
         }
-        api::Error::Api { code, message, .. } => format!("QQ 没办：{code} {message}"),
-        error => format!("不知道 QQ 办成没有，再来一次也无妨：{error}"),
+        api::Error::Api { code, message, .. } => format!("QQ refused: {code} {message}"),
+        error => format!("it isn't known whether QQ did it; doing it again does no harm: {error}"),
     };
     Failure::new("not_muted", why)
 }

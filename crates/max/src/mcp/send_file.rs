@@ -27,9 +27,15 @@ pub struct SendFile;
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Args {
-    #[schemars(length(min = 1), description = "/work 下的路径，相对路径从 /work 算")]
+    #[schemars(
+        length(min = 1),
+        description = "a path under /work; a relative one is from /work"
+    )]
     path: String,
-    #[schemars(length(min = 1), description = "群里显示的文件名，默认用路径里的")]
+    #[schemars(
+        length(min = 1),
+        description = "the file name shown in the chat; the path's by default"
+    )]
     name: Option<String>,
 }
 
@@ -40,8 +46,7 @@ pub struct Sent {
 
 impl Tool for SendFile {
     const NAME: &'static str = "send_file";
-    const DESCRIPTION: &'static str =
-        "把 /work 下的一个文件发到本群，比如生成的文档、表格、压缩包。";
+    const DESCRIPTION: &'static str = "Sends a file under /work to this chat, such as a document, a spreadsheet or an archive you made.";
     const JOB: bool = false;
 
     type Args = Args;
@@ -49,9 +54,9 @@ impl Tool for SendFile {
 
     fn guide() -> String {
         format!(
-            "把 /work 下的一个文件发到本群，群里显示成文件，点开能下载：文档、表格、PDF、压缩包、代码都行。最大 {} MiB，不能是空的；路径上不能有符号链接。\n  \
-            name 是群里显示的文件名，默认用路径里的。文件存好、排上队就返回，handle 是这个文件的句柄；上传在后面接着做，大文件要一两分钟才到群里，你之后说的话排在它后面。没发出去的话，记录里这条标着（没发出去）。\n  \
-            要大家直接看到的图用 send_image，别当文件发。记录里已有的文件要再发，先 max.file 拷到 /work 再发。",
+            "Sends a file under /work to this chat, where it shows as a file that opens to download: documents, spreadsheets, PDFs, archives, code. At most {} MiB, and not empty; no symlink on the path.\n  \
+            name is the file name shown in the chat, the path's by default. It returns once the file is stored and queued, and handle is the file's handle; the upload goes on after that, a big file takes a minute or two to reach the chat, and what you say afterwards waits behind it. If it doesn't go out, its row in the records is marked （没发出去）.\n  \
+            A picture for everyone to see goes with send_image, not as a file. To send again a file the records already have, copy it to /work with max.file first.",
             SENT_FILE_BYTES >> 20
         )
     }
@@ -67,7 +72,7 @@ async fn send(context: &Context, Args { path, name }: Args) -> Result<Sent, Fail
         &context.services.store,
         context.caller.poster(),
     ) else {
-        return Err(Failure::new("unavailable", "这里发不了文件。"));
+        return Err(Failure::new("unavailable", "files can't be sent from here"));
     };
     let relative = beneath_work(&path)?;
     let name = match name {
@@ -102,7 +107,7 @@ async fn send(context: &Context, Args { path, name }: Args) -> Result<Sent, Fail
     let id = poster
         .queue(draft)
         .await
-        .map_err(|error| Failure::new("not_sent", format!("没发出去：{error}")))?;
+        .map_err(|error| Failure::new("not_sent", format!("not sent: {error}")))?;
     Ok(Sent {
         handle: format!("file#{id}.0"),
     })
@@ -123,7 +128,7 @@ async fn keep(store: &Store, file: File, relative: &Path) -> Result<(String, u64
     loop {
         let read = file.read(&mut piece).await.map_err(|error| {
             let shown = shown(relative);
-            Failure::new("unreadable", format!("读不了 {shown}：{error}"))
+            Failure::new("unreadable", format!("can't read {shown}: {error}"))
         })?;
         if read == 0 {
             break;
@@ -136,7 +141,7 @@ async fn keep(store: &Store, file: File, relative: &Path) -> Result<(String, u64
     }
     if size == 0 {
         let shown = shown(relative);
-        return Err(Failure::new("empty", format!("{shown} 是空的")));
+        return Err(Failure::new("empty", format!("{shown} is empty")));
     }
     partial.finish().await.map_err(stored)
 }
@@ -145,15 +150,15 @@ async fn keep(store: &Store, file: File, relative: &Path) -> Result<(String, u64
 /// control characters.
 fn named(name: &str) -> Result<String, Failure> {
     let name = name.trim();
-    let bad = |why: String| Failure::new("bad_name", format!("文件名{why}"));
+    let bad = |why: String| Failure::new("bad_name", format!("the file name {why}"));
     if name.is_empty() || name == "." || name == ".." {
-        return Err(bad("不能是空的".into()));
+        return Err(bad("can't be empty".into()));
     }
     if name.chars().count() > LONGEST_NAME {
-        return Err(bad(format!("最长 {LONGEST_NAME} 个字")));
+        return Err(bad(format!("is at most {LONGEST_NAME} characters")));
     }
     if name.contains(['/', '\\']) || name.chars().any(char::is_control) {
-        return Err(bad("里不能有 /、\\ 或控制字符".into()));
+        return Err(bad("can't have /, \\ or control characters".into()));
     }
     Ok(name.to_owned())
 }

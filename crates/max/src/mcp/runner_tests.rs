@@ -159,7 +159,8 @@ async fn programs_call_max_tools_and_return(pool: PgPool) {
     let ran = run(&mcp, token, &missing).await;
     assert_eq!(ran.status, 1);
     assert!(
-        ran.stdout.starts_with("ToolError: history: 这里没有"),
+        ran.stdout
+            .starts_with("ToolError: history: there is no message #"),
         "{}",
         ran.stdout
     );
@@ -188,7 +189,7 @@ async fn programs_call_max_tools_and_return(pool: PgPool) {
     assert!(ran.stdout.starts_with("SyntaxError"), "{}", ran.stdout);
 
     let ran = run(&mcp, "nope", &read).await;
-    assert!(ran.stdout.contains("token 不对"), "{}", ran.stdout);
+    assert!(ran.stdout.contains("the token is wrong"), "{}", ran.stdout);
 
     scope.close(Duration::from_secs(5)).await;
 }
@@ -280,7 +281,7 @@ async fn programs_show_the_model_pictures(pool: PgPool) {
     let ran = run_with(input(code, json!({ "pngs": pngs(&[2]) }))).await;
     assert_eq!(
         ran.stdout,
-        r#"[{"width":3,"height":1},{"width":2,"height":1},"max.image: /work/notes.txt 不是解得开的 PNG、JPEG、GIF、WebP（not_a_picture）","TypeError"]"#,
+        r#"[{"width":3,"height":1},{"width":2,"height":1},"max.image: /work/notes.txt isn't a PNG, JPEG, GIF or WebP that decodes（not_a_picture）","TypeError"]"#,
         "{}",
         ran.stderr
     );
@@ -303,7 +304,7 @@ async fn programs_show_the_model_pictures(pool: PgPool) {
     assert_eq!(ran.status, 1);
     assert!(
         ran.stdout
-            .starts_with("ToolError: max.image: 一次 run_code 最多交 4 张图"),
+            .starts_with("ToolError: max.image: one run_code shows at most 4 pictures"),
         "{}",
         ran.stdout
     );
@@ -445,7 +446,7 @@ async fn programs_show_the_model_videos(pool: PgPool) {
     let ran = run_with(input(grant.token(), over)).await;
     assert!(
         ran.stdout.starts_with(
-            "ToolError: max.video: 一次 run_code 最多交 10 分钟视频，这段 299 秒，之前交了 304 秒"
+            "ToolError: max.video: one run_code shows at most 10 minutes of video, and this is 299 seconds after 304 shown already"
         ),
         "{}{}",
         ran.stdout,
@@ -458,7 +459,7 @@ async fn programs_show_the_model_videos(pool: PgPool) {
     let ran = run_with(input(blind.token(), "await max.video('clip.mkv')")).await;
     assert!(
         ran.stdout
-            .starts_with("ToolError: max.video: 这个模型看不了视频。（unavailable）"),
+            .starts_with("ToolError: max.video: this model doesn't watch videos（unavailable）"),
         "{}",
         ran.stdout
     );
@@ -645,7 +646,7 @@ async fn commands_call_max_tools_with_maxx(pool: PgPool) {
     let help = maxx(&mcp, token, &["history", "--help"], "").await;
     assert!(
         help.stdout
-            .contains("\n  --around（整数）：读这条消息前后，#123 就是 123\n"),
+            .contains("\n  --around（整数）：read around this message: 123 for #123\n"),
         "{}",
         help.stdout
     );
@@ -670,7 +671,7 @@ async fn commands_call_max_tools_with_maxx(pool: PgPool) {
     let missing = maxx(&mcp, token, &["history", "--around", &after], "").await;
     assert_eq!(missing.status, 1);
     assert!(
-        missing.stderr.starts_with("history: 这里没有")
+        missing.stderr.starts_with("history: there is no message #")
             && missing.stderr.ends_with("（not_found）\n"),
         "{}",
         missing.stderr
@@ -749,7 +750,11 @@ async fn commands_call_max_tools_with_maxx(pool: PgPool) {
     drop(grant);
     let ended = maxx(&mcp, Some(&token), &["history"], "").await;
     assert_eq!(ended.status, 1);
-    assert!(ended.stderr.contains("token 不对"), "{}", ended.stderr);
+    assert!(
+        ended.stderr.contains("the token is wrong"),
+        "{}",
+        ended.stderr
+    );
 
     scope.close(Duration::from_secs(5)).await;
     let _ = std::fs::remove_dir_all(&dir);

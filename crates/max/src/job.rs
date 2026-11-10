@@ -294,8 +294,8 @@ fn take(steer: String, question: &mut Option<Waiting>, queue: &mut Vec<String>) 
 /// end of what it wrote on stderr says.
 fn failure(status: Option<u32>, err: &str) -> String {
     let mut why = match status {
-        Some(code) => format!("agent 退出了，退出码 {code}"),
-        None => "agent 意外退出了".to_owned(),
+        Some(code) => format!("the agent exited with status {code}"),
+        None => "the agent exited unexpectedly".to_owned(),
     };
     let last = err
         .lines()
@@ -307,7 +307,7 @@ fn failure(status: Option<u32>, err: &str) -> String {
             .char_indices()
             .nth(WHY_KEPT)
             .map_or(last.len(), |(at, _)| at);
-        why = format!("{why}：{}", &last[..cut]);
+        why = format!("{why}: {}", &last[..cut]);
     }
     why
 }

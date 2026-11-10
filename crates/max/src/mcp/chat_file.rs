@@ -27,12 +27,12 @@ struct Args {
 pub async fn run(context: &Context, args: Value) -> Result<Value, Failure> {
     let Args { handle } = arguments(NAME, args)?;
     let (Some(work), Some(store)) = (&context.work, &context.services.store) else {
-        return Err(Failure::new("unavailable", "这里拿不了文件。"));
+        return Err(Failure::new("unavailable", "files can't be fetched here"));
     };
     let Some((message, ordinal)) = parse(&handle) else {
         return Err(Failure::new(
             "bad_handle",
-            format!("{handle} 不是句柄，要写成 file#123.0 这样"),
+            format!("{handle} isn't a handle: write it like file#123.0"),
         ));
     };
     let mut conn = context.services.pool.acquire().await?;
@@ -43,7 +43,7 @@ pub async fn run(context: &Context, args: Value) -> Result<Value, Failure> {
         return Err(Failure::new(
             "not_found",
             format!(
-                "本群的记录里没有存下来的 {handle}：句柄不对，或者没下载下来（超过 {} MiB，或者下载失败）",
+                "this chat's records hold no stored {handle}: the handle is wrong, or it wasn't downloaded (over {} MiB, or the download failed)",
                 KEPT_FILE_BYTES >> 20
             ),
         ));

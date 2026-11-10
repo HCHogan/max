@@ -136,7 +136,10 @@ async fn a_normal_member_is_muted_and_let_speak(pool: PgPool) {
     let args = json!({ "member": xiaoming.0, "seconds": 60 });
     let failure = run(&context, args).await.unwrap_err();
     assert_eq!(failure.code, "not_muted");
-    assert!(failure.message.contains("不是群管理员"), "{failure:?}");
+    assert!(
+        failure.message.contains("isn't an admin of the group"),
+        "{failure:?}"
+    );
 
     // What QQ would refuse isn't asked.
     let before = asked().len();
