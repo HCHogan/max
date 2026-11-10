@@ -67,7 +67,7 @@ impl Tool for MuteMember {
 
 async fn mute(context: &Context, Args { member, seconds }: Args) -> Result<Muted, Failure> {
     let place = &context.place;
-    let (Some(admin), Platform::Qq) = (&context.services.admin, place.platform) else {
+    let (Some(qq), Platform::Qq) = (&context.services.groups, place.platform) else {
         return Err(Failure::new("unavailable", "这里禁言不了。"));
     };
     let refused = |why: &str| Err(Failure::new("refused", why));
@@ -102,7 +102,7 @@ async fn mute(context: &Context, Args { member, seconds }: Args) -> Result<Muted
         },
         Some(until) => {
             // QQ adds a mute, or moves the end of one that runs.
-            let muted = admin.muted(group).await.map_err(|e| not_muted(&e))?;
+            let muted = qq.muted(group).await.map_err(|e| not_muted(&e))?;
             let running = muted.iter().any(|muted| muted.member_openid == openid);
             Mute {
                 op: if running { MuteOp::Update } else { MuteOp::Add },
@@ -113,8 +113,7 @@ async fn mute(context: &Context, Args { member, seconds }: Args) -> Result<Muted
             }
         }
     };
-    admin
-        .mute(group, &mute)
+    qq.mute(group, &mute)
         .await
         .map_err(|error| not_muted(&error))?;
     info!(conversation = %place.conversation, member, seconds, "muted");

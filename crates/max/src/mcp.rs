@@ -41,7 +41,7 @@ use crate::conversation::{Place, Poster};
 use crate::embedding::Embedder;
 use crate::job::Link;
 use crate::media::store::Store;
-use crate::qq::admin::Admin;
+use crate::qq::groups::Groups;
 use crate::search::Search;
 
 /// What the tools reach, the same for every call, built once in main; an
@@ -57,8 +57,8 @@ pub struct Services {
     pub store: Option<Arc<Store>>,
     /// For `find_stickers`, and `history` by meaning.
     pub embedder: Option<Arc<Embedder>>,
-    /// For `mute_member`; None without QQ.
-    pub admin: Option<Arc<dyn Admin>>,
+    /// For `mute_member` and a group's name; None without QQ.
+    pub groups: Option<Arc<dyn Groups>>,
 }
 
 /// Where a call comes from: the conversation whose VM the program runs in,
@@ -164,7 +164,7 @@ impl Services {
             search: None,
             store: None,
             embedder: None,
-            admin: None,
+            groups: None,
         }
     }
 }

@@ -11,7 +11,7 @@ use crate::conversation::ingest;
 use crate::conversation::testing::{from_xiaohong, from_xiaoming, group, offset, text};
 use crate::mcp::Services;
 use crate::mcp::tool::Tool;
-use crate::qq::admin::Admin;
+use crate::qq::groups::Groups;
 use crate::qq::send::Answer;
 
 /// Calls the tool as a program does, its arguments checked.
@@ -28,7 +28,7 @@ struct Group {
     refusal: Mutex<Option<api::Error>>,
 }
 
-impl Admin for Group {
+impl Groups for Group {
     fn info<'a>(&'a self, _: &'a str) -> Answer<'a, GroupInfo> {
         unreachable!("muting doesn't ask what the group is called")
     }
@@ -103,7 +103,7 @@ async fn a_normal_member_is_muted_and_let_speak(pool: PgPool) {
     let qq = Arc::new(Group::default());
     let context = Context::check(
         Services {
-            admin: Some(Arc::clone(&qq) as Arc<dyn Admin>),
+            groups: Some(Arc::clone(&qq) as Arc<dyn Groups>),
             ..Services::bare(pool.clone())
         },
         Arc::clone(&place),
@@ -147,7 +147,7 @@ async fn a_normal_member_is_muted_and_let_speak(pool: PgPool) {
     assert_eq!(code(&context, xiaoming, LONGEST + 1).await, "bad_arguments");
     let direct = Context::check(
         Services {
-            admin: context.services.admin.clone(),
+            groups: context.services.groups.clone(),
             ..Services::bare(pool.clone())
         },
         Arc::new(Place {
@@ -163,7 +163,7 @@ async fn a_normal_member_is_muted_and_let_speak(pool: PgPool) {
     assert_eq!(code(&direct, xiaoming, 60).await, "refused");
     let elsewhere = Context {
         services: Arc::new(Services {
-            admin: None,
+            groups: None,
             ..(*context.services).clone()
         }),
         ..context

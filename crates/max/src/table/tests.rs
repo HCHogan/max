@@ -17,7 +17,7 @@ use crate::conversation::{Outgoing, Question, ingest};
 use crate::inbound::{Chat, InNode, Person};
 use crate::llm::testing::{Answer, Script};
 use crate::mcp::Services;
-use crate::qq::admin::Admin;
+use crate::qq::groups::Groups;
 
 const PATIENCE: Duration = Duration::from_secs(5);
 
@@ -40,7 +40,7 @@ impl Setup {
     }
 
     /// With `qq` to ask what a group is called.
-    async fn with_qq(pool: PgPool, qq: Option<Arc<dyn Admin>>) -> Self {
+    async fn with_qq(pool: PgPool, qq: Option<Arc<dyn Groups>>) -> Self {
         let mut conn = pool.acquire().await.unwrap();
         let account = platform::account(&mut conn, Platform::Qq, "BOT", "maxx")
             .await
@@ -52,7 +52,7 @@ impl Setup {
         let script = Arc::new(Script::default());
         let (mut shared, outbound) = shared(&pool, &script, 300, BTreeSet::from([owner.principal]));
         shared.services = Arc::new(Services {
-            admin: qq,
+            groups: qq,
             ..Services::bare(pool.clone())
         });
         // As in main: the actors' questions and the VMs' signals come to
@@ -155,7 +155,7 @@ impl Setup {
 /// QQ, asked only what GROUP1 is called.
 struct Named(&'static str);
 
-impl Admin for Named {
+impl Groups for Named {
     fn muted<'a>(&'a self, _: &'a str) -> crate::qq::send::Answer<'a, Vec<Muted>> {
         unreachable!("nobody is muted here")
     }

@@ -40,7 +40,7 @@ use max::media::fetch;
 use max::media::pictures::Pictures;
 use max::media::stickers::Stickers;
 use max::media::store::Store;
-use max::qq::admin::Admin;
+use max::qq::groups::Groups;
 use max::qq::{listen, send};
 use max::recall::Vectors;
 use max::scope::Scope;
@@ -233,7 +233,7 @@ fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
                 search: None,
                 store: Some(Arc::clone(&store)),
                 embedder: None,
-                admin: None,
+                groups: None,
             };
             Ok::<_, sqlx::Error>(mcp::Context {
                 services: Arc::new(services),
@@ -554,10 +554,10 @@ async fn serve(config: Config) -> Result<()> {
         Some(credentials) => Some(Arc::new(qqbot::Client::new(credentials)?)),
         None => None,
     };
-    // A tool mutes through QQ's client directly; see qq::admin.
-    let admin = client
+    // A tool mutes through QQ's client directly; see qq::groups.
+    let groups = client
         .as_ref()
-        .map(|client| Arc::clone(client) as Arc<dyn Admin>);
+        .map(|client| Arc::clone(client) as Arc<dyn Groups>);
     let mut services = Scope::new();
     let vm_dir = config.vm.as_ref().map(|vm| vm.dir.clone());
     match (&vm_dir, models.dreamer().transpose()?) {
@@ -596,7 +596,7 @@ async fn serve(config: Config) -> Result<()> {
         search,
         store: store.clone(),
         embedder,
-        admin,
+        groups,
     });
     let (outbound, outbound_rx) = mpsc::unbounded_channel();
     let shared = Arc::new(Shared {

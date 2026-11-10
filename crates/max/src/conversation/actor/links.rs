@@ -87,7 +87,7 @@ impl Conversation {
     /// a task of its own: the actor waits only on the database, and no
     /// answer of its own shows the name.
     fn learn_title(&mut self) {
-        let (Some(qq), Platform::Qq) = (&self.shared.services.admin, self.place.platform) else {
+        let (Some(qq), Platform::Qq) = (&self.shared.services.groups, self.place.platform) else {
             return;
         };
         let Some(group) = self.place.native_id.strip_prefix("group:") else {
