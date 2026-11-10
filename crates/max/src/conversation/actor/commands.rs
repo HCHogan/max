@@ -222,9 +222,6 @@ impl Conversation {
         if let Some(peers) = asked_by {
             line("asked by", peers);
         }
-        if let Some(questions) = self.asked.summary() {
-            line("to answer", questions);
-        }
         line(
             "core",
             match &self.core {

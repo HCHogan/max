@@ -1625,12 +1625,6 @@ async fn a_new_core_is_shown_the_questions_still_waiting(pool: PgPool) {
     let (asked, answered) = question("明天的活动\n几点开始？");
     h.mailbox.send(asked).unwrap();
     assert_eq!(h.said().await.1, "谁知道明天几点开始？");
-    h.send(at_max(1, "/status"));
-    let status = h.said().await.1;
-    assert!(
-        status.contains("\nto answer ask#1 from c#7 hank\n"),
-        "{status}"
-    );
     let deadline = std::time::Instant::now() + PATIENCE;
     while h.turns().await.first().is_none_or(|turn| turn.1.is_none()) {
         assert!(std::time::Instant::now() < deadline, "the core didn't end");
@@ -1638,7 +1632,7 @@ async fn a_new_core_is_shown_the_questions_still_waiting(pool: PgPool) {
     }
     // Someone here knows; the core that hears them never saw the question.
     h.script.push(Answer::says("好，我告诉它"));
-    h.send(from_xiaohong(2, vec![me(), text("八点")]));
+    h.send(from_xiaohong(1, vec![me(), text("八点")]));
     assert_eq!(h.said().await.1, "好，我告诉它");
     let shown = h.request_tail(1);
     let waiting = "\n\n[等你回答的问题]\nask#1 c#7 hank：明天的活动 ⏎ 几点开始？\n\n[新消息]\n";

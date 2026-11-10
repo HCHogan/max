@@ -45,30 +45,15 @@ impl Asked {
         }
     }
 
-    /// The questions someone still waits on.
-    fn open(&self) -> impl Iterator<Item = (u32, &Waiting)> {
-        let waiting = self.waiting.iter();
-        waiting
-            .filter(|(_, waiting)| !waiting.answer.is_closed())
-            .map(|(number, waiting)| (*number, waiting))
-    }
-
-    /// For `/status`: the questions someone still waits on.
-    pub(super) fn summary(&self) -> Option<String> {
-        let open: Vec<String> = self
-            .open()
-            .map(|(number, waiting)| format!("{} from {}", name(number), waiting.from))
-            .collect();
-        (!open.is_empty()).then(|| open.join(" · "))
-    }
-
     /// For a new core, which saw none of them asked: a line for each
     /// question someone still waits on, the question on one line.
     pub(super) fn lines(&self) -> Vec<String> {
-        self.open()
+        let waiting = self.waiting.iter();
+        waiting
+            .filter(|(_, waiting)| !waiting.answer.is_closed())
             .map(|(number, waiting)| {
                 let text = waiting.text.replace('\n', " ⏎ ");
-                format!("{} {}：{text}", name(number), waiting.from)
+                format!("{} {}：{text}", name(*number), waiting.from)
             })
             .collect()
     }
@@ -200,10 +185,9 @@ pub(super) const STOPPED_THERE: &str = "那边被 /stop 停了，Max 不回话";
 /// What Max is shown when question `number` comes from `from`.
 fn put(number: u32, from: &Peer, text: &str, single: u32) -> Item {
     let text = format!(
-        "[{} 问] {from}\n{}\n（那个会话的 Max 在等你回答：用 answer 回答，to 填 {}；{} 小时内没答它就不等了。这个问题和你的回答都不会发到这边的聊天里）",
+        "[{} 问] {from}\n{}\n（那个会话的 Max 在等你回答：用 answer 回答，to 填 {number}；{} 小时内没答它就不等了。这个问题和你的回答都不会发到这边的聊天里）",
         name(number),
         fitted(text, single),
-        name(number),
         limits::JOB_TIME.as_secs() / 3600,
     );
     let tokens = tokens::count(&text);

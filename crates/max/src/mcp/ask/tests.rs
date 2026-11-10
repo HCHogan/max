@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use max_core::ids::TurnId;
 use max_db::PgPool;
-use serde_json::{Value, json};
+use serde_json::json;
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 
 use super::*;
@@ -26,7 +26,7 @@ async fn context(pool: &PgPool) -> (Context, UnboundedReceiver<Event>) {
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
 async fn a_turn_asks_and_answers_through_its_conversation(pool: PgPool) {
     let (context, mut events) = context(&pool).await;
-    let asking = json!({ "to": "c#9", "question": "明天的活动几点开始？" });
+    let asking = json!({ "to": 9, "question": "明天的活动几点开始？" });
     let asked = crate::mcp::call(Ask::NAME, &context, asking);
     let actor = async {
         let Some(Event::Ask {
@@ -46,7 +46,7 @@ async fn a_turn_asks_and_answers_through_its_conversation(pool: PgPool) {
     let question = "明天的活动几点开始？".to_owned();
     assert_eq!(sent, (ConversationId(9), question, Some(TurnId(1))));
 
-    let answering = json!({ "to": "ask#5", "text": "晚上八点" });
+    let answering = json!({ "to": 5, "text": "晚上八点" });
     let answered = crate::mcp::call(Answer::NAME, &context, answering);
     let actor = async {
         let Some(Event::Answer {
@@ -104,9 +104,9 @@ async fn a_long_or_empty_question_never_leaves(pool: PgPool) {
             "answer 的 text 是空的",
         ),
         (
-            Ask::NAME,
-            json!({ "to": "示波器同好会", "question": "在吗" }),
-            "示波器同好会 不是会话的编号，要 c#9 或 9",
+            Answer::NAME,
+            json!({ "to": 0, "text": "八点" }),
+            "answer 的 to 不能小于 1",
         ),
     ] {
         let refused = crate::mcp::call(tool, &context, args).await.unwrap_err();
@@ -132,24 +132,4 @@ async fn a_call_from_no_conversation_is_refused(pool: PgPool) {
     let asking = json!({ "to": 9, "question": "在吗" });
     let refused = crate::mcp::call(Ask::NAME, &nowhere, asking).await;
     assert_eq!(refused.unwrap_err().code, "not_here");
-}
-
-#[test]
-fn a_conversation_and_a_line_are_named_either_way() {
-    let handle = |value: Value| serde_json::from_value::<Handle>(value).unwrap();
-    for to in [
-        json!("c#9"),
-        json!("ask#"),
-        json!("ask#-5"),
-        json!("+5"),
-        json!(0),
-    ] {
-        let wrong = handle(to.clone()).question().unwrap_err();
-        assert_eq!(wrong.code, "bad_arguments", "{to}");
-        assert!(
-            wrong.message.ends_with("要 ask#5 或 5"),
-            "{}",
-            wrong.message
-        );
-    }
 }
