@@ -8,6 +8,7 @@
 pub mod captions;
 pub mod embeddings;
 pub mod ledger;
+pub mod links;
 pub mod media;
 pub mod platform;
 pub mod recall;
@@ -58,6 +59,7 @@ mod tests {
                 "endpoints",
                 "gateway_sessions",
                 "identities",
+                "links",
                 "llm_usage",
                 "media",
                 "media_captions",

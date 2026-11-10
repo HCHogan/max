@@ -319,6 +319,23 @@ pub async fn conversation_kind(
     }
 }
 
+/// What a conversation is called from now on, where another one names
+/// it: a group's name, as its platform has it.
+pub async fn set_title(
+    conn: &mut PgConnection,
+    conversation: ConversationId,
+    title: &str,
+) -> sqlx::Result<()> {
+    sqlx::query!(
+        "update conversations set title = $2 where id = $1",
+        conversation.0,
+        title
+    )
+    .execute(conn)
+    .await?;
+    Ok(())
+}
+
 /// Records that `merged` is the same person as `into`: readers follow
 /// `merged_into` once, so `into` must not be merged itself.
 pub async fn merge(

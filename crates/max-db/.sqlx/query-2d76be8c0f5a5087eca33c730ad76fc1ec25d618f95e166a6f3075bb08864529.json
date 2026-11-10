@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select exists (select 1 from links where asker_id = $1 and asked_id = $2) as \"linked!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "linked!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "2d76be8c0f5a5087eca33c730ad76fc1ec25d618f95e166a6f3075bb08864529"
+}

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "delete from links\n         where (asker_id = $1 and asked_id = $2) or (asker_id = $2 and asked_id = $1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3ae0277186dfae581fc550a3fea08ce122bf1fcd3c199dc101822c395652adc8"
+}

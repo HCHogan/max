@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into links (asker_id, asked_id, made_at) values ($1, $2, $3)\n         on conflict do nothing",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ad170e934df92eb8fd1c47f84015825bd736b5d95c34399d76c1a6f5b9cf8f6b"
+}
