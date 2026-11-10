@@ -363,7 +363,7 @@ async fn an_owner_links_two_conversations_one_way(pool: PgPool) {
         .unwrap();
     assert_eq!(edges, [(chat, group)]);
 
-    // The group asked QQ what it is called when it was given the code.
+    // The group asked QQ what it is called when its actor started.
     let deadline = std::time::Instant::now() + PATIENCE;
     let titled = "select count(*) from conversations where title = '示波器同好会'";
     while s.count(titled).await == 0 {

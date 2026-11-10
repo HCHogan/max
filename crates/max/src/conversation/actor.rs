@@ -12,7 +12,7 @@ use color_eyre::eyre::{Report, Result};
 use max_core::ids::{ConversationId, IdentityId, MessageId, PrincipalId, TurnId};
 use max_core::intent::{Decision, Entry, EntryKind, Intent, Reason};
 use max_core::item::{Item, ItemKind, ModelOutput, Timing};
-use max_core::message::{Content, Draft, DraftNode, Message, Node};
+use max_core::message::{Content, Draft, DraftNode, Message, Node, Platform};
 use max_core::project::{Budgets, MEMORY_FILE};
 use max_core::prompt;
 use max_core::render::Mark;
@@ -219,11 +219,40 @@ impl Conversation {
     /// Until `Event::Stop` and the core is done with; or until an error,
     /// when it gives up.
     pub async fn run(mut self, mut mailbox: UnboundedReceiver<Event>) -> Result<()> {
+        self.learn_title();
         let served = self.serve(&mut mailbox).await;
         if let Err(error) = &served {
             self.give_up(error).await;
         }
         served
+    }
+
+    /// Asks QQ what this group is called, and keeps the answer as the
+    /// conversation's title, by which other conversations name this one.
+    /// Once as the actor starts, so a group renamed is known by its new
+    /// name after Max restarts. In a task of its own: the actor waits only
+    /// on the database. Without an answer the title stays as it was.
+    fn learn_title(&mut self) {
+        let (Some(qq), Platform::Qq) = (&self.shared.services.groups, self.place.platform) else {
+            return;
+        };
+        let Some(group) = self.place.native_id.strip_prefix("group:") else {
+            return;
+        };
+        let (qq, group) = (Arc::clone(qq), group.to_owned());
+        let pool = self.shared.services.pool.clone();
+        let conversation = self.place.conversation;
+        self.side.spawn(move |_| async move {
+            let learned = async {
+                let info = qq.info(&group).await?;
+                let mut conn = pool.acquire().await?;
+                platform::set_title(&mut conn, conversation, &info.group_name).await?;
+                Ok::<_, Report>(())
+            };
+            if let Err(error) = learned.await {
+                warn!(%conversation, %error, "couldn't learn what the group is called");
+            }
+        });
     }
 
     async fn serve(&mut self, mailbox: &mut UnboundedReceiver<Event>) -> Result<()> {
