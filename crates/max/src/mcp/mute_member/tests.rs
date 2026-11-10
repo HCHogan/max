@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use max_db::platform::ConversationKind;
-use qqbot::api::Muted;
+use qqbot::api::{GroupInfo, Muted};
 use serde_json::{Value, json};
 use sqlx::PgPool;
 
@@ -29,6 +29,10 @@ struct Group {
 }
 
 impl Admin for Group {
+    fn info<'a>(&'a self, _: &'a str) -> Answer<'a, GroupInfo> {
+        unreachable!("muting doesn't ask what the group is called")
+    }
+
     fn muted<'a>(&'a self, _: &'a str) -> Answer<'a, Vec<Muted>> {
         Box::pin(async move { Ok(self.muted.lock().unwrap().clone()) })
     }

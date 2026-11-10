@@ -24,7 +24,7 @@ max-db = { path = "crates/max-db" }
 max-llm = { path = "crates/max-llm" }
 # QQ's official bot API, in a repository of its own since 2026-11-03;
 # a new commit there is taken by changing rev here.
-qqbot = { git = "https://github.com/HCHogan/qqbot", rev = "f630cea9425660e844caaa36f5b90787cce00275" }
+qqbot = { git = "https://github.com/HCHogan/qqbot", rev = "82d8b6b6f24fc765c5800ce244ed178c323460e2" }
 
 # Postgres for max-db: compile-time checked queries, migrations and
 # #[sqlx::test]. Only the features we use; no TLS, the database is local.
