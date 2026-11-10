@@ -104,20 +104,47 @@ impl Caller {
         }
     }
 
-    /// Whether it may make `call`. A program Max keeps in the VM may use
-    /// all of Max's tools, as the turn that wrote it could: Max decides
-    /// what its programs do (2026-11-05).
-    pub fn allows(&self, call: Call) -> bool {
+    /// Where a call of this caller's goes: the one place that says who may
+    /// call what. A turn has every tool the prompt declares, and the
+    /// runner's own requests. A background agent has the tools marked for
+    /// it and nothing else. A program Max keeps in the VM has all of Max's
+    /// tools, as the turn that wrote it could: Max decides what its
+    /// programs do (2026-11-05); and the chat's files, but nothing that
+    /// shows a model something, having none.
+    pub fn route(&self, call: Call) -> Route {
         match (self, call) {
-            (Caller::Job(_), Call::Tool(tool)) => tool.job,
-            (_, Call::Tool(_)) => true,
-            (Caller::Turn(_) | Caller::Check, _) => true,
-            // A program kept in the VM reads the chat's files, but has no
-            // model to show anything to.
-            (Caller::Program(_), Call::File) => true,
-            (Caller::Job(_) | Caller::Program(_), _) => false,
+            (Caller::Job(_), Call::Tool(tool)) if tool.job => Route::Here,
+            (Caller::Job(_), _) => Route::Refused,
+            // What only programs have, so that Max can try out from a
+            // turn's command the program it writes.
+            (Caller::Turn(_) | Caller::Check, Call::Tool(tool)) if !tool.turn => Route::AsProgram,
+            (Caller::Turn(_) | Caller::Check, _) => Route::Here,
+            (Caller::Program(_), Call::Tool(_) | Call::File) => Route::Here,
+            (Caller::Program(_), Call::Image | Call::Video) => Route::Refused,
         }
     }
+
+    /// What a caller is told of a call that isn't its to make.
+    pub fn refusal(&self, call: Call) -> Failure {
+        let whose = match self {
+            Caller::Job(_) => "后台 agent",
+            Caller::Program(_) => "常驻程序",
+            Caller::Turn(_) | Caller::Check => "这一轮",
+        };
+        Failure::new("not_allowed", format!("{whose}用不了 {}", call.name()))
+    }
+}
+
+/// Where a call goes, for who makes it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Route {
+    /// It runs for the caller, in the caller's session if it has one.
+    Here,
+    /// It is handed to the conversation's actor, which runs it as a
+    /// program's, outside any turn.
+    AsProgram,
+    /// It isn't this caller's to make.
+    Refused,
 }
 
 /// What a program asks Max for by name: one of Max's tools, or one of the
@@ -213,13 +240,13 @@ impl From<sqlx::Error> for Failure {
 /// context's call time.
 pub async fn program_call(name: &str, context: &Context, args: Value) -> Result<Value, Failure> {
     let call = async {
-        match Call::find(name).filter(|call| context.caller.allows(*call)) {
-            Some(Call::Tool(tool)) => tool.call(context, args).await,
-            Some(Call::File) => chat_file::run(context, args).await,
-            _ => Err(Failure::new(
-                "not_allowed",
-                format!("常驻程序用不了 {name}"),
-            )),
+        let Some(call) = Call::find(name) else {
+            return Err(unknown(name));
+        };
+        match (context.caller.route(call), call) {
+            (Route::Here, Call::Tool(tool)) => tool.call(context, args).await,
+            (Route::Here, Call::File) => chat_file::run(context, args).await,
+            _ => Err(context.caller.refusal(call)),
         }
     };
     tokio::time::timeout(context.call_time, call)
@@ -232,10 +259,7 @@ pub async fn program_call(name: &str, context: &Context, args: Value) -> Result<
 pub async fn call(name: &str, context: &Context, args: Value) -> Result<Value, Failure> {
     match tool::find(name) {
         Some(tool) => tool.call(context, args).await,
-        None => Err(Failure::new(
-            "unknown_tool",
-            format!("没有 {name} 这个工具"),
-        )),
+        None => Err(unknown(name)),
     }
 }
 
@@ -245,6 +269,11 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// What a caller is told of a name nothing answers to.
+fn unknown(name: &str) -> Failure {
+    Failure::new("unknown_tool", format!("没有 {name} 这个工具"))
+}
+
 fn internal() -> Failure {
     Failure::new("internal", "出错了，稍后再试。")
 }
@@ -252,4 +281,45 @@ fn internal() -> Failure {
 fn arguments<T: DeserializeOwned>(tool: &str, args: Value) -> Result<T, Failure> {
     serde_json::from_value(args)
         .map_err(|error| Failure::new("bad_arguments", format!("{tool} 的参数不对：{error}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use max_core::ids::TurnId;
+    use tokio::sync::mpsc::unbounded_channel;
+
+    use super::*;
+
+    #[test]
+    fn who_may_call_what() {
+        let (mailbox, _events) = unbounded_channel();
+        let turn = Caller::Turn(Poster::new(mailbox.clone(), TurnId(1)));
+        let program = Caller::Program(Poster::program(mailbox));
+        for tool in tool::TOOLS.iter() {
+            let call = Call::Tool(tool);
+            // What the prompt doesn't declare is a program's, and a turn
+            // that calls it calls as one.
+            let turns = if tool.turn {
+                Route::Here
+            } else {
+                Route::AsProgram
+            };
+            assert_eq!(turn.route(call), turns, "{}", tool.name);
+            assert_eq!(program.route(call), Route::Here, "{}", tool.name);
+        }
+        for call in [Call::Image, Call::Video, Call::File] {
+            assert_eq!(turn.route(call), Route::Here, "{}", call.name());
+        }
+        // A program has no model to show anything to.
+        assert_eq!(program.route(Call::File), Route::Here);
+        for call in [Call::Image, Call::Video] {
+            assert_eq!(program.route(call), Route::Refused, "{}", call.name());
+            let refused = program.refusal(call);
+            assert_eq!(refused.code, "not_allowed");
+            assert!(
+                refused.message.starts_with("常驻程序用不了 "),
+                "{refused:?}"
+            );
+        }
+    }
 }

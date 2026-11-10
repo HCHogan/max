@@ -30,7 +30,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use super::tool::{self, Spec};
-use super::{Call, Caller, Context, Failure, chat_file, forward, harness, lock, show};
+use super::{Call, Context, Failure, Route, chat_file, forward, harness, lock, show};
 use crate::conversation::Signal;
 use max_core::limits::{CALLS_AT_ONCE, Setting};
 
@@ -315,11 +315,14 @@ impl Handler {
             "ping" => Ok(Answer::Value(json!({}))),
             "tools/list" => {
                 let session = self.session(authorization)?;
-                let allows = |spec: &&'static Spec| match &session {
-                    Some(session) => session.context.caller.allows(Call::Tool(spec)),
+                // With no session, a program's: every tool is its.
+                let listed_to = |spec: &&'static Spec| match &session {
+                    Some(session) => {
+                        session.context.caller.route(Call::Tool(spec)) != Route::Refused
+                    }
                     None => true,
                 };
-                let tools = tool::TOOLS.iter().filter(allows).map(listed).collect();
+                let tools = tool::TOOLS.iter().filter(listed_to).map(listed).collect();
                 Ok(Answer::Tools { tools })
             }
             "tools/call" => {
@@ -363,16 +366,15 @@ impl Handler {
         args: Value,
     ) -> Result<Value, Failure> {
         let Some(call) = Call::find(name) else {
-            return Err(Failure::new(
-                "unknown_tool",
-                format!("没有 {name} 这个工具"),
-            ));
+            return Err(super::unknown(name));
         };
-        let program_only = matches!(call, Call::Tool(spec) if !spec.turn);
-        match session {
-            Some(session) if !program_only || matches!(session.context.caller, Caller::Job(_)) => {
-                session.run(call, args).await
-            }
+        let route = match &session {
+            Some(session) => session.context.caller.route(call),
+            None => Route::AsProgram,
+        };
+        match (session, route) {
+            // A refusal is the session's to count.
+            (Some(session), Route::Here | Route::Refused) => session.run(call, args).await,
             _ => self.program(name, args).await,
         }
     }
@@ -413,9 +415,9 @@ impl Session {
     /// of Max's tools: the model sees the pictures and videos shown
     /// themselves, and a file fetched is the program's.
     async fn run(&self, call: Call, args: Value) -> Result<Value, Failure> {
-        let outcome = match self.start(call) {
-            Err(failure) => Err(failure),
-            Ok(()) => tokio::select! {
+        let outcome = match self.context.caller.route(call) {
+            Route::Refused => Err(self.context.caller.refusal(call)),
+            Route::Here | Route::AsProgram => tokio::select! {
                 outcome = async {
                     let _slot = self.slots.acquire().await;
                     timeout(self.context.call_time, self.dispatch(call, args)).await
@@ -438,21 +440,6 @@ impl Session {
             Call::Video => show::video(&self.context, &self.shown, args).await,
             Call::File => chat_file::run(&self.context, args).await,
         }
-    }
-
-    /// Whether the caller may make `call`.
-    fn start(&self, call: Call) -> Result<(), Failure> {
-        if self.context.caller.allows(call) {
-            return Ok(());
-        }
-        let whose = match self.context.caller {
-            Caller::Job(_) => "后台 agent",
-            _ => "这一轮",
-        };
-        Err(Failure::new(
-            "not_allowed",
-            format!("{whose}用不了 {}", call.name()),
-        ))
     }
 }
 
