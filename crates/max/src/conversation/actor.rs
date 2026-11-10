@@ -25,6 +25,7 @@ use tokio::task::AbortHandle;
 use tokio::time::{Instant, sleep_until};
 use tracing::{debug, info, warn};
 
+use self::follow_up::Voice;
 use super::ingest::{self, By};
 use super::notice::Notice;
 use super::project::{self, Projection};
@@ -48,12 +49,6 @@ use max_core::limits::MEMORY_FILE_BYTES;
 /// How many rows a program following the timeline may fall behind by;
 /// further behind, it starts again from the database.
 const SUBSCRIBED_ROWS: usize = 256;
-/// How long after someone addresses Max their next message may finish
-/// what they meant, and start over the model call in flight. People
-/// added to an @ 3 to 38 seconds later (2026-11-04).
-const FOLLOW_UP: Duration = Duration::from_secs(60);
-/// The most times a model call starts over before one finishes.
-const MOST_RESTARTS: u32 = 3;
 /// The most of a reason a failure line shows: a provider's error page
 /// runs to kilobytes.
 const REASON_CHARS: usize = 300;
@@ -186,15 +181,8 @@ struct Active {
     chosen: Chosen,
     io: Scope,
     live: HashSet<TaskId>,
-    /// What the model call in flight has said, segment by segment.
-    said: Vec<String>,
-    segments: i32,
-    /// The model call in flight, if one is.
-    calling: Option<Calling>,
-    /// How many times the model call has started over since one finished.
-    restarts: u32,
-    /// When the core last said something.
-    said_at: Option<Instant>,
+    /// What its model calls have said, and the one in flight.
+    voice: Voice,
     /// The snapshot position: the base context is projected from the
     /// rows up to here; later ones are fed, with their pictures.
     from: MessageId,
@@ -206,14 +194,6 @@ struct Active {
     last_at: Option<DateTime<Utc>>,
     idle_since: Instant,
     started: Instant,
-}
-
-/// A model call in flight.
-struct Calling {
-    task: TaskId,
-    abort: AbortHandle,
-    /// How many segments the core had said when it started.
-    segments: i32,
 }
 
 /// How a core ends.
@@ -379,10 +359,7 @@ impl Conversation {
                     debug!(%task, "dropped a stale Said");
                     return Ok(());
                 };
-                a.said.push(segment.source);
-                a.segments += 1;
-                a.said_at = Some(Instant::now());
-                let (turn, index) = (a.turn, a.segments);
+                let (turn, index) = (a.turn, a.voice.says(segment.source));
                 let said = self
                     .say(segment.draft, Some(turn), Some(index), By::Max, None)
                     .await?;
@@ -399,8 +376,7 @@ impl Conversation {
                     return Ok(());
                 }
                 if let Some(a) = self.core.as_mut() {
-                    a.calling = None;
-                    a.restarts = 0;
+                    a.voice.called();
                 }
                 match out {
                     Ok((out, timing)) => self.model_output(out, timing).await,
@@ -564,82 +540,6 @@ impl Conversation {
         Ok(())
     }
 
-    /// Starts the model call in flight over when `committed` looks like
-    /// the rest of what its sender meant: they addressed Max in the last
-    /// [`FOLLOW_UP`], haven't been answered since, and aren't talking to
-    /// someone else now. Nothing is lost: the call hasn't said anything,
-    /// tools run only after it, and the next one is the same request with
-    /// the row added, which the provider has cached. Other wakes, a job's
-    /// or the classifier's, wait for the next call: they don't change the
-    /// answer someone is waiting for.
-    async fn follow_up(&mut self, committed: &ingest::Committed) -> Result<()> {
-        let now = Instant::now();
-        let sender = committed.sender.identity;
-        self.addressed.retain(|_, at| now < *at + FOLLOW_UP);
-        let since = self.addressed.get(&sender).copied();
-        if committed.direct.is_some() {
-            self.addressed.insert(sender, now);
-        }
-        let Some(since) = since else {
-            return Ok(());
-        };
-        let Some(a) = &self.core else {
-            return Ok(());
-        };
-        let fresh = a
-            .calling
-            .as_ref()
-            .is_some_and(|calling| a.segments == calling.segments);
-        if !fresh
-            || a.restarts >= MOST_RESTARTS
-            || a.said_at.is_some_and(|said| said > since)
-            || (committed.direct.is_none() && !self.own_words(committed).await?)
-        {
-            return Ok(());
-        }
-        self.start_over();
-        Ok(())
-    }
-
-    /// Whether a row that isn't to Max isn't to anyone else either: it
-    /// mentions nobody, and quotes nobody but its sender.
-    async fn own_words(&self, committed: &ingest::Committed) -> Result<bool> {
-        let Content::Message { reply_to, nodes } = &committed.message.content else {
-            return Ok(false);
-        };
-        if nodes
-            .iter()
-            .any(|node| matches!(node, Node::Mention { .. }))
-        {
-            return Ok(false);
-        }
-        let Some(target) = reply_to else {
-            return Ok(true);
-        };
-        let mut conn = self.shared.services.pool.acquire().await?;
-        let row = ledger::row(&mut conn, self.place.conversation, *target).await?;
-        Ok(row.is_some_and(|row| row.message.sender.identity == committed.sender.identity))
-    }
-
-    /// Takes back the model call in flight; the next step makes it again.
-    fn start_over(&mut self) {
-        let Some(a) = self.core.as_mut() else {
-            return;
-        };
-        let Some(calling) = a.calling.take() else {
-            return;
-        };
-        if let Err(rejected) = a.run.retract() {
-            warn!(turn = %a.turn, %rejected, "couldn't take back a model call");
-            a.calling = Some(calling);
-            return;
-        }
-        calling.abort.abort();
-        a.live.remove(&calling.task);
-        a.restarts += 1;
-        info!(conversation = %self.place.conversation, turn = %a.turn, restarts = a.restarts, "a model call starts over");
-    }
-
     async fn decide(&mut self, decisions: Vec<Decision>) -> Result<()> {
         let mut decisions = VecDeque::from(decisions);
         while let Some(decision) = decisions.pop_front() {
@@ -774,11 +674,7 @@ impl Conversation {
             chosen,
             io: Scope::new(),
             live: HashSet::new(),
-            said: Vec::new(),
-            segments: 0,
-            calling: None,
-            restarts: 0,
-            said_at: None,
+            voice: Voice::default(),
             from,
             waiting: watch::Sender::new(false),
             last_at: Some(now),
@@ -830,11 +726,7 @@ impl Conversation {
                     let pictures = self.shared.pictures.clone();
                     let abort =
                         a.io.spawn(move |_| model::call(chosen, pictures, request, task, mailbox));
-                    a.calling = Some(Calling {
-                        task,
-                        abort,
-                        segments: a.segments,
-                    });
+                    a.voice.calls(task, abort);
                     return Ok(());
                 }
                 Step::RunTools(calls) => {
@@ -867,7 +759,7 @@ impl Conversation {
         let Some(a) = self.core.as_mut() else {
             return Ok(());
         };
-        a.said.clear();
+        a.voice.taken();
         a.idle_since = Instant::now();
         let used = out.usage;
         if let Err(rejected) = a.run.model_output(out) {
@@ -921,8 +813,7 @@ impl Conversation {
         };
         // Aborts the model call in flight: started now, not waited for.
         drop(a.io);
-        if !a.said.is_empty() {
-            let text = a.said.join("\n\n");
+        if let Some(text) = a.voice.cut_off() {
             let tokens = tokens::count(&text);
             if let Err(rejected) = a.run.partial_output(text, tokens) {
                 warn!(turn = %a.turn, %rejected, "the partial output didn't fit");
@@ -1156,6 +1047,7 @@ fn failure(what: &str, reason: &str, stopped: &[u32]) -> String {
 
 mod asking;
 mod commands;
+mod follow_up;
 mod jobs;
 mod links;
 mod program;
