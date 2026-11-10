@@ -5,6 +5,7 @@ mod actor;
 pub mod classify;
 pub mod ingest;
 pub mod model;
+mod notice;
 pub mod project;
 mod report;
 #[cfg(test)]

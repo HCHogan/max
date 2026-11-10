@@ -2,10 +2,8 @@
 //! there, and what the VM service says about the VM. See "Resident programs" in
 //! docs/rust-rewrite.md.
 
-use max_core::item::Item;
 use tokio::sync::oneshot;
 
-use super::jobs::excerpt;
 use super::*;
 use max_core::limits::HOUR;
 
@@ -33,22 +31,6 @@ impl Woken {
     }
 }
 
-/// What the model is shown: the text, after the hour's count once there
-/// has been more than one.
-fn shown(text: &str, count: usize, single: u32) -> Item {
-    let text = match count {
-        0 | 1 => format!("[max-wake] {}", text.trim()),
-        _ => format!("[max-wake] （这一小时第 {count} 次）{}", text.trim()),
-    };
-    let tokens = tokens::count(&text);
-    if tokens <= single {
-        return Item::new(ItemKind::user(text), tokens);
-    }
-    let text = excerpt(&text);
-    let tokens = tokens::count(&text);
-    Item::new(ItemKind::user(text), tokens)
-}
-
 impl Conversation {
     /// `max-wake` from a program in the group's VM.
     pub(super) async fn woken(
@@ -69,7 +51,7 @@ impl Conversation {
         let count = self.woken.count(Instant::now());
         let _ = reply.send(Ok("叫醒了 Max".to_owned()));
         info!(conversation = %self.place.conversation, count, "a program wakes Max");
-        let item = shown(&text, count, self.single());
+        let item = Notice::Woken { text: &text, count }.item(self.single());
         self.wake_with(Reason::Program, item).await
     }
 
@@ -78,9 +60,7 @@ impl Conversation {
         if self.stopping.is_some() || self.settings.stopped {
             return Ok(());
         }
-        let text = format!("[VM] {text}");
-        let tokens = tokens::count(&text);
-        let item = Item::new(ItemKind::user(text), tokens);
+        let item = Notice::Vm { text: &text }.item(self.single());
         self.wake_with(Reason::Program, item).await
     }
 }
@@ -88,13 +68,6 @@ impl Conversation {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn text(item: &Item) -> &str {
-        let ItemKind::User { text, .. } = &item.kind else {
-            panic!("{item:?}")
-        };
-        text
-    }
 
     #[test]
     fn a_wake_says_how_many_the_hour_has_had() {
@@ -108,17 +81,5 @@ mod tests {
         // The first went out of the hour.
         assert_eq!(woken.count(at(60)), 10);
         assert_eq!(woken.summary(at(200)), None);
-    }
-
-    #[test]
-    fn the_first_is_shown_as_it_is_and_the_rest_counted() {
-        assert_eq!(
-            text(&shown("CI 挂了 2 个\n", 1, 25_000)),
-            "[max-wake] CI 挂了 2 个"
-        );
-        assert_eq!(
-            text(&shown("又挂了", 37, 25_000)),
-            "[max-wake] （这一小时第 37 次）又挂了"
-        );
     }
 }

@@ -8,7 +8,6 @@ use std::sync::Arc;
 
 use chrono::{DateTime, FixedOffset, Utc};
 use max_core::ids::{IdentityId, MessageId, PrincipalId};
-use max_core::intent::Reason;
 use max_core::item::{Item, ItemKind};
 use max_core::message::{Content, MentionTarget, Message, Node, Role};
 use max_core::project::{self, Budgets, Volatile};
@@ -270,16 +269,6 @@ pub async fn follow_up(
         item: Item::new(ItemKind::user(text), tokens),
         people: new.into_iter().collect(),
     })
-}
-
-/// The line the model is shown for a judged wake.
-pub fn judged(reason: &Reason) -> Option<Item> {
-    let Reason::Judged { note } = reason else {
-        return None;
-    };
-    let text = format!("[判定：{note}]");
-    let tokens = tokens::count(&text);
-    Some(Item::new(ItemKind::user(text), tokens))
 }
 
 /// What became of Max's row, if it didn't reach the platform; else who

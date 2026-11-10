@@ -6,15 +6,13 @@
 
 use std::collections::BTreeMap;
 
-use max_core::item::Item;
-use max_core::limits;
 use max_db::links::{self, Peer};
 use tokio::sync::oneshot;
 
-use super::jobs::fitted;
 use super::links::peer;
 use super::*;
 use crate::conversation::Question;
+use crate::conversation::notice::ask_name;
 
 /// What Max in other conversations asked Max here and still waits to
 /// hear, by the number each question got here. Forgotten with the actor.
@@ -30,11 +28,6 @@ struct Waiting {
     from: Peer,
     text: String,
     answer: oneshot::Sender<Result<String, String>>,
-}
-
-/// How a question put to Max here is named to it.
-pub fn name(question: u32) -> String {
-    format!("ask#{question}")
 }
 
 impl Asked {
@@ -53,7 +46,7 @@ impl Asked {
             .filter(|(_, waiting)| !waiting.answer.is_closed())
             .map(|(number, waiting)| {
                 let text = waiting.text.replace('\n', " ⏎ ");
-                format!("{} {}：{text}", name(*number), waiting.from)
+                format!("{} {}：{text}", ask_name(*number), waiting.from)
             })
             .collect()
     }
@@ -120,7 +113,12 @@ impl Conversation {
         self.asked.last += 1;
         let number = self.asked.last;
         info!(conversation = %self.place.conversation, from = %from.conversation, question = number, "Max is asked from another conversation");
-        let item = put(number, &from, &text, self.single());
+        let notice = Notice::Asked {
+            number,
+            from: &from,
+            question: &text,
+        };
+        let item = notice.item(self.single());
         // Before it is kept: a core this wake starts lists the questions
         // kept, and reads this one once.
         self.wake_with(Reason::Asked, item).await?;
@@ -145,7 +143,7 @@ impl Conversation {
         let nobody = || {
             format!(
                 "没有人在等 {} 的回答：没有这个编号，或者已经答过了、对方撤回了、等到点了、Max 重启过。这次没送出去",
-                name(to)
+                ask_name(to)
             )
         };
         let waiting = self.asked.waiting.remove(&to).ok_or_else(nobody)?;
@@ -169,7 +167,13 @@ impl Conversation {
             return Ok(());
         };
         info!(conversation = %self.place.conversation, job, answered = answer.is_ok(), "a question's wait is over");
-        let item = heard(job, &to, &question, &answer, self.single());
+        let notice = Notice::Answered {
+            job,
+            to: &to,
+            question: &question,
+            answer: &answer,
+        };
+        let item = notice.item(self.single());
         self.wake_with(Reason::Job { job }, item).await
     }
 
@@ -181,41 +185,6 @@ impl Conversation {
 
 /// Why a conversation that is stopped doesn't answer.
 pub(super) const STOPPED_THERE: &str = "那边被 /stop 停了，Max 不回话";
-
-/// What Max is shown when question `number` comes from `from`.
-fn put(number: u32, from: &Peer, text: &str, single: u32) -> Item {
-    let text = format!(
-        "[{} 问] {from}\n{}\n（那个会话的 Max 在等你回答：用 answer 回答，to 填 {number}；{} 小时内没答它就不等了。这个问题和你的回答都不会发到这边的聊天里）",
-        name(number),
-        fitted(text, single),
-        limits::JOB_TIME.as_secs() / 3600,
-    );
-    let tokens = tokens::count(&text);
-    Item::new(ItemKind::user(text), tokens)
-}
-
-/// What Max is shown when the wait of question job `job`, put to `to`,
-/// is over: the question again, since the core that asked may be gone,
-/// and the answer, or why there is none.
-fn heard(
-    job: u32,
-    to: &Peer,
-    question: &str,
-    answer: &Result<String, String>,
-    single: u32,
-) -> Item {
-    let job = crate::job::name(job);
-    let question = fitted(question, single);
-    let text = match answer {
-        Ok(answer) => format!(
-            "[{job} 回答] {to}\n问：{question}\n答：{}",
-            fitted(answer, single)
-        ),
-        Err(why) => format!("[{job} 没答成] {to}：{why}\n问：{question}"),
-    };
-    let tokens = tokens::count(&text);
-    Item::new(ItemKind::user(text), tokens)
-}
 
 #[cfg(test)]
 mod tests;

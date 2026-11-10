@@ -1,3 +1,4 @@
+use max_core::intent::Reason;
 use max_core::message::{Draft, DraftNode};
 use max_db::PgPool;
 use max_db::ledger::Sent;

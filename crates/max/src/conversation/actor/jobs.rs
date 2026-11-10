@@ -5,20 +5,17 @@
 //! "Background commands" and "Asking another conversation" in
 //! docs/rust-rewrite.md.
 
-use std::borrow::Cow;
 use std::collections::BTreeMap;
-use std::fmt::Write;
 use std::sync::{Mutex, PoisonError};
 
 use max_core::item::Item;
-use max_core::render::EXCERPT_CHARS;
 use max_db::links::Peer;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 use super::*;
-use crate::job::{self, Finished, How, Progress, Reply, Request, Status, name};
+use crate::job::{self, Finished, Progress, Reply, Request, Status, name};
 use crate::tools::{self, Background, Moved};
 use max_core::limits;
 
@@ -334,7 +331,12 @@ impl Conversation {
             return Ok(());
         };
         info!(conversation = %self.place.conversation, job, "a job asks Max");
-        let item = asked(job, &running.title, &question, self.single());
+        let notice = Notice::Asks {
+            job,
+            title: &running.title,
+            question: &question,
+        };
+        let item = notice.item(self.single());
         self.wake_for(job, item).await
     }
 
@@ -345,7 +347,12 @@ impl Conversation {
             return Ok(());
         };
         info!(conversation = %self.place.conversation, job, how = ?finished.ending.how, "a job ends");
-        let item = report(job, &running.title, &finished, self.single());
+        let notice = Notice::Ended {
+            job,
+            title: &running.title,
+            finished: &finished,
+        };
+        let item = notice.item(self.single());
         self.wake_for(job, item).await
     }
 
@@ -480,149 +487,9 @@ fn headline(task: &str) -> String {
     title
 }
 
-/// What Max is shown when job `job` ends: how, and the agent's last words,
-/// cut to an excerpt over `single` tokens; the full text is in the file.
-fn report(job: u32, title: &str, finished: &Finished, single: u32) -> Item {
-    let mut text = match &finished.ending.how {
-        How::Done => format!("[{} 完成] {title}", name(job)),
-        // Whether a command stopped is in its text: the guest may not have
-        // said so.
-        How::OutOfTime => format!("[{} 到点了，下面是做到一半的] {title}", name(job)),
-        How::Failed(why) => format!("[{} 失败] {title}：{why}", name(job)),
-    };
-    let words = finished
-        .ending
-        .text
-        .as_deref()
-        .map(str::trim)
-        .filter(|words| !words.is_empty());
-    match words {
-        Some(words) => {
-            text.push('\n');
-            text.push_str(&fitted(words, single));
-        }
-        // pi's session is there too, as JSONL.
-        None if !matches!(finished.ending.how, How::Failed(_)) => {
-            text += "\n（它没留下报告；做的过程在 /work/.max/jobs 里它的会话记录）";
-        }
-        None => {}
-    }
-    if let Some(file) = &finished.file {
-        let _ = write!(text, "\n（全文在 {file}）");
-    }
-    match finished.ending.unsent {
-        0 => {}
-        1 => text += "\n（你最后补充的那条它没收到）",
-        unsent => {
-            let _ = write!(text, "\n（你最后补充的 {unsent} 条它没收到）");
-        }
-    }
-    let tokens = tokens::count(&text);
-    Item::new(ItemKind::user(text), tokens)
-}
-
-/// What Max is shown when job `job` asks `question`, cut to an excerpt
-/// over `single` tokens.
-fn asked(job: u32, title: &str, question: &str, single: u32) -> Item {
-    let text = format!(
-        "[{} 问] {title}\n{}\n（它在等你答复：用 agent_steer 回答它，{} 分钟内没答复它就自己判断）",
-        name(job),
-        fitted(question.trim(), single),
-        limits::QUESTION_WAIT.as_secs() / 60,
-    );
-    let tokens = tokens::count(&text);
-    Item::new(ItemKind::user(text), tokens)
-}
-
-/// `words`, or their beginning if they take over `single` tokens.
-pub(super) fn fitted(words: &str, single: u32) -> Cow<'_, str> {
-    if tokens::count(words) > single {
-        excerpt(words).into()
-    } else {
-        words.into()
-    }
-}
-
-/// The beginning of `words`, saying so.
-pub(super) fn excerpt(words: &str) -> String {
-    let end = words
-        .char_indices()
-        .nth(EXCERPT_CHARS)
-        .map_or(words.len(), |(at, _)| at);
-    format!("{}…（太长，只有开头）", &words[..end])
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::job::Ending;
-
-    fn finished(how: How, text: Option<&str>, file: Option<&str>) -> Finished {
-        Finished {
-            ending: Ending {
-                how,
-                text: text.map(str::to_owned),
-                unsent: 0,
-            },
-            file: file.map(str::to_owned),
-        }
-    }
-
-    fn shown(item: &Item) -> &str {
-        match &item.kind {
-            ItemKind::User { text, .. } => text,
-            other => panic!("{other:?}"),
-        }
-    }
-
-    #[test]
-    fn a_report_says_how_the_job_ended() {
-        let done = finished(
-            How::Done,
-            Some("结论：能。\n"),
-            Some("/work/.max/jobs/job-3.md"),
-        );
-        assert_eq!(
-            shown(&report(3, "查票价", &done, 2000)),
-            "[job#3 完成] 查票价\n结论：能。\n（全文在 /work/.max/jobs/job-3.md）"
-        );
-        let half = finished(How::OutOfTime, Some("查了一半"), None);
-        assert_eq!(
-            shown(&report(3, "查票价", &half, 2000)),
-            "[job#3 到点了，下面是做到一半的] 查票价\n查了一半"
-        );
-        let failed = finished(How::Failed("429".into()), None, None);
-        assert_eq!(
-            shown(&report(3, "查票价", &failed, 2000)),
-            "[job#3 失败] 查票价：429"
-        );
-        let silent = finished(How::Done, Some("  "), None);
-        assert_eq!(
-            shown(&report(3, "查票价", &silent, 2000)),
-            "[job#3 完成] 查票价\n（它没留下报告；做的过程在 /work/.max/jobs 里它的会话记录）"
-        );
-        let cut = finished(How::OutOfTime, None, None);
-        assert!(shown(&report(3, "查票价", &cut, 2000)).ends_with("它的会话记录）"));
-        let mut late = finished(How::Done, Some("好了"), None);
-        late.ending.unsent = 2;
-        assert_eq!(
-            shown(&report(3, "查票价", &late, 2000)),
-            "[job#3 完成] 查票价\n好了\n（你最后补充的 2 条它没收到）"
-        );
-    }
-
-    #[test]
-    fn a_long_report_shows_its_beginning() {
-        let long = "长".repeat(EXCERPT_CHARS * 3);
-        let done = finished(How::Done, Some(&long), Some("/work/.max/jobs/job-3.md"));
-        let text = shown(&report(3, "查票价", &done, 2000)).to_owned();
-        assert!(text.contains("长…（太长，只有开头）\n（全文在 /work/.max/jobs/job-3.md）"));
-        let (excerpt, _) = text.split_once('…').unwrap();
-        assert_eq!(
-            excerpt.chars().filter(|c| *c == '长').count(),
-            EXCERPT_CHARS
-        );
-    }
 
     #[test]
     fn a_title_defaults_to_the_tasks_first_line() {

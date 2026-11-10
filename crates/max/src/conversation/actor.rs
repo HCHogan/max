@@ -11,7 +11,7 @@ use chrono::{DateTime, Utc};
 use color_eyre::eyre::{Report, Result};
 use max_core::ids::{ConversationId, IdentityId, MessageId, PrincipalId, TurnId};
 use max_core::intent::{Decision, Entry, EntryKind, Intent, Reason};
-use max_core::item::{Item, ItemKind, ModelOutput, Timing};
+use max_core::item::{Item, ModelOutput, Timing};
 use max_core::message::{Content, Draft, DraftNode, Message, Node, Platform};
 use max_core::project::{Budgets, MEMORY_FILE};
 use max_core::prompt;
@@ -26,6 +26,7 @@ use tokio::time::{Instant, sleep_until};
 use tracing::{debug, info, warn};
 
 use super::ingest::{self, By};
+use super::notice::Notice;
 use super::project::{self, Projection};
 use super::{
     Act, Event, Place, Post, Poster, Receipt, Signal, Subscription, TaskId, classify, model, tool,
@@ -669,11 +670,13 @@ impl Conversation {
                         debug!(?ids, "dropped a wake for rows a model has seen");
                         continue;
                     }
-                    let wake = Wake {
-                        ids,
-                        item: project::judged(&reason),
-                        reason,
+                    let item = match &reason {
+                        Reason::Judged { note } => {
+                            Some(Notice::Judged { note }.item(self.single()))
+                        }
+                        _ => None,
                     };
+                    let wake = Wake { ids, item, reason };
                     match self.core.as_mut() {
                         Some(a) => {
                             if let Err(rejected) = a.run.input(Input::Wake(wake)) {
