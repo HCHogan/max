@@ -15,7 +15,7 @@ use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 use super::*;
-use crate::job::{self, Finished, Progress, Reply, Request, Status, name};
+use crate::job::{self, Finished, Progress, Status, name};
 use crate::tools::{self, Background, Moved};
 use max_core::limits;
 
@@ -53,66 +53,57 @@ struct Agent {
 }
 
 impl Conversation {
-    /// Answers a tool's request: what the program gets, or why not.
-    pub(super) fn job_request(&mut self, request: Request) -> Result<Reply, String> {
-        match request {
-            Request::Start {
-                task,
-                title,
-                workdir,
-            } => self.start_job(task, title, workdir),
-            Request::Shell(shell) => self.start_command(shell),
-            Request::Steer { job, message } => {
-                let running = self.jobs.running.get(&job).ok_or_else(|| over(job))?;
-                let agent = match &running.kind {
-                    Kind::Agent(agent) => agent,
-                    Kind::Command => return Err(format!("{} 是后台命令，补不了话", name(job))),
-                    Kind::Question { .. } => {
-                        return Err(format!("{} 是在等别的会话回答的问题，补不了话", name(job)));
-                    }
-                };
-                agent.steers.send(message).map_err(|_| over(job))?;
-                Ok(Reply::Job(job))
+    /// Tells the agent of job `job` something more.
+    pub(super) fn steer_job(&mut self, job: u32, message: String) -> Result<(), String> {
+        let running = self.jobs.running.get(&job).ok_or_else(|| over(job))?;
+        let agent = match &running.kind {
+            Kind::Agent(agent) => agent,
+            Kind::Command => return Err(format!("{} 是后台命令，补不了话", name(job))),
+            Kind::Question { .. } => {
+                return Err(format!("{} 是在等别的会话回答的问题，补不了话", name(job)));
             }
-            Request::Cancel { job } => {
-                self.jobs.running.remove(&job).ok_or_else(|| over(job))?;
-                info!(conversation = %self.place.conversation, job, "a job is cancelled");
-                Ok(Reply::Job(job))
-            }
-            Request::Status { job } => {
-                let jobs: Vec<Status> = self
-                    .jobs
-                    .running
-                    .iter()
-                    .filter(|(number, _)| job.is_none_or(|job| job == **number))
-                    .map(|(number, running)| {
-                        let progress = running.progress();
-                        Status {
-                            job: name(*number),
-                            title: running.title.clone(),
-                            minutes: running.started.elapsed().as_secs() / 60,
-                            calls: progress.calls,
-                            tools: progress.tools,
-                            tool: progress.tool,
-                        }
-                    })
-                    .collect();
-                if let Some(job) = job
-                    && jobs.is_empty()
-                {
-                    return Err(over(job));
+        };
+        agent.steers.send(message).map_err(|_| over(job))
+    }
+
+    /// Stops job `job`: nobody hears of it again.
+    pub(super) fn cancel_job(&mut self, job: u32) -> Result<(), String> {
+        self.jobs.running.remove(&job).ok_or_else(|| over(job))?;
+        info!(conversation = %self.place.conversation, job, "a job is cancelled");
+        Ok(())
+    }
+
+    /// Job `job` as it runs, or every running job.
+    pub(super) fn jobs_running(&self, job: Option<u32>) -> Result<Vec<Status>, String> {
+        let jobs: Vec<Status> = self
+            .jobs
+            .running
+            .iter()
+            .filter(|(number, _)| job.is_none_or(|job| job == **number))
+            .map(|(number, running)| {
+                let progress = running.progress();
+                Status {
+                    job: name(*number),
+                    title: running.title.clone(),
+                    minutes: running.started.elapsed().as_secs() / 60,
+                    calls: progress.calls,
+                    tools: progress.tools,
+                    tool: progress.tool,
                 }
-                Ok(Reply::Running(jobs))
-            }
+            })
+            .collect();
+        match job {
+            Some(job) if jobs.is_empty() => Err(over(job)),
+            _ => Ok(jobs),
         }
     }
 
-    fn start_job(
+    pub(super) fn start_job(
         &mut self,
         task: String,
         title: Option<String>,
         workdir: String,
-    ) -> Result<Reply, String> {
+    ) -> Result<u32, String> {
         if self.stopping.is_some() {
             return Err("Max 正在重启，起不了新的后台 agent".to_owned());
         }
@@ -197,11 +188,11 @@ impl Conversation {
                 _task: task,
             },
         );
-        Ok(Reply::Job(number))
+        Ok(number)
     }
 
     /// Runs a `shell` command in the background, as a job of its own.
-    fn start_command(&mut self, shell: Background) -> Result<Reply, String> {
+    pub(super) fn start_command(&mut self, shell: Background) -> Result<u32, String> {
         self.room_for_command()?;
         let Some(vms) = self.shared.vms.clone() else {
             return Err("这里没有配 VM，shell 用不了。".to_owned());
@@ -211,7 +202,7 @@ impl Conversation {
         let work = tools::background(vms, conversation, shell);
         let number = self.command_job(&command, Instant::now(), work);
         info!(conversation = %conversation, job = number, "a background command starts");
-        Ok(Reply::Job(number))
+        Ok(number)
     }
 
     /// Takes a turn's command someone waits on as a background job of its

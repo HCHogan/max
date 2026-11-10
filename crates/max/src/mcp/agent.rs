@@ -6,8 +6,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::tool::Tool;
-use super::{Context, Failure, internal};
-use crate::job::{self, Reply, Request};
+use super::{Context, Failure};
+use crate::conversation::Poster;
+use crate::job;
 use crate::tools::guest_dir;
 use max_core::limits;
 
@@ -106,15 +107,8 @@ impl Tool for Agent {
             return Err(Failure::new("bad_arguments", "task 是空的"));
         }
         let workdir = workdir(dir.as_deref())?;
-        named(
-            context,
-            Request::Start {
-                task,
-                title,
-                workdir,
-            },
-        )
-        .await
+        let started = conversation(context)?.agent(task, title, workdir).await;
+        started.map(named).map_err(failed)
     }
 }
 
@@ -140,7 +134,8 @@ impl Tool for AgentSteer {
             return Err(Failure::new("bad_arguments", "message 是空的"));
         }
         let job = job.number()?;
-        named(context, Request::Steer { job, message }).await
+        let steered = conversation(context)?.steer(job, message).await;
+        steered.map(|()| named(job)).map_err(failed)
     }
 }
 
@@ -160,7 +155,8 @@ impl Tool for AgentCancel {
 
     async fn run(context: &Context, Which { job }: Which) -> Result<Named, Failure> {
         let job = job.number()?;
-        named(context, Request::Cancel { job }).await
+        let cancelled = conversation(context)?.cancel(job).await;
+        cancelled.map(|()| named(job)).map_err(failed)
     }
 }
 
@@ -178,10 +174,8 @@ impl Tool for AgentStatus {
 
     async fn run(context: &Context, Status { job }: Status) -> Result<Running, Failure> {
         let job = job.map(Job::number).transpose()?;
-        match ask(context, Request::Status { job }).await? {
-            Reply::Running(jobs) => Ok(Running { jobs }),
-            Reply::Job(_) => Err(internal()),
-        }
+        let running = conversation(context)?.status(job).await;
+        running.map(|jobs| Running { jobs }).map_err(failed)
     }
 }
 
@@ -214,25 +208,21 @@ fn workdir(dir: Option<&str>) -> Result<String, Failure> {
     Ok(guest_dir(dir))
 }
 
-/// The job `request` was about.
-async fn named(context: &Context, request: Request) -> Result<Named, Failure> {
-    match ask(context, request).await? {
-        Reply::Job(job) => Ok(Named {
-            job: job::name(job),
-        }),
-        Reply::Running(_) => Err(internal()),
+fn named(job: u32) -> Named {
+    Named {
+        job: job::name(job),
     }
 }
 
-async fn ask(context: &Context, request: Request) -> Result<Reply, Failure> {
-    // Only a turn's programs have their conversation at hand.
-    let Some(poster) = context.caller.poster() else {
-        return Err(Failure::new("not_here", "这里管不了后台 agent"));
-    };
-    poster
-        .jobs(request)
-        .await
-        .map_err(|message| Failure::new("job", message))
+/// The conversation whose jobs these are. Only a turn's programs, and
+/// those Max keeps in the VM, have one at hand.
+fn conversation(context: &Context) -> Result<&Poster, Failure> {
+    let here = context.caller.poster();
+    here.ok_or_else(|| Failure::new("not_here", "这里管不了后台 agent"))
+}
+
+fn failed(message: String) -> Failure {
+    Failure::new("job", message)
 }
 
 #[cfg(test)]

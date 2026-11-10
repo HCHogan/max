@@ -31,7 +31,7 @@ pub use actor::{Conversation, Outgoing, Shared};
 use crate::inbound::Inbound;
 use crate::job;
 use crate::mcp;
-use crate::tools::Moved;
+use crate::tools::{Background, Moved};
 
 /// What arrives in an actor's mailbox: everything that happens to a
 /// conversation, in the order the actor handles it.
@@ -61,26 +61,12 @@ pub enum Event {
     },
     /// The classifier's answer; None if it failed.
     Verdict(Option<Verdict>),
-    /// A tool asks about the background agents.
-    Jobs {
-        request: job::Request,
-        /// The turn it comes from, if any.
+    /// A tool, or a program Max keeps in the group's VM, asks something
+    /// of the conversation, and waits for the answer.
+    Request {
+        request: Request,
+        /// The turn it comes from; None from a program, outside any turn.
         origin: Option<TurnId>,
-        reply: oneshot::Sender<Result<job::Reply, String>>,
-    },
-    /// A turn's command someone waits on moves to the background: the
-    /// actor takes it as a job, its number, or gives it back with why not.
-    Move {
-        moved: Box<Moved>,
-        origin: Option<TurnId>,
-        reply: oneshot::Sender<Result<u32, (String, Box<Moved>)>>,
-    },
-    /// Max's `config` tool sets the conversation's limits, None back to
-    /// the default, and is told what each is now; or why not.
-    Configure {
-        changes: Vec<(Setting, Option<u64>)>,
-        origin: Option<TurnId>,
-        reply: oneshot::Sender<Result<Vec<Configured>, String>>,
     },
     /// A background agent asks Max, and waits for the answer.
     JobAsks {
@@ -91,12 +77,6 @@ pub enum Event {
     JobDone {
         job: u32,
         finished: job::Finished,
-    },
-    /// A program in the group's VM runs `max-wake`, and waits to hear
-    /// whether Max was woken.
-    Woken {
-        text: String,
-        reply: oneshot::Sender<Result<String, String>>,
     },
     /// The VM service has something to say about the group's VM.
     VmNotice(String),
@@ -109,24 +89,8 @@ pub enum Event {
     },
     /// A program in the group's VM follows the timeline: `maxx events`.
     Subscribe(oneshot::Sender<Subscription>),
-    /// Max's `ask` tool: a question for Max in conversation `to`. The job
-    /// that waits for the answer, or why it wasn't asked.
-    Ask {
-        to: ConversationId,
-        question: String,
-        origin: Option<TurnId>,
-        reply: oneshot::Sender<Result<u32, String>>,
-    },
     /// Max in another conversation asks Max here, from the table.
     Asked(Question),
-    /// Max's `answer` tool: the answer to question `to`, as it was
-    /// numbered here. Whom it went to, or why it wasn't taken.
-    Answer {
-        to: u32,
-        text: String,
-        origin: Option<TurnId>,
-        reply: oneshot::Sender<Result<String, String>>,
-    },
     /// The question job `job` waits on was answered, or won't be, and why.
     Answered {
         job: u32,
@@ -185,6 +149,73 @@ impl fmt::Debug for Subscription {
             .field("head", &self.head)
             .finish_non_exhaustive()
     }
+}
+
+/// Where a request's answer goes: what was asked for, or why it wasn't
+/// done.
+pub type Reply<T> = oneshot::Sender<Result<T, String>>;
+
+/// What a tool asks of its conversation's actor, each with where its
+/// answer goes. A job is named by its number.
+#[derive(Debug)]
+pub enum Request {
+    /// Start a background agent: its job.
+    Agent {
+        task: String,
+        title: Option<String>,
+        workdir: String,
+        reply: Reply<u32>,
+    },
+    /// Run a `shell` command in the background: its job.
+    Shell {
+        shell: Background,
+        reply: Reply<u32>,
+    },
+    /// Take a turn's command someone waits on as a background job: its
+    /// job, or the command back with why not.
+    Adopt {
+        moved: Box<Moved>,
+        reply: oneshot::Sender<Result<u32, (String, Box<Moved>)>>,
+    },
+    /// Tell a running agent something more.
+    Steer {
+        job: u32,
+        message: String,
+        reply: Reply<()>,
+    },
+    Cancel {
+        job: u32,
+        reply: Reply<()>,
+    },
+    /// One job's state, or every running one's.
+    Status {
+        job: Option<u32>,
+        reply: Reply<Vec<job::Status>>,
+    },
+    /// Set the conversation's limits, None back to the default: what
+    /// each is now.
+    Configure {
+        changes: Vec<(Setting, Option<u64>)>,
+        reply: Reply<Vec<Configured>>,
+    },
+    /// Ask Max in conversation `to`: the job that waits for the answer.
+    Ask {
+        to: ConversationId,
+        question: String,
+        reply: Reply<u32>,
+    },
+    /// Answer question `to`, as it was numbered here, which Max in
+    /// another conversation asked: whom the answer went to.
+    Answer {
+        to: u32,
+        text: String,
+        reply: Reply<String>,
+    },
+    /// Wake Max with a program's `text`: what the program is told.
+    Wake {
+        text: String,
+        reply: Reply<String>,
+    },
 }
 
 /// What Max in one conversation asks Max in another, on its way there.
@@ -251,6 +282,11 @@ impl Sending {
     }
 }
 
+/// What a tool is told when its conversation's actor is gone...
+const GONE: &str = "这个群的会话已经停了";
+/// ...or went before it answered.
+const UNANSWERED: &str = "没等到回答";
+
 /// Lets a tool act in its conversation: say something, or run a
 /// background agent, for its turn, or for a program Max keeps in the
 /// group's VM.
@@ -280,11 +316,7 @@ impl Poster {
     /// Wakes Max with a program's `text`: what the program is told, or
     /// why not.
     pub async fn wake(&self, text: String) -> Result<String, String> {
-        let (reply, answer) = oneshot::channel();
-        self.mailbox
-            .send(Event::Woken { text, reply })
-            .map_err(|_| "这个群的会话已经停了".to_owned())?;
-        answer.await.map_err(|_| "没等到回答".to_owned())?
+        self.request(|reply| Request::Wake { text, reply }).await
     }
 
     /// Says `draft`, and waits until it is sent.
@@ -309,18 +341,45 @@ impl Poster {
         self.act(Act::Unsend(target))?.sent().await
     }
 
-    /// Asks the conversation about its background agents: the answer, or
-    /// why not.
-    pub async fn jobs(&self, request: job::Request) -> Result<job::Reply, String> {
-        let (reply, answer) = oneshot::channel();
-        self.mailbox
-            .send(Event::Jobs {
-                request,
-                origin: self.origin,
-                reply,
-            })
-            .map_err(|_| "这个群的会话已经停了".to_owned())?;
-        answer.await.map_err(|_| "没等到回答".to_owned())?
+    /// Starts a background agent: its job, or why not.
+    pub async fn agent(
+        &self,
+        task: String,
+        title: Option<String>,
+        workdir: String,
+    ) -> Result<u32, String> {
+        let agent = |reply| Request::Agent {
+            task,
+            title,
+            workdir,
+            reply,
+        };
+        self.request(agent).await
+    }
+
+    /// Runs a `shell` command in the background: its job, or why not.
+    pub async fn shell(&self, shell: Background) -> Result<u32, String> {
+        self.request(|reply| Request::Shell { shell, reply }).await
+    }
+
+    /// Tells the agent of job `job` something more.
+    pub async fn steer(&self, job: u32, message: String) -> Result<(), String> {
+        let steer = |reply| Request::Steer {
+            job,
+            message,
+            reply,
+        };
+        self.request(steer).await
+    }
+
+    /// Stops job `job`.
+    pub async fn cancel(&self, job: u32) -> Result<(), String> {
+        self.request(|reply| Request::Cancel { job, reply }).await
+    }
+
+    /// Job `job` as it runs, or every running job.
+    pub async fn status(&self, job: Option<u32>) -> Result<Vec<job::Status>, String> {
+        self.request(|reply| Request::Status { job, reply }).await
     }
 
     /// Sets the conversation's limits, None back to the default: what
@@ -329,45 +388,26 @@ impl Poster {
         &self,
         changes: Vec<(Setting, Option<u64>)>,
     ) -> Result<Vec<Configured>, String> {
-        let (reply, answer) = oneshot::channel();
-        self.mailbox
-            .send(Event::Configure {
-                changes,
-                origin: self.origin,
-                reply,
-            })
-            .map_err(|_| "这个群的会话已经停了".to_owned())?;
-        answer.await.map_err(|_| "没等到回答".to_owned())?
+        self.request(|reply| Request::Configure { changes, reply })
+            .await
     }
 
     /// Asks Max in conversation `to`: the job that waits for the answer,
     /// or why it wasn't asked.
     pub async fn ask(&self, to: ConversationId, question: String) -> Result<u32, String> {
-        let (reply, answer) = oneshot::channel();
-        self.mailbox
-            .send(Event::Ask {
-                to,
-                question,
-                origin: self.origin,
-                reply,
-            })
-            .map_err(|_| "这个群的会话已经停了".to_owned())?;
-        answer.await.map_err(|_| "没等到回答".to_owned())?
+        let ask = |reply| Request::Ask {
+            to,
+            question,
+            reply,
+        };
+        self.request(ask).await
     }
 
     /// Answers question `to`, which Max in another conversation asked:
     /// whom it went to, or why it wasn't taken.
     pub async fn answer(&self, to: u32, text: String) -> Result<String, String> {
-        let (reply, answer) = oneshot::channel();
-        self.mailbox
-            .send(Event::Answer {
-                to,
-                text,
-                origin: self.origin,
-                reply,
-            })
-            .map_err(|_| "这个群的会话已经停了".to_owned())?;
-        answer.await.map_err(|_| "没等到回答".to_owned())?
+        self.request(|reply| Request::Answer { to, text, reply })
+            .await
     }
 
     /// Hands a turn's command to the conversation as a background job:
@@ -375,19 +415,28 @@ impl Poster {
     /// conversation is gone with it.
     pub async fn adopt(&self, moved: Box<Moved>) -> Result<u32, (String, Option<Box<Moved>>)> {
         let (reply, answer) = oneshot::channel();
-        let gone = || ("这个群的会话已经停了".to_owned(), None);
-        self.mailbox
-            .send(Event::Move {
-                moved,
-                origin: self.origin,
-                reply,
-            })
+        let gone = || (GONE.to_owned(), None);
+        self.send(Request::Adopt { moved, reply })
             .map_err(|_| gone())?;
         match answer.await {
             Ok(Ok(job)) => Ok(job),
             Ok(Err((why, moved))) => Err((why, Some(moved))),
             Err(_) => Err(gone()),
         }
+    }
+
+    /// Sends the request `make` builds around where its answer goes, and
+    /// waits for the answer.
+    async fn request<T>(&self, make: impl FnOnce(Reply<T>) -> Request) -> Result<T, String> {
+        let (reply, answer) = oneshot::channel();
+        self.send(make(reply))?;
+        answer.await.map_err(|_| UNANSWERED.to_owned())?
+    }
+
+    fn send(&self, request: Request) -> Result<(), String> {
+        let origin = self.origin;
+        let sent = self.mailbox.send(Event::Request { request, origin });
+        sent.map_err(|_| GONE.to_owned())
     }
 
     fn act(&self, act: Act) -> Result<Sending, String> {
@@ -399,7 +448,7 @@ impl Poster {
         };
         self.mailbox
             .send(Event::Post(post))
-            .map_err(|_| "这个群的会话已经停了".to_owned())?;
+            .map_err(|_| GONE.to_owned())?;
         Ok(Sending(sent))
     }
 }

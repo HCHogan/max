@@ -113,36 +113,6 @@ pub struct Called {
     pub tools: Vec<String>,
 }
 
-/// What a tool asks of its conversation's background jobs: its agents,
-/// and its `shell` commands run in the background.
-#[derive(Debug)]
-pub enum Request {
-    Start {
-        task: String,
-        title: Option<String>,
-        workdir: String,
-    },
-    Shell(crate::tools::Background),
-    Steer {
-        job: u32,
-        message: String,
-    },
-    Cancel {
-        job: u32,
-    },
-    /// One job's, or every running one's.
-    Status {
-        job: Option<u32>,
-    },
-}
-
-/// What a request gets: the job it was about, or the jobs running.
-#[derive(Debug, PartialEq, Eq)]
-pub enum Reply {
-    Job(u32),
-    Running(Vec<Status>),
-}
-
 /// A job running, as `agent_status` shows it.
 #[derive(Debug, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct Status {

@@ -7,7 +7,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 
 use super::*;
 use crate::conversation::testing::group_named;
-use crate::conversation::{Event, Poster};
+use crate::conversation::{Event, Poster, Request};
 use crate::mcp::{Caller, Services};
 
 /// A turn's context whose conversation is `mailbox`, which a test
@@ -28,7 +28,11 @@ async fn answer(
     events: &mut UnboundedReceiver<Event>,
     answer: Result<Vec<Configured>, String>,
 ) -> Vec<(Setting, Option<u64>)> {
-    let Some(Event::Configure { changes, reply, .. }) = events.recv().await else {
+    let Some(Event::Request {
+        request: Request::Configure { changes, reply },
+        ..
+    }) = events.recv().await
+    else {
         panic!("no Configure");
     };
     reply.send(answer).unwrap();

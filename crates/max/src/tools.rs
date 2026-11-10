@@ -26,7 +26,7 @@ use tokio::time::{Instant, sleep, sleep_until};
 use tracing::info;
 
 use crate::conversation::Poster;
-use crate::job::{self, Ending, Finished, How, Reply, Request};
+use crate::job::{self, Ending, Finished, How};
 use crate::mcp::{self, Grant};
 use crate::tokens;
 use crate::vm::ssh::{Command, Sink, Stopped, Stream, Waited, quote};
@@ -613,14 +613,14 @@ async fn started(
     };
     let unit = Vm::unit();
     let file = format!("/work/{OUT}/{unit}.txt");
-    let request = Request::Shell(Background {
+    let shell = Background {
         command,
         workdir,
         limit,
         unit,
-    });
-    match poster.jobs(request).await {
-        Ok(Reply::Job(number)) => {
+    };
+    match poster.shell(shell).await {
+        Ok(number) => {
             let job = job::name(number);
             let shown = format!(
                 "在后台跑了，是 {job}，限时 {} 分钟。{}",
@@ -629,7 +629,6 @@ async fn started(
             );
             (shown, false)
         }
-        Ok(Reply::Running(_)) => ("后台命令没起来。".to_owned(), true),
         Err(why) => (why, true),
     }
 }

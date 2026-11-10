@@ -27,8 +27,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
 use max::config::{self, Config};
-use max::conversation::Signal;
-use max::conversation::{Event, Place, Poster, Shared};
+use max::conversation::{Event, Place, Poster, Request, Shared, Signal};
 use max::dreamer::Dreamer;
 use max::embedding::Embedder;
 use max::job;
@@ -128,7 +127,11 @@ async fn moving(vms: &Vms, context: mcp::Context) -> [ToolOutput; 2] {
     let mut conversation = Scope::new();
     conversation.spawn(move |_| async move {
         while let Some(event) = events.recv().await {
-            if let Event::Move { moved, reply, .. } = event {
+            let adopt = match event {
+                Event::Request { request, .. } => request,
+                _ => continue,
+            };
+            if let Request::Adopt { moved, reply } = adopt {
                 let _ = reply.send(Ok(1));
                 let _ = done.send(tools::moved(moved).await);
                 return;

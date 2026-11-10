@@ -36,7 +36,6 @@ use crate::code::Codes;
 use crate::command;
 use crate::config::Limits;
 use crate::inbound::Inbound;
-use crate::job::Request;
 use crate::llm::{self, Chosen, Models};
 use crate::mcp;
 use crate::media::pictures::Pictures;
@@ -381,52 +380,9 @@ impl Conversation {
                 let decisions = self.intent.verdict(verdict, std::time::Instant::now());
                 self.decide(decisions).await
             }
-            Event::Jobs {
-                request,
-                origin,
-                reply,
-            } => {
-                let starts = matches!(request, Request::Start { .. } | Request::Shell(_));
-                let refused = self
-                    .ended(origin)
-                    .or_else(|| starts.then(|| self.stopped()).flatten());
-                let answer = match refused {
-                    Some(refused) => Err(refused),
-                    None => self.job_request(request),
-                };
-                let _ = reply.send(answer);
-                Ok(())
-            }
-            Event::Move {
-                moved,
-                origin,
-                reply,
-            } => {
-                let answer = match self.ended(origin) {
-                    Some(refused) => Err((refused, moved)),
-                    None => self.adopt(moved),
-                };
-                let _ = reply.send(answer);
-                Ok(())
-            }
-            Event::Configure {
-                changes,
-                origin,
-                reply,
-            } => {
-                let answer = match self.ended(origin) {
-                    Some(refused) => Err(refused),
-                    None => {
-                        self.configure(&changes, "Max").await?;
-                        Ok(self.configured())
-                    }
-                };
-                let _ = reply.send(answer);
-                Ok(())
-            }
+            Event::Request { request, origin } => self.request(request, origin).await,
             Event::JobAsks { job, question } => self.job_asks(job, question).await,
             Event::JobDone { job, finished } => self.job_done(job, finished).await,
-            Event::Woken { text, reply } => self.woken(text, reply).await,
             Event::VmNotice(text) => self.vm_notice(text).await,
             Event::Call { tool, args, reply } => {
                 self.program_call(tool, args, reply);
@@ -442,26 +398,7 @@ impl Conversation {
                 let _ = reply.send(subscription);
                 Ok(())
             }
-            Event::Ask {
-                to,
-                question,
-                origin,
-                reply,
-            } => {
-                let asked = self.ask(to, &question, origin).await?;
-                let _ = reply.send(asked);
-                Ok(())
-            }
             Event::Asked(question) => self.take_question(question).await,
-            Event::Answer {
-                to,
-                text,
-                origin,
-                reply,
-            } => {
-                let _ = reply.send(self.answer_question(to, &text, origin));
-                Ok(())
-            }
             Event::Answered { job, answer } => self.question_answered(job, answer).await,
             Event::Stop => {
                 self.stop();
@@ -1183,6 +1120,7 @@ mod commands;
 mod jobs;
 mod links;
 mod program;
+mod requests;
 mod settings;
 #[cfg(test)]
 mod tests;

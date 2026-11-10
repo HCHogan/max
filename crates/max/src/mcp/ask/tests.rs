@@ -6,8 +6,8 @@ use serde_json::json;
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 
 use super::*;
-use crate::conversation::Event;
 use crate::conversation::testing::group_named;
+use crate::conversation::{Event, Request};
 use crate::mcp::{Caller, Services};
 
 /// A turn's context whose conversation is `mailbox`, which a test
@@ -23,20 +23,28 @@ async fn context(pool: &PgPool) -> (Context, UnboundedReceiver<Event>) {
     (context, events)
 }
 
+/// The next request the conversation is sent, and the turn it is from.
+async fn next(events: &mut UnboundedReceiver<Event>) -> (Request, Option<TurnId>) {
+    match events.recv().await {
+        Some(Event::Request { request, origin }) => (request, origin),
+        other => panic!("{other:?}"),
+    }
+}
+
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
 async fn a_turn_asks_and_answers_through_its_conversation(pool: PgPool) {
     let (context, mut events) = context(&pool).await;
     let asking = json!({ "to": 9, "question": "明天的活动几点开始？" });
     let asked = crate::mcp::call(Ask::NAME, &context, asking);
     let actor = async {
-        let Some(Event::Ask {
+        let (request, origin) = next(&mut events).await;
+        let Request::Ask {
             to,
             question,
-            origin,
             reply,
-        }) = events.recv().await
+        } = request
         else {
-            panic!("no Ask");
+            panic!("{request:?}");
         };
         reply.send(Ok(3)).unwrap();
         (to, question, origin)
@@ -49,11 +57,9 @@ async fn a_turn_asks_and_answers_through_its_conversation(pool: PgPool) {
     let answering = json!({ "to": 5, "text": "晚上八点" });
     let answered = crate::mcp::call(Answer::NAME, &context, answering);
     let actor = async {
-        let Some(Event::Answer {
-            to, text, reply, ..
-        }) = events.recv().await
-        else {
-            panic!("no Answer");
+        let (request, _) = next(&mut events).await;
+        let Request::Answer { to, text, reply } = request else {
+            panic!("{request:?}");
         };
         reply.send(Ok("c#7 hank".to_owned())).unwrap();
         (to, text)
@@ -66,8 +72,9 @@ async fn a_turn_asks_and_answers_through_its_conversation(pool: PgPool) {
     let answering = json!({ "to": 5, "text": "九点" });
     let answered = crate::mcp::call(Answer::NAME, &context, answering);
     let actor = async {
-        let Some(Event::Answer { reply, .. }) = events.recv().await else {
-            panic!("no Answer");
+        let (request, _) = next(&mut events).await;
+        let Request::Answer { reply, .. } = request else {
+            panic!("{request:?}");
         };
         reply
             .send(Err("没有人在等 ask#5 的回答".to_owned()))
@@ -116,8 +123,9 @@ async fn a_long_or_empty_question_never_leaves(pool: PgPool) {
     // As long as may be, it goes.
     let asked = crate::mcp::call(Ask::NAME, &context, json!({ "to": 9, "question": most }));
     let actor = async {
-        let Some(Event::Ask { reply, .. }) = events.recv().await else {
-            panic!("no Ask");
+        let (request, _) = next(&mut events).await;
+        let Request::Ask { reply, .. } = request else {
+            panic!("{request:?}");
         };
         reply.send(Ok(1)).unwrap();
     };

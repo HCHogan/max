@@ -16,7 +16,6 @@ use crate::conversation::testing::{
     from_xiaohong, from_xiaoming, group, offset, private, privately, shared, text,
 };
 use crate::inbound::InNode;
-use crate::job::{Reply, Request};
 use crate::llm::testing::{Answer, Script};
 
 const PATIENCE: Duration = Duration::from_secs(5);
@@ -101,50 +100,19 @@ impl Pair {
         .unwrap();
     }
 
+    /// Max in `place`, asking of its conversation as a tool does.
+    fn max(&self, place: &Place) -> Poster {
+        Poster::program(self.mailboxes[&place.conversation].clone())
+    }
+
     /// Max in `place` calls `ask`.
     async fn ask(&self, place: &Place, to: ConversationId, question: &str) -> Result<u32, String> {
-        let (reply, asked) = oneshot::channel();
-        let ask = Event::Ask {
-            to,
-            question: question.to_owned(),
-            origin: None,
-            reply,
-        };
-        self.mailboxes[&place.conversation].send(ask).unwrap();
-        tokio::time::timeout(PATIENCE, asked)
-            .await
-            .unwrap()
-            .unwrap()
+        self.max(place).ask(to, question.to_owned()).await
     }
 
     /// Max in `place` calls `answer`.
     async fn answer(&self, place: &Place, to: u32, text: &str) -> Result<String, String> {
-        let (reply, taken) = oneshot::channel();
-        let answer = Event::Answer {
-            to,
-            text: text.to_owned(),
-            origin: None,
-            reply,
-        };
-        self.mailboxes[&place.conversation].send(answer).unwrap();
-        tokio::time::timeout(PATIENCE, taken)
-            .await
-            .unwrap()
-            .unwrap()
-    }
-
-    async fn jobs(&self, place: &Place, request: Request) -> Result<Reply, String> {
-        let (reply, answer) = oneshot::channel();
-        let jobs = Event::Jobs {
-            request,
-            origin: None,
-            reply,
-        };
-        self.mailboxes[&place.conversation].send(jobs).unwrap();
-        tokio::time::timeout(PATIENCE, answer)
-            .await
-            .unwrap()
-            .unwrap()
+        self.max(place).answer(to, text.to_owned()).await
     }
 
     /// The next thing said: where, and its text.
@@ -222,16 +190,9 @@ async fn one_max_asks_another_and_no_chat_hears_of_it(pool: PgPool) {
     assert!(!shown.contains("[能问的会话]"), "{shown}");
     assert!(!shown.contains("[等你回答的问题]"), "{shown}");
     // The wait is a job, which nobody steers.
-    let waiting = p.jobs(&chat, Request::Status { job: None }).await.unwrap();
-    let Reply::Running(jobs) = waiting else {
-        panic!("{waiting:?}");
-    };
+    let jobs = p.max(&chat).status(None).await.unwrap();
     assert_eq!(jobs[0].title, format!("? c#{r}: 明天几点开始？"));
-    let steer = Request::Steer {
-        job: 1,
-        message: "快点".into(),
-    };
-    let not_an_agent = p.jobs(&chat, steer).await.unwrap_err();
+    let not_an_agent = p.max(&chat).steer(1, "快点".into()).await.unwrap_err();
     assert!(not_an_agent.contains("补不了话"), "{not_an_agent}");
 
     // The answer names the question; it wakes Max in the private chat,
@@ -251,8 +212,7 @@ async fn one_max_asks_another_and_no_chat_hears_of_it(pool: PgPool) {
     p.script.push(Answer::says("等我想想"));
     assert_eq!(p.ask(&chat, r, "有空吗").await, Ok(2));
     p.says(&room, "等我想想").await;
-    let cancelled = p.jobs(&chat, Request::Cancel { job: 2 }).await;
-    assert_eq!(cancelled, Ok(Reply::Job(2)));
+    assert_eq!(p.max(&chat).cancel(2).await, Ok(()));
     let late = p.answer(&room, 2, "有").await.unwrap_err();
     assert!(late.contains("没有人在等 ask#2"), "{late}");
     p.quiet().await;
