@@ -105,7 +105,7 @@ impl Tool for AgentSteer {
     fn guide() -> String {
         format!(
             "Tells a running background agent something more: a change of direction, more information, what someone here said. It sees it after the tool call it is on, before it next thinks. agent is \"agent#3\" or 3.\n  \
-            A question it asked you ([ask#5 问] agent#3 <title>) is answered with answer, to 5, not with this: answered, it stops waiting. Once it has nothing else to do, it waits at most {} minutes for the answer, then goes on by its own judgement.",
+            A question it asked you ([ask#5 问] agent#3 <title>) is answered with answer, to 5, or declined with cancel, not with this: either way, it stops waiting. Once it has nothing else to do, it waits at most {} minutes for the answer, then goes on by its own judgement.",
             limits::QUESTION_WAIT.as_secs() / 60,
         )
     }

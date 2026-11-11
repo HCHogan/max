@@ -210,7 +210,7 @@ async fn one_max_asks_another_and_no_chat_hears_of_it(pool: PgPool) {
     assert!(!shown.contains("[能问的会话]"), "{shown}");
     assert!(!shown.contains("[等你回答的问题]"), "{shown}");
     // The wait is listed by its handle. Each side numbers the question
-    // its own way: the asker can't answer it, nor the asked withdraw it.
+    // its own way: the asker can't answer it.
     let jobs = p.max(&chat).status(None).await.unwrap();
     let listed = (jobs[0].handle.as_str(), jobs[0].title.as_str());
     assert_eq!(
@@ -222,8 +222,6 @@ async fn one_max_asks_another_and_no_chat_hears_of_it(pool: PgPool) {
         own.starts_with("ask#1 is a question asked from here"),
         "{own}"
     );
-    let theirs = p.max(&room).cancel(Handle::Ask(1)).await.unwrap_err();
-    assert!(theirs.starts_with("ask#1 was asked of you"), "{theirs}");
 
     // The answer names the question; it wakes Max in the private chat,
     // whose new core is told what it had asked and whom it may ask.
@@ -342,5 +340,41 @@ async fn an_agent_asks_another_conversation_and_hears_the_answer_itself(pool: Pg
     );
     let over = agent.ask(Some(r), "还在吗".into()).await.unwrap_err();
     assert_eq!(over, "agent#1 has ended");
+    p.quiet().await;
+}
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn max_declines_a_question_and_the_asker_hears_at_once(pool: PgPool) {
+    let mut p = Pair::new(pool).await;
+    let (chat, room) = (Arc::clone(&p.chat), Arc::clone(&p.room));
+    let r = room.conversation;
+    p.link(&chat, &room).await;
+    p.script.push(Answer::says("这个不能说"));
+    assert_eq!(p.ask(&chat, r, "群主的电话是多少？").await, Ok(1));
+    p.says(&room, "这个不能说").await;
+
+    // Declined there, it wakes Max here with why.
+    p.script.push(Answer::says("那边不肯说"));
+    assert_eq!(p.max(&room).cancel(Handle::Ask(1)).await, Ok(()));
+    p.says(&chat, "那边不肯说").await;
+    let declined =
+        format!("[ask#1 没答成] c#{r}：Max there chose not to answer it\n问：群主的电话是多少？\n");
+    assert!(
+        p.request_tail(1).ends_with(&declined),
+        "{}",
+        p.request_tail(1)
+    );
+    assert_eq!(p.max(&chat).status(None).await, Ok(Vec::new()));
+    // Once: nobody waits any more.
+    let again = p.max(&room).cancel(Handle::Ask(1)).await.unwrap_err();
+    assert!(
+        again.starts_with("ask#1 isn't waiting for an answer"),
+        "{again}"
+    );
+    let late = p.answer(&room, 1, "不告诉你").await.unwrap_err();
+    assert!(
+        late.contains("nobody waits for an answer to ask#1"),
+        "{late}"
+    );
     p.quiet().await;
 }

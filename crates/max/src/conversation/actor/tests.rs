@@ -1076,6 +1076,13 @@ async fn an_agents_question_wakes_max_whose_answer_goes_to_it(pool: PgPool) {
         again.starts_with("nobody waits for an answer to ask#1"),
         "{again}"
     );
+    // Declined, it hears so at once.
+    h.script.push(Answer::says("这个你自己定"));
+    assert_eq!(agent.ask(None, "几点出发？".into()).await, Ok(2));
+    assert_eq!(h.said().await.1, "这个你自己定");
+    assert_eq!(h.poster().cancel(Handle::Ask(2)).await, Ok(()));
+    let declined = "[ask#2 没答成] Max：Max chose not to answer it\n问：几点出发？";
+    assert_eq!(steered.recv().await.unwrap(), declined);
     // Cancelled, it asks no more.
     assert_eq!(h.poster().cancel(Handle::Agent(1)).await, Ok(()));
     let over = agent.ask(None, "那几点？".into()).await.unwrap_err();

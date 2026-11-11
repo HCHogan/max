@@ -127,18 +127,20 @@ impl Conversation {
         self.asked.forget(agent);
     }
 
-    /// Stops `handle`: nobody hears of it again.
+    /// Stops `handle`: nobody hears of it again. A question asked of
+    /// Max here is declined: whoever asked hears so.
     pub(super) fn cancel_job(&mut self, handle: Handle) -> Result<(), String> {
         if let Handle::Agent(agent) = handle {
             self.agent_over(agent);
         }
+        if let Handle::Ask(number) = handle
+            && self.decline(number)
+        {
+            info!(conversation = %self.place.conversation, %handle, "a question is declined");
+            return Ok(());
+        }
         if self.jobs.running.remove(&handle).is_none() {
-            return Err(match handle {
-                Handle::Ask(number) if self.asked.waits(number) => format!(
-                    "{handle} was asked of you: answer it with answer, or leave it unanswered"
-                ),
-                _ => over(handle),
-            });
+            return Err(over(handle));
         }
         info!(conversation = %self.place.conversation, %handle, "a job is cancelled");
         Ok(())

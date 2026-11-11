@@ -70,12 +70,6 @@ impl Asked {
         }
     }
 
-    /// Whether someone still waits for Max here to answer `ask#number`.
-    pub(super) fn waits(&self, number: u32) -> bool {
-        let waiting = self.waiting.get(&number);
-        waiting.is_some_and(|waiting| !waiting.from.gone())
-    }
-
     /// Agent `agent` is over: it waits for nothing.
     pub(super) fn forget(&mut self, agent: u32) {
         self.waiting.retain(|_, waiting| match &waiting.from {
@@ -305,11 +299,37 @@ impl Conversation {
         self.wake_with(Reason::Job { job }, item).await
     }
 
+    /// Max won't answer question `number`, asked of it: whoever waits
+    /// hears so at once, as if out of time. Whether someone waited.
+    pub(super) fn decline(&mut self, number: u32) -> bool {
+        let Some(Waiting { text, from }) = self.asked.waiting.remove(&number) else {
+            return false;
+        };
+        match from {
+            From::Peer { answer, .. } => answer.send(Err(DECLINED_THERE.to_owned())).is_ok(),
+            From::Agent { waits, .. } => {
+                let notice = Notice::Answered {
+                    ask: number,
+                    to: Asker::Max,
+                    question: &text,
+                    answer: &Err(DECLINED.to_owned()),
+                };
+                waits.tell(notice.text(self.single()))
+            }
+        }
+    }
+
     /// What a new core is shown of the questions asked before it started.
     pub(super) fn questions_waiting(&self) -> Vec<String> {
         self.asked.lines()
     }
 }
+
+/// Why a question Max declined with `cancel` has no answer, as the asker
+/// in another conversation hears it...
+const DECLINED_THERE: &str = "Max there chose not to answer it";
+/// ...and as an agent here does.
+const DECLINED: &str = "Max chose not to answer it";
 
 /// Why a conversation that is stopped doesn't answer.
 pub(super) const STOPPED_THERE: &str = "Max is stopped there (/stop)";

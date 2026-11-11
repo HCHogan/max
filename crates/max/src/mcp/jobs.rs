@@ -1,6 +1,7 @@
 //! `cancel` and `status`: what runs or waits in the conversation's
 //! background, by handle: agents (`agent#3`), `shell`'s commands
-//! (`shell#4`) and the questions Max asked another conversation (`ask#5`).
+//! (`shell#4`) and the questions asked from here (`ask#5`). `cancel` also
+//! declines a question asked of Max here.
 //! See "Background agents", "Background commands" and "Asking another
 //! conversation" in docs/rust-rewrite.md.
 
@@ -43,14 +44,14 @@ pub struct Running {
 
 impl Tool for Cancel {
     const NAME: &'static str = "cancel";
-    const DESCRIPTION: &'static str = "Stops a background agent or command whose result isn't wanted any more, or withdraws a question you asked that hasn't been answered.";
+    const DESCRIPTION: &'static str = "Stops a background agent or command whose result isn't wanted any more, withdraws a question you asked that hasn't been answered, or declines one asked of you.";
     const JOB: bool = false;
 
     type Args = Which;
     type Output = Cancelled;
 
     fn guide() -> String {
-        "Stops a background agent (agent#3) or a background command of shell's (shell#4) whose result isn't wanted any more: nothing comes back from it, and what it left in /work stays. Also withdraws a question you asked another conversation (ask#5) that still waits for its answer: an answer given there afterwards finds nobody. A question asked of you isn't cancelled: answer it, or leave it unanswered."
+        "Stops a background agent (agent#3) or a background command of shell's (shell#4) whose result isn't wanted any more: nothing comes back from it, and what it left in /work stays. Also withdraws a question you asked another conversation (ask#5) that still waits for its answer: an answer given there afterwards finds nobody. And it declines a question asked of you (ask#5, by Max in another conversation or by one of your agents) that you won't answer: whoever asked hears at once that no answer comes, as [ask#5 没答成], and an agent goes on by its own judgement."
             .into()
     }
 
