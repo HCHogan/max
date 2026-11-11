@@ -2,13 +2,14 @@
 //! JSON, on a unix socket per VM. Only what the runner's client and pi's
 //! MCP adapter use: `initialize`, `ping`, `tools/list` and `tools/call`;
 //! notifications are taken and dropped, and a call is cancelled by
-//! closing its connection, which drops it. A program authenticates with
-//! its run's token, which is good only while the run lasts and only from
-//! its own conversation's VM. A background agent's session calls only
-//! the tools that read, and its model calls go through the same service;
-//! see [`super::forward`]. A call with no token is from a program Max
-//! keeps in the VM, outside any turn: the VM says which group it is, and
-//! the group's actor runs it; see "Resident programs" in docs/rust-rewrite.md.
+//! closing its connection, which drops it. A token says which run, or
+//! which background agent, a call belongs to; it isn't a permission, as
+//! anything in the VM may leave it out. A background agent's session lists
+//! and calls only the tools that read, and its model calls go through the
+//! same service; see [`super::forward`]. A call without an open token
+//! (none, or one whose run has ended) is from a program Max keeps in the
+//! VM, outside any turn: the VM says which group it is, and the group's
+//! actor runs it; see "Resident programs" in docs/rust-rewrite.md.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
@@ -45,7 +46,6 @@ const MAYBE_DONE: &str =
 const VERSIONS: [&str; 4] = ["2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26"];
 /// JSON-RPC's codes for a request Max doesn't answer.
 const PARSE_ERROR: i32 = -32700;
-const INVALID_REQUEST: i32 = -32600;
 const METHOD_NOT_FOUND: i32 = -32601;
 const INVALID_PARAMS: i32 = -32602;
 
@@ -315,7 +315,7 @@ impl Handler {
             "initialize" => Ok(Answer::Value(initialized(&params))),
             "ping" => Ok(Answer::Value(json!({}))),
             "tools/list" => {
-                let session = self.session(authorization)?;
+                let session = self.session(authorization);
                 // With no session, a program's: every tool is its.
                 let listed_to = |spec: &&'static Spec| match &session {
                     Some(session) => {
@@ -327,7 +327,7 @@ impl Handler {
                 Ok(Answer::Tools { tools })
             }
             "tools/call" => {
-                let session = self.session(authorization)?;
+                let session = self.session(authorization);
                 let Called { name, arguments } =
                     serde_json::from_value(params).map_err(|error| {
                         Refusal::new(
@@ -348,18 +348,12 @@ impl Handler {
     }
 
     /// The session whose token the request carries, if it is open and
-    /// belongs to this VM's conversation; None for a request with no
-    /// token, a program's outside any turn.
-    fn session(&self, authorization: Option<&str>) -> Result<Option<Arc<Session>>, Refusal> {
-        let Some(authorization) = authorization else {
-            return Ok(None);
-        };
-        self.sessions
-            .bearer(Some(authorization), self.conversation)
-            .map(Some)
-            .ok_or_else(|| {
-                Refusal::new(INVALID_REQUEST, "the token is wrong, or its run has ended")
-            })
+    /// belongs to this VM's conversation. Else the call is a program's,
+    /// outside any turn: one with no token, or with a token that outlived
+    /// its run, as a command moved to the background does. Refusing it
+    /// would keep nothing out, since the token can be left out.
+    fn session(&self, authorization: Option<&str>) -> Option<Arc<Session>> {
+        self.sessions.bearer(authorization, self.conversation)
     }
 
     /// Runs `name` in its session, or as a program's call outside any turn
@@ -652,19 +646,20 @@ mod tests {
         let result = post(&socket, grant.token(), "tools/call", typo).await;
         assert_eq!(result["structuredContent"]["code"], "unknown_tool");
 
-        // Another conversation's VM, a wrong token, a run that ended.
-        let refused = |reply: &Value| reply["message"].as_str().unwrap().contains("token");
-        assert!(refused(
+        // Another conversation's VM, a wrong token, a run that ended: none
+        // of them the run's, but a program's call, which here has no
+        // programs to go to.
+        let programs = |reply: &Value| reply["structuredContent"]["code"] == "unavailable";
+        assert!(programs(
             &post(&other, grant.token(), "tools/call", read.clone()).await
         ));
-        assert!(refused(
+        assert!(programs(
             &post(&socket, "nope", "tools/call", read.clone()).await
         ));
+        assert_eq!(grant.calls()["history"], (1, 1));
         let token = grant.token().to_owned();
         drop(grant);
-        assert!(refused(
-            &post(&socket, &token, "tools/list", json!({})).await
-        ));
+        assert!(programs(&post(&socket, &token, "tools/call", read).await));
 
         scope.close(Duration::from_secs(5)).await;
         let _ = std::fs::remove_dir_all(dir);

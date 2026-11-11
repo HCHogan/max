@@ -177,7 +177,9 @@ fn moved_away(job: u32, ran: Duration, left: Duration, file: &str, shown: &str) 
 
 /// A turn's command handed to its conversation as a background job, as
 /// someone addressed Max while it ran. It keeps its unit, its output and
-/// its deadline, and loses the run's token once the call returns.
+/// its deadline. Once the call returns, the run's token is no longer open,
+/// and the command's `maxx` calls as a program, as a background command's
+/// does.
 pub struct Moved {
     vm: Vm,
     running: Command,

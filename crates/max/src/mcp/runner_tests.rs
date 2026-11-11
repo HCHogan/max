@@ -192,8 +192,9 @@ async fn programs_call_max_tools_and_return(pool: PgPool) {
     assert_eq!(ran.status, 1);
     assert!(ran.stdout.starts_with("SyntaxError"), "{}", ran.stdout);
 
+    // Not the run's token: a program's call, and here there are none.
     let ran = run(&mcp, "nope", &read).await;
-    assert!(ran.stdout.contains("the token is wrong"), "{}", ran.stdout);
+    assert!(ran.stdout.contains("(unavailable)"), "{}", ran.stdout);
 
     scope.close(Duration::from_secs(5)).await;
 }
@@ -755,15 +756,14 @@ async fn commands_call_max_tools_with_maxx(pool: PgPool) {
     assert_eq!(muted.status, 0, "{}", muted.stderr);
     let muted: Value = serde_json::from_str(&muted.stdout).unwrap();
     assert_eq!(muted["tool"], "mute_member", "{muted}");
+    // A command that outlives its run, as one moved to the background
+    // does, calls as a program from then on.
     let token = grant.token().to_owned();
     drop(grant);
     let ended = maxx(&mcp, Some(&token), &["history"], "").await;
-    assert_eq!(ended.status, 1);
-    assert!(
-        ended.stderr.contains("the token is wrong"),
-        "{}",
-        ended.stderr
-    );
+    assert_eq!(ended.status, 0, "{}", ended.stderr);
+    let ended: Value = serde_json::from_str(&ended.stdout).unwrap();
+    assert_eq!(ended, json!({ "tool": "history", "args": {} }));
 
     scope.close(Duration::from_secs(5)).await;
     let _ = std::fs::remove_dir_all(&dir);
