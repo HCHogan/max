@@ -2,7 +2,7 @@
 // in any language in a group's VM. It calls the MCP service as the run
 // it is part of, by the token in MAXX_TOKEN, which shell commands and
 // run_code's programs have; without one, as a program Max keeps in the
-// VM, such as a unit's, with fewer tools. Its options come from the
+// VM, such as a unit's, which has no show or video. Its options come from the
 // tools' schemas, as the service lists them: nothing here is about one
 // tool. See "maxx" in docs/rust-rewrite.md.
 //

@@ -13,14 +13,11 @@ struct RunnerInput<'a> {
     tools: &'static [&'static str],
 }
 
-/// The tools a program in a turn may call.
-static TURN_TOOLS: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
-    mcp::tool::TOOLS
-        .iter()
-        .filter(|tool| tool.turn)
-        .map(|tool| tool.name)
-        .collect()
-});
+/// The tools a program in a turn may call: all of them, as its `maxx`
+/// may. Those the prompt doesn't declare, `say` and `wake`, run as a
+/// program's; see [`mcp::Caller::route`].
+static TOOL_NAMES: LazyLock<Vec<&'static str>> =
+    LazyLock::new(|| mcp::tool::TOOLS.iter().map(|tool| tool.name).collect());
 
 /// What the model is shown, and whether the program failed. The result
 /// and the console are cut as `shell`'s output is.
@@ -38,7 +35,7 @@ pub(super) async fn run_code(
         code,
         args,
         token: grant.token(),
-        tools: &TURN_TOOLS,
+        tools: &TOOL_NAMES,
     };
     let input = serde_json::to_vec(&input).expect("the runner's input is JSON");
     let mut split = Split {
