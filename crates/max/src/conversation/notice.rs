@@ -1,12 +1,13 @@
 //! What maxx tells Max: notices only the model reads, each the item of a
-//! wake and never a row of the timeline. A job's end, an agent's question,
-//! a program's wake, a word about the VM, another conversation's question
-//! and its answer, and why the classifier woke Max. How each is worded is
-//! here, in one place; the prompt and the tools' guides describe them.
-//! The run's own two reminders are in max-core, with the run.
+//! wake and never a row of the timeline. A job's end, a program's wake, a
+//! word about the VM, a question from another conversation or an agent
+//! and its answer, and why the classifier woke Max. An agent hears the
+//! answers to its questions as `Answered` too, as a steer. How each is
+//! worded is here, in one place; the prompt and the tools' guides describe
+//! them. The run's own two reminders are in max-core, with the run.
 
 use std::borrow::Cow;
-use std::fmt::Write;
+use std::fmt::{self, Display, Write};
 
 use max_core::ids::Handle;
 use max_core::item::{Item, ItemKind};
@@ -27,21 +28,15 @@ pub enum Notice<'a> {
         title: &'a str,
         finished: &'a Finished,
     },
-    /// Agent `agent` asks Max, and waits for `agent_steer`.
-    Asks {
-        agent: u32,
-        title: &'a str,
-        question: &'a str,
-    },
     /// A program in the group's VM ran `maxx wake`, the hour's `count`th.
     Woken { text: &'a str, count: usize },
     /// The VM service, on the group's VM.
     Vm { text: &'a str },
-    /// Max in `from` asks Max here, and waits for `answer` to name
-    /// `number`.
+    /// Max in another conversation, or an agent here, asks Max here, and
+    /// waits for `answer` to name `number`.
     Asked {
         number: u32,
-        from: &'a Peer,
+        from: Asker<'a>,
         question: &'a str,
     },
     /// The wait of question `ask`, put to `to`, is over: the question
@@ -49,10 +44,31 @@ pub enum Notice<'a> {
     /// there is none.
     Answered {
         ask: u32,
-        to: &'a Peer,
+        to: Asker<'a>,
         question: &'a str,
         answer: &'a Result<String, String>,
     },
+}
+
+/// Who is asked a question, or asks one.
+#[derive(Clone, Copy)]
+pub enum Asker<'a> {
+    /// Max in another conversation.
+    Peer(&'a Peer),
+    /// A background agent here, and its title.
+    Agent(u32, &'a str),
+    /// Max here, as an agent here sees it.
+    Max,
+}
+
+impl Display for Asker<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Asker::Peer(peer) => peer.fmt(f),
+            Asker::Agent(agent, title) => write!(f, "{} {title}", Handle::Agent(*agent)),
+            Asker::Max => f.write_str("Max"),
+        }
+    }
 }
 
 impl Notice<'_> {
@@ -64,7 +80,9 @@ impl Notice<'_> {
         Item::new(ItemKind::user(text), tokens)
     }
 
-    fn text(&self, single: u32) -> String {
+    /// Its words. A part that takes over `single` tokens shows its
+    /// beginning.
+    pub fn text(&self, single: u32) -> String {
         match *self {
             Notice::Judged { note } => format!("[判定：{note}]"),
             Notice::Ended {
@@ -72,16 +90,6 @@ impl Notice<'_> {
                 title,
                 finished,
             } => ended(handle, title, finished, single),
-            Notice::Asks {
-                agent,
-                title,
-                question,
-            } => format!(
-                "[{} 问] {title}\n{}\n（它在等你答复：用 agent_steer 回答它，{} 分钟内没答复它就自己判断）",
-                Handle::Agent(agent),
-                fitted(question.trim(), single),
-                limits::QUESTION_WAIT.as_secs() / 60,
-            ),
             // The count once there has been more than one this hour.
             Notice::Woken { text, count } => {
                 let text = fitted(text.trim(), single);
@@ -95,12 +103,23 @@ impl Notice<'_> {
                 number,
                 from,
                 question,
-            } => format!(
-                "[{} 问] {from}\n{}\n（那个会话的 Max 在等你回答：用 answer 回答，to 填 {number}；{} 小时内没答它就不等了。这个问题和你的回答都不会发到这边的聊天里）",
-                Handle::Ask(number),
-                fitted(question, single),
-                limits::JOB_TIME.as_secs() / 3600,
-            ),
+            } => {
+                let wait = match from {
+                    Asker::Agent(..) => format!(
+                        "你的后台 agent 在等你回答：用 answer 回答，to 填 {number}；它没别的可做时最多再等 {} 分钟，等不到就自己判断",
+                        limits::QUESTION_WAIT.as_secs() / 60,
+                    ),
+                    Asker::Peer(_) | Asker::Max => format!(
+                        "那个会话的 Max 在等你回答：用 answer 回答，to 填 {number}；{} 小时内没答它就不等了",
+                        limits::JOB_TIME.as_secs() / 3600,
+                    ),
+                };
+                format!(
+                    "[{} 问] {from}\n{}\n（{wait}。这个问题和你的回答都不会发到这边的聊天里）",
+                    Handle::Ask(number),
+                    fitted(question, single),
+                )
+            }
             Notice::Answered {
                 ask,
                 to,

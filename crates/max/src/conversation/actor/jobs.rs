@@ -1,11 +1,12 @@
 //! The conversation's background jobs: agents (`agent#3`), `shell`
 //! commands (`shell#4`), and questions put to Max in another conversation
-//! (`ask#5`). Started by its turns, outliving the core that started them,
-//! and waking Max when they end, and agents when they ask something. See
+//! (`ask#5`), Max's or an agent's. Started by its turns, outliving the
+//! core that started them, and waking Max when they end. See
 //! "Background agents", "Background commands" and "Asking another
 //! conversation" in docs/rust-rewrite.md.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::sync::{Mutex, PoisonError};
 
 use max_db::links::Peer;
@@ -14,7 +15,7 @@ use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 use super::*;
-use crate::job::{self, Finished, Progress, Status};
+use crate::job::{self, Asking, Finished, Open, Progress, Status};
 use crate::tools::{self, Background, Moved};
 use max_core::limits;
 
@@ -48,16 +49,39 @@ enum Kind {
     Agent(Agent),
     Command,
     /// A question put to Max in another conversation: which, and what
-    /// was asked, for the core that hears the answer.
+    /// was asked, for the core that hears the answer; or for the agent
+    /// that asked it, which hears it instead.
     Question {
         to: Peer,
         question: String,
+        by: Option<AgentWaits>,
     },
 }
 
 struct Agent {
     steers: UnboundedSender<String>,
     progress: Arc<Mutex<Progress>>,
+    /// Its questions that wait for their answers.
+    open: Open,
+}
+
+/// An agent that asked something and waits: where the answer goes, as a
+/// steer, and the question, kept open until then.
+pub(super) struct AgentWaits {
+    pub(super) agent: u32,
+    steers: UnboundedSender<String>,
+    _open: Asking,
+}
+
+impl AgentWaits {
+    /// Hands the agent `text`: false if it's gone.
+    pub(super) fn tell(&self, text: String) -> bool {
+        self.steers.send(text).is_ok()
+    }
+
+    pub(super) fn gone(&self) -> bool {
+        self.steers.is_closed()
+    }
 }
 
 impl Conversation {
@@ -74,12 +98,44 @@ impl Conversation {
         agent.steers.send(message).map_err(|_| over(handle))
     }
 
+    /// Agent `agent`, from now on waiting for an answer, and its title;
+    /// None if it doesn't run.
+    pub(super) fn agent_waits(&self, agent: u32) -> Option<(AgentWaits, String)> {
+        let Some(Running {
+            kind: Kind::Agent(running),
+            title,
+            ..
+        }) = self.jobs.running.get(&Handle::Agent(agent))
+        else {
+            return None;
+        };
+        let waits = AgentWaits {
+            agent,
+            steers: running.steers.clone(),
+            _open: running.open.asking(),
+        };
+        Some((waits, title.clone()))
+    }
+
+    /// Agent `agent` is over: nobody waits for the answers to its
+    /// questions any more.
+    fn agent_over(&mut self, agent: u32) {
+        self.jobs.running.retain(|_, running| match &running.kind {
+            Kind::Question { by: Some(by), .. } => by.agent != agent,
+            _ => true,
+        });
+        self.asked.forget(agent);
+    }
+
     /// Stops `handle`: nobody hears of it again.
     pub(super) fn cancel_job(&mut self, handle: Handle) -> Result<(), String> {
+        if let Handle::Agent(agent) = handle {
+            self.agent_over(agent);
+        }
         if self.jobs.running.remove(&handle).is_none() {
             return Err(match handle {
                 Handle::Ask(number) if self.asked.waits(number) => format!(
-                    "{handle} was asked of you, by Max in another conversation: answer it with answer, or leave it unanswered"
+                    "{handle} was asked of you: answer it with answer, or leave it unanswered"
                 ),
                 _ => over(handle),
             });
@@ -149,13 +205,14 @@ impl Conversation {
             called,
             hooks,
             stop: stop.clone(),
+            poster: Poster::for_agent(self.mailbox.clone(), number),
         }));
         let pages = Budgets::for_window(upstream.window).single;
         let services = &self.shared.services;
         let context = mcp::Context::new(services, &self.place, caller, pages, self.call_time());
         let (steers, steered) = unbounded_channel();
         let progress = Arc::<Mutex<Progress>>::default();
-        let asking = self.mailbox.clone();
+        let open = Open::default();
         let start = job::Start {
             number,
             title: title.clone(),
@@ -169,12 +226,7 @@ impl Conversation {
             stop,
             deadline: Instant::now() + limits::JOB_TIME,
             progress: Arc::clone(&progress),
-            ask: Box::new(move |question| {
-                let _ = asking.send(Event::JobAsks {
-                    agent: number,
-                    question,
-                });
-            }),
+            open: open.clone(),
         };
         let mailbox = self.mailbox.clone();
         let mut task = Scope::new();
@@ -190,7 +242,11 @@ impl Conversation {
             Running {
                 title,
                 started: Instant::now(),
-                kind: Kind::Agent(Agent { steers, progress }),
+                kind: Kind::Agent(Agent {
+                    steers,
+                    progress,
+                    open,
+                }),
                 _task: task,
             },
         );
@@ -262,14 +318,16 @@ impl Conversation {
         number
     }
 
-    /// Waits for the answer to `question`, put to Max in `to`, as a job:
-    /// its number. The wait ends with the answer, or with why none comes;
-    /// withdrawn, nobody is told, and an answer finds nobody waiting.
+    /// Waits for the answer to `question`, put to Max in `to` by Max
+    /// here or by agent `by`, as a job: its number. The wait ends with the
+    /// answer, or with why none comes; withdrawn, nobody is told, and an
+    /// answer finds nobody waiting.
     pub(super) fn question_job(
         &mut self,
         to: Peer,
         question: &str,
         answered: oneshot::Receiver<Result<String, String>>,
+        by: Option<AgentWaits>,
     ) -> u32 {
         let number = self.jobs.next_ask();
         let mailbox = self.mailbox.clone();
@@ -290,12 +348,17 @@ impl Conversation {
                 answer,
             });
         });
+        let mut title = format!("? {to}: {}", headline(question));
+        if let Some(by) = &by {
+            let _ = write!(title, " ({})", Handle::Agent(by.agent));
+        }
         let running = Running {
-            title: format!("? {to}: {}", headline(question)),
+            title,
             started: Instant::now(),
             kind: Kind::Question {
                 to,
                 question: question.to_owned(),
+                by,
             },
             _task: task,
         };
@@ -303,36 +366,22 @@ impl Conversation {
         number
     }
 
-    /// Ends the wait of question `ask`: whom it was put to, and the
-    /// question. None if it was withdrawn since.
-    pub(super) fn question_over(&mut self, ask: u32) -> Option<(Peer, String)> {
+    /// Ends the wait of question `ask`: whom it was put to, the
+    /// question, and the agent that asked it, if one did. None if it was
+    /// withdrawn since.
+    pub(super) fn question_over(&mut self, ask: u32) -> Option<(Peer, String, Option<AgentWaits>)> {
         match self.jobs.running.remove(&Handle::Ask(ask))?.kind {
-            Kind::Question { to, question } => Some((to, question)),
+            Kind::Question { to, question, by } => Some((to, question, by)),
             Kind::Agent(_) | Kind::Command => None,
         }
-    }
-
-    /// Agent `agent` asks Max: its question wakes Max, who answers with
-    /// `agent_steer`.
-    pub(super) async fn job_asks(&mut self, agent: u32, question: String) -> Result<()> {
-        let handle = Handle::Agent(agent);
-        // Cancelled since.
-        let Some(running) = self.jobs.running.get(&handle) else {
-            return Ok(());
-        };
-        info!(conversation = %self.place.conversation, %handle, "an agent asks Max");
-        let notice = Notice::Asks {
-            agent,
-            title: &running.title,
-            question: &question,
-        };
-        let item = notice.item(self.single());
-        self.wake_with(Reason::Job { job: handle }, item).await
     }
 
     /// An agent or a command ended: Max hears how, in the running core or
     /// a new one.
     pub(super) async fn job_done(&mut self, handle: Handle, finished: Finished) -> Result<()> {
+        if let Handle::Agent(agent) = handle {
+            self.agent_over(agent);
+        }
         // Cancelled since.
         let Some(running) = self.jobs.running.remove(&handle) else {
             return Ok(());
@@ -401,6 +450,7 @@ impl Jobs {
             kind: Kind::Agent(Agent {
                 steers,
                 progress: Arc::default(),
+                open: Open::default(),
             }),
             _task: Scope::new(),
         };

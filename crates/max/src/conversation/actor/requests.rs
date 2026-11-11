@@ -45,13 +45,19 @@ impl Conversation {
             Request::Ask {
                 to,
                 question,
+                by,
                 reply,
             } => {
-                let asked = self.ask(to, &question).await?;
+                let asked = self.ask(to, &question, by).await?;
                 let _ = reply.send(asked);
             }
-            Request::Answer { to, text, reply } => {
-                let _ = reply.send(self.answer_question(to, &text));
+            Request::Answer {
+                to,
+                text,
+                by,
+                reply,
+            } => {
+                let _ = reply.send(self.answer_question(to, &text, by));
             }
             Request::Wake { text, reply } => {
                 let woke = self.woken(&text).await?;

@@ -11,8 +11,8 @@ use chrono::Utc;
 use color_eyre::eyre::Result;
 use max_core::ids::{ConversationId, Handle};
 use max_core::item::{Protocol, Usage};
-use max_core::limits::JOB_NOTES_BYTES;
-use max_db::{PgPool, usage};
+use max_core::limits::{JOB_NOTES_BYTES, QUESTION_WAIT};
+use max_db::{PgPool, links, usage};
 use serde_json::json;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -21,7 +21,7 @@ use tokio::time::{Instant, timeout};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
-use super::{Called, Ending, Exit, GRACE, Hook, How, Watch, drive};
+use super::{Called, Ending, Exit, GRACE, Hook, How, Open, drive};
 use crate::llm::Upstream;
 use crate::mcp;
 use crate::vm::ssh::{Sink, Stream, quote};
@@ -31,7 +31,7 @@ use crate::vm::{Vm, Vms};
 const SYSTEM: &str = "你是 Max 的后台 agent。Max 是一个群聊里的 AI 成员，它把一件要花时间的事交给你，自己接着在群里聊天。
 - 你看不到群里的对话，只有 Max 写给你的任务。要聊天记录时用 mcp__max__history 查，能按内容搜，也能按人、按时间读原文；查网上的用 mcp__max__web_search，读网页用 webread <url>（只留正文，转成 Markdown）。
 - 你不能在群里说话。你最后一条消息就是交给 Max 的报告：先说结论，再给要点和出处，写给 Max 看，不用客套，尽量在 2000 字以内。做出来的文件放在 /work 下，报告里写路径。
-- 做的过程中 Max 可能补充要求，会出现在对话里。卡在只有 Max 或群友才知道的事上（他们的意思、偏好、没说清的要求），用 ask_max 问 Max，它会等 Max 答复；能自己查到、试出来的别问。
+- 做的过程中 Max 可能补充要求，会出现在对话里。
 - 环境：NixOS，root，能上公网，/work 是本群的持久目录，也是家目录（~），群里的程序也用；缺什么用 nix shell nixpkgs#包名 -c 命令 临时装。/nix/store 是宿主的整个 store，几百万个文件：要某个包里的文件，用 nix build --no-link --print-out-paths nixpkgs#包名 拿到它的路径再进去找，不在 /nix/store 下 find、ls 或用通配符。
 - 有时间限制，快到点时会提醒你收尾，到点会被叫停。只做交给你的事。";
 
@@ -70,14 +70,11 @@ pub struct Start {
     pub stop: CancellationToken,
     pub deadline: Instant,
     pub progress: Arc<Mutex<Progress>>,
-    /// Takes the agent's question to Max.
-    pub ask: Asker,
+    /// The questions the agent asked that still wait for their answers.
+    pub open: Open,
 }
 
-/// Where a job's questions go.
-pub type Asker = Box<dyn Fn(String) + Send + Sync>;
-
-/// How far a job has got, for `agent_status`.
+/// How far an agent has got, for `status`.
 #[derive(Clone, Debug, Default)]
 pub struct Progress {
     pub calls: u32,
@@ -117,7 +114,6 @@ pub async fn run(start: Start, mut steers: UnboundedReceiver<String>) -> Finishe
     };
     let mut calls = start.calls;
     let mut hooks = start.hooks;
-    let mut watch = Asks(start.ask);
     let grant = start.vms.sessions().open(start.context);
     let unit = Vm::unit();
     // The unit outlives the deadline only by the agent's grace, twice. A
@@ -127,6 +123,7 @@ pub async fn run(start: Start, mut steers: UnboundedReceiver<String>) -> Finishe
     let line = unit_line(&unit, limit, &start.workdir);
     let notes_file = notes_file(&start.workdir);
     let notes = notes(&vm, &notes_file).await;
+    let askable = askable(&ledger.pool, conversation).await;
     info!(%conversation, job = start.number, %unit, model = start.upstream.reference(), "a job starts");
     let (mut command, mut input) = match vm.open(unit, &line).await {
         Ok(opened) => opened,
@@ -146,7 +143,7 @@ pub async fn run(start: Start, mut steers: UnboundedReceiver<String>) -> Finishe
         "window": upstream.window,
         "max_output": upstream.max_output,
         "effort": upstream.effort,
-        "system": system(&start.workdir, &notes_file, &notes),
+        "system": system(&start.workdir, &notes_file, &notes, &askable),
     });
     // The job is all the harness reads.
     let given = async {
@@ -183,7 +180,7 @@ pub async fn run(start: Start, mut steers: UnboundedReceiver<String>) -> Finishe
             &mut exited,
             &start.stop,
             start.deadline,
-            &mut watch,
+            &start.open,
         );
         tokio::pin!(reading, driving);
         let mut read = false;
@@ -231,13 +228,36 @@ fn unit_line(unit: &str, limit: Duration, workdir: &str) -> String {
     )
 }
 
-/// Appended to pi's system prompt: [`SYSTEM`], then the agents' notes
-/// for `workdir`, kept in `file`, as [`notes`] shows them.
-fn system(workdir: &str, file: &str, notes: &str) -> String {
-    format!(
-        "{SYSTEM}\n- 你在 {workdir} 下干活。后台 agent 给这个目录记的笔记在 {file}，下面的 [笔记] 是它现在的内容，以后在这个目录干活的 agent 都会读到。写报告之前更新它：这次核实过、以后用得上的构建和测试命令、架构约定、踩过的坑和结论，没做完的写明做到哪、下一步做什么；过时的改掉或删掉，别只往后加，整份 {} KiB 以内。项目自己的 AGENTS.md、CLAUDE.md 是项目的文件，别往里记笔记，除非任务就是改它们。\n\n[笔记]\n{notes}",
+/// Appended to pi's system prompt: [`SYSTEM`], how to ask, then the
+/// agents' notes for `workdir`, kept in `file`, as [`notes`] shows them,
+/// and the conversations Max here may ask, if any.
+fn system(workdir: &str, file: &str, notes: &str, askable: &[String]) -> String {
+    let mut system = format!(
+        "{SYSTEM}\n- 卡在只有 Max 或群友才知道的事上（他们的意思、偏好、没说清的要求），用 mcp__max__ask 问 Max，不填 to：它马上返回 ask#编号，Max 的回答之后作为 [ask#编号 回答] 出现在对话里。还有别的事就接着做；没别的可做了，写下你在等什么再停：问题没答完，你停下后还会再等最多 {} 分钟，等到了接着做，等不到就自己判断，在报告里写明你的假设。能自己查到、试出来的别问。有 [能问的会话] 时，to 填那里的编号，就是去问那个会话的 Max：它只看得到你的问题，问题里要写全背景。\n- 你在 {workdir} 下干活。后台 agent 给这个目录记的笔记在 {file}，下面的 [笔记] 是它现在的内容，以后在这个目录干活的 agent 都会读到。写报告之前更新它：这次核实过、以后用得上的构建和测试命令、架构约定、踩过的坑和结论，没做完的写明做到哪、下一步做什么；过时的改掉或删掉，别只往后加，整份 {} KiB 以内。项目自己的 AGENTS.md、CLAUDE.md 是项目的文件，别往里记笔记，除非任务就是改它们。\n\n[笔记]\n{notes}",
+        QUESTION_WAIT.as_secs() / 60,
         JOB_NOTES_BYTES >> 10,
-    )
+    );
+    if !askable.is_empty() {
+        system.push_str("\n\n[能问的会话]\n");
+        system.push_str(&askable.join("\n"));
+    }
+    system
+}
+
+/// The conversations Max in `conversation` may ask, as its turns list
+/// them; none if they can't be read.
+async fn askable(pool: &PgPool, conversation: ConversationId) -> Vec<String> {
+    let asked = async {
+        let mut conn = pool.acquire().await?;
+        links::asked(&mut conn, conversation).await
+    };
+    match asked.await {
+        Ok(peers) => peers.iter().map(ToString::to_string).collect(),
+        Err(error) => {
+            warn!(%error, "couldn't read whom a job may ask");
+            Vec::new()
+        }
+    }
 }
 
 /// The agents' notes for `workdir`, in [`NOTES`]: named after its path
@@ -375,15 +395,6 @@ impl Ledger {
             at: Utc::now(),
         };
         crate::llm::record(&self.pool, &call).await;
-    }
-}
-
-/// Takes the agent's questions on to Max.
-struct Asks(Asker);
-
-impl Watch for Asks {
-    fn asks(&mut self, question: &str) {
-        (self.0)(question.to_owned());
     }
 }
 

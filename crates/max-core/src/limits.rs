@@ -76,8 +76,8 @@ pub const COMMANDS_AT_ONCE: usize = 8;
 /// How long an agent may take; then it is aborted, and reports how far it
 /// got.
 pub const JOB_TIME: Duration = Duration::from_secs(2 * 60 * 60);
-/// How long an agent's question waits for Max's answer; then it goes on by
-/// itself.
+/// How long an agent with nothing left to do but wait for the answers to
+/// its questions is held; then it goes on by itself.
 pub const QUESTION_WAIT: Duration = Duration::from_secs(10 * 60);
 /// The most of its directory's notes an agent is shown; past this, the
 /// rest isn't, and it is asked to trim them.

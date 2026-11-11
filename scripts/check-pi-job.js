@@ -1,9 +1,9 @@
 // Runs a few jobs with pi, max-pi.sh and max-job.ts against a fake host,
 // and checks that pi keeps the job's contract: steers taken at a turn's
 // end go in before the next model call, a stop aborts a tool under way,
-// ask_max's answer reaches the model, the task arrives as written, and
-// the job's system text is appended to pi's, and the report goes out
-// before pi exits. Project context files load even with --no-approve,
+// what comes while the host holds the agent about to settle reaches the
+// model, the task arrives as written, and the job's system text is
+// appended to pi's, and the report goes out before pi exits. Project context files load even with --no-approve,
 // but the project's .pi/ stays untrusted. See scripts/check-pi-job.
 "use strict";
 const assert = require("node:assert/strict");
@@ -27,12 +27,14 @@ const SCRIPT = {
   steers: n => (n === 1 ? { tool: ["bash", { command: "echo hi" }] } : { content: "完成" }),
   last: n => ({ content: n === 1 ? "初稿" : "定稿" }),
   stop: n => (n === 1 ? { content: "开始查", tool: ["bash", { command: "sleep 30" }] } : { content: "不该到这" }),
-  ask: n => (n === 1 ? { tool: ["ask_max", { question: "选火锅还是烧烤？" }] } : { content: "订了火锅" }),
+  settle: n => ({ content: n === 1 ? "等 Max 回答选哪家" : "订了火锅" }),
   agents: n => (n === 1 ? { tool: ["bash", { command: "pwd" }] } : { content: "项目完成" }),
   claude: n => (n === 1 ? { tool: ["bash", { command: "pwd" }] } : { content: "项目完成" }),
 };
 // What the turn's end `n` takes.
 const STEERS = { steers: ["先看 A", "再看 B"], last: ["再补一句"] };
+// What comes to the agent about to settle the first time, after a while.
+const ANSWER = "[ask#1 回答] Max\n答：火锅";
 
 // The words of the messages after the model's last answer.
 function since(messages) {
@@ -46,7 +48,7 @@ function since(messages) {
 }
 
 function host(scenario) {
-  const seen = { systems: [], calls: [], turns: 0, asks: [], reports: [], stops: 0, strangers: [] };
+  const seen = { systems: [], calls: [], turns: 0, settles: 0, reports: [], stops: 0, strangers: [] };
   const server = http.createServer((req, res) => {
     let body = "";
     req.on("data", chunk => (body += chunk));
@@ -69,6 +71,19 @@ function host(scenario) {
         res.write(`data: ${JSON.stringify({ choices: [finish], usage: { prompt_tokens: 10, completion_tokens: 2 } })}\n\n`);
         return res.end("data: [DONE]\n\n");
       }
+      if (req.url === "/job/turn" && JSON.parse(body).settling) {
+        seen.settles += 1;
+        if (scenario !== "settle" || seen.settles > 1) return res.end('{"steers":[],"stop":false}');
+        // Held, with heartbeats, as the host holds an agent whose
+        // questions are open.
+        res.writeHead(200, { "content-type": "application/x-ndjson" });
+        res.write("\n");
+        const beat = setInterval(() => res.write("\n"), 300);
+        return setTimeout(() => {
+          clearInterval(beat);
+          res.end(`${JSON.stringify({ steers: [ANSWER], stop: false })}\n`);
+        }, 1000);
+      }
       if (req.url === "/job/turn") {
         seen.turns += 1;
         const steers = seen.turns === 1 ? (STEERS[scenario] ?? []) : [];
@@ -83,12 +98,6 @@ function host(scenario) {
           clearInterval(beat);
           clearTimeout(stop);
         });
-      }
-      if (req.url === "/job/ask") {
-        seen.asks.push(JSON.parse(body).question);
-        res.writeHead(200, { "content-type": "application/x-ndjson" });
-        res.write("\n");
-        return setTimeout(() => res.end('{"answer":"火锅"}\n'), 300);
       }
       if (req.url === "/job/report") {
         seen.reports.push(JSON.parse(body));
@@ -169,6 +178,8 @@ const checks = {
     assert.equal(status, 0);
     assert.deepEqual(seen.calls[1], ["tool: hi\n", "user: 先看 A", "user: 再看 B"]);
     assert.deepEqual(seen.reports, [{ text: "完成", error: null }]);
+    // Once, about to settle, with nothing for it.
+    assert.equal(seen.settles, 1);
   },
   last({ seen }) {
     // A steer taken at the last turn's end: pi goes on.
@@ -182,9 +193,10 @@ const checks = {
     assert.equal(seen.reports[0].text, "开始查");
     assert.ok(seen.reports[0].error, "an aborted run says so");
   },
-  ask({ seen }) {
-    assert.deepEqual(seen.asks, ["选火锅还是烧烤？"]);
-    assert.deepEqual(seen.calls[1], ["tool: Max answered: 火锅"]);
+  settle({ seen }) {
+    // Held about to settle, it went on with what came, then settled.
+    assert.deepEqual(seen.calls[1], [`user: ${ANSWER}`]);
+    assert.equal(seen.settles, 2);
     assert.deepEqual(seen.reports, [{ text: "订了火锅", error: null }]);
   },
   agents: project,

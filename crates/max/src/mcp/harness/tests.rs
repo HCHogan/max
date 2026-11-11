@@ -8,19 +8,21 @@ use sqlx::PgPool;
 use tokio::net::TcpListener;
 use tokio::process::Command;
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
+use tokio::sync::oneshot;
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 
 use super::beating;
+use crate::conversation::Poster;
 use crate::conversation::testing::group;
-use crate::job::{Hook, Link, Question, Report, Turn};
+use crate::job::{Hook, Link, Report, Turn};
 use crate::llm::Upstream;
 use crate::mcp::{Caller, Context, Services, Sessions, serve};
 use crate::scope::Scope;
 use max_core::ids::ConversationId;
 
 const CLIENT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../nix/client.js");
-const QUESTION: &str = r#"{"question":"选火锅还是烧烤？"}"#;
+const SETTLING: &str = r#"{"settling":true}"#;
 
 /// A job's caller, where its harness's calls come, and its stop.
 fn job() -> (Caller, UnboundedReceiver<Hook>, CancellationToken) {
@@ -42,15 +44,24 @@ fn job() -> (Caller, UnboundedReceiver<Hook>, CancellationToken) {
         called: unbounded_channel().0,
         hooks,
         stop: stop.clone(),
+        poster: Poster::for_agent(unbounded_channel().0, 1),
     };
     (Caller::Job(Arc::new(link)), hooked, stop)
 }
 
-/// The next of `hooks`, a question.
-async fn asked(hooks: &mut UnboundedReceiver<Hook>) -> Question {
+/// The next of `hooks`, a turn's end: whether it settles, and where its
+/// answer goes.
+async fn turned(hooks: &mut UnboundedReceiver<Hook>) -> (bool, oneshot::Sender<Turn>) {
     match hooks.recv().await {
-        Some(Hook::Ask(question)) => question,
+        Some(Hook::Turn { settling, reply }) => (settling, reply),
         other => panic!("{other:?}"),
+    }
+}
+
+fn steered(steers: &[&str]) -> Turn {
+    Turn {
+        steers: steers.iter().map(ToString::to_string).collect(),
+        stop: false,
     }
 }
 
@@ -68,7 +79,7 @@ async fn served(scope: &mut Scope, conversation: ConversationId, sessions: Sessi
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn a_question_waits_for_its_answer_with_a_heartbeat(pool: PgPool) {
+async fn a_settling_turn_waits_with_a_heartbeat(pool: PgPool) {
     let mut conn = pool.acquire().await.unwrap();
     let place = Arc::new(group(&mut conn).await);
     drop(conn);
@@ -86,53 +97,60 @@ async fn a_question_waits_for_its_answer_with_a_heartbeat(pool: PgPool) {
     let check = sessions.open(context(Caller::Check));
 
     let mut scope = Scope::new();
-    let url = served(&mut scope, conversation, sessions).await + "/job/ask";
+    let url = served(&mut scope, conversation, sessions).await + "/job/turn";
     let client = reqwest::Client::new();
-    let ask =
+    let settle =
         |token: &str, body: &'static str| client.post(&url).bearer_auth(token).body(body).send();
 
-    // Answered after a while: heartbeats, then the answer.
+    // Held a while: heartbeats, then what came for it.
     let answering = async {
-        let question = asked(&mut hooks).await;
-        assert_eq!(question.text, "选火锅还是烧烤？");
+        let (settling, reply) = turned(&mut hooks).await;
+        assert!(settling);
         sleep(Duration::from_millis(150)).await;
-        question.answer.send(Some("火锅".into())).unwrap();
+        reply
+            .send(steered(&["[ask#1 回答] Max\n答：火锅"]))
+            .unwrap();
     };
-    let asking = async { ask(grant.token(), QUESTION).await.unwrap().text().await };
-    let (body, ()) = tokio::join!(asking, answering);
+    let settling = async { settle(grant.token(), SETTLING).await.unwrap().text().await };
+    let (body, ()) = tokio::join!(settling, answering);
     let body = body.unwrap();
     assert!(body.starts_with('\n'), "{body:?}");
-    assert!(body.ends_with("{\"answer\":\"火锅\"}\n"), "{body:?}");
+    let line = r#"{"steers":["[ask#1 回答] Max\n答：火锅"],"stop":false}"#;
+    assert!(body.ends_with(&format!("{line}\n")), "{body:?}");
 
-    // Given up on, the job gone, or its session closed: null.
-    let giving_up = async {
-        let question = asked(&mut hooks).await;
-        question.answer.send(None).unwrap();
+    // Dropped, as the job does once it's over, or its session closed:
+    // the stream ends with nothing on it.
+    let dropping = async {
+        drop(turned(&mut hooks).await);
     };
-    let (body, ()) = tokio::join!(ask(grant.token(), QUESTION), giving_up);
-    assert_eq!(body.unwrap().text().await.unwrap(), "{\"answer\":null}\n");
+    let (body, ()) = tokio::join!(settle(grant.token(), SETTLING), dropping);
+    let body = body.unwrap().text().await.unwrap();
+    assert!(body.trim().is_empty(), "{body:?}");
     let token = grant.token().to_owned();
     let closing = async {
-        let question = asked(&mut hooks).await;
+        let held = turned(&mut hooks).await;
         drop(grant);
-        question
+        held
     };
-    let (body, _question) = tokio::join!(ask(&token, QUESTION), closing);
+    let (body, _held) = tokio::join!(settle(&token, SETTLING), closing);
     let body = body.unwrap().text().await.unwrap();
-    assert!(body.ends_with("{\"answer\":null}\n"), "{body:?}");
+    assert!(body.trim().is_empty(), "{body:?}");
 
     let status = |response: reqwest::Result<reqwest::Response>| response.unwrap().status();
     assert_eq!(
-        status(ask(&token, QUESTION).await),
+        status(settle(&token, SETTLING).await),
         StatusCode::UNAUTHORIZED
     );
     assert_eq!(
-        status(ask(check.token(), QUESTION).await),
+        status(settle(check.token(), SETTLING).await),
         StatusCode::FORBIDDEN
     );
-    assert_eq!(status(ask(ended.token(), QUESTION).await), StatusCode::GONE);
     assert_eq!(
-        status(ask(ended.token(), "{}").await),
+        status(settle(ended.token(), SETTLING).await),
+        StatusCode::GONE
+    );
+    assert_eq!(
+        status(settle(ended.token(), r#"{"settling":3}"#).await),
         StatusCode::BAD_REQUEST
     );
 
@@ -175,16 +193,9 @@ async fn a_turn_takes_the_steers_and_the_stop_is_streamed(pool: PgPool) {
 
     // A turn's end takes what the job gives it.
     let giving = async {
-        let Some(Hook::Turn(reply)) = hooks.recv().await else {
-            panic!("not a turn");
-        };
-        let steers = vec!["先看 A".to_owned(), "再看 B".to_owned()];
-        reply
-            .send(Turn {
-                steers,
-                stop: false,
-            })
-            .unwrap();
+        let (settling, reply) = turned(&mut hooks).await;
+        assert!(!settling);
+        reply.send(steered(&["先看 A", "再看 B"])).unwrap();
     };
     let (turned, ()) = tokio::join!(post("/job/turn", grant.token(), ""), giving);
     let turned: Value = turned.unwrap().json().await.unwrap();
@@ -280,13 +291,13 @@ async fn maxxs_client_keeps_a_jobs_contract(pool: PgPool) {
         (async () => {
           const ours = job({ url, token: process.env.TOKEN });
           const turned = await ours.turn();
-          const answered = await ours.ask("选火锅还是烧烤？");
+          const settled = await ours.turn({ settling: true });
           const stopped = await ours.stopped(new AbortController().signal);
           const reported = await ours.report({ text: "订了火锅" });
           const theirs = job({ url, token: "nope" });
-          const refused = await theirs.ask("几个人？");
+          const refused = await theirs.turn({ settling: true });
           const over = await theirs.stopped();
-          console.log(JSON.stringify([turned, answered, stopped, reported, refused, over]));
+          console.log(JSON.stringify([turned, settled, stopped, reported, refused, over]));
         })();
     "#;
     let node = Command::new("node")
@@ -298,19 +309,18 @@ async fn maxxs_client_keeps_a_jobs_contract(pool: PgPool) {
         .kill_on_drop(true)
         .output();
     let host = async {
-        let Some(Hook::Turn(reply)) = hooks.recv().await else {
-            panic!("not a turn");
-        };
-        let steers = vec!["要包间".to_owned()];
+        let (settling, reply) = turned(&mut hooks).await;
+        assert!(!settling);
+        reply.send(steered(&["要包间"])).unwrap();
+        // Held past a heartbeat of the real service's, 30 seconds, would
+        // be too slow for a test: the client reads past empty lines
+        // either way.
+        let (settling, reply) = turned(&mut hooks).await;
+        assert!(settling);
+        sleep(Duration::from_millis(100)).await;
         reply
-            .send(Turn {
-                steers,
-                stop: false,
-            })
+            .send(steered(&["[ask#1 回答] Max\n答：火锅"]))
             .unwrap();
-        let question = asked(&mut hooks).await;
-        assert_eq!(question.text, "选火锅还是烧烤？");
-        question.answer.send(Some("火锅".into())).unwrap();
         stop.cancel();
         match hooks.recv().await {
             Some(Hook::Report(report)) => report,
@@ -325,7 +335,10 @@ async fn maxxs_client_keeps_a_jobs_contract(pool: PgPool) {
         outcomes[0],
         json!({ "ok": true, "value": { "steers": ["要包间"], "stop": false } })
     );
-    assert_eq!(outcomes[1], json!({ "ok": true, "value": "火锅" }));
+    assert_eq!(
+        outcomes[1],
+        json!({ "ok": true, "value": { "steers": ["[ask#1 回答] Max\n答：火锅"], "stop": false } })
+    );
     assert_eq!(outcomes[2], true);
     assert_eq!(outcomes[3], json!({ "ok": true, "value": null }));
     assert_eq!(outcomes[4]["ok"], false);

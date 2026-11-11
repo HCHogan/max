@@ -71,7 +71,7 @@ impl Tool for Agent {
             "Starts a background agent on something that takes time: looking up a pile of sources, reading many pages or files, writing code and running experiments. It runs in this chat's VM and shares /work with you; it has its own shell, file reading and writing, history and web_search; it can't speak in the chat, nor send pictures or files, recall or mute.\n  \
             It doesn't see the conversation, only task: so put in the background, what to do, how far to take it, and what the report should say. title is a one-line title, shown by status.\n  \
             workdir is the directory it starts in, /work by default: an absolute path, or one relative to /work; made if it isn't there. For work on a project give the project's path: it reads the project's AGENTS.md (or CLAUDE.md) and the notes background agents keep for that directory (under /work/.max/projects/), and updates the notes when done.\n  \
-            Returns {{ agent: \"agent#3\" }} at once, and you go on talking. Stuck on something only you or the people here know, it asks you: the question appears as [agent#3 问], it waits, and you answer with agent_steer. When it is done, its report appears among your new messages as [agent#3 完成], the whole of it saved under /work/.max/jobs/, and what to say of it in the chat is yours to decide. At most {} at once, each for at most {} hours; at its time it stops and hands over what it has.",
+            Returns {{ agent: \"agent#3\" }} at once, and you go on talking. Stuck on something only you or the people here know, it asks you: the question appears as [ask#5 问] agent#3 <title>, and you answer it with answer, to 5. It may also ask the conversations you may ask. When it is done, its report appears among your new messages as [agent#3 完成], the whole of it saved under /work/.max/jobs/, and what to say of it in the chat is yours to decide. At most {} at once, each for at most {} hours; at its time it stops and hands over what it has.",
             limits::JOBS_AT_ONCE,
             limits::JOB_TIME.as_secs() / 3600,
         )
@@ -96,7 +96,7 @@ impl Tool for Agent {
 
 impl Tool for AgentSteer {
     const NAME: &'static str = "agent_steer";
-    const DESCRIPTION: &'static str = "Tells a running background agent something more: a change of direction, more information, or the answer to its [agent#N 问].";
+    const DESCRIPTION: &'static str = "Tells a running background agent something more: a change of direction, or more information.";
     const JOB: bool = false;
 
     type Args = Steer;
@@ -104,8 +104,8 @@ impl Tool for AgentSteer {
 
     fn guide() -> String {
         format!(
-            "Tells a running background agent something more: a change of direction, more information, what someone here answered. It sees it after the tool call it is on, before it next thinks. agent is \"agent#3\" or 3.\n  \
-            While it waits on a question it asked you ([agent#3 问]), your next message is the answer, and it gets it at once. If you can't answer, ask in the chat and pass on what you hear; with no answer in {} minutes it goes on by its own judgement, and what you say later is taken as more information.",
+            "Tells a running background agent something more: a change of direction, more information, what someone here said. It sees it after the tool call it is on, before it next thinks. agent is \"agent#3\" or 3.\n  \
+            A question it asked you ([ask#5 问] agent#3 <title>) is answered with answer, to 5, not with this: answered, it stops waiting. Once it has nothing else to do, it waits at most {} minutes for the answer, then goes on by its own judgement.",
             limits::QUESTION_WAIT.as_secs() / 60,
         )
     }

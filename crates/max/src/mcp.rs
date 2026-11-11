@@ -120,11 +120,12 @@ pub enum Caller {
 
 impl Caller {
     /// Says things in the conversation for the turn, or the program, that
-    /// called.
+    /// called; or asks and answers for the agent.
     pub fn poster(&self) -> Option<&Poster> {
         match self {
             Caller::Turn(poster) | Caller::Program(poster) => Some(poster),
-            Caller::Job(_) | Caller::Check => None,
+            Caller::Job(link) => Some(&link.poster),
+            Caller::Check => None,
         }
     }
 

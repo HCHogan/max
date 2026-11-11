@@ -14,36 +14,75 @@ use max_core::item::{Timing, Usage};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, watch};
 use tokio::time::{Instant, sleep_until};
 use tokio_util::sync::CancellationToken;
 
+use crate::conversation::Poster;
 use crate::llm::Upstream;
 use max_core::limits::QUESTION_WAIT;
-pub use run::{Asker, Finished, Progress, Start, run};
+pub use run::{Finished, Progress, Start, run};
 
 /// What a job's session knows of it: the model its calls go to, who
-/// hears how each went, where its harness's calls go, and when it is to
-/// stop.
+/// hears how each went, where its harness's calls go, when it is to
+/// stop, and the conversation its `ask` and `answer` go to.
 #[derive(Debug)]
 pub struct Link {
     pub upstream: Arc<Upstream>,
     pub called: UnboundedSender<Called>,
-    /// `/job/turn`'s, `/job/ask`'s and `/job/report`'s.
+    /// `/job/turn`'s and `/job/report`'s.
     pub hooks: UnboundedSender<Hook>,
     /// Cancelled at the deadline, for `/job/stop`.
     pub stop: CancellationToken,
+    pub poster: Poster,
 }
 
 /// What the harness calls for, at one of its hooks.
 #[derive(Debug)]
 pub enum Hook {
-    /// A turn has ended: the steers since the last, and whether to stop.
-    /// Dropped unanswered, it took none of them.
-    Turn(oneshot::Sender<Turn>),
-    Ask(Question),
+    /// A turn has ended, or the agent is about to settle: the steers
+    /// since the last, and whether to stop. Dropped unanswered, it took
+    /// none of them.
+    Turn {
+        settling: bool,
+        reply: oneshot::Sender<Turn>,
+    },
     /// The agent has settled: the job ends.
     Report(Report),
+}
+
+/// The questions an agent asked with `ask` that still wait for their
+/// answers, which come to it as steers. While there are any, an agent
+/// about to settle waits for one, for [`QUESTION_WAIT`] at most.
+#[derive(Clone, Debug, Default)]
+pub struct Open(Arc<watch::Sender<usize>>);
+
+/// One of an agent's open questions: dropped, answered or not, it is no
+/// longer open.
+#[derive(Debug)]
+pub struct Asking(Open);
+
+impl Open {
+    pub fn asking(&self) -> Asking {
+        self.0.send_modify(|open| *open += 1);
+        Asking(self.clone())
+    }
+
+    fn any(&self) -> bool {
+        *self.0.borrow() > 0
+    }
+
+    /// Done once none is open.
+    async fn none(&self) {
+        let mut open = self.0.subscribe();
+        let _ = open.wait_for(|open| *open == 0).await;
+    }
+}
+
+impl Drop for Asking {
+    fn drop(&mut self) {
+        self.0.0.send_modify(|open| *open -= 1);
+    }
 }
 
 /// What a turn's end is told.
@@ -63,14 +102,6 @@ pub struct Report {
     pub error: Option<String>,
 }
 
-/// The agent's question to Max, from `ask_max` through `/job/ask`, and
-/// where the answer goes: None if there is none.
-#[derive(Debug)]
-pub struct Question {
-    pub text: String,
-    pub answer: oneshot::Sender<Option<String>>,
-}
-
 /// How the harness's process ended: its exit status, if the guest sent
 /// one; what it wrote, for one with no plugin to report; and the end of
 /// its stderr.
@@ -79,28 +110,6 @@ pub struct Exit {
     pub status: Option<u32>,
     pub out: String,
     pub err: String,
-}
-
-/// The question the agent waits on, and since when.
-struct Waiting {
-    answer: oneshot::Sender<Option<String>>,
-    since: Instant,
-}
-
-/// The question the agent still waits on, taken: one whose `ask_max`
-/// call is gone waits no more.
-fn waiting(question: &mut Option<Waiting>) -> Option<Waiting> {
-    question
-        .take()
-        .filter(|waiting| !waiting.answer.is_closed())
-}
-
-/// Tells the agent waiting on `question`, if any, that no answer is
-/// coming.
-fn unanswered(question: &mut Option<Waiting>) {
-    if let Some(waiting) = question.take() {
-        let _ = waiting.answer.send(None);
-    }
 }
 
 /// One of the agent's model calls, as the forwarder read it on its way
@@ -114,7 +123,7 @@ pub struct Called {
 }
 
 /// What runs or waits in the background, as `status` shows it: an agent,
-/// a command, or a question Max asked.
+/// a command, or a question asked from here, by Max or an agent.
 #[derive(Debug, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct Status {
     pub handle: String,
@@ -142,13 +151,6 @@ fn wrap_up_message() -> String {
 /// How much of stderr's end a failure's reason carries.
 const WHY_KEPT: usize = 300;
 
-/// What a job's driver tells as it goes. Its model calls and their tools
-/// the forwarder tells, as [`Called`].
-pub trait Watch {
-    /// The agent asks Max `question`, and waits for the answer.
-    fn asks(&mut self, question: &str);
-}
-
 /// How a job ended, the agent's last text, its report or how far it got,
 /// and how many of Max's steers it never took in.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -168,19 +170,20 @@ pub enum How {
 }
 
 /// Keeps the job's side of the contract with its harness until the agent
-/// reports, or its process ends: holds Max's `steers` until the next
-/// turn's end takes them, tells the agent to wrap up shortly before
-/// `deadline`, and cancels `stop` then. While the agent waits on a
-/// question, the next steer is its answer; none within
-/// [`QUESTION_WAIT`], and it is told none is coming. A harness with no
-/// plugin only ends: `exited` tells how, and its output is the report.
+/// reports, or its process ends: holds Max's `steers`, the answers to the
+/// agent's questions among them, until the next turn's end takes them,
+/// tells the agent to wrap up shortly before `deadline`, and cancels
+/// `stop` then. An agent about to settle with questions still `open` is
+/// held there until something comes for it, for [`QUESTION_WAIT`] at
+/// most. A harness with no plugin only ends: `exited` tells how, and its
+/// output is the report.
 pub async fn drive(
     hooks: &mut UnboundedReceiver<Hook>,
     steers: &mut UnboundedReceiver<String>,
     exited: &mut oneshot::Receiver<Exit>,
     stop: &CancellationToken,
     deadline: Instant,
-    watch: &mut impl Watch,
+    open: &Open,
 ) -> Ending {
     // The steers not yet taken in, and Max's dropped at the deadline;
     // whether the queue holds the wrap-up, which isn't Max's.
@@ -188,40 +191,31 @@ pub async fn drive(
     let mut dropped = 0;
     let mut wrapping = false;
     let mut stopped: Option<Instant> = None;
-    let mut question: Option<Waiting> = None;
+    // The settling agent's turn, held for an answer, and until when.
+    let mut held: Option<(oneshot::Sender<Turn>, Instant)> = None;
     // Only a job that has the time is told.
     let mut wrap_up = deadline
         .checked_sub(WARNING)
         .filter(|at| *at > Instant::now());
     let (how, text) = loop {
         let give_up = stopped.map(|at| at + GRACE);
-        let given_up_on = question
-            .as_ref()
-            .map(|waiting| waiting.since + QUESTION_WAIT);
+        let hold_until = held.as_ref().map(|(_, until)| *until);
         tokio::select! {
-            // The report comes before the process ends.
+            // The report comes before the process ends, and a steer before
+            // the end of the wait it answers.
             biased;
             Some(hook) = hooks.recv() => match hook {
-                Hook::Turn(reply) => {
+                Hook::Turn { settling, reply } => {
                     // Every steer sent before the turn ended.
                     while stopped.is_none() && let Ok(steer) = steers.try_recv() {
-                        take(steer, &mut question, &mut queue);
+                        queue.push(steer);
                     }
-                    let turn = Turn { steers: mem::take(&mut queue), stop: stopped.is_some() };
-                    let took = mem::take(&mut wrapping);
-                    if let Err(turn) = reply.send(turn) {
-                        queue = turn.steers;
-                        wrapping = took;
-                    }
-                }
-                Hook::Ask(asked) => {
-                    // ask_max runs one at a time; nobody answers once it's over.
-                    let open = question.as_ref().is_some_and(|waiting| !waiting.answer.is_closed());
-                    if stopped.is_some() || open {
-                        let _ = asked.answer.send(None);
+                    // Another turn's end: the one held is gone.
+                    held = None;
+                    if settling && queue.is_empty() && stopped.is_none() && open.any() {
+                        held = Some((reply, Instant::now() + QUESTION_WAIT));
                     } else {
-                        watch.asks(&asked.text);
-                        question = Some(Waiting { answer: asked.answer, since: Instant::now() });
+                        hand(reply, &mut queue, &mut wrapping, stopped.is_some());
                     }
                 }
                 Hook::Report(Report { text, error }) => {
@@ -244,23 +238,27 @@ pub async fn drive(
                 break (how, text);
             }
             Some(steer) = steers.recv(), if stopped.is_none() => {
-                take(steer, &mut question, &mut queue);
+                queue.push(steer);
+                release(&mut held, &mut queue, &mut wrapping, false);
             }
-            () = sleep_until(given_up_on.unwrap_or(deadline)), if given_up_on.is_some() => {
-                unanswered(&mut question);
+            // Withdrawn, or answered: then its answer came first.
+            () = open.none(), if held.is_some() => {
+                release(&mut held, &mut queue, &mut wrapping, false);
+            }
+            () = sleep_until(hold_until.unwrap_or(deadline)), if hold_until.is_some() => {
+                release(&mut held, &mut queue, &mut wrapping, false);
             }
             () = sleep_until(wrap_up.unwrap_or(deadline)), if wrap_up.is_some() => {
                 wrap_up = None;
-                // The agent waiting on Max couldn't take the steer in.
-                unanswered(&mut question);
                 queue.push(wrap_up_message());
                 wrapping = true;
+                release(&mut held, &mut queue, &mut wrapping, false);
             }
             () = sleep_until(deadline), if stopped.is_none() => {
                 stopped = Some(Instant::now());
-                unanswered(&mut question);
                 dropped += mem::take(&mut queue).len() - usize::from(mem::take(&mut wrapping));
                 stop.cancel();
+                release(&mut held, &mut queue, &mut wrapping, true);
             }
             () = sleep_until(give_up.unwrap_or(deadline)), if give_up.is_some() => {
                 break (How::OutOfTime, None);
@@ -275,15 +273,30 @@ pub async fn drive(
     Ending { how, text, unsent }
 }
 
-/// Takes in Max's `steer`: the answer to the question the agent waits
-/// on, if any, else the next turn's end's.
-fn take(steer: String, question: &mut Option<Waiting>, queue: &mut Vec<String>) {
-    // An answer whose question went in the meantime is a steer.
-    let steer = match waiting(question) {
-        Some(waiting) => waiting.answer.send(Some(steer)).err().flatten(),
-        None => Some(steer),
+/// Hands a turn's end the steers queued, and whether to stop; one whose
+/// call is gone took none of them.
+fn hand(reply: oneshot::Sender<Turn>, queue: &mut Vec<String>, wrapping: &mut bool, stop: bool) {
+    let turn = Turn {
+        steers: mem::take(queue),
+        stop,
     };
-    queue.extend(steer);
+    let took = mem::take(wrapping);
+    if let Err(turn) = reply.send(turn) {
+        *queue = turn.steers;
+        *wrapping = took;
+    }
+}
+
+/// Lets the turn held for an answer go, with what came meanwhile.
+fn release(
+    held: &mut Option<(oneshot::Sender<Turn>, Instant)>,
+    queue: &mut Vec<String>,
+    wrapping: &mut bool,
+    stop: bool,
+) {
+    if let Some((reply, _)) = held.take() {
+        hand(reply, queue, wrapping, stop);
+    }
 }
 
 /// Why a harness that ended with `status` and didn't report failed: the

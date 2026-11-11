@@ -2,12 +2,13 @@
 //! harness calls, by its job's token, for what only a job does; see "Decoupling
 //! from the harness" in docs/rust-rewrite.md.
 //!
-//! - `POST /job/turn`, at each turn's end: `{"steers": […], "stop": …}`.
+//! - `POST /job/turn` `{"settling"}`, at each turn's end, and once more
+//!   as the agent is about to settle: a line `{"steers": […], "stop": …}`.
+//!   One about to settle while the agent's questions wait for their
+//!   answers is answered once something comes for it, or after a while.
 //! - `GET /job/stop`, open the whole job: a line `{"stop": true}` once it
 //!   is to stop, at once if it already is; the stream ends with nothing
 //!   when the job does.
-//! - `POST /job/ask` `{"question"}`, `ask_max`'s question to Max: a line
-//!   `{"answer": …}`, null if none came.
 //! - `POST /job/report` `{"text", "error"}`, once the agent has settled.
 //!
 //! A stream sends a line with nothing on it every so often, as `/events`
@@ -33,7 +34,7 @@ use tokio::time::sleep;
 
 use super::service::Session;
 use super::{Caller, Sessions};
-use crate::job::{Hook, Link, Question, Report};
+use crate::job::{Hook, Link, Report};
 
 /// How long a stream goes without a line before the heartbeat.
 const HEARTBEAT: Duration = Duration::from_secs(30);
@@ -54,7 +55,6 @@ fn beating(conversation: ConversationId, sessions: Sessions, heartbeat: Duration
     Router::new()
         .route("/job/turn", post(turn))
         .route("/job/stop", get(stop))
-        .route("/job/ask", post(ask))
         .route("/job/report", post(report))
         .with_state(Harness {
             conversation,
@@ -89,23 +89,47 @@ fn job(harness: &Harness, headers: &HeaderMap) -> Result<(Arc<Session>, Arc<Link
     Ok((session, link))
 }
 
-async fn turn(State(harness): State<Harness>, headers: HeaderMap) -> Response {
+#[derive(Default, Deserialize)]
+struct Ended {
+    /// The agent is about to settle, rather than going on.
+    #[serde(default)]
+    settling: bool,
+}
+
+async fn turn(State(harness): State<Harness>, headers: HeaderMap, body: Bytes) -> Response {
     let (session, link) = match job(&harness, &headers) {
         Ok(job) => job,
         Err((status, why)) => return refuse(status, why),
     };
+    // An empty body is a turn's end that goes on.
+    let ended = match body.is_empty() {
+        true => Ok(Ended::default()),
+        false => serde_json::from_slice(&body),
+    };
+    let Ok(Ended { settling }) = ended else {
+        return refuse(StatusCode::BAD_REQUEST, r#"expected {"settling": false}"#);
+    };
     let (reply, replied) = oneshot::channel();
-    if link.hooks.send(Hook::Turn(reply)).is_err() {
+    if link.hooks.send(Hook::Turn { settling, reply }).is_err() {
         return refuse(StatusCode::GONE, OVER);
     }
-    let turn = tokio::select! {
-        turn = replied => turn.ok(),
-        () = session.closed.cancelled() => None,
+    let closed = session.closed.clone();
+    let turned = async move {
+        tokio::select! {
+            turn = replied => turn.ok().map(|turn| json!(turn)),
+            () = closed.cancelled() => None,
+        }
     };
-    match turn {
-        Some(turn) => answer(StatusCode::OK, &json!(turn)),
-        None => refuse(StatusCode::GONE, OVER),
+    if !settling {
+        return match turned.await {
+            Some(turn) => answer(StatusCode::OK, &turn),
+            None => refuse(StatusCode::GONE, OVER),
+        };
     }
+    // It may be held for a while: heartbeats until its line, or nothing
+    // if the job ends first. Dropped with the stream, it took none of the
+    // steers.
+    streamed(lines(turned, harness.heartbeat))
 }
 
 async fn stop(State(harness): State<Harness>, headers: HeaderMap) -> Response {
@@ -122,39 +146,6 @@ async fn stop(State(harness): State<Harness>, headers: HeaderMap) -> Response {
         }
     };
     streamed(lines(stopped, harness.heartbeat))
-}
-
-#[derive(Deserialize)]
-struct Asked {
-    question: String,
-}
-
-async fn ask(State(harness): State<Harness>, headers: HeaderMap, body: Bytes) -> Response {
-    let (session, link) = match job(&harness, &headers) {
-        Ok(job) => job,
-        Err((status, why)) => return refuse(status, why),
-    };
-    let Ok(Asked { question }) = serde_json::from_slice(&body) else {
-        return refuse(StatusCode::BAD_REQUEST, r#"expected {"question": "…"}"#);
-    };
-    let (answer, answered) = oneshot::channel();
-    let asked = Question {
-        text: question,
-        answer,
-    };
-    if link.hooks.send(Hook::Ask(asked)).is_err() {
-        return refuse(StatusCode::GONE, OVER);
-    }
-    // Null if the job gave up on the question, or ended.
-    let closed = session.closed.clone();
-    let answered = async move {
-        let answer = tokio::select! {
-            answer = answered => answer.ok().flatten(),
-            () = closed.cancelled() => None,
-        };
-        Some(json!({ "answer": answer }))
-    };
-    streamed(lines(answered, harness.heartbeat))
 }
 
 async fn report(State(harness): State<Harness>, headers: HeaderMap, body: Bytes) -> Response {

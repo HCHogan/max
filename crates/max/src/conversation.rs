@@ -68,11 +68,6 @@ pub enum Event {
         /// The turn it comes from; None from a program, outside any turn.
         origin: Option<TurnId>,
     },
-    /// A background agent asks Max, and waits for the answer.
-    JobAsks {
-        agent: u32,
-        question: String,
-    },
     /// A background agent or command ended.
     JobDone {
         handle: Handle,
@@ -197,17 +192,21 @@ pub enum Request {
         changes: Vec<(Setting, Option<u64>)>,
         reply: Reply<Vec<Configured>>,
     },
-    /// Ask Max in conversation `to`: the question's number here.
+    /// Ask Max in conversation `to`; or, for agent `by`, with no `to`,
+    /// Max here: the question's number here.
     Ask {
-        to: ConversationId,
+        to: Option<ConversationId>,
         question: String,
+        by: Option<u32>,
         reply: Reply<u32>,
     },
     /// Answer question `to`, as it was numbered here, which Max in
-    /// another conversation asked: whom the answer went to.
+    /// another conversation or an agent here asked; `by` an agent, the
+    /// one answering: whom the answer went to.
     Answer {
         to: u32,
         text: String,
+        by: Option<u32>,
         reply: Reply<String>,
     },
     /// Wake Max with a program's `text`: what the program is told.
@@ -309,12 +308,14 @@ const UNANSWERED: &str = "the conversation stopped before answering";
 
 /// Lets a tool act in its conversation: say something, or run a
 /// background agent, for its turn, or for a program Max keeps in the
-/// group's VM.
+/// group's VM; or ask and answer, for a background agent.
 #[derive(Clone, Debug)]
 pub struct Poster {
     mailbox: UnboundedSender<Event>,
-    /// None for a program's.
+    /// None for a program's, or an agent's.
     origin: Option<TurnId>,
+    /// The agent's number, for an agent's.
+    agent: Option<u32>,
 }
 
 impl Poster {
@@ -322,6 +323,7 @@ impl Poster {
         Self {
             mailbox,
             origin: Some(origin),
+            agent: None,
         }
     }
 
@@ -330,6 +332,16 @@ impl Poster {
         Self {
             mailbox,
             origin: None,
+            agent: None,
+        }
+    }
+
+    /// For background agent `agent`, which may only ask and answer.
+    pub fn for_agent(mailbox: UnboundedSender<Event>, agent: u32) -> Self {
+        Self {
+            mailbox,
+            origin: None,
+            agent: Some(agent),
         }
     }
 
@@ -414,22 +426,28 @@ impl Poster {
             .await
     }
 
-    /// Asks Max in conversation `to`: the question's number here, or why
-    /// it wasn't asked.
-    pub async fn ask(&self, to: ConversationId, question: String) -> Result<u32, String> {
+    /// Asks Max in conversation `to`, or an agent's Max, with no `to`:
+    /// the question's number here, or why it wasn't asked.
+    pub async fn ask(&self, to: Option<ConversationId>, question: String) -> Result<u32, String> {
         let ask = |reply| Request::Ask {
             to,
             question,
+            by: self.agent,
             reply,
         };
         self.request(ask).await
     }
 
-    /// Answers question `to`, which Max in another conversation asked:
-    /// whom it went to, or why it wasn't taken.
+    /// Answers question `to`, which Max in another conversation or an
+    /// agent here asked: whom it went to, or why it wasn't taken.
     pub async fn answer(&self, to: u32, text: String) -> Result<String, String> {
-        self.request(|reply| Request::Answer { to, text, reply })
-            .await
+        let answer = |reply| Request::Answer {
+            to,
+            text,
+            by: self.agent,
+            reply,
+        };
+        self.request(answer).await
     }
 
     /// Asks whether the tool may act in the chat by itself: `/stop`

@@ -103,6 +103,7 @@ fn linked(upstream: Upstream) -> (Caller, UnboundedReceiver<Called>) {
         called,
         hooks: unbounded_channel().0,
         stop: tokio_util::sync::CancellationToken::new(),
+        poster: crate::conversation::Poster::for_agent(unbounded_channel().0, 1),
     };
     (Caller::Job(Arc::new(link)), calls)
 }
@@ -252,7 +253,7 @@ async fn a_job_calls_only_the_tools_that_dont_act_in_the_group(pool: PgPool) {
         .iter()
         .map(|tool| tool["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, ["history", "web_search"]);
+    assert_eq!(names, ["history", "web_search", "ask", "answer"]);
 
     let call = json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
         "name": "send_image", "arguments": { "path": "a.png" }, "_meta": meta,

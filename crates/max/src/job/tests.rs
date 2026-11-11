@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
+use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
@@ -9,21 +9,35 @@ use super::*;
 use max_core::limits::JOB_TIME;
 
 /// The harness's side of a job, as its plugin calls; and Max's, the
-/// questions the driver passes on and the steers.
+/// steers and the agent's questions still open.
 struct Fake {
     hooks: UnboundedSender<Hook>,
     exit: Option<oneshot::Sender<Exit>>,
     stop: CancellationToken,
-    told: UnboundedReceiver<String>,
     steering: UnboundedSender<String>,
+    open: Open,
 }
 
 impl Fake {
     /// A turn has ended: what it is told.
     async fn turn(&self) -> Turn {
         let (reply, replied) = oneshot::channel();
-        self.hooks.send(Hook::Turn(reply)).unwrap();
+        let settling = false;
+        self.hooks.send(Hook::Turn { settling, reply }).unwrap();
         replied.await.unwrap()
+    }
+
+    /// The agent is about to settle: where what it is told comes.
+    fn settle(&self) -> oneshot::Receiver<Turn> {
+        let (reply, replied) = oneshot::channel();
+        let settling = true;
+        self.hooks.send(Hook::Turn { settling, reply }).unwrap();
+        replied
+    }
+
+    /// The agent asked something: open until it is answered.
+    fn ask(&self) -> Asking {
+        self.open.asking()
     }
 
     /// The steers a turn's end takes.
@@ -31,24 +45,6 @@ impl Fake {
         let turn = self.turn().await;
         assert!(!turn.stop);
         turn.steers
-    }
-
-    /// ask_max's question, as `/job/ask` hands it on: where the answer
-    /// comes.
-    fn put(&self, question: &str) -> oneshot::Receiver<Option<String>> {
-        let (answer, answered) = oneshot::channel();
-        let text = question.to_owned();
-        self.hooks
-            .send(Hook::Ask(Question { text, answer }))
-            .unwrap();
-        answered
-    }
-
-    /// The same, once the driver has passed it on to Max.
-    async fn ask(&mut self, question: &str) -> oneshot::Receiver<Option<String>> {
-        let answered = self.put(question);
-        assert_eq!(self.told.recv().await.unwrap(), question);
-        answered
     }
 
     fn steer(&self, steer: &str) {
@@ -74,17 +70,6 @@ impl Fake {
     }
 }
 
-/// Max's side: the questions the driver passes on.
-struct Seen {
-    questions: UnboundedSender<String>,
-}
-
-impl Watch for Seen {
-    fn asks(&mut self, question: &str) {
-        let _ = self.questions.send(question.to_owned());
-    }
-}
-
 /// A job against the fake harness `agent` plays.
 async fn job<F>(within: Duration, agent: impl FnOnce(Fake) -> F) -> Ending
 where
@@ -93,16 +78,15 @@ where
     let (hooks, mut hooked) = unbounded_channel();
     let (exit, mut exited) = oneshot::channel();
     let (steering, mut steered) = unbounded_channel();
-    let (telling, told) = unbounded_channel();
     let stop = CancellationToken::new();
+    let open = Open::default();
     let fake = Fake {
         hooks,
         exit: Some(exit),
         stop: stop.clone(),
-        told,
         steering,
+        open: open.clone(),
     };
-    let mut seen = Seen { questions: telling };
     let deadline = Instant::now() + within;
     let driven = drive(
         &mut hooked,
@@ -110,7 +94,7 @@ where
         &mut exited,
         &stop,
         deadline,
-        &mut seen,
+        &open,
     );
     let (ending, ()) = tokio::join!(driven, agent(fake));
     ending
@@ -145,9 +129,7 @@ async fn steers_wait_for_a_turns_end_and_come_in_order() {
         assert!(agent.steers().await.is_empty());
         // A turn's end that went before its answer took none.
         agent.steer("还有 C");
-        let (reply, replied) = oneshot::channel();
-        agent.hooks.send(Hook::Turn(reply)).unwrap();
-        drop(replied);
+        drop(agent.settle());
         assert_eq!(agent.steers().await, ["还有 C"]);
         agent.report(Some("看完了"), None);
     })
@@ -167,31 +149,41 @@ async fn steers_left_when_the_agent_reports_are_counted() {
     assert_eq!(ending.unsent, 2);
 }
 
-#[tokio::test]
-async fn a_question_goes_to_max_and_the_next_steer_answers_it() {
-    let ending = job(LONG, |mut agent| async move {
-        let answer = agent.ask("选火锅还是烧烤？").await;
-        agent.steer("火锅");
-        assert_eq!(answer.await.unwrap(), Some("火锅".into()));
-        // Answered: the next is a steer again.
-        agent.steer("要包间");
-        assert_eq!(agent.steers().await, ["要包间"]);
-        agent.report(Some("订了火锅包间"), None);
+#[tokio::test(start_paused = true)]
+async fn an_agent_with_questions_open_waits_to_settle_until_answered() {
+    let ending = job(JOB_TIME, |agent| async move {
+        // Only about to settle: at a turn's end it goes on.
+        let asked = agent.ask();
+        assert_eq!(agent.turn().await, Turn::default());
+        let mut settled = agent.settle();
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        assert!(settled.try_recv().is_err());
+        // The answer, then the question closed, as the actor does both.
+        agent.steer("[ask#1 回答] Max\n答：火锅");
+        drop(asked);
+        assert_eq!(
+            settled.await.unwrap().steers,
+            ["[ask#1 回答] Max\n答：火锅"]
+        );
+        assert_eq!(agent.settle().await.unwrap(), Turn::default());
+        agent.report(Some("订了火锅"), None);
     })
     .await;
-    assert_eq!(ending, done("订了火锅包间"));
+    assert_eq!(ending, done("订了火锅"));
 }
 
-#[tokio::test]
-async fn one_question_at_a_time_and_one_withdrawn_takes_no_answer() {
-    let ending = job(LONG, |mut agent| async move {
-        let first = agent.ask("选火锅还是烧烤？").await;
-        assert_eq!(agent.put("几个人？").await.unwrap(), None);
-        // The agent aborted ask_max: what Max says next is a steer.
-        drop(first);
-        agent.steer("火锅");
-        assert_eq!(agent.steers().await, ["火锅"]);
-        agent.report(Some("订了火锅"), None);
+#[tokio::test(start_paused = true)]
+async fn a_steer_or_a_question_withdrawn_lets_a_held_agent_go() {
+    let ending = job(JOB_TIME, |agent| async move {
+        let asked = agent.ask();
+        let settled = agent.settle();
+        agent.steer("要包间");
+        assert_eq!(settled.await.unwrap().steers, ["要包间"]);
+        // Max withdrew it.
+        let settled = agent.settle();
+        drop(asked);
+        assert_eq!(settled.await.unwrap(), Turn::default());
+        agent.report(Some("订了包间"), None);
     })
     .await;
     assert_eq!(ending.how, How::Done);
@@ -199,11 +191,11 @@ async fn one_question_at_a_time_and_one_withdrawn_takes_no_answer() {
 
 #[tokio::test(start_paused = true)]
 async fn an_unanswered_question_is_given_up_on_after_a_while() {
-    let ending = job(JOB_TIME, |mut agent| async move {
-        let asked = Instant::now();
-        let answer = agent.ask("选火锅还是烧烤？").await;
-        assert_eq!(answer.await.unwrap(), None);
-        assert_eq!(asked.elapsed(), QUESTION_WAIT);
+    let ending = job(JOB_TIME, |agent| async move {
+        let _asked = agent.ask();
+        let held = Instant::now();
+        assert_eq!(agent.settle().await.unwrap(), Turn::default());
+        assert_eq!(held.elapsed(), QUESTION_WAIT);
         agent.report(Some("自己选了火锅"), None);
     })
     .await;
@@ -236,27 +228,35 @@ async fn a_wrap_up_not_taken_in_isnt_counted_as_maxs() {
 #[tokio::test(start_paused = true)]
 async fn a_job_waiting_on_max_is_still_told_to_wrap_up() {
     let within = WARNING + Duration::from_secs(60);
-    let ending = job(within, |mut agent| async move {
-        let answer = agent.ask("选火锅还是烧烤？").await;
-        assert_eq!(answer.await.unwrap(), None);
-        assert_eq!(agent.steers().await, [wrap_up_message()]);
+    let ending = job(within, |agent| async move {
+        let _asked = agent.ask();
+        let held = Instant::now();
+        let turn = agent.settle().await.unwrap();
+        assert_eq!(turn.steers, [wrap_up_message()]);
+        assert_eq!(held.elapsed(), Duration::from_secs(60));
         agent.report(Some("没等到，先报这些"), None);
     })
     .await;
-    assert_eq!(ending.how, How::Done);
+    assert_eq!(ending, done("没等到，先报这些"));
 }
 
 #[tokio::test(start_paused = true)]
 async fn a_job_out_of_time_is_stopped_and_says_how_far_it_got() {
     let within = Duration::from_millis(100);
-    let ending = job(within, |mut agent| async move {
-        let answer = agent.ask("选火锅还是烧烤？").await;
+    let ending = job(within, |agent| async move {
+        let _asked = agent.ask();
+        let settled = agent.settle();
         agent.stop.cancelled().await;
-        assert_eq!(answer.await.unwrap(), None);
-        // Queued steers are dropped; later ones and questions aren't taken.
+        assert_eq!(
+            settled.await.unwrap(),
+            Turn {
+                steers: Vec::new(),
+                stop: true
+            }
+        );
+        // Later steers aren't taken, nor is a settling agent held.
         agent.steer("太晚了");
-        assert_eq!(agent.put("几个人？").await.unwrap(), None);
-        let turn = agent.turn().await;
+        let turn = agent.settle().await.unwrap();
         assert!(turn.stop && turn.steers.is_empty(), "{turn:?}");
         agent.report(Some("做了一半"), Some("The operation was aborted."));
     })

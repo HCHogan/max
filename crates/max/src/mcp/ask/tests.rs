@@ -41,32 +41,42 @@ async fn a_turn_asks_and_answers_through_its_conversation(pool: PgPool) {
         let Request::Ask {
             to,
             question,
+            by,
             reply,
         } = request
         else {
             panic!("{request:?}");
         };
         reply.send(Ok(3)).unwrap();
-        (to, question, origin)
+        (to, question, by, origin)
     };
     let (out, sent) = tokio::join!(asked, actor);
     assert_eq!(out.unwrap(), json!({ "ask": "ask#3" }));
     let question = "明天的活动几点开始？".to_owned();
-    assert_eq!(sent, (ConversationId(9), question, Some(TurnId(1))));
+    assert_eq!(
+        sent,
+        (Some(ConversationId(9)), question, None, Some(TurnId(1)))
+    );
 
     let answering = json!({ "to": 5, "text": "晚上八点" });
     let answered = crate::mcp::call(Answer::NAME, &context, answering);
     let actor = async {
         let (request, _) = next(&mut events).await;
-        let Request::Answer { to, text, reply } = request else {
+        let Request::Answer {
+            to,
+            text,
+            by,
+            reply,
+        } = request
+        else {
             panic!("{request:?}");
         };
         reply.send(Ok("c#7 hank".to_owned())).unwrap();
-        (to, text)
+        (to, text, by)
     };
     let (out, sent) = tokio::join!(answered, actor);
     assert_eq!(out.unwrap(), json!({ "to": "c#7 hank" }));
-    assert_eq!(sent, (5, "晚上八点".to_owned()));
+    assert_eq!(sent, (5, "晚上八点".to_owned(), None));
 
     // Why the conversation didn't take it is the tool's failure.
     let answering = json!({ "to": 5, "text": "九点" });
@@ -140,4 +150,46 @@ async fn a_call_from_no_conversation_is_refused(pool: PgPool) {
     let asking = json!({ "to": 9, "question": "在吗" });
     let refused = crate::mcp::call(Ask::NAME, &nowhere, asking).await;
     assert_eq!(refused.unwrap_err().code, "not_here");
+}
+
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn an_agent_asks_as_itself(pool: PgPool) {
+    let (turn, _events) = context(&pool).await;
+    let (mailbox, mut events) = unbounded_channel();
+    let (hooks, _hooked) = unbounded_channel();
+    let link = crate::job::Link {
+        upstream: Arc::new(crate::llm::Upstream {
+            provider: "cliproxy".into(),
+            protocol: max_core::item::Protocol::Chat,
+            base_url: "http://127.0.0.1:9/v1".into(),
+            api_key: None,
+            headers: Vec::new(),
+            model: "m".into(),
+            window: 1_000_000,
+            max_output: None,
+            effort: None,
+            idle: std::time::Duration::from_secs(120),
+        }),
+        called: unbounded_channel().0,
+        hooks,
+        stop: tokio_util::sync::CancellationToken::new(),
+        poster: Poster::for_agent(mailbox, 3),
+    };
+    let context = Context {
+        caller: Caller::Job(Arc::new(link)),
+        ..Context::check(Services::bare(pool.clone()), Arc::clone(&turn.place))
+    };
+    let asking = json!({ "question": "选火锅还是烧烤？" });
+    let asked = crate::mcp::call(Ask::NAME, &context, asking);
+    let actor = async {
+        let (request, origin) = next(&mut events).await;
+        let Request::Ask { to, by, reply, .. } = request else {
+            panic!("{request:?}");
+        };
+        reply.send(Ok(4)).unwrap();
+        (to, by, origin)
+    };
+    let (out, sent) = tokio::join!(asked, actor);
+    assert_eq!(out.unwrap(), json!({ "ask": "ask#4" }));
+    assert_eq!(sent, (None, Some(3), None));
 }

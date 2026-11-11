@@ -2,7 +2,7 @@
 // command share: a call is one POST, the outcome {ok: true, value} or
 // {ok: false, error: {code, message}}. Without a token it calls as a
 // program Max keeps in the VM, outside any turn. See "The MCP channel" in
-// docs/rust-rewrite.md. A background agent's harness asks Max with job();
+// docs/rust-rewrite.md. A background agent's harness keeps its job with job();
 // see "Decoupling from the harness" there.
 "use strict";
 
@@ -100,10 +100,12 @@ function connect({ url = MCP, token }) {
 // What only a background job does, by its token; see "Decoupling from the
 // harness" in docs/rust-rewrite.md. Each but stopped() gives an outcome, as
 // a call does.
-//   turn()          at the end of a turn: {steers, stop}, the steers Max
-//                   sent since the last, and whether to stop now
-//   ask(question)   waits until Max answers, as long as that takes: the
-//                   answer, or null if none came
+//   turn({settling}) at the end of a turn, and once more as the agent is
+//                   about to settle: {steers, stop}, the steers Max sent
+//                   since the last, the answers to the agent's questions
+//                   among them, and whether to stop now. About to settle
+//                   with questions open, it waits for what comes, as long
+//                   as the host holds it
 //   stopped(signal) waits until the host says stop, opening the stream
 //                   again if it breaks or goes quiet: true then, false
 //                   once the job is over or `signal` ends the wait
@@ -128,17 +130,12 @@ function job({ url = MCP, token }) {
   // alive.
   const first = text => text.split("\n").find(line => line.trim() !== "");
 
-  async function turn() {
-    const outcome = await post("/job/turn", {});
-    return outcome.ok ? { ok: true, value: JSON.parse(outcome.value) } : outcome;
-  }
-
-  async function ask(question, signal) {
-    const outcome = await post("/job/ask", { question }, signal);
+  async function turn({ settling = false } = {}) {
+    const outcome = await post("/job/turn", { settling });
     if (!outcome.ok) return outcome;
     const line = first(outcome.value);
-    if (line === undefined) return { ok: false, error: { code: "unreachable", message: "Max's MCP service hung up without answering" } };
-    return { ok: true, value: JSON.parse(line).answer ?? null };
+    if (line === undefined) return { ok: false, error: { code: "over", message: "the job ended before the turn was answered" } };
+    return { ok: true, value: JSON.parse(line) };
   }
 
   async function stopped(signal) {
@@ -182,7 +179,7 @@ function job({ url = MCP, token }) {
     return outcome.ok ? { ok: true, value: null } : outcome;
   }
 
-  return { turn, ask, stopped, report };
+  return { turn, stopped, report };
 }
 
 // The group's rows after the one numbered `after`, or from now, as the

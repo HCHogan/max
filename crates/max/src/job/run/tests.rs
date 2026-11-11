@@ -84,10 +84,24 @@ fn notes_are_shown_up_to_their_limit() {
 
 #[test]
 fn the_agent_is_told_where_its_notes_are() {
-    let system = system("/work/max", "/work/.max/projects/work-max.md", "- 先跑 fmt");
+    let system = system(
+        "/work/max",
+        "/work/.max/projects/work-max.md",
+        "- 先跑 fmt",
+        &[],
+    );
     assert!(system.starts_with(SYSTEM));
+    assert!(system.contains("用 mcp__max__ask 问 Max，不填 to"));
+    assert!(system.contains("还会再等最多 10 分钟"));
     assert!(system.contains("你在 /work/max 下干活"));
     assert!(system.contains("笔记在 /work/.max/projects/work-max.md"));
     assert!(system.contains("别往里记笔记"));
     assert!(system.ends_with("\n\n[笔记]\n- 先跑 fmt"));
+}
+
+#[test]
+fn the_agent_is_told_whom_it_may_ask() {
+    let askable = ["c#9 周末球局".to_owned(), "c#12".to_owned()];
+    let system = system("/work", "/work/.max/projects/work.md", "", &askable);
+    assert!(system.ends_with("\n\n[笔记]\n\n\n[能问的会话]\nc#9 周末球局\nc#12"));
 }

@@ -1,7 +1,8 @@
 //! `ask` and `answer`: Max here asks Max in another conversation, and
-//! answers what one asked it. The conversation's actor sends the question
-//! on its way and keeps who waits. See "Asking another conversation" in
-//! docs/rust-rewrite.md.
+//! answers what one, or a background agent here, asked it; an agent asks
+//! Max here, or Max in another conversation. The conversation's actor
+//! sends the question on its way and keeps who waits. See "Asking another
+//! conversation" in docs/rust-rewrite.md.
 
 use max_core::ids::{ConversationId, Handle};
 use max_core::limits::{self, ASK_CHARS};
@@ -20,12 +21,12 @@ pub struct Answer;
 pub struct Asking {
     #[schemars(
         range(min = 1),
-        description = "the number of the conversation to ask: 9 for the c#9 listed under [能问的会话]"
+        description = "the number of the conversation to ask: 9 for the c#9 listed under [能问的会话]; a background agent leaves it out to ask its own Max"
     )]
-    to: i64,
+    to: Option<i64>,
     #[schemars(
         length(min = 1, max = ASK_CHARS),
-        description = "the question, with the background they need there, in full: it doesn't see this conversation"
+        description = "the question, with the background needed to answer it, in full: whoever is asked sees this text and nothing else of yours"
     )]
     question: String,
 }
@@ -56,18 +57,18 @@ pub struct Answered {
 
 impl Tool for Ask {
     const NAME: &'static str = "ask";
-    const DESCRIPTION: &'static str = "Asks Max in another conversation a question, and returns its handle, ask#N, at once; its answer comes back here later as [ask#N 回答].";
-    const JOB: bool = false;
+    const DESCRIPTION: &'static str = "Asks Max a question: your own Max without to, or Max in a conversation listed under [能问的会话] with to. Returns its handle, ask#N, at once; the answer comes later as [ask#N 回答], or [ask#N 没答成] and why.";
+    const JOB: bool = true;
 
     type Args = Asking;
     type Output = Waiting;
 
     fn guide() -> String {
         format!(
-            "Asks Max in another conversation (another group, or a private chat) a question. Only those listed under [能问的会话] can be asked; to is the number, 9 for c#9. With no such block in the context, nobody can be asked from here.\n  \
+            "Asks Max in another conversation (another group, or a private chat) a question. Only those listed under [能问的会话] can be asked; to is the number, 9 for c#9, and you always give it: only a background agent leaves it out, to ask you. With no such block in the context, nobody can be asked from here.\n  \
             Max there answers by its own rules, with its own records, memory and tools; whether to answer and how much is its to decide. It doesn't see this conversation, nor you its, so question has to carry the background and what is asked in full, in at most {ASK_CHARS} characters; a [mention#…], a message number or a picture's handle from here means nothing there: say it with names and words.\n  \
             Neither the question nor the answer is sent to either chat; only the two Maxes see them. The people here don't know you asked: whether to say so, and how to pass the answer on, is yours to decide.\n  \
-            Returns {{ ask: \"ask#3\" }} at once, and you go on talking. When it answers, the answer appears among your new messages as [ask#3 回答], with what you asked; if no answer comes, as [ask#3 没答成] and why. It may ask its own people first, and is waited for at most {} hours. A question that waits shows in status, its title starting with ?; to stop waiting, withdraw it with cancel.",
+            Returns {{ ask: \"ask#3\" }} at once, and you go on talking. When it answers, the answer appears among your new messages as [ask#3 回答], with what you asked; if no answer comes, as [ask#3 没答成] and why. It may ask its own people first, and is waited for at most {} hours. A question that waits shows in status, its title starting with ?; to stop waiting, withdraw it with cancel. Your background agents may ask the same conversations: their questions show there too, the title ending with (agent#3), and the answer goes to the agent.",
             limits::JOB_TIME.as_secs() / 3600,
         )
     }
@@ -77,7 +78,7 @@ impl Tool for Ask {
             return Err(Failure::new("bad_arguments", "question is empty"));
         }
         let ask = conversation(context)?
-            .ask(ConversationId(to), question)
+            .ask(to.map(ConversationId), question)
             .await
             .map_err(|message| Failure::new("not_asked", message))?;
         Ok(Waiting {
@@ -88,18 +89,19 @@ impl Tool for Ask {
 
 impl Tool for Answer {
     const NAME: &'static str = "answer";
-    const DESCRIPTION: &'static str = "Answers a question that Max in another conversation asked here; to is the question's number, 5 for [ask#5 问].";
-    const JOB: bool = false;
+    const DESCRIPTION: &'static str = "Answers a question asked here, by Max in another conversation or by a background agent; to is the question's number, 5 for [ask#5 问].";
+    const JOB: bool = true;
 
     type Args = Answering;
     type Output = Answered;
 
     fn guide() -> String {
         format!(
-            "Answers a question that Max in another conversation asked you. When it asks, your new messages have [ask#5 问] c#7 <name> and the question; to is that number, 5 for ask#5, and text is the answer, at most {ASK_CHARS} characters.\n  \
-            It is that conversation's Max who asks, not anyone here: it doesn't see this conversation, only your text. What may be said, and how much, is yours to judge by the rules and memory of this conversation; you may ask the people here first and answer once you know, and it waits at most {} hours. You may leave it unanswered, or answer that you'd rather not say.\n  \
-            Neither the question nor your answer is sent to this chat, so the people here don't know anyone asked: whether to tell them is yours to decide. A question still unanswered when this turn ends is listed under [等你回答的问题] in the next. Questions are numbered here whichever way they go: one you asked yourself is answered to you, not by you. A question is answered once; if nobody waits any more (withdrawn, out of time, or Max has restarted), the call fails. Returns {{ to: \"c#7 <name>\" }}.",
+            "Answers a question asked of you: by Max in another conversation, when your new messages have [ask#5 问] c#7 <name> and the question, or by one of your background agents, [ask#5 问] agent#3 <title>. to is that number, 5 for ask#5, and text is the answer, at most {ASK_CHARS} characters.\n  \
+            Another conversation's Max is not anyone here: it doesn't see this conversation, only your text. What may be said, and how much, is yours to judge by the rules and memory of this conversation; you may ask the people here first and answer once you know, and it waits at most {} hours. You may leave it unanswered, or answer that you'd rather not say. An agent asks what only you or the people here know; once it has nothing else to do, it waits at most {} minutes more, then goes on by its own judgement.\n  \
+            Neither the question nor your answer is sent to this chat, so the people here don't know anyone asked: whether to tell them is yours to decide. A question still unanswered when this turn ends is listed under [等你回答的问题] in the next. Questions are numbered here whichever way they go: one you asked yourself is answered to you, not by you. A question is answered once; if nobody waits any more (withdrawn, out of time, the agent ended, or Max has restarted), the call fails. Returns whom it went to: {{ to: \"c#7 <name>\" }}, or {{ to: \"agent#3 <title>\" }}.",
             limits::JOB_TIME.as_secs() / 3600,
+            limits::QUESTION_WAIT.as_secs() / 60,
         )
     }
 
@@ -118,7 +120,8 @@ impl Tool for Answer {
     }
 }
 
-/// The conversation the call comes from, a turn's or a program's.
+/// The conversation the call comes from: a turn's, a program's or an
+/// agent's.
 fn conversation(context: &Context) -> Result<&Poster, Failure> {
     let here = context.caller.poster();
     here.ok_or_else(|| {

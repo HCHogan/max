@@ -400,7 +400,6 @@ impl Conversation {
                 self.decide(decisions).await
             }
             Event::Request { request, origin } => self.request(request, origin).await,
-            Event::JobAsks { agent, question } => self.job_asks(agent, question).await,
             Event::JobDone { handle, finished } => self.job_done(handle, finished).await,
             Event::VmNotice(text) => self.vm_notice(text).await,
             Event::Call { tool, args, reply } => {

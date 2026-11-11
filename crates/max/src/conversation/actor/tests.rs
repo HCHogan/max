@@ -1048,31 +1048,38 @@ async fn a_jobs_report_wakes_max(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn a_jobs_question_wakes_max_who_answers_with_a_steer(pool: PgPool) {
+async fn an_agents_question_wakes_max_whose_answer_goes_to_it(pool: PgPool) {
     let (mut h, mut steered) = Harness::with_job(pool, "订餐厅").await;
     h.send(from_xiaoming(0, vec![text("帮我们订个餐厅")]));
     h.script.push(Answer::says("我问问大家"));
-    let question = "选火锅还是烧烤？".to_owned();
-    h.mailbox
-        .send(Event::JobAsks { agent: 1, question })
-        .unwrap();
+    let agent = Poster::for_agent(h.mailbox.clone(), 1);
+    assert_eq!(agent.ask(None, "选火锅还是烧烤？".into()).await, Ok(1));
     assert_eq!(h.said().await.1, "我问问大家");
     let volatile = h.request_tail(0);
     assert!(
         volatile.ends_with(
-            "[agent#1 问] 订餐厅\n选火锅还是烧烤？\n（它在等你答复：用 agent_steer 回答它，10 分钟内没答复它就自己判断）\n"
+            "[ask#1 问] agent#1 订餐厅\n选火锅还是烧烤？\n（你的后台 agent 在等你回答：用 answer 回答，to 填 1；它没别的可做时最多再等 10 分钟，等不到就自己判断。这个问题和你的回答都不会发到这边的聊天里）\n"
         ),
         "{volatile}"
     );
-    assert_eq!(h.poster().steer(1, "火锅".into()).await, Ok(()));
-    assert_eq!(steered.recv().await.unwrap(), "火锅");
-    // A cancelled job's question wakes nobody.
+    // Max asks with to; the agent can't answer itself.
+    let missing = h.poster().ask(None, "几点？".into()).await.unwrap_err();
+    assert!(missing.starts_with("to is missing"), "{missing}");
+    let own = agent.answer(1, "火锅".into()).await.unwrap_err();
+    assert_eq!(own, "ask#1 is your own question: its answer comes to you");
+    let answered = h.poster().answer(1, " 火锅\n".into()).await;
+    assert_eq!(answered, Ok("agent#1 订餐厅".to_owned()));
+    let heard = "[ask#1 回答] Max\n问：选火锅还是烧烤？\n答：火锅";
+    assert_eq!(steered.recv().await.unwrap(), heard);
+    let again = h.poster().answer(1, "烧烤".into()).await.unwrap_err();
+    assert!(
+        again.starts_with("nobody waits for an answer to ask#1"),
+        "{again}"
+    );
+    // Cancelled, it asks no more.
     assert_eq!(h.poster().cancel(Handle::Agent(1)).await, Ok(()));
-    let question = "那几点？".to_owned();
-    h.mailbox
-        .send(Event::JobAsks { agent: 1, question })
-        .unwrap();
-    assert_eq!(h.poster().status(None).await, Ok(Vec::new()));
+    let over = agent.ask(None, "那几点？".into()).await.unwrap_err();
+    assert_eq!(over, "agent#1 has ended");
     h.stop().await;
     assert_eq!(h.turns().await.len(), 1);
 }
