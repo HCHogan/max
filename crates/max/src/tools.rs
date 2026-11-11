@@ -309,12 +309,13 @@ fn exited(status: Option<u32>) -> String {
     }
 }
 
-/// A command's run time, as the model is told it.
+/// A command's run time, or time left, as the model is told it.
 fn took(elapsed: Duration) -> String {
     let seconds = elapsed.as_secs();
     match seconds {
         0..60 => format!("{seconds} seconds"),
-        _ => format!("{} minutes {} seconds", seconds / 60, seconds % 60),
+        60..3600 => format!("{} minutes {} seconds", seconds / 60, seconds % 60),
+        _ => format!("{} hours {} minutes", seconds / 3600, seconds % 3600 / 60),
     }
 }
 
@@ -331,9 +332,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_run_time_is_in_seconds_or_minutes() {
+    fn a_run_time_is_in_seconds_minutes_or_hours() {
         assert_eq!(took(Duration::from_millis(5400)), "5 seconds");
         assert_eq!(took(Duration::from_secs(192)), "3 minutes 12 seconds");
+        assert_eq!(took(Duration::from_secs(21_585)), "5 hours 59 minutes");
     }
 
     #[test]

@@ -24,10 +24,12 @@ pub const HOUR: Duration = Duration::from_secs(3600);
 pub const RUN_TIME: Duration = Duration::from_secs(120);
 /// ...and the most it may ask for.
 pub const RUN_TIME_MAX: Duration = Duration::from_secs(600);
-/// A background command's, unless the call asks for another...
-pub const BACKGROUND_TIME: Duration = Duration::from_secs(30 * 60);
-/// ...and the most it may ask for: as long as a background agent.
-pub const BACKGROUND_TIME_MAX: Duration = JOB_TIME;
+/// A background command's, and a foreground one's that moved there,
+/// counted from its start, unless the call asks for another...
+pub const BACKGROUND_TIME: Duration = Duration::from_secs(6 * 60 * 60);
+/// ...and the most it may ask for. A command costs no model calls while
+/// it runs, only room in the VM, so it may run much longer than an agent.
+pub const BACKGROUND_TIME_MAX: Duration = Duration::from_secs(24 * 60 * 60);
 /// How long a command runs before it moves to the background, once
 /// someone addresses Max while it runs: a shorter one finishes first.
 pub const MOVE_AFTER: Duration = Duration::from_secs(15);

@@ -7,7 +7,9 @@ use super::output::OUT;
 use super::*;
 
 /// What the model is shown, and whether the command failed to finish. A
-/// turn's command, `movable`, may move to the background instead.
+/// turn's command, `movable`, may move to the background instead, where
+/// it runs on for [`BACKGROUND_TIME`] from its start: the guest is told
+/// so from the start, and max stops it at `limit` while it stays here.
 pub(super) async fn shell(
     vm: &Vm,
     grant: &Grant,
@@ -19,7 +21,11 @@ pub(super) async fn shell(
     let unit = Vm::unit();
     let mut output = Output::new(vm.work(), format!("{unit}.txt"));
     let token = Some(grant.token());
-    let running = start_in(vm, unit, command, workdir, token, limit).await?;
+    let most = match movable {
+        Some(_) => limit.max(BACKGROUND_TIME),
+        None => limit,
+    };
+    let running = start_in(vm, unit, command, workdir, token, most).await?;
     let (begun, deadline) = (Instant::now(), Instant::now() + limit);
     let ran = match movable {
         None => wait_until(vm, running, &mut output, deadline).await?,
@@ -28,6 +34,7 @@ pub(super) async fn shell(
                 running,
                 begun,
                 deadline,
+                moved: begun + most,
             };
             match wait_or_move(vm, started, output, command, movable).await? {
                 Kept::Here(ran, kept) => {
@@ -64,11 +71,13 @@ pub(super) struct Movable {
     pub(super) poster: Poster,
 }
 
-/// A command that has started, and when it must end.
+/// A command that has started, and when it must end: here, or once it
+/// has moved.
 struct Started {
     running: Command,
     begun: Instant,
     deadline: Instant,
+    moved: Instant,
 }
 
 /// What a command that could move stops waiting on, besides its end.
@@ -100,6 +109,7 @@ async fn wait_or_move(
         mut running,
         begun,
         deadline,
+        moved,
     } = started;
     // Between pieces of output, so that none is half written when the
     // command moves with its output.
@@ -120,13 +130,13 @@ async fn wait_or_move(
     let file = format!("/work/{OUT}/{}", output.name);
     let (ran, left) = (
         begun.elapsed(),
-        deadline.saturating_duration_since(Instant::now()),
+        moved.saturating_duration_since(Instant::now()),
     );
     let moved = Box::new(Moved {
         vm: vm.clone(),
         running,
         output,
-        deadline,
+        deadline: moved,
         begun,
         command: command.to_owned(),
     });
@@ -162,9 +172,9 @@ async fn due(mut waiting: Waiting, begun: Instant) {
 fn moved_away(number: u32, ran: Duration, left: Duration, file: &str, shown: &str) -> String {
     let shell = Handle::Shell(number);
     let mut text = format!(
-        "Someone is waiting for you to answer: this command had run {} seconds and wasn't done, so it moved to the background as {shell}, with {} seconds left. {}",
-        ran.as_secs(),
-        left.as_secs(),
+        "Someone is waiting for you to answer: this command had run {} and wasn't done, so it moved to the background as {shell}, with {} left. {}",
+        took(ran),
+        took(left),
         follow(shell, file),
     );
     if shown.is_empty() {
@@ -177,10 +187,10 @@ fn moved_away(number: u32, ran: Duration, left: Duration, file: &str, shown: &st
 }
 
 /// A turn's command handed to its conversation as a background job, as
-/// someone addressed Max while it ran. It keeps its unit, its output and
-/// its deadline. Once the call returns, the run's token is no longer open,
-/// and the command's `maxx` calls as a program, as a background command's
-/// does.
+/// someone addressed Max while it ran. It keeps its unit and its output,
+/// and runs on for [`BACKGROUND_TIME`] from its start. Once the call
+/// returns, the run's token is no longer open, and the command's `maxx`
+/// calls as a program, as a background command's does.
 pub struct Moved {
     vm: Vm,
     running: Command,
@@ -257,13 +267,13 @@ mod tests {
 
     #[test]
     fn a_moved_command_says_where_it_went() {
-        let (ran, left) = (Duration::from_secs(15), Duration::from_secs(105));
+        let (ran, left) = (Duration::from_secs(15), Duration::from_secs(21_585));
         let file = "/work/.max/out/max-1.txt";
         let text = moved_away(4, ran, left, file, "编译中\n");
         assert!(
             text.starts_with(
                 "Someone is waiting for you to answer: this command had run 15 seconds and wasn't \
-                 done, so it moved to the background as shell#4, with 105 seconds left. When it ends, \
+                 done, so it moved to the background as shell#4, with 5 hours 59 minutes left. When it ends, \
                  its exit status and output come back to you as [shell#4 完成]"
             ),
             "{text}"

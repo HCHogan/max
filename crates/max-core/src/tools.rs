@@ -27,7 +27,7 @@ pub static TOOLS: LazyLock<[ToolSpec; 2]> = LazyLock::new(|| {
     let run_max = RUN_TIME_MAX.as_millis();
     let shown = SHOWN_BYTES >> 10;
     let half = shown / 2;
-    let background = BACKGROUND_TIME.as_secs() / 60;
+    let background = BACKGROUND_TIME.as_secs() / 3600;
     let background_max = BACKGROUND_TIME_MAX.as_millis();
     let move_after = MOVE_AFTER.as_secs();
     [
@@ -50,10 +50,11 @@ pub static TOOLS: LazyLock<[ToolSpec; 2]> = LazyLock::new(|| {
                 {shown} KiB comes back as {half} KiB of its head and as much of its tail, the whole of it in \
                 the file under /work/.max/out/ that the result names. The command gets no input: run nothing \
                 interactive. With background true it runs in the background and its handle, shell#N, comes \
-                back at once; {background} minutes by default, timeout_ms at most {background_max}; when it \
+                back at once; {background} hours by default, timeout_ms at most {background_max}; when it \
                 ends, its exit status and output come back to you as [shell#N 完成]. If someone addresses you \
                 while a foreground command runs, one that has run {move_after} seconds moves to the background \
-                and runs on with the same time limit, and the result names its shell#N."
+                and runs on as a background command does, {background} hours from its start, and the result \
+                names its shell#N."
             ),
             parameters: r#"{"type":"object","properties":{"command":{"type":"string"},"workdir":{"type":"string","description":"/work by default"},"timeout_ms":{"type":"integer","minimum":1},"background":{"type":"boolean","description":"run in the background and tell you when it ends; false by default"}},"required":["command"]}"#,
         },
