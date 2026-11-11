@@ -77,6 +77,42 @@ fn ms(duration: Duration) -> i32 {
     i32::try_from(duration.as_millis()).unwrap_or(i32::MAX)
 }
 
+/// The tokens of a conversation's calls on one model, summed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Used {
+    pub provider: String,
+    pub model: String,
+    pub input: i64,
+    /// Of the input, how much hit the cache.
+    pub cached: i64,
+    pub output: i64,
+}
+
+/// What `conversation`'s model calls since `since` used, a model a row.
+pub async fn used(
+    conn: &mut PgConnection,
+    conversation: ConversationId,
+    since: DateTime<Utc>,
+) -> sqlx::Result<Vec<Used>> {
+    sqlx::query_as!(
+        Used,
+        r#"
+        select provider, model,
+            sum(input)::bigint as "input!",
+            sum(cached)::bigint as "cached!",
+            sum(output)::bigint as "output!"
+        from llm_usage
+        where conversation_id = $1 and at >= $2
+        group by provider, model
+        order by provider, model
+        "#,
+        conversation.0,
+        since
+    )
+    .fetch_all(conn)
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use sqlx::PgPool;
@@ -123,6 +159,54 @@ mod tests {
             (row.first_ms, row.took_ms, row.quiet_ms),
             (None, Some(2_500), Some(2_000))
         );
+        Ok(())
+    }
+
+    #[sqlx::test]
+    async fn a_conversations_calls_are_summed_by_model(pool: PgPool) -> sqlx::Result<()> {
+        let mut conn = pool.acquire().await?;
+        let here = group(&mut conn, "group:30001").await?.endpoint.conversation;
+        let there = group(&mut conn, "group:30002").await?.endpoint.conversation;
+        for (conversation, model, input, cached, minute) in [
+            (Some(here), "big", 1_000, 800, 10),
+            (Some(here), "big", 2_000, 1_500, 20),
+            (Some(here), "small", 300, 0, 20),
+            // Too early, elsewhere, or no conversation's.
+            (Some(here), "big", 9_000, 0, 0),
+            (Some(there), "big", 9_000, 0, 20),
+            (None, "big", 9_000, 0, 20),
+        ] {
+            let call = Call {
+                conversation,
+                turn: None,
+                purpose: Purpose::Turn,
+                provider: "cliproxy",
+                model,
+                effort: None,
+                usage: Usage {
+                    input,
+                    cached,
+                    output: 10,
+                    reasoning: 4,
+                },
+                cost_micros: None,
+                timing: None,
+                at: at(minute),
+            };
+            record(&mut conn, &call).await?;
+        }
+        let used = |model: &str, input, cached, output| Used {
+            provider: "cliproxy".to_owned(),
+            model: model.to_owned(),
+            input,
+            cached,
+            output,
+        };
+        assert_eq!(
+            super::used(&mut conn, here, at(5)).await?,
+            [used("big", 3_000, 2_300, 20), used("small", 300, 0, 10)]
+        );
+        assert!(super::used(&mut conn, here, at(30)).await?.is_empty());
         Ok(())
     }
 }

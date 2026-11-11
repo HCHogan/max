@@ -236,6 +236,12 @@ impl Models {
         })
     }
 
+    /// The list price of `provider`'s `model`, as `llm_usage` names them,
+    /// if it is configured and has one.
+    pub fn price(&self, provider: &str, model: &str) -> Option<config::Price> {
+        self.llm.providers.get(provider)?.models.get(model)?.price
+    }
+
     /// How long a core on `model` waits idle before it ends: its
     /// provider's window, or the default model's when it is None or no
     /// longer configured.
@@ -442,6 +448,7 @@ pub mod testing {
             [providers.test.models.big]
             context_window = 100000
             max_output = 8000
+            price = { input = 0.5, cached = 0.05, output = 3 }
             [providers.test.models.small]
             context_window = 8000
             # Another the turns may switch to, with room for the prompt.

@@ -458,6 +458,21 @@ pub struct Model {
     /// a model, through Chat.
     #[serde(default)]
     pub video: bool,
+    /// What its maker charges, for the cost `/status` shows. Without it,
+    /// that cost leaves the model's calls out, and says so.
+    pub price: Option<Price>,
+}
+
+/// A model's list price, in US dollars per million tokens.
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Price {
+    pub input: f64,
+    /// Input read from the provider's cache; the input's price, unless
+    /// said.
+    pub cached: Option<f64>,
+    /// Reasoning included.
+    pub output: f64,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -774,6 +789,7 @@ mod tests {
         [llm.providers.cliproxy.models."gpt-5.6-luna"]
         context_window = 400000
         max_output = 128000
+        price = { input = 1.25, cached = 0.125, output = 10 }
 
         [llm.providers.local]
         base_url = "http://127.0.0.1:8080/v1"
@@ -830,10 +846,17 @@ mod tests {
         assert_eq!(config.utc_offset.local_minus_utc(), 9 * 3600);
         let qq = config.platforms.qq.unwrap();
         assert_eq!(qq.app_id_file, Path::new("/run/secrets/maxx/qq-app-id"));
-        let (provider, settings, model, _) = config.llm.model("cliproxy/gpt-5.6-luna").unwrap();
+        let (provider, settings, model, luna) = config.llm.model("cliproxy/gpt-5.6-luna").unwrap();
         assert_eq!((provider, model), ("cliproxy", "gpt-5.6-luna"));
         assert_eq!(settings.protocol, ProtocolName::Responses);
         assert_eq!((settings.retries, settings.idle_window_secs), (2, 300));
+        let price = Price {
+            input: 1.25,
+            cached: Some(0.125),
+            output: 10.0,
+        };
+        assert_eq!(luna.price, Some(price));
+        assert_eq!(config.llm.model("local/qwen3.5-4b").unwrap().3.price, None);
     }
 
     #[test]

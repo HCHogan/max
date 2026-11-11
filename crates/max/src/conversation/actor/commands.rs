@@ -8,6 +8,8 @@
 use std::fmt::Write;
 use std::time::Duration;
 
+use chrono::TimeDelta;
+
 use max_core::message::{Platform, Role};
 use max_db::platform::ConversationKind;
 
@@ -15,6 +17,10 @@ use super::*;
 use crate::bind::Pending;
 use crate::command::{self, Command, Persona};
 use crate::conversation::ingest::Committed;
+
+mod spent;
+
+use self::spent::Spent;
 
 /// Who may run what. Commands that change one conversation are also its
 /// group's owner's and admins'; those that cost money are also the other
@@ -256,12 +262,30 @@ impl Conversation {
         if let Some(mark) = settings.cleared_upto {
             line("context", format!("after #{mark}"));
         }
+        for (key, spent) in self.spent().await? {
+            line(key, spent.to_string());
+        }
         let mut up = span(self.shared.started.elapsed());
         if let Some(host) = host_uptime() {
             let _ = write!(up, " · host {}", span(host));
         }
         line("uptime", up);
         Ok(lines.join("\n"))
+    }
+
+    /// What this conversation's model calls used in the last day and
+    /// week.
+    async fn spent(&self) -> Result<Vec<(&'static str, Spent)>> {
+        let mut conn = self.shared.services.pool.acquire().await?;
+        let models = &self.shared.models;
+        let mut spent = Vec::new();
+        for (key, days) in [("24h", 1), ("7d", 7)] {
+            let since = Utc::now() - TimeDelta::days(days);
+            let used = usage::used(&mut conn, self.place.conversation, since).await?;
+            let price = |provider: &str, model: &str| models.price(provider, model);
+            spent.push((key, Spent::sum(&used, price)));
+        }
+        Ok(spent)
     }
 
     async fn model(&mut self, argument: Option<&str>) -> Result<String> {

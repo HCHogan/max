@@ -558,7 +558,9 @@ async fn commands_answer_and_never_wake(pool: PgPool) {
         "{status}"
     );
     assert!(
-        status.contains("\nmodel     test/big · high\nproactive on\ncore      idle\nuptime    "),
+        status.contains(
+            "\nmodel     test/big · high\nproactive on\ncore      idle\n24h       none\n7d        none\nuptime    "
+        ),
         "{status}"
     );
     assert!(status.ends_with("\n```"), "{status}");
@@ -566,6 +568,31 @@ async fn commands_answer_and_never_wake(pool: PgPool) {
         unreachable!()
     };
     assert_eq!(reply_to, None, "an answer doesn't quote the command");
+
+    // Its model calls, one of them on a model with no price, and the
+    // tokens they used in the last day and week.
+    sqlx::query(
+        "insert into llm_usage
+             (conversation_id, purpose, provider, model, input, cached, output, reasoning, at)
+         select id, 'turn', 'test', model, input, cached, output, 0, now() - ago
+         from conversations, (values
+             ('big', 10000000, 8000000, 100000, interval '1 hour'),
+             ('small', 1000, 0, 10, interval '3 days'),
+             ('big', 5, 0, 5, interval '8 days')
+         ) as calls (model, input, cached, output, ago)",
+    )
+    .execute(&h.pool)
+    .await
+    .unwrap();
+    h.send(from_xiaoming(20, vec![me(), text("/status")]));
+    let status = h.said().await.1;
+    assert!(
+        status.contains(
+            "\n24h       in 10.0M · out 100k · cache 80.0% · $1.70\n\
+             7d        in 10.0M · out 100k · cache 80.0% · ≥ $1.70\n"
+        ),
+        "{status}"
+    );
 
     h.send(from_xiaoming(1, vec![me(), text("/model test/small")]));
     assert_eq!(
