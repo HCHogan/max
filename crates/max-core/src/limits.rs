@@ -76,8 +76,8 @@ pub const JOBS_AT_ONCE: usize = 3;
 /// waits on began to move here.
 pub const COMMANDS_AT_ONCE: usize = 8;
 /// How long an agent may take; then it is aborted, and reports how far it
-/// got.
-pub const JOB_TIME: Duration = Duration::from_secs(2 * 60 * 60);
+/// got. Two hours until 2026-11-11, when the owner found it too short.
+pub const JOB_TIME: Duration = Duration::from_secs(6 * 60 * 60);
 /// How long an agent with nothing left to do but wait for the answers to
 /// its questions is held; then it goes on by itself.
 pub const QUESTION_WAIT: Duration = Duration::from_secs(10 * 60);
@@ -91,6 +91,10 @@ pub const JOB_NOTES_BYTES: u64 = 16 << 10;
 /// and of its answer; a longer one is refused, not cut. Both are said in
 /// two chats.
 pub const ASK_CHARS: u32 = 2_000;
+/// How long a question put to another conversation waits for its answer:
+/// Max there may ask its own people first, and waiting costs nothing.
+/// As long as an agent could run, until agents got longer.
+pub const ASK_WAIT: Duration = Duration::from_secs(2 * 60 * 60);
 
 // Memory.
 

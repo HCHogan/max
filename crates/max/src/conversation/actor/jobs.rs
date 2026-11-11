@@ -335,14 +335,14 @@ impl Conversation {
         let mailbox = self.mailbox.clone();
         let mut task = Scope::new();
         task.spawn(move |_| async move {
-            let answer = match tokio::time::timeout(limits::JOB_TIME, answered).await {
+            let answer = match tokio::time::timeout(limits::ASK_WAIT, answered).await {
                 Ok(Ok(answer)) => answer,
                 // The question was dropped on its way, or with the actor
                 // that held it.
                 Ok(Err(_)) => Err("Max there stopped before answering".to_owned()),
                 Err(_) => Err(format!(
                     "no answer in {} hours",
-                    limits::JOB_TIME.as_secs() / 3600
+                    limits::ASK_WAIT.as_secs() / 3600
                 )),
             };
             let _ = mailbox.send(Event::Answered {

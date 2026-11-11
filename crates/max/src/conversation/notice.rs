@@ -111,7 +111,7 @@ impl Notice<'_> {
                     ),
                     Asker::Peer(_) | Asker::Max => format!(
                         "那个会话的 Max 在等你回答：用 answer 回答，to 填 {number}；{} 小时内没答它就不等了",
-                        limits::JOB_TIME.as_secs() / 3600,
+                        limits::ASK_WAIT.as_secs() / 3600,
                     ),
                 };
                 format!(
