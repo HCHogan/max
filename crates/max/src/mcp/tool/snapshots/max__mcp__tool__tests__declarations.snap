@@ -10,7 +10,7 @@ expression: DECLARATIONS.as_str()
   A read comes in pages, none longer than one message may be in the context: pages is how many there are, and page picks one. What /clear --all cleared is only out of the context, and is found all the same. */
 history(args: { query?: string; who?: string; from?: string; to?: string; around?: number; before?: number; after?: number; limit?: number; page?: number }): Promise<{ results: { ref: string; time: string; text: string; read: { around: number } }[] } | { text: string; page: number; pages: number; next?: object }>;
 
-/** Searches the web: the first results' titles, links, summaries and publication dates, where known. For facts, prices, news, plots and whatever else you aren't sure of or may be out of date, search before answering, and don't go by memory.
+/** Searches the web: the first results' titles, links, summaries and publication dates, where known. For facts, prices, news, plots and whatever else you aren't sure of or may be out of date, search before answering, and don't go by memory. What you know ends with your training, often months or years before [现在]: versions, releases, prices, schedules, who holds which post and recent events may have changed since, so search first even when you feel sure, and go by the results dated nearest [现在].
   limit is 1 to 10, 5 by default. For several searches use Promise.all. To read a page in full, run webread <url> with shell. */
 web_search(args: { query: string; limit?: number }): Promise<{ results: { title: string; url: string; snippet: string; published?: string }[] }>;
 

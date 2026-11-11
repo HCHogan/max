@@ -28,8 +28,7 @@ pub struct Results {
 
 impl Tool for WebSearch {
     const NAME: &'static str = "web_search";
-    const DESCRIPTION: &'static str =
-        "Searches the web: the first results' titles, links, summaries and publication dates.";
+    const DESCRIPTION: &'static str = "Searches the web: the first results' titles, links, summaries and publication dates. What you know ends with your training: search first for anything that may have changed since.";
     const JOB: bool = true;
 
     type Args = Args;
@@ -39,7 +38,7 @@ impl Tool for WebSearch {
     // answered from memory instead, and got plots and prices wrong.
     fn guide() -> String {
         format!(
-            "Searches the web: the first results' titles, links, summaries and publication dates, where known. For facts, prices, news, plots and whatever else you aren't sure of or may be out of date, search before answering, and don't go by memory.\n  \
+            "Searches the web: the first results' titles, links, summaries and publication dates, where known. For facts, prices, news, plots and whatever else you aren't sure of or may be out of date, search before answering, and don't go by memory. What you know ends with your training, often months or years before [现在]: versions, releases, prices, schedules, who holds which post and recent events may have changed since, so search first even when you feel sure, and go by the results dated nearest [现在].\n  \
             limit is 1 to {MOST}, {DEFAULT} by default. For several searches use Promise.all. To read a page in full, run webread <url> with shell."
         )
     }
