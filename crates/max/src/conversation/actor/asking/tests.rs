@@ -190,14 +190,18 @@ async fn one_max_asks_another_and_no_chat_hears_of_it(pool: PgPool) {
     // once: neither list is there.
     assert!(!shown.contains("[能问的会话]"), "{shown}");
     assert!(!shown.contains("[等你回答的问题]"), "{shown}");
-    // The wait is a job, which nobody steers.
+    // The wait is listed by its handle. Each side numbers the question
+    // its own way: the asker can't answer it, nor the asked withdraw it.
     let jobs = p.max(&chat).status(None).await.unwrap();
-    assert_eq!(jobs[0].title, format!("? c#{r}: 明天几点开始？"));
-    let not_an_agent = p.max(&chat).steer(1, "快点".into()).await.unwrap_err();
-    assert!(
-        not_an_agent.contains("there is nobody to steer"),
-        "{not_an_agent}"
+    let listed = (jobs[0].handle.as_str(), jobs[0].title.as_str());
+    assert_eq!(
+        listed,
+        ("ask#1", format!("? c#{r}: 明天几点开始？").as_str())
     );
+    let own = p.answer(&chat, 1, "自问自答").await.unwrap_err();
+    assert!(own.starts_with("ask#1 is a question you asked"), "{own}");
+    let theirs = p.max(&room).cancel(Handle::Ask(1)).await.unwrap_err();
+    assert!(theirs.starts_with("ask#1 was asked of you"), "{theirs}");
 
     // The answer names the question; it wakes Max in the private chat,
     // whose new core is told what it had asked and whom it may ask.
@@ -205,7 +209,7 @@ async fn one_max_asks_another_and_no_chat_hears_of_it(pool: PgPool) {
     assert_eq!(p.answer(&room, 1, "晚上八点\n").await, Ok(format!("c#{c}")));
     p.says(&chat, "群里说晚上八点").await;
     let shown = p.request_tail(1);
-    let heard = format!("[job#1 回答] c#{r}\n问：明天几点开始？\n答：晚上八点\n");
+    let heard = format!("[ask#1 回答] c#{r}\n问：明天几点开始？\n答：晚上八点\n");
     assert!(shown.ends_with(&heard), "{shown}");
     let askable = format!("\n\n[能问的会话]\nc#{r}\n\n[新消息]\n");
     assert!(shown.contains(&askable), "{shown}");
@@ -219,7 +223,7 @@ async fn one_max_asks_another_and_no_chat_hears_of_it(pool: PgPool) {
     p.script.push(Answer::says("等我想想"));
     assert_eq!(p.ask(&chat, r, "有空吗").await, Ok(2));
     p.says(&room, "等我想想").await;
-    assert_eq!(p.max(&chat).cancel(2).await, Ok(()));
+    assert_eq!(p.max(&chat).cancel(Handle::Ask(2)).await, Ok(()));
     let late = p.answer(&room, 2, "有").await.unwrap_err();
     assert!(
         late.contains("nobody waits for an answer to ask#2"),
@@ -248,7 +252,7 @@ async fn one_max_asks_another_and_no_chat_hears_of_it(pool: PgPool) {
     expected.sort();
     assert_eq!(heard, expected);
     let why = format!("c#{r}：Max is stopped there (/stop)");
-    let unanswered = format!("[新消息]\n[job#3 没答成] {why}\n问：还在吗");
+    let unanswered = format!("[新消息]\n[ask#3 没答成] {why}\n问：还在吗");
     assert_eq!(p.request_tail(4), unanswered);
 
     // Stopped, Max there isn't told of a question, and the asker hears
@@ -256,7 +260,7 @@ async fn one_max_asks_another_and_no_chat_hears_of_it(pool: PgPool) {
     p.script.push(Answer::says("嗯"));
     assert_eq!(p.ask(&chat, r, "真的不在？").await, Ok(4));
     p.says(&chat, "嗯").await;
-    let unanswered = format!("[新消息]\n[job#4 没答成] {why}\n问：真的不在？");
+    let unanswered = format!("[新消息]\n[ask#4 没答成] {why}\n问：真的不在？");
     assert_eq!(p.request_tail(5), unanswered);
     p.quiet().await;
 

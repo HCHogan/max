@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use color_eyre::eyre::{Report, Result};
-use max_core::ids::{ConversationId, IdentityId, MessageId, PrincipalId, TurnId};
+use max_core::ids::{ConversationId, Handle, IdentityId, MessageId, PrincipalId, TurnId};
 use max_core::intent::{Decision, Entry, EntryKind, Intent, Reason};
 use max_core::item::{Item, ModelOutput, Timing};
 use max_core::message::{Content, Draft, DraftNode, Message, Node, Platform};
@@ -311,7 +311,7 @@ impl Conversation {
         }
     }
 
-    async fn wind_up(&mut self, core: Option<Active>, jobs: &[u32], why: &str) -> Result<()> {
+    async fn wind_up(&mut self, core: Option<Active>, jobs: &[Handle], why: &str) -> Result<()> {
         let mut conn = self.shared.services.pool.acquire().await?;
         for turn in turns::unfinished(&mut conn, Some(self.place.conversation)).await? {
             turns::close(&mut conn, turn, &Outcome::Lost, Utc::now()).await?;
@@ -400,8 +400,8 @@ impl Conversation {
                 self.decide(decisions).await
             }
             Event::Request { request, origin } => self.request(request, origin).await,
-            Event::JobAsks { job, question } => self.job_asks(job, question).await,
-            Event::JobDone { job, finished } => self.job_done(job, finished).await,
+            Event::JobAsks { agent, question } => self.job_asks(agent, question).await,
+            Event::JobDone { handle, finished } => self.job_done(handle, finished).await,
             Event::VmNotice(text) => self.vm_notice(text).await,
             Event::Call { tool, args, reply } => {
                 self.program_call(tool, args, reply);
@@ -418,7 +418,7 @@ impl Conversation {
                 Ok(())
             }
             Event::Asked(question) => self.take_question(question).await,
-            Event::Answered { job, answer } => self.question_answered(job, answer).await,
+            Event::Answered { ask, answer } => self.question_answered(ask, answer).await,
             Event::Stop => {
                 self.stop();
                 Ok(())
@@ -1028,7 +1028,7 @@ fn chain(error: &Report) -> String {
 /// What the host says when something fails, like a log, in a text code
 /// block: `error: what: reason`, the reason as it came on one line, cut
 /// when long; then the jobs stopped with it, if any.
-fn failure(what: &str, reason: &str, stopped: &[u32]) -> String {
+fn failure(what: &str, reason: &str, stopped: &[Handle]) -> String {
     let reason = reason.split_whitespace().collect::<Vec<_>>().join(" ");
     let mut line = format!("error: {what}: ");
     line.extend(reason.chars().take(REASON_CHARS));
@@ -1036,7 +1036,7 @@ fn failure(what: &str, reason: &str, stopped: &[u32]) -> String {
         line.push('…');
     }
     if !stopped.is_empty() {
-        let jobs: Vec<String> = stopped.iter().map(|job| format!("job#{job}")).collect();
+        let jobs: Vec<String> = stopped.iter().map(Handle::to_string).collect();
         line.push_str("\nstopped: ");
         line.push_str(&jobs.join(", "));
     }

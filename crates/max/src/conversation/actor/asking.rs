@@ -12,15 +12,13 @@ use tokio::sync::oneshot;
 use super::links::peer;
 use super::*;
 use crate::conversation::Question;
-use crate::conversation::notice::ask_name;
 
 /// What Max in other conversations asked Max here and still waits to
-/// hear, by the number each question got here. Forgotten with the actor.
+/// hear, by the number each question got here, `ask#5`: numbered with the
+/// questions Max here asks (`Jobs::next_ask`). Forgotten with the actor.
 #[derive(Default)]
 pub(super) struct Asked {
     waiting: BTreeMap<u32, Waiting>,
-    /// Questions are numbered within the conversation while max runs.
-    last: u32,
 }
 
 /// A question, who waits on it, and where its answer goes.
@@ -38,6 +36,12 @@ impl Asked {
         }
     }
 
+    /// Whether someone still waits for Max here to answer `ask#number`.
+    pub(super) fn waits(&self, number: u32) -> bool {
+        let waiting = self.waiting.get(&number);
+        waiting.is_some_and(|waiting| !waiting.answer.is_closed())
+    }
+
     /// For a new core, which saw none of them asked: a line for each
     /// question someone still waits on, the question on one line.
     pub(super) fn lines(&self) -> Vec<String> {
@@ -46,7 +50,7 @@ impl Asked {
             .filter(|(_, waiting)| !waiting.answer.is_closed())
             .map(|(number, waiting)| {
                 let text = waiting.text.replace('\n', " ⏎ ");
-                format!("{} {}：{text}", ask_name(*number), waiting.from)
+                format!("{} {}：{text}", Handle::Ask(*number), waiting.from)
             })
             .collect()
     }
@@ -54,8 +58,8 @@ impl Asked {
 
 impl Conversation {
     /// Max's `ask`: the question goes to that conversation's actor, and a
-    /// job waits for the answer. The job's number, or why nothing was
-    /// asked.
+    /// job waits for the answer. The question's number here, or why
+    /// nothing was asked.
     pub(super) async fn ask(
         &mut self,
         to: ConversationId,
@@ -85,9 +89,9 @@ impl Conversation {
         };
         // The table is gone only as Max stops: the wait then ends at once.
         let _ = self.shared.signals.send(asked);
-        let job = self.question_job(to, question, answered);
-        info!(conversation = %here, job, "Max asks another conversation");
-        Ok(Ok(job))
+        let ask = self.question_job(to, question, answered);
+        info!(conversation = %here, ask, "Max asks another conversation");
+        Ok(Ok(ask))
     }
 
     /// Max in another conversation asks Max here: the question wakes Max,
@@ -102,8 +106,7 @@ impl Conversation {
             return Ok(());
         }
         let Question { from, text, answer } = question;
-        self.asked.last += 1;
-        let number = self.asked.last;
+        let number = self.jobs.next_ask();
         info!(conversation = %self.place.conversation, from = %from.conversation, question = number, "Max is asked from another conversation");
         let notice = Notice::Asked {
             number,
@@ -124,10 +127,15 @@ impl Conversation {
     /// Max's `answer` to question `to`: it goes to whoever waits on it.
     /// Whom it went to, or why it wasn't taken.
     pub(super) fn answer_question(&mut self, to: u32, text: &str) -> Result<String, String> {
+        let handle = Handle::Ask(to);
+        if self.jobs.has(handle) {
+            return Err(format!(
+                "{handle} is a question you asked: its answer comes to you, so there is nothing to answer; to stop waiting for it, cancel it"
+            ));
+        }
         let nobody = || {
             format!(
-                "nobody waits for an answer to {}: there is no such question, or it was answered, withdrawn or out of time, or Max has restarted since; nothing was sent",
-                ask_name(to)
+                "nobody waits for an answer to {handle}: there is no such question, or it was answered, withdrawn or out of time, or Max has restarted since; nothing was sent"
             )
         };
         let waiting = self.asked.waiting.remove(&to).ok_or_else(nobody)?;
@@ -138,26 +146,27 @@ impl Conversation {
         Ok(from.to_string())
     }
 
-    /// The wait of question job `job` is over: Max hears what was
-    /// answered, or that nothing was and why, in the running core or a new
-    /// one.
+    /// The wait of question `ask`, which Max here asked, is over: Max
+    /// hears what was answered, or that nothing was and why, in the
+    /// running core or a new one.
     pub(super) async fn question_answered(
         &mut self,
-        job: u32,
+        ask: u32,
         answer: Result<String, String>,
     ) -> Result<()> {
         // Withdrawn since.
-        let Some((to, question)) = self.question_over(job) else {
+        let Some((to, question)) = self.question_over(ask) else {
             return Ok(());
         };
-        info!(conversation = %self.place.conversation, job, answered = answer.is_ok(), "a question's wait is over");
+        info!(conversation = %self.place.conversation, ask, answered = answer.is_ok(), "a question's wait is over");
         let notice = Notice::Answered {
-            job,
+            ask,
             to: &to,
             question: &question,
             answer: &answer,
         };
         let item = notice.item(self.single());
+        let job = Handle::Ask(ask);
         self.wake_with(Reason::Job { job }, item).await
     }
 

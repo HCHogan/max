@@ -107,7 +107,7 @@ impl Conversation {
 
     /// Ends the running core quietly and stops the jobs, for `/kill` and
     /// `/stop`, the command `name`: the jobs stopped.
-    async fn kill(&mut self, committed: &Committed, name: &str) -> Result<Vec<u32>> {
+    async fn kill(&mut self, committed: &Committed, name: &str) -> Result<Vec<Handle>> {
         // Nothing the model has seen wakes it again, held or not.
         self.seen = self.head;
         if self.core.is_some() {
@@ -400,8 +400,8 @@ impl Conversation {
 }
 
 /// The jobs `/kill` or `/stop` stopped, as a line of its answer.
-fn stopped_jobs(jobs: &[u32]) -> String {
-    let jobs: Vec<String> = jobs.iter().map(|job| format!("job#{job}")).collect();
+fn stopped_jobs(jobs: &[Handle]) -> String {
+    let jobs: Vec<String> = jobs.iter().map(Handle::to_string).collect();
     format!("jobs stopped: {}", jobs.join(", "))
 }
 

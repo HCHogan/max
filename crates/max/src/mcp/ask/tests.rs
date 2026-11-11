@@ -50,7 +50,7 @@ async fn a_turn_asks_and_answers_through_its_conversation(pool: PgPool) {
         (to, question, origin)
     };
     let (out, sent) = tokio::join!(asked, actor);
-    assert_eq!(out.unwrap(), json!({ "job": "job#3" }));
+    assert_eq!(out.unwrap(), json!({ "ask": "ask#3" }));
     let question = "明天的活动几点开始？".to_owned();
     assert_eq!(sent, (ConversationId(9), question, Some(TurnId(1))));
 
@@ -130,7 +130,7 @@ async fn a_long_or_empty_question_never_leaves(pool: PgPool) {
         reply.send(Ok(1)).unwrap();
     };
     let (out, ()) = tokio::join!(asked, actor);
-    assert_eq!(out.unwrap(), json!({ "job": "job#1" }));
+    assert_eq!(out.unwrap(), json!({ "ask": "ask#1" }));
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]

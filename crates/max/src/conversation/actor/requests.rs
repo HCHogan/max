@@ -26,17 +26,17 @@ impl Conversation {
                 let _ = reply.send(self.adopt(moved));
             }
             Request::Steer {
-                job,
+                agent,
                 message,
                 reply,
             } => {
-                let _ = reply.send(self.steer_job(job, message));
+                let _ = reply.send(self.steer_job(agent, message));
             }
-            Request::Cancel { job, reply } => {
-                let _ = reply.send(self.cancel_job(job));
+            Request::Cancel { handle, reply } => {
+                let _ = reply.send(self.cancel_job(handle));
             }
-            Request::Status { job, reply } => {
-                let _ = reply.send(self.jobs_running(job));
+            Request::Status { handle, reply } => {
+                let _ = reply.send(self.jobs_running(handle));
             }
             Request::Configure { changes, reply } => {
                 self.configure(&changes, "Max").await?;

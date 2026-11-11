@@ -113,20 +113,16 @@ pub struct Called {
     pub tools: Vec<String>,
 }
 
-/// A job running, as `agent_status` shows it.
+/// What runs or waits in the background, as `status` shows it: an agent,
+/// a command, or a question Max asked.
 #[derive(Debug, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct Status {
-    pub job: String,
+    pub handle: String,
     pub title: String,
     pub minutes: u64,
     pub calls: u32,
     pub tools: u32,
     pub tool: Option<String>,
-}
-
-/// How a job is named to Max.
-pub fn name(job: u32) -> String {
-    format!("job#{job}")
 }
 
 /// How long the agent has to settle and report once told to stop.

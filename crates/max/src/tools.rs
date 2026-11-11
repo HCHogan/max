@@ -14,7 +14,7 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 use color_eyre::eyre::{Result, eyre};
-use max_core::ids::ConversationId;
+use max_core::ids::{ConversationId, Handle};
 use max_core::item::{Part, ToolOutput};
 use max_core::project::{PICTURE_TOKENS, VIDEO_TOKENS_PER_SECOND};
 use max_core::tools::Tool;
@@ -26,7 +26,7 @@ use tokio::time::{Instant, sleep, sleep_until};
 use tracing::info;
 
 use crate::conversation::Poster;
-use crate::job::{self, Ending, Finished, How};
+use crate::job::{Ending, Finished, How};
 use crate::mcp::{self, Grant};
 use crate::tokens;
 use crate::vm::ssh::{Command, Sink, Stopped, Stream, Waited, quote};
@@ -291,13 +291,14 @@ async fn ended<T>(
     }
 }
 
-/// How the model hears of a background command, `job`, writing to `file`.
-fn follow(job: &str, file: &str) -> String {
+/// How the model hears of a background command, `shell`, writing to
+/// `file`.
+fn follow(shell: Handle, file: &str) -> String {
     format!(
-        "When it ends, its exit status and output come back to you as [{job} 完成]: don't sleep \
+        "When it ends, its exit status and output come back to you as [{shell} 完成]: don't sleep \
          waiting for it, and don't keep checking. Its output is written to {file} as it runs: to \
          see how far it is, read the end of that; if it isn't wanted any more, stop it with \
-         agent_cancel."
+         cancel."
     )
 }
 

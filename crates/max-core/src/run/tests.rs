@@ -252,7 +252,9 @@ fn someone_who_addresses_max_waits_until_a_call_sees_it() {
     run.input(messages(2, 5)).unwrap();
     let job = Wake {
         ids: Vec::new(),
-        reason: Reason::Job { job: 1 },
+        reason: Reason::Job {
+            job: crate::ids::Handle::Agent(1),
+        },
         item: None,
     };
     run.input(Input::Wake(job)).unwrap();

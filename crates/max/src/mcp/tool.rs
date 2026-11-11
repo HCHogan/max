@@ -16,11 +16,12 @@ use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 use tracing::warn;
 
-use super::agent::{Agent, AgentCancel, AgentStatus, AgentSteer};
+use super::agent::{Agent, AgentSteer};
 use super::ask::{Answer, Ask};
 use super::config::Config;
 use super::find_stickers::FindStickers;
 use super::history::History;
+use super::jobs::{Cancel, Status};
 use super::mute_member::MuteMember;
 use super::program::{Say, Wake};
 use super::recall_message::RecallMessage;
@@ -86,8 +87,8 @@ pub static TOOLS: LazyLock<Vec<Spec>> = LazyLock::new(|| {
         spec::<FindStickers>(),
         spec::<Agent>(),
         spec::<AgentSteer>(),
-        spec::<AgentCancel>(),
-        spec::<AgentStatus>(),
+        spec::<Cancel>(),
+        spec::<Status>(),
         spec::<Ask>(),
         spec::<Answer>(),
         spec::<Config>(),

@@ -1,30 +1,38 @@
-//! The conversation's background jobs: agents, `shell` commands, and
-//! questions put to Max in another conversation. Started by its turns,
-//! outliving the core that started them, and waking Max when they end,
-//! and agents when they ask something. See "Background agents",
-//! "Background commands" and "Asking another conversation" in
-//! docs/rust-rewrite.md.
+//! The conversation's background jobs: agents (`agent#3`), `shell`
+//! commands (`shell#4`), and questions put to Max in another conversation
+//! (`ask#5`). Started by its turns, outliving the core that started them,
+//! and waking Max when they end, and agents when they ask something. See
+//! "Background agents", "Background commands" and "Asking another
+//! conversation" in docs/rust-rewrite.md.
 
 use std::collections::BTreeMap;
 use std::sync::{Mutex, PoisonError};
 
-use max_core::item::Item;
 use max_db::links::Peer;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 use super::*;
-use crate::job::{self, Finished, Progress, Status, name};
+use crate::job::{self, Finished, Progress, Status};
 use crate::tools::{self, Background, Moved};
 use max_core::limits;
 
-/// The jobs running, by number.
+/// The jobs running, by handle.
 #[derive(Default)]
 pub(super) struct Jobs {
-    running: BTreeMap<u32, Running>,
-    /// Jobs are numbered within the conversation while max runs.
-    last: u32,
+    running: BTreeMap<Handle, Running>,
+    last: Last,
+}
+
+/// The last number of each kind: each is numbered on its own, within the
+/// conversation while max runs. Questions count together whichever way
+/// they go, so that `ask#5` is one question here.
+#[derive(Default)]
+struct Last {
+    agent: u32,
+    shell: u32,
+    ask: u32,
 }
 
 struct Running {
@@ -53,45 +61,44 @@ struct Agent {
 }
 
 impl Conversation {
-    /// Tells the agent of job `job` something more.
-    pub(super) fn steer_job(&mut self, job: u32, message: String) -> Result<(), String> {
-        let running = self.jobs.running.get(&job).ok_or_else(|| over(job))?;
-        let agent = match &running.kind {
-            Kind::Agent(agent) => agent,
-            Kind::Command => {
-                return Err(format!(
-                    "{} is a background command: there is nobody to steer",
-                    name(job)
-                ));
-            }
-            Kind::Question { .. } => {
-                return Err(format!(
-                    "{} is a question waiting for another conversation's answer: there is nobody to steer",
-                    name(job)
-                ));
-            }
+    /// Tells agent `agent` something more.
+    pub(super) fn steer_job(&mut self, agent: u32, message: String) -> Result<(), String> {
+        let handle = Handle::Agent(agent);
+        let Some(Running {
+            kind: Kind::Agent(agent),
+            ..
+        }) = self.jobs.running.get(&handle)
+        else {
+            return Err(over(handle));
         };
-        agent.steers.send(message).map_err(|_| over(job))
+        agent.steers.send(message).map_err(|_| over(handle))
     }
 
-    /// Stops job `job`: nobody hears of it again.
-    pub(super) fn cancel_job(&mut self, job: u32) -> Result<(), String> {
-        self.jobs.running.remove(&job).ok_or_else(|| over(job))?;
-        info!(conversation = %self.place.conversation, job, "a job is cancelled");
+    /// Stops `handle`: nobody hears of it again.
+    pub(super) fn cancel_job(&mut self, handle: Handle) -> Result<(), String> {
+        if self.jobs.running.remove(&handle).is_none() {
+            return Err(match handle {
+                Handle::Ask(number) if self.asked.waits(number) => format!(
+                    "{handle} was asked of you, by Max in another conversation: answer it with answer, or leave it unanswered"
+                ),
+                _ => over(handle),
+            });
+        }
+        info!(conversation = %self.place.conversation, %handle, "a job is cancelled");
         Ok(())
     }
 
-    /// Job `job` as it runs, or every running job.
-    pub(super) fn jobs_running(&self, job: Option<u32>) -> Result<Vec<Status>, String> {
+    /// `handle` as it runs, or every running job.
+    pub(super) fn jobs_running(&self, handle: Option<Handle>) -> Result<Vec<Status>, String> {
         let jobs: Vec<Status> = self
             .jobs
             .running
             .iter()
-            .filter(|(number, _)| job.is_none_or(|job| job == **number))
-            .map(|(number, running)| {
+            .filter(|(running, _)| handle.is_none_or(|handle| handle == **running))
+            .map(|(handle, running)| {
                 let progress = running.progress();
                 Status {
-                    job: name(*number),
+                    handle: handle.to_string(),
                     title: running.title.clone(),
                     minutes: running.started.elapsed().as_secs() / 60,
                     calls: progress.calls,
@@ -100,8 +107,8 @@ impl Conversation {
                 }
             })
             .collect();
-        match job {
-            Some(job) if jobs.is_empty() => Err(over(job)),
+        match handle {
+            Some(handle) if jobs.is_empty() => Err(over(handle)),
             _ => Ok(jobs),
         }
     }
@@ -129,8 +136,7 @@ impl Conversation {
         let Some(vms) = self.shared.vms.clone() else {
             return Err("there are no VMs here for a background agent to run in".to_owned());
         };
-        self.jobs.last += 1;
-        let number = self.jobs.last;
+        let number = self.jobs.next_agent();
         let title = title
             .map(|title| title.trim().to_owned())
             .filter(|title| !title.is_empty())
@@ -165,7 +171,7 @@ impl Conversation {
             progress: Arc::clone(&progress),
             ask: Box::new(move |question| {
                 let _ = asking.send(Event::JobAsks {
-                    job: number,
+                    agent: number,
                     question,
                 });
             }),
@@ -175,12 +181,12 @@ impl Conversation {
         task.spawn(move |_| async move {
             let finished = job::run(start, steered).await;
             let _ = mailbox.send(Event::JobDone {
-                job: number,
+                handle: Handle::Agent(number),
                 finished,
             });
         });
         self.jobs.running.insert(
-            number,
+            Handle::Agent(number),
             Running {
                 title,
                 started: Instant::now(),
@@ -191,7 +197,8 @@ impl Conversation {
         Ok(number)
     }
 
-    /// Runs a `shell` command in the background, as a job of its own.
+    /// Runs a `shell` command in the background, as a job of its own: its
+    /// number.
     pub(super) fn start_command(&mut self, shell: Background) -> Result<u32, String> {
         self.room_for_command()?;
         let Some(vms) = self.shared.vms.clone() else {
@@ -201,7 +208,7 @@ impl Conversation {
         let command = shell.command.clone();
         let work = tools::background(vms, conversation, shell);
         let number = self.command_job(&command, Instant::now(), work);
-        info!(conversation = %conversation, job = number, "a background command starts");
+        info!(conversation = %conversation, shell = number, "a background command starts");
         Ok(number)
     }
 
@@ -213,7 +220,7 @@ impl Conversation {
         }
         let (command, begun) = (moved.command.clone(), moved.begun);
         let number = self.command_job(&command, begun, tools::moved(moved));
-        info!(conversation = %self.place.conversation, job = number, "a command someone waits on moves to the background");
+        info!(conversation = %self.place.conversation, shell = number, "a command someone waits on moves to the background");
         Ok(number)
     }
 
@@ -222,7 +229,7 @@ impl Conversation {
         let most = self.commands_at_once();
         if self.jobs.commands() >= most {
             return Err(format!(
-                "{most} background commands run already: wait for one to end, or stop one with agent_cancel"
+                "{most} background commands run already: wait for one to end, or stop one with cancel"
             ));
         }
         Ok(())
@@ -235,14 +242,13 @@ impl Conversation {
         started: Instant,
         work: impl Future<Output = Finished> + Send + 'static,
     ) -> u32 {
-        self.jobs.last += 1;
-        let number = self.jobs.last;
+        let number = self.jobs.next_shell();
         let mailbox = self.mailbox.clone();
         let mut task = Scope::new();
         task.spawn(move |_| async move {
             let finished = work.await;
             let _ = mailbox.send(Event::JobDone {
-                job: number,
+                handle: Handle::Shell(number),
                 finished,
             });
         });
@@ -252,7 +258,7 @@ impl Conversation {
             kind: Kind::Command,
             _task: task,
         };
-        self.jobs.running.insert(number, running);
+        self.jobs.running.insert(Handle::Shell(number), running);
         number
     }
 
@@ -265,8 +271,7 @@ impl Conversation {
         question: &str,
         answered: oneshot::Receiver<Result<String, String>>,
     ) -> u32 {
-        self.jobs.last += 1;
-        let number = self.jobs.last;
+        let number = self.jobs.next_ask();
         let mailbox = self.mailbox.clone();
         let mut task = Scope::new();
         task.spawn(move |_| async move {
@@ -281,7 +286,7 @@ impl Conversation {
                 )),
             };
             let _ = mailbox.send(Event::Answered {
-                job: number,
+                ask: number,
                 answer,
             });
         });
@@ -294,64 +299,56 @@ impl Conversation {
             },
             _task: task,
         };
-        self.jobs.running.insert(number, running);
+        self.jobs.running.insert(Handle::Ask(number), running);
         number
     }
 
-    /// Ends the wait of question job `job`: whom it was put to, and the
+    /// Ends the wait of question `ask`: whom it was put to, and the
     /// question. None if it was withdrawn since.
-    pub(super) fn question_over(&mut self, job: u32) -> Option<(Peer, String)> {
-        let running = self.jobs.running.get(&job)?;
-        if !matches!(running.kind, Kind::Question { .. }) {
-            return None;
-        }
-        match self.jobs.running.remove(&job)?.kind {
+    pub(super) fn question_over(&mut self, ask: u32) -> Option<(Peer, String)> {
+        match self.jobs.running.remove(&Handle::Ask(ask))?.kind {
             Kind::Question { to, question } => Some((to, question)),
             Kind::Agent(_) | Kind::Command => None,
         }
     }
 
-    /// A job asks Max: its question wakes Max, who answers with
+    /// Agent `agent` asks Max: its question wakes Max, who answers with
     /// `agent_steer`.
-    pub(super) async fn job_asks(&mut self, job: u32, question: String) -> Result<()> {
+    pub(super) async fn job_asks(&mut self, agent: u32, question: String) -> Result<()> {
+        let handle = Handle::Agent(agent);
         // Cancelled since.
-        let Some(running) = self.jobs.running.get(&job) else {
+        let Some(running) = self.jobs.running.get(&handle) else {
             return Ok(());
         };
-        info!(conversation = %self.place.conversation, job, "a job asks Max");
+        info!(conversation = %self.place.conversation, %handle, "an agent asks Max");
         let notice = Notice::Asks {
-            job,
+            agent,
             title: &running.title,
             question: &question,
         };
         let item = notice.item(self.single());
-        self.wake_for(job, item).await
+        self.wake_with(Reason::Job { job: handle }, item).await
     }
 
-    /// A job ended: Max hears how, in the running core or a new one.
-    pub(super) async fn job_done(&mut self, job: u32, finished: Finished) -> Result<()> {
+    /// An agent or a command ended: Max hears how, in the running core or
+    /// a new one.
+    pub(super) async fn job_done(&mut self, handle: Handle, finished: Finished) -> Result<()> {
         // Cancelled since.
-        let Some(running) = self.jobs.running.remove(&job) else {
+        let Some(running) = self.jobs.running.remove(&handle) else {
             return Ok(());
         };
-        info!(conversation = %self.place.conversation, job, how = ?finished.ending.how, "a job ends");
+        info!(conversation = %self.place.conversation, %handle, how = ?finished.ending.how, "a job ends");
         let notice = Notice::Ended {
-            job,
+            handle,
             title: &running.title,
             finished: &finished,
         };
         let item = notice.item(self.single());
-        self.wake_for(job, item).await
+        self.wake_with(Reason::Job { job: handle }, item).await
     }
 
-    /// Wakes Max with what job `job` says: in the running core, or a new
-    /// one.
-    async fn wake_for(&mut self, job: u32, item: Item) -> Result<()> {
-        self.wake_with(Reason::Job { job }, item).await
-    }
-
-    /// Stops every job, for `/kill`: their numbers.
-    pub(super) fn cancel_jobs(&mut self) -> Vec<u32> {
+    /// Stops every job, for `/kill`: their handles.
+    pub(super) fn cancel_jobs(&mut self) -> Vec<Handle> {
         let jobs = std::mem::take(&mut self.jobs.running);
         jobs.into_keys().collect()
     }
@@ -361,15 +358,13 @@ impl Conversation {
         self.jobs
             .running
             .iter()
-            .map(|(number, running)| {
-                let what = match &running.kind {
-                    Kind::Agent(_) => format!("{} calls", running.progress().calls),
-                    Kind::Command => "shell".to_owned(),
-                    Kind::Question { .. } => "ask".to_owned(),
+            .map(|(handle, running)| {
+                let calls = match &running.kind {
+                    Kind::Agent(_) => format!(" · {} calls", running.progress().calls),
+                    Kind::Command | Kind::Question { .. } => String::new(),
                 };
                 format!(
-                    "{} · {}m · {what} · {}",
-                    name(*number),
+                    "{handle} · {}m{calls} · {}",
                     running.started.elapsed().as_secs() / 60,
                     running.title
                 )
@@ -399,7 +394,7 @@ impl Jobs {
     /// A job as if started, with nothing behind it: where its steers go.
     pub(super) fn pretend(&mut self, title: &str) -> tokio::sync::mpsc::UnboundedReceiver<String> {
         let (steers, steered) = unbounded_channel();
-        self.last += 1;
+        let number = self.next_agent();
         let running = Running {
             title: title.to_owned(),
             started: Instant::now(),
@@ -409,7 +404,7 @@ impl Jobs {
             }),
             _task: Scope::new(),
         };
-        self.running.insert(self.last, running);
+        self.running.insert(Handle::Agent(number), running);
         steered
     }
 }
@@ -418,18 +413,39 @@ impl Jobs {
 impl Jobs {
     /// A background command as if started, with nothing behind it.
     pub(super) fn pretend_command(&mut self, title: &str) {
-        self.last += 1;
+        let number = self.next_shell();
         let running = Running {
             title: title.to_owned(),
             started: Instant::now(),
             kind: Kind::Command,
             _task: Scope::new(),
         };
-        self.running.insert(self.last, running);
+        self.running.insert(Handle::Shell(number), running);
     }
 }
 
 impl Jobs {
+    fn next_agent(&mut self) -> u32 {
+        self.last.agent += 1;
+        self.last.agent
+    }
+
+    fn next_shell(&mut self) -> u32 {
+        self.last.shell += 1;
+        self.last.shell
+    }
+
+    /// Whether `handle` runs, or waits for its answer.
+    pub(super) fn has(&self, handle: Handle) -> bool {
+        self.running.contains_key(&handle)
+    }
+
+    /// The next question's number, whichever way it goes.
+    pub(super) fn next_ask(&mut self) -> u32 {
+        self.last.ask += 1;
+        self.last.ask
+    }
+
     /// The agents running. They and the background commands have a limit
     /// each; the questions waiting have none.
     fn agents(&self) -> usize {
@@ -461,11 +477,15 @@ impl Running {
     }
 }
 
-fn over(job: u32) -> String {
-    format!(
-        "{} isn't running: it ended, was cancelled, or never was",
-        name(job)
-    )
+fn over(handle: Handle) -> String {
+    match handle {
+        Handle::Ask(_) => format!(
+            "{handle} isn't waiting for an answer: it was answered, withdrawn or out of time, or never was"
+        ),
+        Handle::Agent(_) | Handle::Shell(_) => {
+            format!("{handle} isn't running: it ended, was cancelled, or never was")
+        }
+    }
 }
 
 /// A title from the task's first line, when none was given.

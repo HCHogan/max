@@ -9,6 +9,7 @@ mod find_stickers;
 mod forward;
 mod harness;
 mod history;
+mod jobs;
 mod mute_member;
 mod program;
 mod recall_message;

@@ -40,11 +40,11 @@ pub(super) async fn started(
     };
     match poster.shell(shell).await {
         Ok(number) => {
-            let job = job::name(number);
+            let shell = Handle::Shell(number);
             let shown = format!(
-                "It runs in the background as {job}, for at most {} minutes. {}",
+                "It runs in the background as {shell}, for at most {} minutes. {}",
                 limit.as_secs().div_ceil(60),
-                follow(&job, &file),
+                follow(shell, &file),
             );
             (shown, false)
         }

@@ -8,27 +8,28 @@
 use std::borrow::Cow;
 use std::fmt::Write;
 
+use max_core::ids::Handle;
 use max_core::item::{Item, ItemKind};
 use max_core::limits;
 use max_core::render::EXCERPT_CHARS;
 use max_db::links::Peer;
 
-use crate::job::{self, Finished, How};
+use crate::job::{Finished, How};
 use crate::tokens;
 
 pub enum Notice<'a> {
     /// The classifier judged that Max should join in, and why.
     Judged { note: &'a str },
-    /// Job `job` ended: how, and the agent's last words or the command's
-    /// output; the whole is in its file.
+    /// An agent or a command ended: how, and the agent's last words or
+    /// the command's output; the whole is in its file.
     Ended {
-        job: u32,
+        handle: Handle,
         title: &'a str,
         finished: &'a Finished,
     },
-    /// The agent of job `job` asks Max, and waits for `agent_steer`.
+    /// Agent `agent` asks Max, and waits for `agent_steer`.
     Asks {
-        job: u32,
+        agent: u32,
         title: &'a str,
         question: &'a str,
     },
@@ -43,20 +44,15 @@ pub enum Notice<'a> {
         from: &'a Peer,
         question: &'a str,
     },
-    /// The wait of question job `job`, put to `to`, is over: the question
+    /// The wait of question `ask`, put to `to`, is over: the question
     /// again, since the core that asked may be gone, and the answer or why
     /// there is none.
     Answered {
-        job: u32,
+        ask: u32,
         to: &'a Peer,
         question: &'a str,
         answer: &'a Result<String, String>,
     },
-}
-
-/// How a question put to Max here is named to it.
-pub fn ask_name(number: u32) -> String {
-    format!("ask#{number}")
 }
 
 impl Notice<'_> {
@@ -72,17 +68,17 @@ impl Notice<'_> {
         match *self {
             Notice::Judged { note } => format!("[判定：{note}]"),
             Notice::Ended {
-                job,
+                handle,
                 title,
                 finished,
-            } => ended(job, title, finished, single),
+            } => ended(handle, title, finished, single),
             Notice::Asks {
-                job,
+                agent,
                 title,
                 question,
             } => format!(
                 "[{} 问] {title}\n{}\n（它在等你答复：用 agent_steer 回答它，{} 分钟内没答复它就自己判断）",
-                job::name(job),
+                Handle::Agent(agent),
                 fitted(question.trim(), single),
                 limits::QUESTION_WAIT.as_secs() / 60,
             ),
@@ -101,38 +97,37 @@ impl Notice<'_> {
                 question,
             } => format!(
                 "[{} 问] {from}\n{}\n（那个会话的 Max 在等你回答：用 answer 回答，to 填 {number}；{} 小时内没答它就不等了。这个问题和你的回答都不会发到这边的聊天里）",
-                ask_name(number),
+                Handle::Ask(number),
                 fitted(question, single),
                 limits::JOB_TIME.as_secs() / 3600,
             ),
             Notice::Answered {
-                job,
+                ask,
                 to,
                 question,
                 answer,
             } => {
-                let job = job::name(job);
+                let ask = Handle::Ask(ask);
                 let question = fitted(question, single);
                 match answer {
                     Ok(answer) => format!(
-                        "[{job} 回答] {to}\n问：{question}\n答：{}",
+                        "[{ask} 回答] {to}\n问：{question}\n答：{}",
                         fitted(answer, single)
                     ),
-                    Err(why) => format!("[{job} 没答成] {to}：{why}\n问：{question}"),
+                    Err(why) => format!("[{ask} 没答成] {to}：{why}\n问：{question}"),
                 }
             }
         }
     }
 }
 
-fn ended(job: u32, title: &str, finished: &Finished, single: u32) -> String {
-    let job = job::name(job);
+fn ended(handle: Handle, title: &str, finished: &Finished, single: u32) -> String {
     let mut text = match &finished.ending.how {
-        How::Done => format!("[{job} 完成] {title}"),
+        How::Done => format!("[{handle} 完成] {title}"),
         // Whether a command stopped is in its text: the guest may not have
         // said so.
-        How::OutOfTime => format!("[{job} 到点了，下面是做到一半的] {title}"),
-        How::Failed(why) => format!("[{job} 失败] {title}：{why}"),
+        How::OutOfTime => format!("[{handle} 到点了，下面是做到一半的] {title}"),
+        How::Failed(why) => format!("[{handle} 失败] {title}：{why}"),
     };
     let words = finished.ending.text.as_deref().map(str::trim);
     match words.filter(|words| !words.is_empty()) {
@@ -190,7 +185,7 @@ mod tests {
 
     fn ended(finished: &Finished) -> String {
         let notice = Notice::Ended {
-            job: 3,
+            handle: Handle::Agent(3),
             title: "查票价",
             finished,
         };
@@ -202,23 +197,23 @@ mod tests {
         let done = finished(
             How::Done,
             Some("结论：能。\n"),
-            Some("/work/.max/jobs/job-3.md"),
+            Some("/work/.max/jobs/agent-3.md"),
         );
         assert_eq!(
             ended(&done),
-            "[job#3 完成] 查票价\n结论：能。\n（全文在 /work/.max/jobs/job-3.md）"
+            "[agent#3 完成] 查票价\n结论：能。\n（全文在 /work/.max/jobs/agent-3.md）"
         );
         let half = finished(How::OutOfTime, Some("查了一半"), None);
         assert_eq!(
             ended(&half),
-            "[job#3 到点了，下面是做到一半的] 查票价\n查了一半"
+            "[agent#3 到点了，下面是做到一半的] 查票价\n查了一半"
         );
         let failed = finished(How::Failed("429".into()), None, None);
-        assert_eq!(ended(&failed), "[job#3 失败] 查票价：429");
+        assert_eq!(ended(&failed), "[agent#3 失败] 查票价：429");
         let silent = finished(How::Done, Some("  "), None);
         assert_eq!(
             ended(&silent),
-            "[job#3 完成] 查票价\n（它没留下报告；做的过程在 /work/.max/jobs 里它的会话记录）"
+            "[agent#3 完成] 查票价\n（它没留下报告；做的过程在 /work/.max/jobs 里它的会话记录）"
         );
         let cut = finished(How::OutOfTime, None, None);
         assert!(ended(&cut).ends_with("它的会话记录）"));
@@ -226,16 +221,16 @@ mod tests {
         late.ending.unsent = 2;
         assert_eq!(
             ended(&late),
-            "[job#3 完成] 查票价\n好了\n（你最后补充的 2 条它没收到）"
+            "[agent#3 完成] 查票价\n好了\n（你最后补充的 2 条它没收到）"
         );
     }
 
     #[test]
     fn a_long_report_shows_its_beginning() {
         let long = "长".repeat(EXCERPT_CHARS * 3);
-        let done = finished(How::Done, Some(&long), Some("/work/.max/jobs/job-3.md"));
+        let done = finished(How::Done, Some(&long), Some("/work/.max/jobs/agent-3.md"));
         let text = ended(&done);
-        assert!(text.contains("长…（太长，只有开头）\n（全文在 /work/.max/jobs/job-3.md）"));
+        assert!(text.contains("长…（太长，只有开头）\n（全文在 /work/.max/jobs/agent-3.md）"));
         let (excerpt, _) = text.split_once('…').unwrap();
         assert_eq!(
             excerpt.chars().filter(|c| *c == '长').count(),

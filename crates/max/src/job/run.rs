@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use chrono::Utc;
 use color_eyre::eyre::Result;
-use max_core::ids::ConversationId;
+use max_core::ids::{ConversationId, Handle};
 use max_core::item::{Protocol, Usage};
 use max_core::limits::JOB_NOTES_BYTES;
 use max_db::{PgPool, usage};
@@ -300,8 +300,8 @@ fn shown(text: &str) -> String {
 
 /// Saves the report under /work/.max/jobs: its path in the VM.
 async fn save(vm: &Vm, number: u32, title: &str, text: &str) -> Option<String> {
-    let name = format!("job-{number}-{}.md", Utc::now().format("%Y%m%d-%H%M%S"));
-    let report = format!("# job#{number} {title}\n\n{text}\n");
+    let name = format!("agent-{number}-{}.md", Utc::now().format("%Y%m%d-%H%M%S"));
+    let report = format!("# {} {title}\n\n{text}\n", Handle::Agent(number));
     let (work, file) = (vm.work().to_owned(), name.clone());
     let saved = tokio::task::spawn_blocking(move || {
         mcp::work::write(&work, ".max/jobs", &file, report.as_bytes(), None)

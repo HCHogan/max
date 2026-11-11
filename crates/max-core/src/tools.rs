@@ -49,11 +49,11 @@ pub static TOOLS: LazyLock<[ToolSpec; 2]> = LazyLock::new(|| {
                 stderr together. {run} seconds by default, timeout_ms at most {run_max}. An output over \
                 {shown} KiB comes back as {half} KiB of its head and as much of its tail, the whole of it in \
                 the file under /work/.max/out/ that the result names. The command gets no input: run nothing \
-                interactive. With background true it runs in the background and a job number comes back at \
-                once; {background} minutes by default, timeout_ms at most {background_max}; when it ends, its \
-                exit status and output come back to you as [job#N 完成]. If someone addresses you while a \
-                foreground command runs, one that has run {move_after} seconds moves to the background and \
-                runs on with the same time limit, and the result names its job."
+                interactive. With background true it runs in the background and its handle, shell#N, comes \
+                back at once; {background} minutes by default, timeout_ms at most {background_max}; when it \
+                ends, its exit status and output come back to you as [shell#N 完成]. If someone addresses you \
+                while a foreground command runs, one that has run {move_after} seconds moves to the background \
+                and runs on with the same time limit, and the result names its shell#N."
             ),
             parameters: r#"{"type":"object","properties":{"command":{"type":"string"},"workdir":{"type":"string","description":"/work by default"},"timeout_ms":{"type":"integer","minimum":1},"background":{"type":"boolean","description":"run in the background and tell you when it ends; false by default"}},"required":["command"]}"#,
         },

@@ -15,7 +15,7 @@ mod tool;
 use std::fmt;
 use std::sync::Arc;
 
-use max_core::ids::{CallId, ConversationId, EndpointId, MessageId, TurnId};
+use max_core::ids::{CallId, ConversationId, EndpointId, Handle, MessageId, TurnId};
 use max_core::intent::Verdict;
 use max_core::item::{ModelOutput, Timing, ToolOutput};
 use max_core::limits::Setting;
@@ -70,12 +70,12 @@ pub enum Event {
     },
     /// A background agent asks Max, and waits for the answer.
     JobAsks {
-        job: u32,
+        agent: u32,
         question: String,
     },
-    /// A background agent ended.
+    /// A background agent or command ended.
     JobDone {
-        job: u32,
+        handle: Handle,
         finished: job::Finished,
     },
     /// The VM service has something to say about the group's VM.
@@ -91,9 +91,10 @@ pub enum Event {
     Subscribe(oneshot::Sender<Subscription>),
     /// Max in another conversation asks Max here, from the table.
     Asked(Question),
-    /// The question job `job` waits on was answered, or won't be, and why.
+    /// The question Max here asked, `ask`, was answered, or won't be, and
+    /// why.
     Answered {
-        job: u32,
+        ask: u32,
         answer: Result<String, String>,
     },
     /// Max restarts: end the core, within a grace, then stop.
@@ -179,17 +180,15 @@ pub enum Request {
     },
     /// Tell a running agent something more.
     Steer {
-        job: u32,
+        agent: u32,
         message: String,
         reply: Reply<()>,
     },
-    Cancel {
-        job: u32,
-        reply: Reply<()>,
-    },
+    /// Stop an agent or a command, or withdraw a question.
+    Cancel { handle: Handle, reply: Reply<()> },
     /// One job's state, or every running one's.
     Status {
-        job: Option<u32>,
+        handle: Option<Handle>,
         reply: Reply<Vec<job::Status>>,
     },
     /// Set the conversation's limits, None back to the default: what
@@ -198,7 +197,7 @@ pub enum Request {
         changes: Vec<(Setting, Option<u64>)>,
         reply: Reply<Vec<Configured>>,
     },
-    /// Ask Max in conversation `to`: the job that waits for the answer.
+    /// Ask Max in conversation `to`: the question's number here.
     Ask {
         to: ConversationId,
         question: String,
@@ -212,15 +211,10 @@ pub enum Request {
         reply: Reply<String>,
     },
     /// Wake Max with a program's `text`: what the program is told.
-    Wake {
-        text: String,
-        reply: Reply<String>,
-    },
+    Wake { text: String, reply: Reply<String> },
     /// Whether the tool may go on to act in the chat by itself, as a mute
     /// does, not through the actor: it may unless Max is stopped here.
-    Act {
-        reply: Reply<()>,
-    },
+    Act { reply: Reply<()> },
 }
 
 impl Request {
@@ -367,7 +361,7 @@ impl Poster {
         self.act(Act::Unsend(target))?.sent().await
     }
 
-    /// Starts a background agent: its job, or why not.
+    /// Starts a background agent: its number, or why not.
     pub async fn agent(
         &self,
         task: String,
@@ -383,29 +377,31 @@ impl Poster {
         self.request(agent).await
     }
 
-    /// Runs a `shell` command in the background: its job, or why not.
+    /// Runs a `shell` command in the background: its number, or why not.
     pub async fn shell(&self, shell: Background) -> Result<u32, String> {
         self.request(|reply| Request::Shell { shell, reply }).await
     }
 
-    /// Tells the agent of job `job` something more.
-    pub async fn steer(&self, job: u32, message: String) -> Result<(), String> {
+    /// Tells agent `agent` something more.
+    pub async fn steer(&self, agent: u32, message: String) -> Result<(), String> {
         let steer = |reply| Request::Steer {
-            job,
+            agent,
             message,
             reply,
         };
         self.request(steer).await
     }
 
-    /// Stops job `job`.
-    pub async fn cancel(&self, job: u32) -> Result<(), String> {
-        self.request(|reply| Request::Cancel { job, reply }).await
+    /// Stops `handle`, an agent or a command, or withdraws it, a question.
+    pub async fn cancel(&self, handle: Handle) -> Result<(), String> {
+        self.request(|reply| Request::Cancel { handle, reply })
+            .await
     }
 
-    /// Job `job` as it runs, or every running job.
-    pub async fn status(&self, job: Option<u32>) -> Result<Vec<job::Status>, String> {
-        self.request(|reply| Request::Status { job, reply }).await
+    /// `handle` as it runs, or every running job.
+    pub async fn status(&self, handle: Option<Handle>) -> Result<Vec<job::Status>, String> {
+        self.request(|reply| Request::Status { handle, reply })
+            .await
     }
 
     /// Sets the conversation's limits, None back to the default: what
@@ -418,8 +414,8 @@ impl Poster {
             .await
     }
 
-    /// Asks Max in conversation `to`: the job that waits for the answer,
-    /// or why it wasn't asked.
+    /// Asks Max in conversation `to`: the question's number here, or why
+    /// it wasn't asked.
     pub async fn ask(&self, to: ConversationId, question: String) -> Result<u32, String> {
         let ask = |reply| Request::Ask {
             to,

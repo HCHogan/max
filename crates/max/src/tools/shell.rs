@@ -131,7 +131,7 @@ async fn wait_or_move(
         command: command.to_owned(),
     });
     match movable.poster.adopt(moved).await {
-        Ok(job) => Ok(Kept::Moved(moved_away(job, ran, left, &file, &shown))),
+        Ok(number) => Ok(Kept::Moved(moved_away(number, ran, left, &file, &shown))),
         Err((why, Some(moved))) => {
             info!(why, "a command someone waits on stays in the foreground");
             let Moved {
@@ -157,14 +157,15 @@ async fn due(mut waiting: Waiting, begun: Instant) {
 }
 
 /// What the model is shown of a command that moved to the background as
-/// job `job`: it had run `ran`, has `left`, and printed `shown` so far.
-fn moved_away(job: u32, ran: Duration, left: Duration, file: &str, shown: &str) -> String {
-    let job = job::name(job);
+/// `shell#number`: it had run `ran`, has `left`, and printed `shown` so
+/// far.
+fn moved_away(number: u32, ran: Duration, left: Duration, file: &str, shown: &str) -> String {
+    let shell = Handle::Shell(number);
     let mut text = format!(
-        "Someone is waiting for you to answer: this command had run {} seconds and wasn't done, so it moved to the background as {job}, with {} seconds left. {}",
+        "Someone is waiting for you to answer: this command had run {} seconds and wasn't done, so it moved to the background as {shell}, with {} seconds left. {}",
         ran.as_secs(),
         left.as_secs(),
-        follow(&job, file),
+        follow(shell, file),
     );
     if shown.is_empty() {
         text.push_str(" No output so far.");
@@ -262,8 +263,8 @@ mod tests {
         assert!(
             text.starts_with(
                 "Someone is waiting for you to answer: this command had run 15 seconds and wasn't \
-                 done, so it moved to the background as job#4, with 105 seconds left. When it ends, \
-                 its exit status and output come back to you as [job#4 完成]"
+                 done, so it moved to the background as shell#4, with 105 seconds left. When it ends, \
+                 its exit status and output come back to you as [shell#4 完成]"
             ),
             "{text}"
         );
@@ -272,12 +273,12 @@ mod tests {
             "{text}"
         );
         assert!(
-            text.ends_with("agent_cancel. Its output so far:\n编译中\n"),
+            text.ends_with("stop it with cancel. Its output so far:\n编译中\n"),
             "{text}"
         );
         let quiet = moved_away(4, ran, left, file, "");
         assert!(
-            quiet.ends_with("agent_cancel. No output so far."),
+            quiet.ends_with("stop it with cancel. No output so far."),
             "{quiet}"
         );
     }

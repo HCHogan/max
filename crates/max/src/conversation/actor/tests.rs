@@ -61,7 +61,7 @@ impl Harness {
         Self::start(pool, Group, idle_window_secs, false, false, None, |_| {}).await
     }
 
-    /// With job#1, titled `title`, running as far as the actor knows:
+    /// With agent#1, titled `title`, running as far as the actor knows:
     /// where its steers go.
     async fn with_job(pool: PgPool, title: &str) -> (Self, UnboundedReceiver<String>) {
         let mut steered = None;
@@ -1021,7 +1021,7 @@ fn finished(how: How, text: &str) -> Finished {
             text: Some(text.to_owned()),
             unsent: 0,
         },
-        file: Some("/work/.max/jobs/job-1.md".to_owned()),
+        file: Some("/work/.max/jobs/agent-1.md".to_owned()),
     }
 }
 
@@ -1032,16 +1032,18 @@ async fn a_jobs_report_wakes_max(pool: PgPool) {
     h.send(from_xiaoming(0, vec![text("票价多少来着")]));
     h.script.push(Answer::says("票价查到了，一百块"));
     let finished = finished(How::Done, "一百块。");
-    h.mailbox.send(Event::JobDone { job: 1, finished }).unwrap();
+    let handle = Handle::Agent(1);
+    h.mailbox.send(Event::JobDone { handle, finished }).unwrap();
     assert_eq!(h.said().await.1, "票价查到了，一百块");
     let volatile = h.request_tail(0);
     assert!(
-        volatile.ends_with("[job#1 完成] 查票价\n一百块。\n（全文在 /work/.max/jobs/job-1.md）\n"),
+        volatile
+            .ends_with("[agent#1 完成] 查票价\n一百块。\n（全文在 /work/.max/jobs/agent-1.md）\n"),
         "{volatile}"
     );
     // It ended: no more steering it.
     let steered = h.poster().steer(1, "再查查".into()).await;
-    assert!(steered.unwrap_err().contains("job#1 isn't running"));
+    assert!(steered.unwrap_err().contains("agent#1 isn't running"));
     h.stop().await;
 }
 
@@ -1051,21 +1053,25 @@ async fn a_jobs_question_wakes_max_who_answers_with_a_steer(pool: PgPool) {
     h.send(from_xiaoming(0, vec![text("帮我们订个餐厅")]));
     h.script.push(Answer::says("我问问大家"));
     let question = "选火锅还是烧烤？".to_owned();
-    h.mailbox.send(Event::JobAsks { job: 1, question }).unwrap();
+    h.mailbox
+        .send(Event::JobAsks { agent: 1, question })
+        .unwrap();
     assert_eq!(h.said().await.1, "我问问大家");
     let volatile = h.request_tail(0);
     assert!(
         volatile.ends_with(
-            "[job#1 问] 订餐厅\n选火锅还是烧烤？\n（它在等你答复：用 agent_steer 回答它，10 分钟内没答复它就自己判断）\n"
+            "[agent#1 问] 订餐厅\n选火锅还是烧烤？\n（它在等你答复：用 agent_steer 回答它，10 分钟内没答复它就自己判断）\n"
         ),
         "{volatile}"
     );
     assert_eq!(h.poster().steer(1, "火锅".into()).await, Ok(()));
     assert_eq!(steered.recv().await.unwrap(), "火锅");
     // A cancelled job's question wakes nobody.
-    assert_eq!(h.poster().cancel(1).await, Ok(()));
+    assert_eq!(h.poster().cancel(Handle::Agent(1)).await, Ok(()));
     let question = "那几点？".to_owned();
-    h.mailbox.send(Event::JobAsks { job: 1, question }).unwrap();
+    h.mailbox
+        .send(Event::JobAsks { agent: 1, question })
+        .unwrap();
     assert_eq!(h.poster().status(None).await, Ok(Vec::new()));
     h.stop().await;
     assert_eq!(h.turns().await.len(), 1);
@@ -1078,14 +1084,19 @@ async fn a_job_is_steered_listed_and_cancelled(pool: PgPool) {
     assert_eq!(steered.recv().await.unwrap(), "只要硬座");
     let jobs = h.poster().status(None).await.unwrap();
     assert_eq!(
-        (jobs[0].job.as_str(), jobs[0].title.as_str()),
-        ("job#1", "查票价")
+        (jobs[0].handle.as_str(), jobs[0].title.as_str()),
+        ("agent#1", "查票价")
     );
     assert_eq!(jobs[0].calls, 0);
-    assert_eq!(h.poster().cancel(1).await, Ok(()));
+    let handle = Handle::Agent(1);
+    assert_eq!(h.poster().cancel(handle).await, Ok(()));
+    assert_eq!(
+        h.poster().cancel(handle).await.unwrap_err(),
+        "agent#1 isn't running: it ended, was cancelled, or never was"
+    );
     // What a cancelled job says when it ends wakes nobody.
     let finished = finished(How::Done, "一百块。");
-    h.mailbox.send(Event::JobDone { job: 1, finished }).unwrap();
+    h.mailbox.send(Event::JobDone { handle, finished }).unwrap();
     assert_eq!(h.poster().status(None).await, Ok(Vec::new()));
     h.stop().await;
     assert!(h.turns().await.is_empty());
@@ -1097,14 +1108,15 @@ async fn a_background_command_is_a_job_that_wakes_max_when_it_ends(pool: PgPool)
         actor.jobs.pretend_command("$ make");
     })
     .await;
+    // Numbered on its own: shell#1 isn't agent#1.
     assert_eq!(
         h.poster().steer(1, "快点".into()).await.unwrap_err(),
-        "job#1 is a background command: there is nobody to steer"
+        "agent#1 isn't running: it ended, was cancelled, or never was"
     );
     h.send(from_xiaoming(0, vec![me(), text(" /status")]));
     let (_, status) = h.said().await;
     assert!(
-        status.contains("job       job#1 · 0m · shell · $ make"),
+        status.contains("job       shell#1 · 0m · $ make"),
         "{status}"
     );
     h.script.push(Answer::says("编好了"));
@@ -1116,11 +1128,12 @@ async fn a_background_command_is_a_job_that_wakes_max_when_it_ends(pool: PgPool)
         },
         file: None,
     };
-    h.mailbox.send(Event::JobDone { job: 1, finished }).unwrap();
+    let handle = Handle::Shell(1);
+    h.mailbox.send(Event::JobDone { handle, finished }).unwrap();
     assert_eq!(h.said().await.1, "编好了");
     let volatile = h.request_tail(0);
     assert!(
-        volatile.ends_with("[job#1 完成] $ make\n退出码 0，跑了 3 分 12 秒\nok\n"),
+        volatile.ends_with("[shell#1 完成] $ make\n退出码 0，跑了 3 分 12 秒\nok\n"),
         "{volatile}"
     );
     h.stop().await;
@@ -1193,12 +1206,12 @@ async fn kill_stops_the_jobs_too(pool: PgPool) {
     h.send(from_xiaoming(0, vec![me(), text(" /status")]));
     let (_, status) = h.said().await;
     assert!(
-        status.contains("job       job#1 · 0m · 0 calls · 查票价"),
+        status.contains("job       agent#1 · 0m · 0 calls · 查票价"),
         "{status}"
     );
     h.send(from_xiaoming(1, vec![me(), text(" /kill")]));
     let (_, killed) = h.said().await;
-    assert!(killed.contains("/kill → jobs stopped: job#1"), "{killed}");
+    assert!(killed.contains("/kill → jobs stopped: agent#1"), "{killed}");
     assert_eq!(h.poster().status(None).await, Ok(Vec::new()));
     h.stop().await;
 }
@@ -1216,7 +1229,7 @@ async fn stop_ends_the_turn_and_its_jobs_and_nothing_starts_until_start(pool: Pg
         command::answer(
             "stop",
             "stopped: messages are still recorded, but Max won't reply until @maxx /start\n\
-             jobs stopped: job#1"
+             jobs stopped: agent#1"
         )
     );
     assert_eq!(h.turns().await[0].1, Some(Outcome::Interrupted));
