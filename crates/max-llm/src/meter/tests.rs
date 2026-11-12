@@ -61,3 +61,38 @@ fn lines_end_either_way_and_a_field_goes_on_in_the_next() {
     let done = format!("{crlf}data: [DONE]\n\n");
     assert_eq!(metered(Protocol::Chat, done.as_bytes()).usage().input, 10);
 }
+
+#[test]
+fn an_answer_that_isnt_streamed_has_its_usage_too() {
+    let chat = br#"
+{"id":"c1","choices":[{"message":{"role":"assistant","content":"data: {}"}}],
+ "usage":{"prompt_tokens":40,"completion_tokens":3,"prompt_tokens_details":{"cached_tokens":8}}}"#;
+    let meter = metered(Protocol::Chat, chat);
+    let used = Usage {
+        input: 40,
+        cached: 8,
+        output: 3,
+        reasoning: 0,
+    };
+    assert_eq!(meter.usage(), used);
+    // It never began, as far as anyone watching the pieces could tell.
+    assert!(!meter.started());
+
+    let response = br#"{"id":"r1","output":[],"usage":{"input_tokens":70,"output_tokens":5,"output_tokens_details":{"reasoning_tokens":2}}}"#;
+    let meter = metered(Protocol::Responses, response);
+    let used = Usage {
+        input: 70,
+        cached: 0,
+        output: 5,
+        reasoning: 2,
+    };
+    assert_eq!(meter.usage(), used);
+
+    // An error, or one cut short, used nothing anyone can read.
+    for bytes in [&br#"{"error":{"message":"no"}}"#[..], &response[..40]] {
+        assert_eq!(
+            metered(Protocol::Responses, bytes).usage(),
+            Usage::default()
+        );
+    }
+}

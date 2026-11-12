@@ -5,7 +5,8 @@
 // in the agent's directory, MAX_AGENT_DIR (/run/max/jobs/<unit>):
 // - at the end of each turn it takes the steers in `inbox`, which
 //   `max-agent steer` put there, and they go in before the next model
-//   call;
+//   call; an agent that had asked its Max something has its answer then,
+//   and waits for none;
 // - as pi is about to settle, it takes them once more: if the agent has
 //   asked its Max something (`max-agent ask` left `asked`) and nothing has
 //   come, it waits a while for an answer, and what comes is one more
@@ -132,7 +133,11 @@ export default function (pi: ExtensionAPI) {
   // pi takes the steers in once this has run, before the next call.
   pi.on("turn_end", () => {
     if (stopping) return;
-    for (const steer of taken()) pi.sendUserMessage(steer, { deliverAs: "steer" });
+    const steers = taken();
+    // What it asked is answered: left there, `asked` would hold it for
+    // nothing once its work is done.
+    if (steers.length > 0) fs.rmSync(`${dir}/asked`, { force: true });
+    for (const steer of steers) pi.sendUserMessage(steer, { deliverAs: "steer" });
   });
 
   // pi is about to settle. What comes goes in as Max's words, and pi

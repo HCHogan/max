@@ -110,6 +110,7 @@ launch() {
       '{result: "", code: "", status: "", seconds: 0, out: null, err: null, shown: [], failed: $failed}'
     return
   fi
+  workdir=$(realpath -- "$workdir")
 
   local dir=$jobs/$unit
   mkdir -p "$dir" "$out"
@@ -120,7 +121,13 @@ launch() {
   local args=(
     --quiet --collect --unit="$unit" --slice=max-jobs.slice
     --description="$title"
-    --working-directory="$workdir"
+    # The command as it was written: systemd would put the unit's
+    # environment in for each ${…} in it, and make each $$ a $, before
+    # bash saw it (2026-11-13; a heredoc's quotes don't keep it out).
+    --expand-environment=no
+    # Not needed by the end: a command that removed its own directory
+    # would have the hook fail there, and end with nothing said.
+    --property=WorkingDirectory="-$workdir"
     --property=RuntimeMaxSec="$limit"
     --property=StandardOutput="append:$out/$unit.txt"
     --property=ExecStopPost="$self ended $unit"
@@ -275,7 +282,7 @@ agent_notice() {
     head="[$unit 失败] $title：$(head -c 300 "$dir/error")"
   elif [ ! -s "$report" ] && [ "$status" != 0 ]; then
     failed=1
-    head="[$unit 失败] $title：the agent exited with status $status: $(tail -n 1 "$out/$unit.txt" 2> /dev/null | head -c 300)"
+    head="[$unit 失败] $title：the agent exited with status $status: $({ tail -n 1 "$out/$unit.txt" 2> /dev/null || true; } | head -c 300)"
   fi
   if [ -s "$report" ]; then
     tail+=("（全文在 $report）")

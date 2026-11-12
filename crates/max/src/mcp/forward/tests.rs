@@ -29,8 +29,12 @@ const ANSWER: &str = "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\"
      data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":1200,\"completion_tokens\":30,\"prompt_tokens_details\":{\"cached_tokens\":1000}}}\n\n\
      data: [DONE]\n\n";
 
+/// What the provider answers a call that isn't streamed, and what it
+/// used.
+const WHOLE: &str = r#"{"choices":[{"message":{"role":"assistant","content":"你好"}}],"usage":{"prompt_tokens":40,"completion_tokens":3}}"#;
+
 /// A provider that answers with an event stream; under /quiet, one event
-/// and then nothing.
+/// and then nothing; under /whole, one object.
 async fn provider(scope: &mut Scope, asked: Asked) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -55,6 +59,10 @@ async fn provider(scope: &mut Scope, asked: Asked) -> String {
     };
     let app = axum::Router::new()
         .route("/quiet/chat/completions", post(quiet))
+        .route(
+            "/whole/chat/completions",
+            post(|| async { ([("content-type", "application/json")], WHOLE) }),
+        )
         .route("/v1/chat/completions", answering(ANSWER))
         .route("/other/responses", answering(RESPONDED));
     scope.spawn(move |stop| async move {
@@ -279,6 +287,26 @@ async fn a_call_goes_to_the_model_it_names() {
         assert_eq!(called.effort.as_deref(), Some("xhigh"));
     }
     assert_eq!(asked.lock().unwrap().len(), 3);
+
+    scope.close(Duration::from_secs(5)).await;
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A program of Max's own may call without `stream`, as curl would.
+#[tokio::test]
+async fn an_answer_that_isnt_streamed_is_counted_too() {
+    let mut scope = Scope::new();
+    let base_url = provider(&mut scope, Asked::default()).await;
+    let whole = upstream(base_url.replace("/v1", "/whole"));
+    let (model, mut used) = Models::heard(whole);
+    let (dir, socket) = vm(&mut scope, "whole", Some(model));
+
+    let ask = r#"{"messages":[{"role":"user","content":"你好"}]}"#;
+    let (status, body) = send(&socket, "/llm/chat/completions", Some(ask)).await;
+    assert_eq!(status, "HTTP/1.1 200 OK", "{body}");
+    assert!(body.contains(WHOLE), "{body}");
+    let (_, called) = used.recv().await.unwrap();
+    assert_eq!((called.usage.input, called.usage.output), (40, 3));
 
     scope.close(Duration::from_secs(5)).await;
     let _ = std::fs::remove_dir_all(dir);

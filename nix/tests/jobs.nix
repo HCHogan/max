@@ -173,6 +173,22 @@ pkgs.testers.runNixOSTest {
         machine.fail("max-jobs start --unit max-job-nowhere --limit 30 --workdir /no/such/directory -- true")
         assert left("nowhere") == [], left("nowhere")
 
+    with subtest("a call's command reaches bash as it was written"):
+        # systemd would fill in ''${…} and $$ itself, in a quoted heredoc too.
+        said = call(
+            "written",
+            "f=1; for g in a b; do echo \"[''${f}''${g}]\"; done; test $$ -gt 1 && echo pid; cat <<\\EOT\n[reply#''${id}]\nEOT",
+            "--limit 30",
+        )
+        assert said["out"]["head"] == "[1a]\n[1b]\npid\n[reply#''${id}]\n", said
+
+    with subtest("a call that removes its own directory still says how it ended"):
+        machine.succeed("mkdir -p /work/tmp/gone")
+        said = call("gone", "echo done; cd / && rm -rf /work/tmp/gone", "--limit 30 --workdir /work/tmp/gone")
+        assert (said["result"], said["status"], said["failed"]) == ("success", "0", None), said
+        assert said["out"]["head"] == "done\n", said
+        assert left("gone") == [], left("gone")
+
     assert wakes() == [], wakes()
 
     with subtest("a background command returns at once, and its end wakes Max once"):
@@ -307,5 +323,15 @@ pkgs.testers.runNixOSTest {
         assert "no model is configured for background agents" in refused, refused
         machine.succeed("rm /run/no-model")
         assert "the task comes on standard input" in machine.fail("max-agent start < /dev/null 2>&1")
+
+    with subtest("a background command that removes its own directory is still told of"):
+        machine.succeed("mkdir -p /work/tmp/gone")
+        machine.succeed(
+            "max-jobs start --unit max-job-gone --limit 60 --title '$ rm' --workdir /work/tmp/gone "
+            "-- bash -lc 'echo going; cd / && rm -rf /work/tmp/gone'"
+        )
+        notice = woken(9)
+        assert notice.startswith("[max-job-gone 完成] $ rm\nexit status 0, ran for "), notice
+        machine.wait_until_fails("test -e /run/max/jobs/max-job-gone")
   '';
 }

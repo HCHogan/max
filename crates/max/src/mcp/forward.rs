@@ -5,7 +5,8 @@
 //! broken off if the provider keeps quiet as long as max-llm would wait:
 //! pi takes it for a failed call, and retries. On the way back it is read
 //! for what the call used and how long it took, which is recorded for the
-//! conversation.
+//! conversation; an answer that isn't streamed, as a program of Max's own
+//! may ask for, is read once it has all come.
 //!
 //! A call names its model as the configuration does, `provider/model`,
 //! and any configured model can be named: Max starts an agent on the one

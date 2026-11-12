@@ -141,7 +141,7 @@ async fn call(tool: Tool, vms: Option<&Vms>, context: &Context) -> ToolOutput {
     };
     let mut told = match ran {
         Ok(told) => told,
-        Err(error) => return text(format!("{name} didn't run: {error:#}"), true),
+        Err(error) => return text(format!("{name} failed: {error:#}"), true),
     };
     // What it left for the model to see, read now that it is over; and
     // what of that can't be shown, said here, the program being gone.
@@ -264,21 +264,35 @@ async fn wait(vm: &Vm, unit: Unit<'_>, command: &str, input: Option<&[u8]>) -> R
         line.push_str(" --input");
     }
     line.push_str(&format!(" -- bash -lc {}", quote(command)));
-    let mut running = vm.command(name, &line, input.unwrap_or_default()).await?;
+    let running = vm.command(name, &line, input.unwrap_or_default());
+    let mut running = running.await.wrap_err("it didn't start")?;
     let mut said = Said::default();
     let waited = running.wait_or(&mut said, sleep(unit.limit + GUEST_MARGIN));
     match waited.await? {
-        Waited::Exited(Some(0)) => serde_json::from_slice(&said.out)
+        Waited::Exited(Some(0)) => serde_json::from_slice(last_line(&said.out))
             .wrap_err_with(|| format!("max-jobs said {:?}", String::from_utf8_lossy(&said.out))),
-        Waited::Exited(status) => bail!(
-            "max-jobs ended with {status:?}: {}",
+        Waited::Exited(Some(status)) => bail!(
+            "max-jobs ended with status {status}: {}",
             String::from_utf8_lossy(&said.err).trim()
+        ),
+        // The connection went, as when the guest's sshd restarts under
+        // it. The unit is the guest's, and has its limit.
+        Waited::Exited(None) => bail!(
+            "the connection to the VM closed before the command ended: it may have run, and may \
+             still be running"
         ),
         Waited::Interrupted(()) => bail!(
             "the VM didn't say how it ended, {} seconds past its limit: it may still run",
             GUEST_MARGIN.as_secs()
         ),
     }
+}
+
+/// The line `max-jobs` printed: the last of what came, since the shell
+/// sshd runs it in writes first if the group's /work/.bashrc does.
+fn last_line(out: &[u8]) -> &[u8] {
+    let out = out.trim_ascii_end();
+    out.rsplit(|&byte| byte == b'\n').next().unwrap_or(out)
 }
 
 /// What `max-jobs` wrote: its line, and why it failed if it did.
@@ -375,6 +389,18 @@ mod tests {
             ended("oom-kill", "killed", "KILL").ran(),
             Ran::Killed("oom-kill (KILL)".to_owned())
         );
+    }
+
+    #[test]
+    fn a_calls_line_is_the_last_of_what_came() {
+        let line = br#"{"result":"success"}"#;
+        assert_eq!(last_line(b"{\"result\":\"success\"}\n"), line);
+        // What the group's .bashrc wrote first isn't the line.
+        assert_eq!(
+            last_line(b"Agent pid 4242\nnvm: now using node 24\n{\"result\":\"success\"}\n\n"),
+            line
+        );
+        assert_eq!(last_line(b""), b"");
     }
 
     #[test]

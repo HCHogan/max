@@ -1,7 +1,8 @@
-//! A response read on its way past, for a call Max didn't make: a
-//! background agent's, which max forwards to the provider and back as the
-//! bytes came. Its usage is read as the protocol's parser reads Max's own,
-//! and when the model began to answer.
+//! A response read on its way past, for a call Max didn't make: one from
+//! a VM, a background agent's or a program's, which max forwards to the
+//! provider and back as the bytes came. Its usage is read as the
+//! protocol's parser reads Max's own, and when the model began to answer.
+//! An answer that isn't streamed, one JSON object, has its usage too.
 
 use std::mem;
 
@@ -11,13 +12,18 @@ use serde_json::Value;
 use crate::{chat, responses};
 
 /// The longest line read; a longer one is skipped. `response.completed`
-/// carries the whole output.
+/// carries the whole output. An answer that isn't streamed is no longer.
 const LONGEST: usize = 16 << 20;
 
-/// Reads a streamed response a piece at a time, as server-sent events.
+/// Reads a response a piece at a time: server-sent events, or one JSON
+/// object, which is what an answer that isn't streamed begins as.
 #[derive(Debug)]
 pub struct Meter {
     protocol: Protocol,
+    /// Whether the answer has begun, and said which of the two it is.
+    begun: bool,
+    /// The answer so far, if it is one object and not events.
+    whole: Option<Vec<u8>>,
     /// The line so far; dropped once it is too long.
     line: Vec<u8>,
     dropping: bool,
@@ -31,6 +37,8 @@ impl Meter {
     pub fn new(protocol: Protocol) -> Self {
         Self {
             protocol,
+            begun: false,
+            whole: None,
             line: Vec::new(),
             dropping: false,
             data: None,
@@ -40,7 +48,27 @@ impl Meter {
     }
 
     /// Reads the response's next piece.
-    pub fn push(&mut self, bytes: &[u8]) {
+    pub fn push(&mut self, mut bytes: &[u8]) {
+        if !self.begun {
+            // No event begins with a brace.
+            let Some(at) = bytes.iter().position(|byte| !byte.is_ascii_whitespace()) else {
+                return;
+            };
+            bytes = &bytes[at..];
+            self.begun = true;
+            if bytes[0] == b'{' {
+                self.whole = Some(Vec::new());
+            }
+        }
+        if let Some(whole) = &mut self.whole {
+            if whole.len() + bytes.len() > LONGEST {
+                self.dropping = true;
+                whole.clear();
+            } else if !self.dropping {
+                whole.extend_from_slice(bytes);
+            }
+            return;
+        }
         let mut pieces = bytes.split(|&byte| byte == b'\n').peekable();
         while let Some(piece) = pieces.next() {
             if !self.dropping {
@@ -69,9 +97,21 @@ impl Meter {
         self.started
     }
 
-    /// What the provider said the call used: nothing until it says.
+    /// What the provider said the call used: nothing until it says, which
+    /// an answer that isn't streamed does once it has all come.
     pub fn usage(&self) -> Usage {
-        self.usage
+        let Some(whole) = &self.whole else {
+            return self.usage;
+        };
+        let Ok(answer) = serde_json::from_slice::<Value>(whole) else {
+            return Usage::default();
+        };
+        let usage = &answer["usage"];
+        match self.protocol {
+            _ if !usage.is_object() => Usage::default(),
+            Protocol::Chat => chat::usage(usage),
+            Protocol::Responses => responses::usage(usage),
+        }
     }
 
     /// One line of the stream.

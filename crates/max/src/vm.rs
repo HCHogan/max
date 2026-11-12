@@ -663,9 +663,12 @@ impl Service {
                     () = stop.cancelled() => return,
                     _ = every.tick() => {}
                 }
-                // One that doesn't say isn't kept up for it.
+                // One that doesn't say isn't kept up for it. The count is
+                // the last line: the group's .bashrc may write before it.
                 let said = ssh::ask(&asked, "max-jobs list --count").await;
-                let jobs = said.ok().and_then(|said| said.trim().parse::<u32>().ok());
+                let jobs = said
+                    .ok()
+                    .and_then(|said| said.lines().last()?.trim().parse::<u32>().ok());
                 if jobs.is_some_and(|jobs| jobs > 0)
                     && internal.send(Internal::Busy { conversation }).is_err()
                 {

@@ -20,7 +20,7 @@ use tokio::fs;
 use tokio::io::AsyncWriteExt;
 use tokio::net::UnixListener;
 use tokio::process::Command;
-use tokio::time::{Instant, sleep};
+use tokio::time::{Instant, sleep, timeout_at};
 use tracing::warn;
 
 use super::ssh::{self, Connection};
@@ -367,25 +367,32 @@ pub async fn attach(config: &config::Vm, conversation: ConversationId) -> Result
     let key = fs::read(dir.join(KEY)).await.wrap_err("reading its key")?;
     let key = Arc::new(PrivateKey::from_openssh(key)?);
     let mcp = listen(dir).await?;
-    let socket = dir.join("notify.vsock");
-    let deadline = Instant::now() + ATTACH;
-    loop {
-        match ssh::connect(&socket, Arc::clone(&key)).await {
-            Ok(connection) => {
-                return Ok(Booted {
-                    machine,
-                    connection,
-                    mcp,
-                });
-            }
-            Err(error) if Instant::now() >= deadline => {
-                return Err(
-                    error.wrap_err(format!("the guest didn't let max in within {ATTACH:?}"))
-                );
-            }
-            Err(_) => sleep(RETRY).await,
+    let connection = let_in(&dir.join("notify.vsock"), &key, ATTACH).await?;
+    Ok(Booted {
+        machine,
+        connection,
+        mcp,
+    })
+}
+
+/// Logs in at `socket`, again while the guest refuses, for at most
+/// `within`. One that takes the connection and then says nothing has no
+/// longer: such a VM outlives max, and would keep the next one waiting
+/// as well.
+async fn let_in(socket: &Path, key: &Arc<PrivateKey>, within: Duration) -> Result<Connection> {
+    let deadline = Instant::now() + within;
+    let mut refused = None;
+    while Instant::now() < deadline {
+        match timeout_at(deadline, ssh::connect(socket, Arc::clone(key))).await {
+            Ok(Ok(connection)) => return Ok(connection),
+            Ok(Err(error)) => refused = Some(error),
+            Err(_) => break,
         }
+        sleep(RETRY).await;
     }
+    Err(refused
+        .unwrap_or_else(|| eyre!("it took the connection and said nothing"))
+        .wrap_err(format!("the guest didn't let max in within {within:?}")))
 }
 
 /// Has the guest of a VM that runs an older image switch to `guest`'s
@@ -488,6 +495,51 @@ async fn disk(config: &config::Vm, image: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_guest_that_says_nothing_keeps_max_no_longer_than_one_that_refuses() {
+        let dir = std::env::temp_dir().join(format!("max-let-in-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let socket = dir.join("notify.vsock");
+        let _ = std::fs::remove_file(&socket);
+        let listener = UnixListener::bind(&socket).unwrap();
+        // The port is open in the guest, and its sshd never greets.
+        let mut scope = crate::scope::Scope::new();
+        scope.spawn(move |stop| async move {
+            let mut held = Vec::new();
+            loop {
+                tokio::select! {
+                    () = stop.cancelled() => return,
+                    taken = listener.accept() => {
+                        let (mut stream, _) = taken.unwrap();
+                        stream.write_all(b"OK 22\n").await.unwrap();
+                        held.push(stream);
+                    }
+                }
+            }
+        });
+        let key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
+        let key = Arc::new(key);
+        let within = Duration::from_millis(300);
+        let started = Instant::now();
+        let error = let_in(&socket, &key, within).await.err().unwrap();
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert_eq!(
+            format!("{error:#}"),
+            "the guest didn't let max in within 300ms: it took the connection and said nothing"
+        );
+
+        // One that refuses says why.
+        scope.close(Duration::from_secs(1)).await;
+        let error = let_in(&socket, &key, within).await.err().unwrap();
+        let error = format!("{error:#}");
+        assert!(
+            error.starts_with("the guest didn't let max in within 300ms: ")
+                && !error.contains("said nothing"),
+            "{error}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn a_unit_names_its_conversation_if_it_is_one_of_ours() {

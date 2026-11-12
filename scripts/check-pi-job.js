@@ -39,13 +39,16 @@ const SCRIPT = {
   last: n => ({ content: n === 1 ? "初稿" : "定稿" }),
   stop: n => (n === 1 ? { content: "开始查", tool: ["bash", { command: "sleep 30" }] } : { content: "不该到这" }),
   settle: n => ({ content: n === 1 ? "等 Max 回答选哪家" : "订了火锅" }),
+  answered: n => (n === 1 ? { tool: ["bash", { command: "echo hi" }] } : { content: "订了火锅" }),
   agents: n => (n === 1 ? { tool: ["bash", { command: "pwd" }] } : { content: "项目完成" }),
   claude: n => (n === 1 ? { tool: ["bash", { command: "pwd" }] } : { content: "项目完成" }),
 };
-// What waits in the inbox as the agent starts.
-const STEERS = { steers: ["先看 A", "再看 B"], last: ["再补一句"] };
 // What comes to the agent about to settle, after a while: it had asked.
 const ANSWER = "[回答] 火锅";
+// How long the plugin holds an agent that waits for an answer.
+const HOLD = 20_000;
+// What waits in the inbox as the agent starts.
+const STEERS = { steers: ["先看 A", "再看 B"], last: ["再补一句"], answered: [ANSWER] };
 
 // The words of the messages after the model's last answer.
 function since(messages) {
@@ -139,7 +142,7 @@ async function agent(scenario) {
   (STEERS[scenario] ?? []).forEach((steer, n) => fs.writeFileSync(path.join(jobs, "inbox", `${n}`), `${steer}\n`));
   if (scenario === "steers") fs.writeFileSync(path.join(dir, "projects", notesName(cwd)), `${NOTES}\n`);
   // As after `max-agent ask`: the agent waits for its answer.
-  if (scenario === "settle") fs.writeFileSync(path.join(jobs, "asked"), "");
+  if (scenario === "settle" || scenario === "answered") fs.writeFileSync(path.join(jobs, "asked"), "");
   const wrapper = fs
     .readFileSync(path.join(repo, "nix/max-pi.sh"), "utf8")
     .replaceAll("127.0.0.1:7777", `127.0.0.1:${port}`)
@@ -158,7 +161,7 @@ async function agent(scenario) {
       RUNTIME_DIRECTORY: path.join(dir, "runtime"),
       MAX_AGENT_PLUGIN: path.join(repo, "nix/max-agent.ts"),
       MAX_AGENT_SYSTEM: path.join(repo, "nix/agent-system.md"),
-      MAX_AGENT_HOLD_MS: "20000",
+      MAX_AGENT_HOLD_MS: `${HOLD}`,
     },
   });
   let out = "";
@@ -235,6 +238,14 @@ const checks = {
     assert.deepEqual(seen.calls[1], [`user: ${ANSWER}\n`]);
     assert.equal(report, reported("订了火锅"));
     assert.ok(!asked, "it waits for nothing any more");
+  },
+  answered({ seen, status, report, asked, took }) {
+    // The answer came while it worked: done, it waits for nothing.
+    assert.equal(status, 0);
+    assert.deepEqual(seen.calls[1], ["tool: hi\n", `user: ${ANSWER}\n`]);
+    assert.equal(report, reported("订了火锅"));
+    assert.ok(!asked, "it waits for nothing any more");
+    assert.ok(took < HOLD, `it settled at once, not after ${took} ms`);
   },
   agents: project,
   claude: project,
