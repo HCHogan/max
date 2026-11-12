@@ -294,6 +294,7 @@ impl Conversation {
     /// group's VM runs on: it isn't the actor's.
     async fn give_up(&mut self, error: &Report) {
         let core = self.core.take();
+        self.refuse_questions(asking::TURN_OVER);
         let why = chain(error);
         if let Err(error) = self.wind_up(core, &why).await {
             let conversation = self.place.conversation;
@@ -629,7 +630,6 @@ impl Conversation {
             window: chosen.window,
             cleared_upto: settings.cleared_upto,
             memory: self.memory().await,
-            asked: self.questions_waiting(),
             now,
             offset: self.shared.services.offset,
         };
@@ -781,6 +781,8 @@ impl Conversation {
         };
         // Aborts the model call in flight: started now, not waited for.
         drop(a.io);
+        // What it was asked and didn't answer, nobody will.
+        self.refuse_questions(asking::TURN_OVER);
         if let Some(text) = a.voice.cut_off() {
             let tokens = tokens::count(&text);
             if let Err(rejected) = a.run.partial_output(text, tokens) {

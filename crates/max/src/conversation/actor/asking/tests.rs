@@ -221,8 +221,8 @@ async fn one_max_asks_another_and_no_chat_hears_of_it(pool: PgPool) {
     let again = p.answer(&room, 1, "九点").await.unwrap_err();
     assert!(again.starts_with("there is no ask#1 to answer"), "{again}");
 
-    // Nobody waits: left unanswered, neither side hears more, and an
-    // answer that comes late arrives all the same.
+    // Nobody waits: while the group's core runs, an answer that takes
+    // its time arrives all the same.
     p.script.push(Answer::says("等我想想"));
     assert_eq!(p.ask(&chat, r, "有空吗").await, asked);
     p.says(&room, "等我想想").await;
@@ -276,34 +276,52 @@ async fn one_max_asks_another_and_no_chat_hears_of_it(pool: PgPool) {
     assert_eq!(p.count(turns).await, 1, "one core took every question");
 }
 
-/// Who is asked keeps the latest questions, and one pushed out can't be
-/// answered any more.
-#[test]
-fn the_latest_questions_are_kept_for_their_answers() {
-    let peer = |conversation| links::Peer {
-        conversation: ConversationId(conversation),
-        title: None,
+/// A question is the core's that read it: when that core ends with the
+/// question unanswered, the asker hears so, as it does of `/stop`, and
+/// nothing is kept for a later core.
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn a_question_goes_with_the_turn_that_read_it(pool: PgPool) {
+    let mut p = Pair::new(pool).await;
+    let (chat, room) = (Arc::clone(&p.chat), Arc::clone(&p.room));
+    let (c, r) = (chat.conversation, room.conversation);
+    p.link(&chat, &room).await;
+    p.script.push(Answer::says("我问问大家"));
+    assert_eq!(
+        p.ask(&chat, r, "明天几点开始？").await,
+        Ok(format!("c#{r}"))
+    );
+    p.says(&room, "我问问大家").await;
+    let shown = p.request_tail(0);
+    assert!(shown.contains("就在这一轮里答"), "{shown}");
+
+    // The group's turn is killed before Max there answered.
+    p.script.push(Answer::says("那边没答，要再问吗"));
+    let me = InNode::MentionMe {
+        display: "maxx".into(),
     };
-    let question = |n: usize| Question {
-        from: peer(7),
-        to: peer(9),
-        text: format!("第 {n} 问\n还有一行"),
-    };
-    let mut asked = Asked::default();
-    for n in 1..=ASKED_KEPT + 1 {
-        assert_eq!(asked.keep(question(n)), u32::try_from(n).unwrap());
-    }
-    assert_eq!(asked.kept.len(), ASKED_KEPT);
-    assert!(!asked.kept.contains_key(&1), "the oldest went");
-    let lines = asked.lines();
-    assert_eq!(lines.len(), ASKED_KEPT);
-    assert_eq!(lines[0], "ask#2 c#7：第 2 问 ⏎ 还有一行");
-    // Answered, it is kept no longer; the numbers go on.
-    asked.kept.remove(&2);
-    assert_eq!(asked.lines()[0], "ask#3 c#7：第 3 问 ⏎ 还有一行");
-    let next = u32::try_from(ASKED_KEPT).unwrap() + 2;
-    assert_eq!(asked.keep(question(0)), next);
-    // /stop answers for all of them.
-    assert_eq!(asked.take().len(), ASKED_KEPT);
-    assert!(asked.lines().is_empty());
+    let kill = Event::Inbound(from_xiaohong(1, vec![me, text("/kill")]));
+    p.mailboxes[&r].send(kill).unwrap();
+    p.says(&chat, "那边没答，要再问吗").await;
+    let unanswered =
+        format!("[没答成] c#{r}：Max there ended its turn without answering\n问：明天几点开始？\n");
+    let shown = p.request_tail(1);
+    assert!(shown.ends_with(&unanswered), "{shown}");
+
+    // The next core there never saw the question, and has nothing to
+    // answer: who asked may ask again.
+    let gone = p.answer(&room, 1, "八点").await.unwrap_err();
+    assert!(
+        gone.starts_with("there is no ask#1 to answer") && gone.contains("an earlier turn"),
+        "{gone}"
+    );
+    p.script.push(Answer::says("八点"));
+    assert_eq!(
+        p.ask(&chat, r, "明天几点开始？").await,
+        Ok(format!("c#{r}"))
+    );
+    p.says(&room, "八点").await;
+    let again = p.request_tail(2);
+    assert!(again.contains(&format!("[ask#2 问] c#{c}\n")), "{again}");
+    assert!(!again.contains("ask#1"), "{again}");
+    p.quiet().await;
 }

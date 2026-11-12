@@ -1,9 +1,12 @@
 //! Max here asks Max in another conversation, and is asked by one: the
 //! question's way between the actors, and the answer's way back. Neither
-//! is said in a chat: each reaches Max as a wake's item. Nothing waits:
-//! who asks keeps nothing of the question, and who is asked keeps who
-//! asked, which is all that lets its answer go back. See "Asking another
-//! conversation" in docs/rust-rewrite.md.
+//! is said in a chat: each reaches Max as a wake's item. Nothing waits
+//! and nothing is timed: who asks keeps nothing of the question, and who
+//! is asked keeps it for as long as the core that read it runs. When
+//! that core ends with the question unanswered, the asker hears so, as
+//! it does when Max is stopped there; whether to ask again is the
+//! asker's to judge. See "Asking another conversation" in
+//! docs/rust-rewrite.md.
 
 use std::collections::BTreeMap;
 
@@ -12,48 +15,16 @@ use max_db::links;
 use super::links::peer;
 use super::*;
 use crate::conversation::{Answer, Heard, Question};
-use max_core::limits::{ASKED_KEPT, ASKED_LISTED};
 
-/// What Max in other conversations asked Max here, by the number each
-/// question got here, `ask#5`: the latest few dozen, each until it is
-/// answered. Forgotten with the actor.
+/// What Max in other conversations asked the core that runs here, by the
+/// number each question got, `ask#5`: each until it is answered, or the
+/// core ends.
 #[derive(Default)]
 pub(super) struct Asked {
-    kept: BTreeMap<u32, (Question, Instant)>,
-    /// The last number given.
+    kept: BTreeMap<u32, Question>,
+    /// The last number given: they go on from core to core, while max
+    /// runs.
     last: u32,
-}
-
-impl Asked {
-    /// Keeps `question`, asked now: its number. The oldest goes if that
-    /// is one too many.
-    fn keep(&mut self, question: Question) -> u32 {
-        self.last += 1;
-        self.kept.insert(self.last, (question, Instant::now()));
-        while self.kept.len() > ASKED_KEPT {
-            self.kept.pop_first();
-        }
-        self.last
-    }
-
-    /// For a new core, which saw none of them asked: a line for each
-    /// question asked lately and not answered, the question on one line.
-    pub(super) fn lines(&self) -> Vec<String> {
-        let lately = self.kept.iter();
-        lately
-            .filter(|(_, (_, at))| at.elapsed() < ASKED_LISTED)
-            .map(|(number, (question, _))| {
-                let text = question.text.replace('\n', " ⏎ ");
-                format!("ask#{number} {}：{text}", question.from)
-            })
-            .collect()
-    }
-
-    /// Every question kept, none of them kept any longer.
-    fn take(&mut self) -> Vec<Question> {
-        let kept = std::mem::take(&mut self.kept);
-        kept.into_values().map(|(question, _)| question).collect()
-    }
 }
 
 impl Conversation {
@@ -93,7 +64,8 @@ impl Conversation {
 
     /// Max in another conversation asks Max here: the question wakes Max,
     /// in the running core or a new one, and is kept until `answer` names
-    /// it. Stopped, Max here isn't told, and the asker hears why.
+    /// it or that core ends. Stopped, Max here isn't told, and the asker
+    /// hears why.
     pub(super) async fn asked(&mut self, question: Question) -> Result<()> {
         if let Some(refused) = self.refuses(Does::STARTS) {
             let why = match refused {
@@ -104,9 +76,8 @@ impl Conversation {
             return Ok(());
         }
         let conversation = self.place.conversation;
-        // Numbered, though not listed, before the wake: a core this wake
-        // starts lists the questions kept, and reads this one once.
-        let number = self.asked.last + 1;
+        self.asked.last += 1;
+        let number = self.asked.last;
         info!(%conversation, from = %question.from.conversation, question = number, "Max is asked from another conversation");
         let notice = Notice::Asked {
             number,
@@ -114,17 +85,17 @@ impl Conversation {
             question: &question.text,
         };
         let item = notice.item(self.single());
-        self.wake_with(Reason::Asked, item).await?;
-        self.asked.keep(question);
-        Ok(())
+        // Kept first: if the wake fails, the asker hears with the rest.
+        self.asked.kept.insert(number, question);
+        self.wake_with(Reason::Asked, item).await
     }
 
     /// `answer` to question `to`: it goes to the conversation that asked.
     /// Whom it went to, or why it wasn't taken.
     pub(super) fn answer_question(&mut self, to: u32, text: &str) -> Result<String, String> {
-        let Some((question, _)) = self.asked.kept.remove(&to) else {
+        let Some(question) = self.asked.kept.remove(&to) else {
             return Err(format!(
-                "there is no ask#{to} to answer: no such question, or it was answered already, or it is older than the latest {ASKED_KEPT}, or Max has restarted since; nothing was sent"
+                "there is no ask#{to} to answer: no such question, or it was answered already, or it was asked in an earlier turn, which ended without answering it; nothing was sent"
             ));
         };
         let asker = question.from.to_string();
@@ -152,17 +123,13 @@ impl Conversation {
         self.wake_with(Reason::Answered, item).await
     }
 
-    /// `/stop`: what other conversations asked won't be answered, and
-    /// each hears so.
-    pub(super) fn refuse_questions(&mut self) {
-        for question in self.asked.take() {
-            self.tell(question.answered(Err(STOPPED_THERE.to_owned())));
+    /// What other conversations asked and Max hasn't answered won't be
+    /// answered, and each hears `why`: `/stop`, or the core that read
+    /// them ended.
+    pub(super) fn refuse_questions(&mut self, why: &str) {
+        for question in std::mem::take(&mut self.asked.kept).into_values() {
+            self.tell(question.answered(Err(why.to_owned())));
         }
-    }
-
-    /// What a new core is shown of the questions asked before it started.
-    pub(super) fn questions_waiting(&self) -> Vec<String> {
-        self.asked.lines()
     }
 
     /// Sends `signal` to another conversation's actor, through the
@@ -172,8 +139,11 @@ impl Conversation {
     }
 }
 
-/// Why a conversation that is stopped doesn't answer.
-const STOPPED_THERE: &str = "Max is stopped there (/stop)";
+/// Why a conversation that is stopped doesn't answer...
+pub(super) const STOPPED_THERE: &str = "Max is stopped there (/stop)";
+/// ...and one whose core ended with the question still there: its idle
+/// window ran out, or the turn was killed or failed.
+pub(super) const TURN_OVER: &str = "Max there ended its turn without answering";
 
 #[cfg(test)]
 mod tests;

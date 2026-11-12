@@ -1328,25 +1328,13 @@ async fn answer(h: &Harness, to: u32, text: &str) -> Result<String, String> {
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn a_new_core_is_shown_the_questions_still_waiting(pool: PgPool) {
-    // An idle window too short to outlast the question.
+async fn a_question_is_answered_to_who_asked_or_ends_with_the_turn(pool: PgPool) {
+    // An idle window too short to outlast the second question.
     let mut h = Harness::unprompted(pool, 1).await;
     h.send(from_xiaoming(0, vec![text("明天有活动")]));
-    h.script.push(Answer::says("谁知道明天几点开始？"));
+    h.script.push(Answer::says("八点吧"));
     h.mailbox.send(question("明天的活动\n几点开始？")).unwrap();
-    assert_eq!(h.said().await.1, "谁知道明天几点开始？");
-    let deadline = std::time::Instant::now() + PATIENCE;
-    while h.turns().await.first().is_none_or(|turn| turn.1.is_none()) {
-        assert!(std::time::Instant::now() < deadline, "the core didn't end");
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    // Someone here knows; the core that hears them never saw the question.
-    h.script.push(Answer::says("好，我告诉它"));
-    h.send(from_xiaohong(1, vec![me(), text("八点")]));
-    assert_eq!(h.said().await.1, "好，我告诉它");
-    let shown = h.request_tail(1);
-    let waiting = "\n\n[等你回答的问题]\nask#1 c#7 hank：明天的活动 ⏎ 几点开始？\n\n[新消息]\n";
-    assert!(shown.contains(waiting), "{shown}");
+    assert_eq!(h.said().await.1, "八点吧");
     assert_eq!(answer(&h, 1, "八点").await, Ok("c#7 hank".to_owned()));
     // The answer goes back to who asked, with the question: nothing
     // there kept it.
@@ -1361,9 +1349,35 @@ async fn a_new_core_is_shown_the_questions_still_waiting(pool: PgPool) {
     assert_eq!(answered.by.to_string(), "c#9 示波器群");
     assert_eq!(answered.question, "明天的活动\n几点开始？");
     assert_eq!(answered.said, Ok("八点".to_owned()));
-    // Answered, it is listed no more, and can't be answered again.
+    // Once.
     let again = answer(&h, 1, "九点").await.unwrap_err();
     assert!(again.starts_with("there is no ask#1 to answer"), "{again}");
+
+    // One Max doesn't answer: its turn ends when the idle window runs
+    // out, and who asked hears that it wasn't answered.
+    h.script.push(Answer::says("谁知道地点？"));
+    h.mailbox.send(question("在哪儿？")).unwrap();
+    assert_eq!(h.said().await.1, "谁知道地点？");
+    let ended = tokio::time::timeout(PATIENCE, h.signals.recv()).await;
+    let Some(Signal::Heard {
+        heard: Heard::Answered(unanswered),
+        ..
+    }) = ended.expect("the turn didn't end")
+    else {
+        panic!("who asked heard nothing");
+    };
+    assert_eq!(unanswered.question, "在哪儿？");
+    let why = "Max there ended its turn without answering".to_owned();
+    assert_eq!(unanswered.said, Err(why));
+    // Someone here knows, later: the core that hears them never saw the
+    // question, and there is nothing left to answer.
+    h.script.push(Answer::says("好的"));
+    h.send(from_xiaohong(1, vec![me(), text("在三楼")]));
+    assert_eq!(h.said().await.1, "好的");
+    let shown = h.request_tail(2);
+    assert!(!shown.contains("ask#2"), "{shown}");
+    let late = answer(&h, 2, "三楼").await.unwrap_err();
+    assert!(late.contains("an earlier turn"), "{late}");
     h.stop().await;
 }
 

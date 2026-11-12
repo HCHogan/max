@@ -66,17 +66,8 @@ pub const SENT_FILE_BYTES: u64 = 200 << 20;
 // Asking another conversation.
 
 /// The most characters of a question put to Max in another conversation,
-/// and of its answer; a longer one is refused, not cut. Both are said in
-/// two chats.
+/// and of its answer; a longer one is refused, not cut.
 pub const ASK_CHARS: u32 = 2_000;
-/// How many questions put to Max in a conversation are kept there for
-/// their answers: the latest. One pushed out can't be answered any more.
-pub const ASKED_KEPT: usize = 32;
-/// How long a question put to Max is listed for a core that starts
-/// later, which didn't see it asked. It can be answered for as long as
-/// it is kept: nobody waits, so nothing runs out. Until 2026-11-12 the
-/// asker waited this long for its answer, and then heard there was none.
-pub const ASKED_LISTED: Duration = Duration::from_secs(2 * 60 * 60);
 
 // Memory.
 

@@ -22,7 +22,7 @@ pub enum Notice<'a> {
     /// The VM service, on the group's VM.
     Vm { text: &'a str },
     /// Max in another conversation asks Max here: `answer` names
-    /// `number` to answer it.
+    /// `number` to answer it, while this core runs.
     Asked {
         number: u32,
         from: &'a Peer,
@@ -67,7 +67,7 @@ impl Notice<'_> {
                 question,
             } => {
                 format!(
-                    "[ask#{number} 问] {from}\n{}\n（那个会话的 Max 问你的：用 answer 回答，to 填 {number}。它没在等：你答了它才会收到，不答它就什么也收不到。这个问题和你的回答都不会发到这边的聊天里）",
+                    "[ask#{number} 问] {from}\n{}\n（那个会话的 Max 问你的：用 answer 回答，to 填 {number}，就在这一轮里答。这一轮结束还没答，它会收到一句没答成，要不要再问由它那边定。这个问题和你的回答都不会发到这边的聊天里）",
                     fitted(question, single),
                 )
             }

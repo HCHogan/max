@@ -94,7 +94,6 @@ async fn a_core_sees_the_tail_and_its_trigger(pool: PgPool) {
         window: 100_000,
         cleared_upto: None,
         memory: String::new(),
-        asked: Vec::new(),
         now: at(5),
         offset: offset(),
     };
@@ -164,7 +163,6 @@ async fn the_tail_is_cut_at_a_mark_that_stays(pool: PgPool) {
         window: 800,
         cleared_upto: None,
         memory: String::new(),
-        asked: Vec::new(),
         now: at(20),
         offset: offset(),
     };
@@ -311,7 +309,6 @@ async fn the_trigger_and_what_it_quotes_show_their_pictures(pool: PgPool) {
         // The first picture is cleared from the tail, so it is quoted.
         cleared_upto: Some(ids[0]),
         memory: String::new(),
-        asked: Vec::new(),
         now: at(3),
         offset: offset(),
     };
@@ -405,7 +402,6 @@ async fn a_turn_starts_with_the_first_call_of_the_turn_before(pool: PgPool) {
         window: 100_000,
         cleared_upto: None,
         memory: String::new(),
-        asked: Vec::new(),
         now: at(30),
         offset: offset(),
     };

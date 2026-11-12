@@ -4,7 +4,7 @@
 //! docs/rust-rewrite.md.
 
 use max_core::ids::ConversationId;
-use max_core::limits::{ASK_CHARS, ASKED_KEPT, ASKED_LISTED};
+use max_core::limits::ASK_CHARS;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -66,7 +66,7 @@ impl Tool for Ask {
             "Asks Max in another conversation (another group, or a private chat) a question. Only those listed under [能问的会话] can be asked; to is the number, 9 for c#9. With no such block in the context, nobody can be asked from here.\n  \
             Max there answers by its own rules, with its own records, memory and tools; whether to answer and how much is its to decide. It doesn't see this conversation, nor you its, so question has to carry the background and what is asked in full, in at most {ASK_CHARS} characters; a [mention#…], a message number or a picture's handle from here means nothing there: say it with names and words.\n  \
             Neither the question nor the answer is sent to either chat; only the two Maxes see them. The people here don't know you asked: whether to say so, and how to pass the answer on, is yours to decide.\n  \
-            Returns {{ asked: \"c#9 <name>\" }} at once, and you go on talking. When Max there answers, the answer appears among your new messages as [回答] c#9 <name>, with what you asked; it may ask its own people first, so that can take a while. If it can't be asked just now (it is stopped there, or Max is restarting), you hear at once, as [没答成] and why. Nothing waits for the answer and nothing times out: if it never answers, you hear nothing more, and may ask again or go on without. A background agent of yours asks through the same tool, as anything in the VM does, and the answer comes to you: tell it what was answered with max-agent steer."
+            Returns {{ asked: \"c#9 <name>\" }} at once, and you go on talking. When Max there answers, the answer appears among your new messages as [回答] c#9 <name>, with what you asked; it may ask its own people first, so that can take a while. If no answer comes, you hear that too, as [没答成] and why: it can't be asked just now (it is stopped there, or Max is restarting), or its turn ended without an answer, as when its people didn't say in time. Whether to ask again then is for you and the people here to judge; nothing asks again by itself. A background agent of yours asks through the same tool, as anything in the VM does, and the answer comes to you: tell it what was answered with max-agent steer."
         )
     }
 
@@ -92,9 +92,8 @@ impl Tool for Answer {
     fn guide() -> String {
         format!(
             "Answers a question Max in another conversation asked of you, when your new messages have [ask#5 问] c#7 <name> and the question. to is that number, 5 for ask#5, and text is the answer, at most {ASK_CHARS} characters. What a background agent of yours asks you, [max-agent-3 问], is not answered with this but with max-agent steer.\n  \
-            Another conversation's Max is not anyone here: it doesn't see this conversation, only your text. What may be said, and how much, is yours to judge by the rules and memory of this conversation; you may ask the people here first and answer once you know. The asker doesn't wait: it hears only what you answer, so if you'd rather not say, answer that, or it hears nothing at all.\n  \
-            Neither the question nor your answer is sent to this chat, so the people here don't know anyone asked: whether to tell them is yours to decide. A question still unanswered when this turn ends is listed under [等你回答的问题] in the next turns, for {} hours. A question is answered once, and the latest {ASKED_KEPT} asked here can be: for one answered already, older than those, or asked before Max last restarted, the call fails and nothing is sent. Returns whom it went to: {{ to: \"c#7 <name>\" }}.",
-            ASKED_LISTED.as_secs() / 3600,
+            Another conversation's Max is not anyone here: it doesn't see this conversation, only your text. What may be said, and how much, is yours to judge by the rules and memory of this conversation; you may ask the people here first and answer once you know. If you'd rather not say, answer that.\n  \
+            Answer in this turn: a question still unanswered when the turn ends can't be answered any more, and the asker hears that it wasn't, and may ask again. Neither the question nor your answer is sent to this chat, so the people here don't know anyone asked: whether to tell them is yours to decide. A question is answered once: for one answered already, or asked in an earlier turn, the call fails and nothing is sent. Returns whom it went to: {{ to: \"c#7 <name>\" }}."
         )
     }
 

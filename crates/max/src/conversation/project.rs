@@ -33,9 +33,6 @@ pub struct Projection<'a> {
     pub cleared_upto: Option<MessageId>,
     /// Max's memory file, as the core is shown it.
     pub memory: String,
-    /// The questions other conversations still wait on, asked before this
-    /// core started: a line each.
-    pub asked: Vec<String>,
     pub now: DateTime<Utc>,
     pub offset: FixedOffset,
 }
@@ -158,7 +155,6 @@ impl Projection<'_> {
             now: self.now,
             roster: roster_lines(conn, self.place, &roster, project::roster_line).await?,
             askable: askable.iter().map(Peer::to_string).collect(),
-            asked: self.asked,
             memory: self.memory,
             quoted: quoted_text,
             first: first_text,
