@@ -231,6 +231,9 @@
               inherit pkgs;
               module = self.nixosModules.maxx;
             };
+            # What Max runs in a guest, as units: no VM inside the test
+            # machine, so this one runs wherever the module's does.
+            jobs = import ./nix/tests/jobs.nix { inherit pkgs; };
           };
 
           # These boot VMs inside the test machine, so they need KVM in it:

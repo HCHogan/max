@@ -41,6 +41,9 @@ let
   wake = import ./max-wake.nix { inherit pkgs runner; };
 in
 {
+  # Max's calls and background commands, as units.
+  imports = [ ./jobs.nix ];
+
   system.stateVersion = "26.05";
   networking.hostName = "max";
 
