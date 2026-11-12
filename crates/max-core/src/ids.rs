@@ -47,23 +47,21 @@ impl fmt::Display for CallId {
 }
 
 /// What runs or waits in a conversation's background, as Max is shown it:
-/// a background agent, `agent#3`; a background command of `shell`'s,
-/// `shell#4`; a question between Max here and Max in another
-/// conversation, `ask#5`, whichever asked. Each kind is numbered on its
+/// a background agent, `agent#3`; a question between Max here and Max in
+/// another conversation, `ask#5`, whichever asked. Each kind is numbered on its
 /// own, within the conversation while max runs, so the name says what it
 /// is and what may be done with it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(into = "String", try_from = "String")]
 pub enum Handle {
     Agent(u32),
-    Shell(u32),
     Ask(u32),
 }
 
 impl Handle {
     pub fn number(self) -> u32 {
         match self {
-            Handle::Agent(number) | Handle::Shell(number) | Handle::Ask(number) => number,
+            Handle::Agent(number) | Handle::Ask(number) => number,
         }
     }
 }
@@ -72,7 +70,6 @@ impl fmt::Display for Handle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let kind = match self {
             Handle::Agent(_) => "agent",
-            Handle::Shell(_) => "shell",
             Handle::Ask(_) => "ask",
         };
         write!(f, "{kind}#{}", self.number())
@@ -81,7 +78,7 @@ impl fmt::Display for Handle {
 
 /// Text that isn't a handle.
 #[derive(Debug, thiserror::Error)]
-#[error("{0} isn't a handle: write agent#3, shell#4 or ask#5")]
+#[error("{0} isn't a handle: write agent#3 or ask#5")]
 pub struct NotAHandle(String);
 
 impl std::str::FromStr for Handle {
@@ -93,7 +90,6 @@ impl std::str::FromStr for Handle {
         let number = number.parse().map_err(|_| not())?;
         match kind {
             "agent" => Ok(Handle::Agent(number)),
-            "shell" => Ok(Handle::Shell(number)),
             "ask" => Ok(Handle::Ask(number)),
             _ => Err(not()),
         }
@@ -120,10 +116,10 @@ mod tests {
 
     #[test]
     fn a_handle_reads_as_it_is_written() {
-        for handle in [Handle::Agent(3), Handle::Shell(4), Handle::Ask(5)] {
+        for handle in [Handle::Agent(3), Handle::Ask(5)] {
             assert_eq!(handle.to_string().parse::<Handle>().unwrap(), handle);
         }
-        assert_eq!(" shell#12 ".parse::<Handle>().unwrap(), Handle::Shell(12));
+        assert_eq!(" ask#12 ".parse::<Handle>().unwrap(), Handle::Ask(12));
         assert_eq!(
             serde_json::to_value(Handle::Agent(3)).unwrap(),
             serde_json::json!("agent#3")
@@ -132,7 +128,7 @@ mod tests {
             let error = text.parse::<Handle>().unwrap_err();
             assert_eq!(
                 error.to_string(),
-                format!("{text} isn't a handle: write agent#3, shell#4 or ask#5")
+                format!("{text} isn't a handle: write agent#3 or ask#5")
             );
         }
     }

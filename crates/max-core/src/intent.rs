@@ -25,7 +25,7 @@ pub enum Reason {
     Direct,
     /// The classifier judged that Max should join in, and said why.
     Judged { note: String },
-    /// A background agent or command ended, an agent asks Max, or a
+    /// A background agent ended, an agent asks Max, or a
     /// question Max asked is answered or won't be: what it says is the
     /// wake's item.
     Job { job: Handle },

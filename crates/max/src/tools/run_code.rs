@@ -28,9 +28,6 @@ pub(super) async fn run_code(
     args: Option<serde_json::Value>,
     limit: Duration,
 ) -> Result<(String, bool)> {
-    let unit = Vm::unit();
-    // The runner has the token from its input.
-    let line = unit_line(&unit, limit, "/work", "exec node /run/max/runner.js", None);
     let input = RunnerInput {
         code,
         args,
@@ -38,66 +35,42 @@ pub(super) async fn run_code(
         tools: &TOOL_NAMES,
     };
     let input = serde_json::to_vec(&input).expect("the runner's input is JSON");
-    let mut split = Split {
-        out: Output::new(vm.work(), format!("{unit}.txt")),
-        err: Output::new(vm.work(), format!("{unit}.log")),
+    let unit = Unit {
+        title: "run_code",
+        workdir: "/work",
+        limit,
+        // The runner has the token from its input.
+        token: None,
+        split: true,
     };
-    let mut running = vm.command(unit, &line, &input).await?;
-    let waited = running.wait_or(&mut split, sleep(limit)).await;
-    split.out.finish().await?;
-    split.err.finish().await?;
-    let result = split.out.shown();
-    let (head, error) = match waited? {
-        Waited::Exited(status) => match status {
-            Some(0) if result.is_empty() => (
-                "the program finished and returned nothing".to_owned(),
-                false,
-            ),
-            Some(0) => (format!("returned:\n{result}"), false),
-            Some(1) => (format!("the program failed:\n{result}"), true),
-            Some(code) => (
-                with(format!("the runner's exit status {code}"), &result),
-                true,
-            ),
-            None => (
-                with(
-                    "the runner has no exit status: it may have been killed".into(),
-                    &result,
-                ),
-                true,
-            ),
-        },
-        Waited::Interrupted(()) => {
-            let stopped = running.stop(vm.connection()).await;
-            let head = format!(
-                "not done in {} seconds; {}",
-                limit.as_secs(),
-                stopping(&stopped)
-            );
-            (with(head, &result), true)
-        }
+    let ended = wait(vm, unit, "exec node /run/max/runner.js", Some(&input)).await?;
+    if let Some(why) = &ended.failed {
+        return Ok((format!("the program didn't run: {}", why.trim()), true));
+    }
+    let result = shown(ended.out.as_ref());
+    let (head, error) = match ended.ran() {
+        Ran::Exited(0) if result.is_empty() => (
+            "the program finished and returned nothing".to_owned(),
+            false,
+        ),
+        Ran::Exited(0) => (format!("returned:\n{result}"), false),
+        Ran::Exited(1) => (format!("the program failed:\n{result}"), true),
+        Ran::Exited(code) => (
+            with(format!("the runner's exit status {code}"), &result),
+            true,
+        ),
+        Ran::OutOfTime => (with(shell::out_of_time(limit), &result), true),
+        Ran::Killed(how) => (
+            with(format!("the runner was ended by {how}"), &result),
+            true,
+        ),
     };
     let mut shown = head;
-    let console = split.err.shown();
+    let console = super::shown(ended.err.as_ref());
     if !console.is_empty() {
         shown.push_str("\nconsole output:\n");
         shown.push_str(&console);
     }
     shown.push_str(&called(&grant.calls()));
     Ok((shown, error))
-}
-
-/// A program's result and console, apart.
-struct Split {
-    out: Output,
-    err: Output,
-}
-
-impl Sink for Split {
-    async fn output(&mut self, stream: Stream, data: &[u8]) -> Result<()> {
-        match stream {
-            Stream::Out => self.out.output(stream, data).await,
-            Stream::Err => self.err.output(stream, data).await,
-        }
-    }
 }

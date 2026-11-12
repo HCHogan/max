@@ -81,12 +81,11 @@ pkgs.testers.runNixOSTest {
     # maxx calls the MCP service from a command, as the program did, and
     # lists the tools.
     assert " (not_found)\nmaxx 退出码 1\n1\n" in shown, shown
-    # A background command's output is in its file while it runs.
-    assert "后台命令：Done\nexit status 0, ran for" in shown, shown
-    # A command someone waits on moves to the background once it has run
-    # a while, and its job's output has what it printed before and after.
-    assert "moved to the background as shell#1," in shown and "Its output so far:\n前台起了\n" in shown, shown
-    assert "转到后台的命令：exit status 0, ran for" in shown and "前台起了\n后台跑完了" in shown, shown
+    # A background command is a unit of the guest's: the call comes back
+    # with its name at once, its output is in its file while it runs, and
+    # the guest tells of its end.
+    assert "It runs in the background as max-job-" in shown, shown
+    assert "后台命令结束的通知：[max-job-" in shown and "exit status 0, ran for" in shown, shown
     # A unit in /work/.max/systemd, started by max-units, with the
     # system's commands on its PATH.
     assert "boot-note.service：active" in shown, shown

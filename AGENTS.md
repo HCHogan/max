@@ -30,6 +30,16 @@ the job part of `client.js`, run `scripts/check-pi-job` in the dev shell
 as well. It runs the pinned pi against a fake host, without real model
 calls.
 
+## The guest's jobs
+
+After changing `nix/max-jobs.sh` or `nix/jobs.nix`, build
+`.#checks.<system>.jobs` for a Linux system (`aarch64-linux` on a Mac
+with a Linux builder): a NixOS test of what Max runs in a VM as units,
+with no VM inside it. What the host makes of a call's line is in
+`crates/max/src/tools.rs`; the two meet only in `max vm-check` and the
+nested test, `.#nestedChecks.x86_64-linux.vm`, which needs nested KVM
+and runs on tank.
+
 ## Queries
 
 max-db's queries are checked at compile time: against the dev database in

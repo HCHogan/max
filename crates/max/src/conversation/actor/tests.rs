@@ -23,7 +23,6 @@ use crate::conversation::{Configured, Question};
 use crate::inbound::{InNode, Quote};
 use crate::job::{Ending, Finished, How};
 use crate::llm::testing::{Answer, Script};
-use crate::tools::Background;
 
 const PATIENCE: Duration = Duration::from_secs(5);
 
@@ -1143,99 +1142,16 @@ async fn a_job_is_steered_listed_and_cancelled(pool: PgPool) {
     assert!(h.turns().await.is_empty());
 }
 
+/// No job model: no agent.
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn a_background_command_is_a_job_that_wakes_max_when_it_ends(pool: PgPool) {
-    let mut h = Harness::start(pool, Group, 300, true, false, None, |actor| {
-        actor.jobs.pretend_command("$ make");
-    })
-    .await;
-    // Numbered on its own: shell#1 isn't agent#1.
-    assert_eq!(
-        h.poster().steer(1, "快点".into()).await.unwrap_err(),
-        "agent#1 isn't running: it ended, was cancelled, or never was"
-    );
-    h.send(from_xiaoming(0, vec![me(), text(" /status")]));
-    let (_, status) = h.said().await;
-    assert!(
-        status.contains("job       shell#1 · 0m · $ make"),
-        "{status}"
-    );
-    h.script.push(Answer::says("编好了"));
-    let finished = Finished {
-        ending: Ending {
-            how: How::Done,
-            text: Some("退出码 0，跑了 3 分 12 秒\nok".to_owned()),
-            unsent: 0,
-        },
-        file: None,
-    };
-    let handle = Handle::Shell(1);
-    h.mailbox.send(Event::JobDone { handle, finished }).unwrap();
-    assert_eq!(h.said().await.1, "编好了");
-    let volatile = h.request_tail(0);
-    assert!(
-        volatile.ends_with("[shell#1 完成] $ make\n退出码 0，跑了 3 分 12 秒\nok\n"),
-        "{volatile}"
-    );
-    h.stop().await;
-}
-
-/// No VMs: no background command; no job model: no job.
-#[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn nothing_starts_without_its_config(pool: PgPool) {
+async fn no_agent_starts_without_its_model(pool: PgPool) {
     let mut h = Harness::new(pool, 300).await;
-    let shell = Background {
-        command: "make".into(),
-        workdir: None,
-        limit: Duration::from_secs(60),
-        unit: "max-1".into(),
-    };
-    assert_eq!(
-        h.poster().shell(shell).await.unwrap_err(),
-        "there are no VMs here, so shell can't run"
-    );
     let start = h
         .poster()
         .agent("查一下".into(), None, "/work".into())
         .await;
     assert_eq!(
         start.unwrap_err(),
-        "no model is configured for background agents"
-    );
-    h.stop().await;
-}
-
-/// Background commands have a limit of their own: with as many running as
-/// it allows, another is refused, but an agent still starts while there
-/// is room for one. It is refused only for the config the harness
-/// doesn't have, which comes after the limits.
-#[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn commands_dont_count_against_agents(pool: PgPool) {
-    let mut h = Harness::start(pool, Group, 300, false, false, None, |actor| {
-        for _ in 0..max_core::limits::COMMANDS_AT_ONCE {
-            actor.jobs.pretend_command("$ make");
-        }
-        for _ in 1..max_core::limits::JOBS_AT_ONCE {
-            actor.jobs.pretend("查票价");
-        }
-    })
-    .await;
-    let shell = Background {
-        command: "make".into(),
-        workdir: None,
-        limit: Duration::from_secs(60),
-        unit: "max-9".into(),
-    };
-    let refused = h.poster().shell(shell).await.unwrap_err();
-    let full = format!(
-        "{} background commands run already",
-        max_core::limits::COMMANDS_AT_ONCE
-    );
-    assert!(refused.starts_with(&full), "{refused}");
-    let poster = h.poster();
-    let start = poster.agent("查一下".into(), None, "/work/max".into());
-    assert_eq!(
-        start.await.unwrap_err(),
         "no model is configured for background agents"
     );
     h.stop().await;
@@ -1456,8 +1372,7 @@ async fn admins_config_the_limits_and_everyone_sees_them(pool: PgPool) {
             "config",
             "this conversation's limits\n\
              idle_window_secs  300\n\
-             call_time_secs    60\n\
-             commands_at_once  8"
+             call_time_secs    60"
         )
     );
     h.send(from_xiaoming(
@@ -1492,7 +1407,7 @@ async fn admins_config_the_limits_and_everyone_sees_them(pool: PgPool) {
         ),
         (
             "job_time_secs 60",
-            "error: no such setting; there are idle_window_secs, call_time_secs, commands_at_once",
+            "error: no such setting; there are idle_window_secs, call_time_secs",
         ),
         (
             "idle_window_secs 1800",
@@ -1531,30 +1446,6 @@ async fn admins_config_the_limits_and_everyone_sees_them(pool: PgPool) {
         .count("select count(overrides->'idle_window_secs') from conversation_settings")
         .await;
     assert_eq!(idle, 0);
-}
-
-#[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn a_conversation_runs_as_many_commands_as_it_set(pool: PgPool) {
-    let h = Harness::start(pool, Group, 300, false, false, None, |actor| {
-        actor
-            .settings
-            .overrides
-            .set(Setting::CommandsAtOnce, Some(2));
-        actor.jobs.pretend_command("$ make");
-        actor.jobs.pretend_command("$ make test");
-    })
-    .await;
-    let shell = Background {
-        command: "make".into(),
-        workdir: None,
-        limit: Duration::from_secs(60),
-        unit: "max-9".into(),
-    };
-    let refused = h.poster().shell(shell).await.unwrap_err();
-    assert!(
-        refused.starts_with("2 background commands run already"),
-        "{refused}"
-    );
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]

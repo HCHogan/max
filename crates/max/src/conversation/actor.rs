@@ -19,8 +19,8 @@ use max_core::render::Mark;
 use max_core::run::{FailReason, Input, Outcome, Run, RunSpec, Step, Wake};
 use max_db::platform::{self, Settings};
 use max_db::{ledger, turns, usage};
+use tokio::sync::broadcast;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use tokio::sync::{broadcast, watch};
 use tokio::task::AbortHandle;
 use tokio::time::{Instant, sleep_until};
 use tracing::{debug, info, warn};
@@ -186,9 +186,6 @@ struct Active {
     /// The snapshot position: the base context is projected from the
     /// rows up to here; later ones are fed, with their pictures.
     from: MessageId,
-    /// Whether someone waits on the run, as [`Run::waited_on`] says, for
-    /// its commands: one they wait on moves to the background.
-    waiting: watch::Sender<bool>,
     /// When the last row the core saw was sent, for date lines; at first,
     /// when the core started.
     last_at: Option<DateTime<Utc>>,
@@ -675,7 +672,6 @@ impl Conversation {
             live: HashSet::new(),
             voice: Voice::default(),
             from,
-            waiting: watch::Sender::new(false),
             last_at: Some(now),
             idle_since: Instant::now(),
             started: Instant::now(),
@@ -690,9 +686,6 @@ impl Conversation {
             let Some(a) = self.core.as_mut() else {
                 return Ok(());
             };
-            let waited_on = a.run.waited_on();
-            a.waiting
-                .send_if_modified(|was| std::mem::replace(was, waited_on) != waited_on);
             if a.run.busy() {
                 return Ok(());
             }
@@ -742,8 +735,7 @@ impl Conversation {
                             ..mcp::Context::new(services, &self.place, caller, pages, call_time)
                         };
                         let mailbox = self.mailbox.clone();
-                        let waiting = a.waiting.subscribe();
-                        a.io.spawn(move |_| tool::call(vms, context, call, task, mailbox, waiting));
+                        a.io.spawn(move |_| tool::call(vms, context, call, task, mailbox));
                     }
                     return Ok(());
                 }

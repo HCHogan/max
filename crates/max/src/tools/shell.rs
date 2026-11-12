@@ -1,295 +1,108 @@
-//! `shell` in a turn: a command the turn waits on, which moves to the
-//! background once someone waits on the turn and it has run a while. See
-//! "Background commands" in docs/rust-rewrite.md.
+//! `shell`: a command the turn waits for, to its end or its limit; and
+//! with `background`, one it doesn't wait for, whose end the guest tells
+//! Max of (`max-jobs start`, `max-notify@`). See "Lifetimes move to
+//! systemd" in docs/rust-rewrite.md.
 
-use super::background::{failed, finished};
-use super::output::OUT;
 use super::*;
 
-/// What the model is shown, and whether the command failed to finish. A
-/// turn's command, `movable`, may move to the background instead, where
-/// it runs on for [`BACKGROUND_TIME`] from its start: the guest is told
-/// so from the start, and max stops it at `limit` while it stays here.
+/// What the model is shown, and whether the command failed to finish.
 pub(super) async fn shell(
     vm: &Vm,
     grant: &Grant,
     command: &str,
     workdir: Option<&str>,
     limit: Duration,
-    movable: Option<Movable>,
 ) -> Result<(String, bool)> {
-    let unit = Vm::unit();
-    let mut output = Output::new(vm.work(), format!("{unit}.txt"));
-    let token = Some(grant.token());
-    let most = match movable {
-        Some(_) => limit.max(BACKGROUND_TIME),
-        None => limit,
+    let unit = Unit {
+        title: &title(command),
+        workdir: &guest_dir(workdir),
+        limit,
+        token: Some(grant.token()),
+        split: false,
     };
-    let running = start_in(vm, unit, command, workdir, token, most).await?;
-    let (begun, deadline) = (Instant::now(), Instant::now() + limit);
-    let ran = match movable {
-        None => wait_until(vm, running, &mut output, deadline).await?,
-        Some(movable) => {
-            let started = Started {
-                running,
-                begun,
-                deadline,
-                moved: begun + most,
-            };
-            match wait_or_move(vm, started, output, command, movable).await? {
-                Kept::Here(ran, kept) => {
-                    output = *kept;
-                    ran
-                }
-                Kept::Moved(mut shown) => {
-                    shown.push_str(&called(&grant.calls()));
-                    return Ok((shown, false));
-                }
-            }
-        }
-    };
-    let shown = output.shown();
-    let (mut shown, error) = match ran {
-        Ran::Exited(status) => (with(exited(status), &shown), false),
-        Ran::OutOfTime(stopped) => {
-            let head = format!(
-                "not done in {} seconds; {}",
-                limit.as_secs(),
-                stopping(&stopped)
-            );
-            (with(head, &shown), true)
-        }
+    let ended = wait(vm, unit, command, None).await?;
+    if let Some(why) = &ended.failed {
+        return Ok((format!("the command didn't run: {}", why.trim()), true));
+    }
+    let output = shown(ended.out.as_ref());
+    let (mut shown, error) = match ended.ran() {
+        Ran::Exited(status) => (with(format!("exit status {status}"), &output), false),
+        Ran::OutOfTime => (with(out_of_time(limit), &output), true),
+        Ran::Killed(how) => (with(format!("ended by {how}"), &output), true),
     };
     shown.push_str(&called(&grant.calls()));
     Ok((shown, error))
 }
 
-/// What lets a turn's command move to the background: whether someone
-/// waits on the turn, and its conversation, which takes the command.
-pub(super) struct Movable {
-    pub(super) waiting: Waiting,
-    pub(super) poster: Poster,
-}
-
-/// A command that has started, and when it must end: here, or once it
-/// has moved.
-struct Started {
-    running: Command,
-    begun: Instant,
-    deadline: Instant,
-    moved: Instant,
-}
-
-/// What a command that could move stops waiting on, besides its end.
-enum Interrupt {
-    OutOfTime,
-    /// It moves.
-    Due,
-}
-
-/// Where a command that could move ended up.
-enum Kept {
-    /// Here, as it ran, with its output.
-    Here(Ran, Box<Output>),
-    /// In the background: what the model is shown.
-    Moved(String),
-}
-
-/// Waits for the command as [`wait_until`] does; but once someone waits
-/// on the turn and it has run [`MOVE_AFTER`], it goes to the conversation
-/// as a background job, if the conversation takes it.
-async fn wait_or_move(
+/// Starts `command` in the background, for at most `limit`: what the
+/// model is told of it. It has no run's token, as it outlives the run:
+/// its `maxx` calls as a program's.
+pub(super) async fn start(
     vm: &Vm,
-    started: Started,
-    mut output: Output,
     command: &str,
-    movable: Movable,
-) -> Result<Kept> {
-    let Started {
-        mut running,
-        begun,
-        deadline,
-        moved,
-    } = started;
-    // Between pieces of output, so that none is half written when the
-    // command moves with its output.
-    let interrupt = async {
-        tokio::select! {
-            () = sleep_until(deadline) => Interrupt::OutOfTime,
-            () = due(movable.waiting, begun) => Interrupt::Due,
-        }
-    };
-    match running.wait_or(&mut output, interrupt).await {
-        Ok(Waited::Interrupted(Interrupt::Due)) => {}
-        waited => {
-            let ran = ended(vm, running, &mut output, waited).await?;
-            return Ok(Kept::Here(ran, Box::new(output)));
-        }
-    }
-    let shown = output.shown();
-    let file = format!("/work/{OUT}/{}", output.name);
-    let (ran, left) = (
-        begun.elapsed(),
-        moved.saturating_duration_since(Instant::now()),
+    workdir: Option<&str>,
+    limit: Duration,
+) -> Result<String> {
+    let unit = Vm::unit();
+    let line = format!(
+        "max-jobs start --unit {unit} --limit {} --title {} --workdir {} -- bash -lc {}",
+        limit.as_secs(),
+        quote(&title(command)),
+        quote(&guest_dir(workdir)),
+        quote(command),
     );
-    let moved = Box::new(Moved {
-        vm: vm.clone(),
-        running,
-        output,
-        deadline: moved,
-        begun,
-        command: command.to_owned(),
-    });
-    match movable.poster.adopt(moved).await {
-        Ok(number) => Ok(Kept::Moved(moved_away(number, ran, left, &file, &shown))),
-        Err((why, Some(moved))) => {
-            info!(why, "a command someone waits on stays in the foreground");
-            let Moved {
-                running,
-                mut output,
-                ..
-            } = *moved;
-            let ran = wait_until(vm, running, &mut output, deadline).await?;
-            Ok(Kept::Here(ran, Box::new(output)))
-        }
-        // Dropped with the conversation, it went to the stopper.
-        Err((why, None)) => Err(eyre!(why)),
-    }
+    vm.ask(&line).await?;
+    Ok(started(&unit, limit))
 }
 
-/// Once someone waits on the turn and the command begun at `begun` has
-/// run [`MOVE_AFTER`]; never, if the turn ends first.
-async fn due(mut waiting: Waiting, begun: Instant) {
-    if waiting.wait_for(|waiting| *waiting).await.is_err() {
-        std::future::pending::<()>().await;
-    }
-    sleep_until(begun + MOVE_AFTER).await;
+/// What the model is told of a background command that started as
+/// `unit`.
+fn started(unit: &str, limit: Duration) -> String {
+    format!(
+        "It runs in the background as {unit}, for at most {}. When it ends, its exit status and \
+         output come back to you as [{unit} 完成]: don't sleep waiting for it, and don't keep \
+         checking. Its output is written to /work/.max/out/{unit}.txt as it runs: to see how far it \
+         is, read the end of that; if it isn't wanted any more, stop it with systemctl stop {unit}.",
+        took(limit)
+    )
 }
 
-/// What the model is shown of a command that moved to the background as
-/// `shell#number`: it had run `ran`, has `left`, and printed `shown` so
-/// far.
-fn moved_away(number: u32, ran: Duration, left: Duration, file: &str, shown: &str) -> String {
-    let shell = Handle::Shell(number);
-    let mut text = format!(
-        "Someone is waiting for you to answer: this command had run {} and wasn't done, so it moved to the background as {shell}, with {} left. {}",
-        took(ran),
-        took(left),
-        follow(shell, file),
-    );
-    if shown.is_empty() {
-        text.push_str(" No output so far.");
-    } else {
-        text.push_str(" Its output so far:\n");
-        text.push_str(shown);
-    }
-    text
+/// What a call at its limit is told.
+pub(super) fn out_of_time(limit: Duration) -> String {
+    format!("not done in {} seconds; it was stopped", limit.as_secs())
 }
 
-/// A turn's command handed to its conversation as a background job, as
-/// someone addressed Max while it ran. It keeps its unit and its output,
-/// and runs on for [`BACKGROUND_TIME`] from its start. Once the call
-/// returns, the run's token is no longer open, and the command's `maxx`
-/// calls as a program, as a background command's does.
-pub struct Moved {
-    vm: Vm,
-    running: Command,
-    output: Output,
-    deadline: Instant,
-    /// When it started, for the job's age...
-    pub begun: Instant,
-    /// ...and what it is, for its title.
-    pub command: String,
-}
-
-impl fmt::Debug for Moved {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Moved")
-            .field("command", &self.command)
-            .finish_non_exhaustive()
-    }
-}
-
-/// Runs a moved command on until it ends or its time is up: how it went,
-/// as for [`background`].
-pub async fn moved(moved: Box<Moved>) -> Finished {
-    let Moved {
-        vm,
-        running,
-        mut output,
-        deadline,
-        begun,
-        ..
-    } = *moved;
-    // Whole from now on, for the model to follow along.
-    if output.file.is_none()
-        && let Err(error) = output.create().await
-    {
-        return failed(format!("{error:#}"));
-    }
-    let ran = wait_until(&vm, running, &mut output, deadline).await;
-    finished(ran, &output, begun, deadline - begun)
+/// A command, as the guest lists it and its notice names it.
+fn title(command: &str) -> String {
+    format!("$ {}", headline(command))
 }
 
 #[cfg(test)]
 mod tests {
-    use std::pin::pin;
-
-    use tokio::time::timeout;
-
     use super::*;
 
-    /// A command moves once someone waits and it has run `MOVE_AFTER`:
-    /// never while nobody waits, nor once the turn has ended.
-    #[tokio::test(start_paused = true)]
-    async fn a_command_moves_once_someone_waits_and_it_has_run_a_while() {
-        let begun = Instant::now();
-        let (someone, waiting) = watch::channel(false);
-        let mut moves = pin!(due(waiting, begun));
-        assert!(timeout(MOVE_AFTER * 2, &mut moves).await.is_err());
-        someone.send_replace(true);
-        assert!(timeout(Duration::ZERO, &mut moves).await.is_ok(), "at once");
-
-        let begun = Instant::now();
-        let (someone, waiting) = watch::channel(false);
-        let mut moves = pin!(due(waiting, begun));
-        let early = Duration::from_secs(3);
-        assert!(timeout(early, &mut moves).await.is_err());
-        someone.send_replace(true);
-        moves.await;
-        assert_eq!(begun.elapsed(), MOVE_AFTER, "not before its time");
-
-        let (someone, waiting) = watch::channel(false);
-        drop(someone);
-        let ended = due(waiting, Instant::now());
-        assert!(timeout(MOVE_AFTER * 2, ended).await.is_err());
-    }
-
     #[test]
-    fn a_moved_command_says_where_it_went() {
-        let (ran, left) = (Duration::from_secs(15), Duration::from_secs(21_585));
-        let file = "/work/.max/out/max-1.txt";
-        let text = moved_away(4, ran, left, file, "编译中\n");
+    fn a_background_command_says_where_it_is_and_how_to_stop_it() {
+        let text = started("max-job-6734-9", Duration::from_secs(6 * 3600));
         assert!(
             text.starts_with(
-                "Someone is waiting for you to answer: this command had run 15 seconds and wasn't \
-                 done, so it moved to the background as shell#4, with 5 hours 59 minutes left. When it ends, \
-                 its exit status and output come back to you as [shell#4 完成]"
+                "It runs in the background as max-job-6734-9, for at most 6 hours 0 minutes. \
+                 When it ends, its exit status and output come back to you as [max-job-6734-9 完成]"
             ),
             "{text}"
         );
         assert!(
-            text.contains("written to /work/.max/out/max-1.txt as it runs"),
+            text.contains("written to /work/.max/out/max-job-6734-9.txt as it runs"),
             "{text}"
         );
         assert!(
-            text.ends_with("stop it with cancel. Its output so far:\n编译中\n"),
+            text.ends_with("stop it with systemctl stop max-job-6734-9."),
             "{text}"
         );
-        let quiet = moved_away(4, ran, left, file, "");
-        assert!(
-            quiet.ends_with("stop it with cancel. No output so far."),
-            "{quiet}"
-        );
+    }
+
+    #[test]
+    fn a_command_is_titled_by_its_first_line() {
+        assert_eq!(title("make -j8\nmake install"), "$ make -j8");
     }
 }

@@ -19,16 +19,17 @@ use russh::{Channel, ChannelMsg};
 use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::UnixStream;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use tokio::time::{Instant, timeout, timeout_at};
+use tokio::time::timeout;
 use tracing::warn;
 
-/// How long the guest has to stop a unit, for [`Command::stop`] and the
-/// stopper each: past the 90 seconds systemd gives a unit from SIGTERM to
-/// SIGKILL, so a guest that answers has ended it by then. One that doesn't
-/// answer leaves it to the stopper, and the turn goes on.
+/// How long the guest has to stop a unit the stopper asks it to: past the
+/// 90 seconds systemd gives a unit from SIGTERM to SIGKILL, so a guest
+/// that answers has ended it by then.
 const STOP_WAIT: Duration = Duration::from_secs(120);
 /// The most of a control command's stderr its error keeps.
 const STDERR_KEPT: usize = 1024;
+/// The most of a control command's answer kept.
+const ANSWER_KEPT: usize = 64 << 10;
 
 pub struct Client;
 
@@ -161,44 +162,6 @@ impl Command {
         }
         Ok(waited)
     }
-
-    /// Stops the unit now, and waits for the channel to close, all in
-    /// `STOP_WAIT`: whether the guest said it stopped. If it didn't, the
-    /// unit goes to the stopper as the command is dropped, and the run that
-    /// stopped it still reports what it got, and that the stop is
-    /// unconfirmed.
-    pub async fn stop(mut self, connection: &Connection) -> Stopped {
-        let deadline = Instant::now() + STOP_WAIT;
-        if let Some(unit) = &self.unit {
-            let error = match timeout_at(deadline, stop(connection, unit)).await {
-                Ok(Ok(())) => None,
-                Ok(Err(error)) => Some(format!("{error:#}")),
-                Err(_) => Some(format!("no answer in {} seconds", STOP_WAIT.as_secs())),
-            };
-            if let Some(error) = error {
-                warn!(%unit, %error, "couldn't stop a command in a VM; the stopper tries again");
-                return Stopped::Unconfirmed(error);
-            }
-        }
-        // The unit is gone; the channel brings the last of what it said.
-        self.unit = None;
-        let drained = async { while self.channel.wait().await.is_some() {} };
-        if timeout_at(deadline, drained).await.is_err() {
-            warn!("a stopped command's channel stayed open");
-        }
-        Stopped::Confirmed
-    }
-}
-
-/// How [`Command::stop`] went.
-#[derive(Debug, PartialEq, Eq)]
-#[must_use]
-pub enum Stopped {
-    /// The guest said the unit stopped, or was gone already.
-    Confirmed,
-    /// It was asked to, but didn't say so, as this says: the unit may
-    /// still run, and the stopper asks again.
-    Unconfirmed(String),
 }
 
 impl Drop for Command {
@@ -340,25 +303,38 @@ pub async fn trim(connection: &Connection) -> Result<()> {
 /// with a status in `fine`, saying how it did end and what it wrote to
 /// stderr, the start of it.
 async fn exec(connection: &Connection, line: &str, fine: &[u32]) -> Result<()> {
+    answered(connection, line, fine).await.map(drop)
+}
+
+/// Runs `line` as root and waits for it to end: what it wrote to stdout,
+/// the start of it, for a command of max's own that answers in a line or
+/// a few. Fails unless it exits with 0, as [`exec`] does.
+pub async fn ask(connection: &Connection, line: &str) -> Result<String> {
+    answered(connection, line, &[0]).await
+}
+
+async fn answered(connection: &Connection, line: &str, fine: &[u32]) -> Result<String> {
     let mut channel = connection.channel_open_session().await?;
     channel.exec(true, line).await?;
     channel.eof().await?;
     let mut status = None;
-    let mut stderr = Vec::new();
+    let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+    let keep = |kept: &mut Vec<u8>, data: &[u8], most: usize| {
+        let room = most.saturating_sub(kept.len());
+        kept.extend_from_slice(&data[..data.len().min(room)]);
+    };
     while let Some(message) = channel.wait().await {
         match message {
             ChannelMsg::ExitStatus { exit_status } => status = Some(exit_status),
-            ChannelMsg::ExtendedData { data, .. } => {
-                let room = STDERR_KEPT.saturating_sub(stderr.len());
-                stderr.extend_from_slice(&data[..data.len().min(room)]);
-            }
+            ChannelMsg::Data { data } => keep(&mut stdout, &data, ANSWER_KEPT),
+            ChannelMsg::ExtendedData { data, .. } => keep(&mut stderr, &data, STDERR_KEPT),
             _ => {}
         }
     }
     let said = String::from_utf8_lossy(&stderr);
     let said = said.trim();
     match status {
-        Some(status) if fine.contains(&status) => Ok(()),
+        Some(status) if fine.contains(&status) => Ok(String::from_utf8_lossy(&stdout).into_owned()),
         Some(status) => bail!("`{line}` exited with {status}: {said}"),
         None => bail!("`{line}` ended with no exit status: {said}"),
     }

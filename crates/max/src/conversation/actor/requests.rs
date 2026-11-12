@@ -19,12 +19,6 @@ impl Conversation {
             } => {
                 let _ = reply.send(self.start_job(task, title, workdir));
             }
-            Request::Shell { shell, reply } => {
-                let _ = reply.send(self.start_command(shell));
-            }
-            Request::Adopt { moved, reply } => {
-                let _ = reply.send(self.adopt(moved));
-            }
             Request::Steer {
                 agent,
                 message,
@@ -74,11 +68,7 @@ impl Conversation {
 /// What a request would have the conversation do.
 fn does(request: &Request) -> Does {
     match request {
-        Request::Agent { .. }
-        | Request::Shell { .. }
-        | Request::Adopt { .. }
-        | Request::Ask { .. }
-        | Request::Wake { .. } => Does::STARTS,
+        Request::Agent { .. } | Request::Ask { .. } | Request::Wake { .. } => Does::STARTS,
         Request::Answer { .. } | Request::Act { .. } => Does::ACTS,
         Request::Steer { .. }
         | Request::Cancel { .. }

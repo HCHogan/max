@@ -48,7 +48,6 @@ fn now() -> Vec<Configured> {
     vec![
         one(Setting::IdleWindowSecs, 1800, 300),
         one(Setting::CallTimeSecs, 60, 60),
-        one(Setting::CommandsAtOnce, 8, 8),
     ]
 }
 
@@ -76,7 +75,6 @@ async fn max_sets_and_resets_its_limits(pool: PgPool) {
         json!({
             "idle_window_secs": { "value": 1800, "default": 300 },
             "call_time_secs": { "value": 60, "default": 60 },
-            "commands_at_once": { "value": 8, "default": 8 },
         })
     );
 
@@ -97,7 +95,7 @@ async fn what_cant_be_set_isnt_asked_for(pool: PgPool) {
         short.message,
         "call_time_secs is either 0 (back to the default) or from 10 to 600"
     );
-    let long = call(&context, json!({ "commands_at_once": 17 }))
+    let long = call(&context, json!({ "call_time_secs": 601 }))
         .await
         .unwrap_err();
     assert_eq!(long.code, "bad_arguments");
@@ -107,7 +105,7 @@ async fn what_cant_be_set_isnt_asked_for(pool: PgPool) {
     assert_eq!(unknown.code, "bad_arguments");
     assert!(events.try_recv().is_err(), "nothing reached the actor");
 
-    let refused = call(&context, json!({ "commands_at_once": 2 }));
+    let refused = call(&context, json!({ "call_time_secs": 30 }));
     let (out, _) = tokio::join!(
         refused,
         answer(

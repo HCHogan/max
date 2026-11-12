@@ -112,7 +112,9 @@ impl Conversation {
     }
 
     /// Ends the running core quietly and stops the jobs, for `/kill` and
-    /// `/stop`, the command `name`: the jobs stopped.
+    /// `/stop`, the command `name`: the jobs of max's own that it stopped.
+    /// The background commands are the guest's units, and it is told to
+    /// stop them: a person's way to stop what runs without asking Max.
     async fn kill(&mut self, committed: &Committed, name: &str) -> Result<Vec<Handle>> {
         // Nothing the model has seen wakes it again, held or not.
         self.seen = self.head;
@@ -120,7 +122,34 @@ impl Conversation {
             let reason = format!("{} ran /{name}", committed.message.sender.name);
             self.end(End::Kill(reason)).await?;
         }
+        self.stop_commands();
         Ok(self.cancel_jobs())
+    }
+
+    /// Has the guest stop every background command, if the VM runs: one
+    /// stopped on request tells nobody. In a task of its own, as the actor
+    /// waits only on the database.
+    fn stop_commands(&mut self) {
+        let Some(vms) = self.shared.vms.clone() else {
+            return;
+        };
+        let conversation = self.place.conversation;
+        self.side.spawn(move |_| async move {
+            let Some(vm) = vms.running(conversation).await else {
+                return;
+            };
+            match vm.ask("max-jobs stop-all").await {
+                Ok(stopped) => {
+                    let stopped: Vec<&str> = stopped.split_whitespace().collect();
+                    if !stopped.is_empty() {
+                        info!(%conversation, ?stopped, "the guest's jobs are stopped");
+                    }
+                }
+                Err(error) => {
+                    warn!(%conversation, error = format!("{error:#}"), "couldn't stop the guest's jobs");
+                }
+            }
+        });
     }
 
     /// `/stop`: `/kill`, and then nothing starts a turn until `/start`,

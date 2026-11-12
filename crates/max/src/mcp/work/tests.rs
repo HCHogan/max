@@ -126,23 +126,3 @@ fn files_are_put_in_place() {
     assert_eq!(put(&work, "../x", "y", &from).unwrap_err().code, "bad_path");
     assert!(listed(&host).is_empty());
 }
-
-#[test]
-fn a_file_is_created_only_where_nothing_is() {
-    let scratch = Scratch::new();
-    let work = scratch.0.join("work");
-    std::fs::create_dir_all(&work).unwrap();
-    let mut file = create(&work, ".max/out", "a.txt").unwrap();
-    file.write_all(b"out").unwrap();
-    assert_eq!(std::fs::read(work.join(".max/out/a.txt")).unwrap(), b"out");
-    let outside = scratch.0.join("host.txt");
-    std::fs::write(&outside, b"host").unwrap();
-    std::os::unix::fs::symlink(&outside, work.join(".max/out/b.txt")).unwrap();
-    for name in ["a.txt", "b.txt"] {
-        assert_eq!(
-            create(&work, ".max/out", name).unwrap_err().code,
-            "bad_path"
-        );
-    }
-    assert_eq!(std::fs::read(&outside).unwrap(), b"host");
-}

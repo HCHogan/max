@@ -25,18 +25,12 @@ pub struct Args {
         description = "seconds a program or a command waits at most for each call of a Max tool; 0 is back to the default"
     )]
     call_time_secs: Option<u64>,
-    #[schemars(
-        range(min = 0, max = *Setting::CommandsAtOnce.range().end()),
-        description = "how many background commands run at once at most; 0 is back to the default"
-    )]
-    commands_at_once: Option<u64>,
 }
 
 #[derive(Serialize, JsonSchema)]
 pub struct Limits {
     idle_window_secs: Shown,
     call_time_secs: Shown,
-    commands_at_once: Shown,
 }
 
 /// A limit as it is now, and what it is when nobody has set it.
@@ -48,7 +42,7 @@ pub struct Shown {
 
 impl Tool for Config {
     const NAME: &'static str = "config";
-    const DESCRIPTION: &'static str = "Shows or sets a few of this chat's settings: how long an idle turn lasts, how long a tool call may take, and how many background commands run at once.";
+    const DESCRIPTION: &'static str = "Shows or sets a few of this chat's settings: how long an idle turn lasts, and how long a tool call may take.";
     const JOB: bool = false;
 
     type Args = Args;
@@ -62,11 +56,9 @@ impl Tool for Config {
         format!(
             "Shows or sets a few of this chat's settings. Without arguments it only shows; one given is set, and 0 puts it back to the default. Returns each one's value now and its default. Whether to change one is yours to judge: when someone asks and the reason holds, or when you do need it; say so briefly afterwards. A group's admins can set them too, with /config, and the last to set one wins.\n  \
             idle_window_secs: how many seconds after you last spoke an idle turn ends ({}). Called again within the window, you still have what this turn found; called after it, a new turn starts and reads from the records again. The default follows the model. In force at once, for this turn too.\n  \
-            call_time_secs: how many seconds a program or a command waits at most for each call of a Max tool, max.video and max.file among them ({}). Raise it when converting a long video or copying a big file runs out of time. In force from the next run_code or shell.\n  \
-            commands_at_once: how many background commands run at once at most ({}). In force at once.",
+            call_time_secs: how many seconds a program or a command waits at most for each call of a Max tool, max.video and max.file among them ({}). Raise it when converting a long video or copying a big file runs out of time. In force from the next run_code or shell.",
             range(Setting::IdleWindowSecs),
             range(Setting::CallTimeSecs),
-            range(Setting::CommandsAtOnce),
         )
     }
 
@@ -80,7 +72,6 @@ impl Tool for Config {
         let given = [
             (Setting::IdleWindowSecs, args.idle_window_secs),
             (Setting::CallTimeSecs, args.call_time_secs),
-            (Setting::CommandsAtOnce, args.commands_at_once),
         ];
         let mut changes = Vec::new();
         for (setting, value) in given {
@@ -113,7 +104,6 @@ impl Tool for Config {
         Ok(Limits {
             idle_window_secs: shown(Setting::IdleWindowSecs)?,
             call_time_secs: shown(Setting::CallTimeSecs)?,
-            commands_at_once: shown(Setting::CommandsAtOnce)?,
         })
     }
 }

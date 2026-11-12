@@ -57,14 +57,12 @@ pub struct Config {
 #[serde(deny_unknown_fields, default)]
 pub struct Limits {
     pub call_time_secs: u64,
-    pub commands_at_once: u64,
 }
 
 impl Default for Limits {
     fn default() -> Self {
         Self {
             call_time_secs: limits::CALL_TIME.as_secs(),
-            commands_at_once: limits::COMMANDS_AT_ONCE as u64,
         }
     }
 }
@@ -75,7 +73,6 @@ impl Limits {
         match setting {
             Setting::IdleWindowSecs => None,
             Setting::CallTimeSecs => Some(self.call_time_secs),
-            Setting::CommandsAtOnce => Some(self.commands_at_once),
         }
     }
 
@@ -867,10 +864,14 @@ mod tests {
         assert_eq!(config.limits.call_time_secs, 60);
         let config = with_llm(&format!("{database}\n[limits]\ncall_time_secs = 120")).unwrap();
         assert_eq!(config.limits.call_time_secs, 120);
-        assert_eq!(config.limits.commands_at_once, 8);
-        let error = with_llm(&format!("{database}\n[limits]\ncommands_at_once = 0")).unwrap_err();
+        let error = with_llm(&format!("{database}\n[limits]\ncall_time_secs = 5")).unwrap_err();
         assert!(
-            format!("{error:#}").contains("commands_at_once is 0, out of 1..=16"),
+            format!("{error:#}").contains("call_time_secs is 5, out of 10..=600"),
+            "{error:#}"
+        );
+        let error = with_llm(&format!("{database}\n[limits]\ncommands_at_once = 8")).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("unknown field `commands_at_once`"),
             "{error:#}"
         );
         let error = with_llm(&format!("{database}\n[limits]\nidle_window_secs = 600")).unwrap_err();

@@ -21,8 +21,7 @@ use crate::tokens;
 pub enum Notice<'a> {
     /// The classifier judged that Max should join in, and why.
     Judged { note: &'a str },
-    /// An agent or a command ended: how, and the agent's last words or
-    /// the command's output; the whole is in its file.
+    /// An agent ended: how, and its last words; the whole is in its file.
     Ended {
         handle: Handle,
         title: &'a str,

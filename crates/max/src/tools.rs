@@ -1,69 +1,51 @@
 //! What the model's tool calls do; see "Tools and codemode". Both run in the
-//! group's VM: `shell` a command, `run_code` a program in the guest's
-//! runner. Both call Max's tools through the MCP service as the run, and
-//! can show the model pictures and videos after their result: the runner's
-//! SDK, and `maxx` from a command, with the token in MAXX_TOKEN.
+//! group's VM, each as a unit of the guest's own that `max-jobs` starts and
+//! sees end (nix/max-jobs.sh): `shell` a command, `run_code` a program in
+//! the guest's runner. A call waits for its unit to end, or for the unit's
+//! limit to end it; `shell` with `background` starts one and doesn't wait,
+//! and the guest tells Max when it ends. A unit is one or the other from
+//! its start. See "Lifetimes move to systemd" in docs/rust-rewrite.md.
 //!
-//! A turn's command that someone waits on moves to the background; see
-//! "Background commands" in docs/rust-rewrite.md.
+//! Both call Max's tools through the MCP service as the run, and can show
+//! the model pictures and videos after their result: the runner's SDK, and
+//! `maxx` from a command, with the token in MAXX_TOKEN.
 
-use std::collections::{BTreeMap, VecDeque};
-use std::fmt;
-use std::path::{Path, PathBuf};
+use std::collections::BTreeMap;
 use std::sync::LazyLock;
 use std::time::Duration;
 
-use color_eyre::eyre::{Result, eyre};
-use max_core::ids::{ConversationId, Handle};
+use color_eyre::eyre::{Result, WrapErr, bail};
 use max_core::item::{Part, ToolOutput};
 use max_core::project::{PICTURE_TOKENS, VIDEO_TOKENS_PER_SECOND};
 use max_core::tools::Tool;
-use serde::Serialize;
-use tokio::fs;
-use tokio::io::AsyncWriteExt;
-use tokio::sync::watch;
-use tokio::time::{Instant, sleep, sleep_until};
+use serde::{Deserialize, Serialize};
+use tokio::time::{Instant, sleep};
 use tracing::info;
 
-use crate::conversation::Poster;
-use crate::job::{Ending, Finished, How};
 use crate::mcp::{self, Grant};
 use crate::tokens;
-use crate::vm::ssh::{Command, Sink, Stopped, Stream, Waited, quote};
+use crate::vm::ssh::{Sink, Stream, Waited, quote};
 use crate::vm::{Vm, Vms};
-use max_core::limits::{
-    BACKGROUND_TIME, BACKGROUND_TIME_MAX, MOVE_AFTER, RUN_TIME, RUN_TIME_MAX, SHOWN_BYTES,
-};
+use max_core::limits::{BACKGROUND_TIME, BACKGROUND_TIME_MAX, RUN_TIME, RUN_TIME_MAX, SHOWN_BYTES};
 
-mod background;
-mod output;
 mod run_code;
 mod shell;
 
-use self::background::started;
-pub use self::background::{Background, background};
-use self::output::Output;
 use self::run_code::run_code;
-use self::shell::{Movable, shell};
-pub use self::shell::{Moved, moved};
+use self::shell::shell;
 
-/// The guest stops the unit itself a little after max would have.
+/// How long past a call's limit max waits for the guest to say how the
+/// unit ended: the guest ends it at the limit, and one that says nothing
+/// by then has stopped answering.
 const GUEST_MARGIN: Duration = Duration::from_secs(30);
-
-/// Whether someone waits on the turn a tool call is in: they addressed
-/// Max since its last model call. A command they wait on moves to the
-/// background.
-pub type Waiting = watch::Receiver<bool>;
+/// The most of what `max-jobs` writes that is kept: a call's line has
+/// what is shown of two outputs, each character of which may be written
+/// as six.
+const LINE_KEPT: usize = 16 * SHOWN_BYTES;
 
 /// Runs `tool` for a call from `context`'s conversation, and logs how it
-/// went: what a task took in steps, and how many failed. A turn's call
-/// has `waiting`.
-pub async fn run(
-    tool: Tool,
-    vms: Option<&Vms>,
-    context: mcp::Context,
-    waiting: Option<Waiting>,
-) -> ToolOutput {
+/// went: what a task took in steps, and how many failed.
+pub async fn run(tool: Tool, vms: Option<&Vms>, context: mcp::Context) -> ToolOutput {
     let conversation = context.place.conversation;
     let (name, browser) = match &tool {
         Tool::RunCode { code, .. } => ("run_code", browses(code)),
@@ -73,7 +55,7 @@ pub async fn run(
         Tool::Shell { .. } => ("shell", false),
     };
     let started = Instant::now();
-    let (output, calls) = call(tool, vms, context, waiting).await;
+    let (output, calls) = call(tool, vms, context).await;
     info!(
         %conversation,
         tool = name,
@@ -112,7 +94,6 @@ async fn call(
     tool: Tool,
     vms: Option<&Vms>,
     context: mcp::Context,
-    waiting: Option<Waiting>,
 ) -> (ToolOutput, BTreeMap<String, (u32, u32)>) {
     let text = |text: String, error| {
         let tokens = tokens::count(&text);
@@ -121,6 +102,14 @@ async fn call(
     let (name, timeout_ms) = match &tool {
         Tool::RunCode { timeout_ms, .. } => ("run_code", *timeout_ms),
         Tool::Shell { timeout_ms, .. } => ("shell", *timeout_ms),
+    };
+    let Some(vms) = vms else {
+        let shown = text(format!("there are no VMs here, so {name} can't run"), true);
+        return (shown, BTreeMap::new());
+    };
+    let vm = match vms.get(context.place.conversation).await {
+        Ok(vm) => vm,
+        Err(error) => return (text(error, true), BTreeMap::new()),
     };
     if let Tool::Shell {
         command,
@@ -132,23 +121,16 @@ async fn call(
         let limit = timeout_ms
             .map_or(BACKGROUND_TIME, Duration::from_millis)
             .clamp(Duration::from_secs(1), BACKGROUND_TIME_MAX);
-        let (shown, error) = started(&context, command, workdir, limit).await;
-        return (text(shown, error), BTreeMap::new());
-    }
-    let Some(vms) = vms else {
-        let shown = text(format!("there are no VMs here, so {name} can't run"), true);
+        let started = shell::start(&vm, &command, workdir.as_deref(), limit).await;
+        let shown = match started {
+            Ok(shown) => text(shown, false),
+            Err(error) => text(format!("the command didn't start: {error:#}"), true),
+        };
         return (shown, BTreeMap::new());
-    };
-    let vm = match vms.get(context.place.conversation).await {
-        Ok(vm) => vm,
-        Err(error) => return (text(error, true), BTreeMap::new()),
-    };
+    }
     let limit = timeout_ms
         .map_or(RUN_TIME, Duration::from_millis)
         .clamp(Duration::from_secs(1), RUN_TIME_MAX);
-    let movable = waiting
-        .zip(context.caller.poster().cloned())
-        .map(|(waiting, poster)| Movable { waiting, poster });
     let context = mcp::Context {
         work: Some(vm.work().to_owned()),
         ..context
@@ -158,10 +140,7 @@ async fn call(
         Tool::RunCode { code, args, .. } => run_code(&vm, &grant, &code, args, limit).await,
         Tool::Shell {
             command, workdir, ..
-        } => {
-            let workdir = workdir.as_deref();
-            shell(&vm, &grant, &command, workdir, limit, movable).await
-        }
+        } => shell(&vm, &grant, &command, workdir.as_deref(), limit).await,
     };
     let mut output = match ran {
         Ok((shown, error)) => text(shown, error),
@@ -177,80 +156,149 @@ async fn call(
     (output, grant.calls())
 }
 
-/// The systemd-run line that runs `command` as the unit `unit`, at most
-/// `limit`, with the run's `token` for maxx; the guest stops it itself a
-/// little after max would have. systemd-run would also set the terminal's
-/// title.
-fn unit_line(
-    unit: &str,
+/// A call's unit, as `max-jobs run` is asked for it.
+struct Unit<'a> {
+    /// What it is, for the guest's list.
+    title: &'a str,
+    /// Its directory in the guest.
+    workdir: &'a str,
+    /// The guest ends it then.
     limit: Duration,
-    workdir: &str,
-    command: &str,
-    token: Option<&str>,
-) -> String {
-    let token = token
-        .map(|token| format!(" --setenv=MAXX_TOKEN={}", quote(token)))
-        .unwrap_or_default();
-    format!(
-        "SYSTEMD_ADJUST_TERMINAL_TITLE=0 exec systemd-run --quiet --pipe --wait --collect \
-         --unit={unit} --property=RuntimeMaxSec={} --working-directory={}{token} \
-         -- bash -lc {}",
-        (limit + GUEST_MARGIN).as_secs(),
-        quote(workdir),
-        quote(command),
-    )
+    /// The run's, for the command's own `maxx`; a program has it from its
+    /// input.
+    token: Option<&'a str>,
+    /// Its stderr apart from its stdout.
+    split: bool,
 }
 
-/// The Max tools a program called, for the model to see what happened.
-fn called(calls: &BTreeMap<String, (u32, u32)>) -> String {
-    let each: Vec<String> = calls
-        .iter()
-        .map(|(tool, (succeeded, failed))| match failed {
-            0 => format!("{tool} {succeeded}"),
-            _ => format!("{tool} {} ({failed} failed)", succeeded + failed),
-        })
-        .collect();
-    if each.is_empty() {
-        String::new()
-    } else {
-        format!("\nMax tools called: {}", each.join(", "))
-    }
+/// How a call's unit ended, as `max-jobs run` says in its one line: what
+/// systemd says of the unit, and what the unit wrote.
+#[derive(Debug, Deserialize)]
+struct Ended {
+    /// systemd's result for the unit: `success`, `exit-code`, `timeout`,
+    /// `signal`, `oom-kill`...
+    result: String,
+    /// How its main process ended, `exited` or `killed`...
+    code: String,
+    /// ...and with what: an exit status, or a signal's name.
+    status: String,
+    out: Option<Piece>,
+    err: Option<Piece>,
+    /// Why there was no unit, if there wasn't.
+    failed: Option<String>,
 }
 
-/// How a command in the guest ended.
+/// An output: all of it in `head` while it fits in what is shown; past
+/// that its head and its tail, the whole in `file`, in the guest.
+#[derive(Debug, Deserialize)]
+struct Piece {
+    bytes: usize,
+    head: String,
+    tail: String,
+    file: Option<String>,
+}
+
+/// How a call ended, for what the model is told.
+#[derive(Debug, PartialEq, Eq)]
 enum Ran {
-    /// With its exit status, if the guest sent one.
-    Exited(Option<u32>),
-    /// At its limit, when it was stopped, as this says.
-    OutOfTime(Stopped),
+    Exited(u32),
+    /// The guest ended it at its limit.
+    OutOfTime,
+    /// Something else did, as this says.
+    Killed(String),
 }
 
-/// What the model is told of a command stopped at its limit: that it
-/// stopped only if the guest said so.
-fn stopping(stopped: &Stopped) -> String {
-    match stopped {
-        Stopped::Confirmed => "it was stopped".to_owned(),
-        Stopped::Unconfirmed(why) => {
-            format!("it was told to stop, but the VM didn't confirm ({why}): it may still run")
+impl Ended {
+    fn ran(&self) -> Ran {
+        match (self.result.as_str(), self.code.as_str()) {
+            ("timeout", _) => Ran::OutOfTime,
+            (_, "exited") => match self.status.parse() {
+                Ok(status) => Ran::Exited(status),
+                Err(_) => Ran::Killed(format!("{} ({})", self.result, self.status)),
+            },
+            _ => Ran::Killed(format!("{} ({})", self.result, self.status)),
         }
     }
 }
 
-/// Starts `command` as the unit `unit`, for at most `limit`, which the
-/// guest enforces too; maxx calls as the run whose `token` it has.
-async fn start_in(
-    vm: &Vm,
-    unit: String,
-    command: &str,
-    workdir: Option<&str>,
-    token: Option<&str>,
-    limit: Duration,
-) -> Result<Command> {
-    let workdir = guest_dir(workdir);
-    // systemd-run hands the unit its own output, so 2>&1 merges the
-    // command's.
-    let line = unit_line(&unit, limit, &workdir, command, token) + " 2>&1";
-    vm.command(unit, &line, &[]).await
+impl Piece {
+    fn shown(&self) -> String {
+        let Some(file) = &self.file else {
+            return self.head.clone();
+        };
+        // The guest cut it by bytes, perhaps inside a character.
+        format!(
+            "{}\n… ({} bytes left out here; the whole output is in {file}) …\n{}",
+            self.head.trim_end_matches('\u{fffd}'),
+            self.bytes.saturating_sub(SHOWN_BYTES),
+            self.tail.trim_start_matches('\u{fffd}'),
+        )
+    }
+}
+
+/// What an output shows, if there is one.
+fn shown(piece: Option<&Piece>) -> String {
+    piece.map(Piece::shown).unwrap_or_default()
+}
+
+/// Runs `command` in the guest as a call's unit, with `input` if it reads
+/// any, and waits for it to end: how it did. Dropped while it waits, as
+/// when the turn is killed, the unit goes to the VM's stopper.
+async fn wait(vm: &Vm, unit: Unit<'_>, command: &str, input: Option<&[u8]>) -> Result<Ended> {
+    let name = Vm::unit();
+    let mut line = format!(
+        "exec max-jobs run --unit {name} --limit {} --title {} --workdir {} --shown {SHOWN_BYTES}",
+        unit.limit.as_secs(),
+        quote(unit.title),
+        quote(unit.workdir),
+    );
+    if let Some(token) = unit.token {
+        line.push_str(&format!(
+            " --setenv {}",
+            quote(&format!("MAXX_TOKEN={token}"))
+        ));
+    }
+    if unit.split {
+        line.push_str(" --split");
+    }
+    if input.is_some() {
+        line.push_str(" --input");
+    }
+    line.push_str(&format!(" -- bash -lc {}", quote(command)));
+    let mut running = vm.command(name, &line, input.unwrap_or_default()).await?;
+    let mut said = Said::default();
+    let waited = running.wait_or(&mut said, sleep(unit.limit + GUEST_MARGIN));
+    match waited.await? {
+        Waited::Exited(Some(0)) => serde_json::from_slice(&said.out)
+            .wrap_err_with(|| format!("max-jobs said {:?}", String::from_utf8_lossy(&said.out))),
+        Waited::Exited(status) => bail!(
+            "max-jobs ended with {status:?}: {}",
+            String::from_utf8_lossy(&said.err).trim()
+        ),
+        Waited::Interrupted(()) => bail!(
+            "the VM didn't say how it ended, {} seconds past its limit: it may still run",
+            GUEST_MARGIN.as_secs()
+        ),
+    }
+}
+
+/// What `max-jobs` wrote: its line, and why it failed if it did.
+#[derive(Default)]
+struct Said {
+    out: Vec<u8>,
+    err: Vec<u8>,
+}
+
+impl Sink for Said {
+    async fn output(&mut self, stream: Stream, data: &[u8]) -> Result<()> {
+        let kept = match stream {
+            Stream::Out => &mut self.out,
+            Stream::Err => &mut self.err,
+        };
+        let room = LINE_KEPT.saturating_sub(kept.len());
+        kept.extend_from_slice(&data[..data.len().min(room)]);
+        Ok(())
+    }
 }
 
 /// A command's or an agent's directory in the guest: `dir` if absolute,
@@ -264,49 +312,14 @@ pub fn guest_dir(dir: Option<&str>) -> String {
     }
 }
 
-/// Waits for `running` until `deadline`, its output into `output`; then
-/// it is stopped.
-async fn wait_until(
-    vm: &Vm,
-    mut running: Command,
-    output: &mut Output,
-    deadline: Instant,
-) -> Result<Ran> {
-    let waited = running.wait_or(output, sleep_until(deadline)).await;
-    ended(vm, running, output, waited).await
-}
-
-/// How a command waited for ended, as `waited` says: stopped, if its time
-/// ran out, the only thing besides that a wait ends on here.
-async fn ended<T>(
-    vm: &Vm,
-    running: Command,
-    output: &mut Output,
-    waited: Result<Waited<T>>,
-) -> Result<Ran> {
-    output.finish().await?;
-    match waited? {
-        Waited::Exited(status) => Ok(Ran::Exited(status)),
-        Waited::Interrupted(_) => Ok(Ran::OutOfTime(running.stop(vm.connection()).await)),
+/// What a task or a command is, in a line: the first of it, cut short.
+pub fn headline(task: &str) -> String {
+    let line = task.trim().lines().next().unwrap_or_default();
+    let mut title: String = line.chars().take(30).collect();
+    if line.chars().count() > 30 {
+        title.push('…');
     }
-}
-
-/// How the model hears of a background command, `shell`, writing to
-/// `file`.
-fn follow(shell: Handle, file: &str) -> String {
-    format!(
-        "When it ends, its exit status and output come back to you as [{shell} 完成]: don't sleep \
-         waiting for it, and don't keep checking. Its output is written to {file} as it runs: to \
-         see how far it is, read the end of that; if it isn't wanted any more, stop it with \
-         cancel."
-    )
-}
-
-fn exited(status: Option<u32>) -> String {
-    match status {
-        Some(code) => format!("exit status {code}"),
-        None => "no exit status: the command may have been killed".to_owned(),
-    }
+    title
 }
 
 /// A command's run time, or time left, as the model is told it.
@@ -327,6 +340,22 @@ fn with(head: String, shown: &str) -> String {
     }
 }
 
+/// The Max tools a program called, for the model to see what happened.
+fn called(calls: &BTreeMap<String, (u32, u32)>) -> String {
+    let each: Vec<String> = calls
+        .iter()
+        .map(|(tool, (succeeded, failed))| match failed {
+            0 => format!("{tool} {succeeded}"),
+            _ => format!("{tool} {} ({failed} failed)", succeeded + failed),
+        })
+        .collect();
+    if each.is_empty() {
+        String::new()
+    } else {
+        format!("\nMax tools called: {}", each.join(", "))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -336,6 +365,58 @@ mod tests {
         assert_eq!(took(Duration::from_millis(5400)), "5 seconds");
         assert_eq!(took(Duration::from_secs(192)), "3 minutes 12 seconds");
         assert_eq!(took(Duration::from_secs(21_585)), "5 hours 59 minutes");
+    }
+
+    #[test]
+    fn a_title_is_the_first_line_cut_short() {
+        assert_eq!(headline("  查一下明天的天气\n背景：……"), "查一下明天的天气");
+        let long = "字".repeat(40);
+        assert_eq!(headline(&long), format!("{}…", "字".repeat(30)));
+    }
+
+    #[test]
+    fn a_call_ended_as_systemd_says() {
+        let ended = |result: &str, code: &str, status: &str| Ended {
+            result: result.to_owned(),
+            code: code.to_owned(),
+            status: status.to_owned(),
+            out: None,
+            err: None,
+            failed: None,
+        };
+        assert_eq!(ended("success", "exited", "0").ran(), Ran::Exited(0));
+        assert_eq!(ended("exit-code", "exited", "3").ran(), Ran::Exited(3));
+        assert_eq!(ended("timeout", "killed", "TERM").ran(), Ran::OutOfTime);
+        assert_eq!(
+            ended("oom-kill", "killed", "KILL").ran(),
+            Ran::Killed("oom-kill (KILL)".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_calls_line_is_read_and_a_long_output_shows_its_ends() {
+        let line = r#"{"result":"exit-code","code":"exited","status":"2","seconds":1,
+            "out":{"bytes":3,"head":"hi\n","tail":"","file":null},"err":null,"failed":null}"#;
+        let ended: Ended = serde_json::from_str(line).unwrap();
+        assert_eq!(ended.ran(), Ran::Exited(2));
+        assert_eq!(shown(ended.out.as_ref()), "hi\n");
+        assert_eq!(shown(ended.err.as_ref()), "");
+        let long = Piece {
+            bytes: SHOWN_BYTES + 100,
+            head: "开头\u{fffd}".to_owned(),
+            tail: "\u{fffd}结尾".to_owned(),
+            file: Some("/work/.max/out/max-job-1-2.txt".to_owned()),
+        };
+        assert_eq!(
+            long.shown(),
+            "开头\n… (100 bytes left out here; the whole output is in /work/.max/out/max-job-1-2.txt) …\n结尾"
+        );
+        let refused: Ended =
+            serde_json::from_str(r#"{"result":"","code":"","status":"","seconds":0,"out":null,"err":null,"failed":"there is no directory /nowhere"}"#).unwrap();
+        assert_eq!(
+            refused.failed.as_deref(),
+            Some("there is no directory /nowhere")
+        );
     }
 
     #[test]

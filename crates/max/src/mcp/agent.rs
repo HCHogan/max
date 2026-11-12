@@ -219,10 +219,10 @@ mod tests {
         assert_eq!(agent(json!(" 3 ")).unwrap(), 3);
         assert_eq!(agent(json!(3)).unwrap(), 3);
         assert_eq!(agent(json!("三")).unwrap_err().code, "bad_arguments");
-        let shell = agent(json!("shell#4")).unwrap_err();
+        let question = agent(json!("ask#4")).unwrap_err();
         assert_eq!(
-            shell.message,
-            "shell#4 isn't an agent: only an agent can be steered"
+            question.message,
+            "ask#4 isn't an agent: only an agent can be steered"
         );
     }
 }

@@ -1,9 +1,10 @@
-//! The conversation's background jobs: agents (`agent#3`), `shell`
-//! commands (`shell#4`), and questions put to Max in another conversation
-//! (`ask#5`), Max's or an agent's. Started by its turns, outliving the
-//! core that started them, and waking Max when they end. See
-//! "Background agents", "Background commands" and "Asking another
-//! conversation" in docs/rust-rewrite.md.
+//! The conversation's background jobs: agents (`agent#3`), and questions
+//! put to Max in another conversation (`ask#5`), Max's or an agent's.
+//! Started by its turns, outliving the core that started them, and waking
+//! Max when they end. A background command of `shell`'s is not one: it is
+//! a unit of the guest's, which tells Max of its end itself. See
+//! "Background agents", "Asking another conversation" and "Lifetimes move
+//! to systemd" in docs/rust-rewrite.md.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -16,7 +17,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::*;
 use crate::job::{self, Asking, Finished, Open, Progress, Status};
-use crate::tools::{self, Background, Moved};
+use crate::tools::headline;
 use max_core::limits;
 
 /// The jobs running, by handle.
@@ -32,7 +33,6 @@ pub(super) struct Jobs {
 #[derive(Default)]
 struct Last {
     agent: u32,
-    shell: u32,
     ask: u32,
 }
 
@@ -40,14 +40,13 @@ struct Running {
     title: String,
     started: Instant,
     kind: Kind,
-    /// Dropping it stops the job: the agent's unit, the command's, or the
-    /// wait for an answer.
+    /// Dropping it stops the job: the agent's unit, or the wait for an
+    /// answer.
     _task: Scope,
 }
 
 enum Kind {
     Agent(Agent),
-    Command,
     /// A question put to Max in another conversation: which, and what
     /// was asked, for the core that hears the answer; or for the agent
     /// that asked it, which hears it instead.
@@ -255,71 +254,6 @@ impl Conversation {
         Ok(number)
     }
 
-    /// Runs a `shell` command in the background, as a job of its own: its
-    /// number.
-    pub(super) fn start_command(&mut self, shell: Background) -> Result<u32, String> {
-        self.room_for_command()?;
-        let Some(vms) = self.shared.vms.clone() else {
-            return Err("there are no VMs here, so shell can't run".to_owned());
-        };
-        let conversation = self.place.conversation;
-        let command = shell.command.clone();
-        let work = tools::background(vms, conversation, shell);
-        let number = self.command_job(&command, Instant::now(), work);
-        info!(conversation = %conversation, shell = number, "a background command starts");
-        Ok(number)
-    }
-
-    /// Takes a turn's command someone waits on as a background job of its
-    /// own: its number; or, without room for it, gives it back.
-    pub(super) fn adopt(&mut self, moved: Box<Moved>) -> Result<u32, (String, Box<Moved>)> {
-        if let Err(why) = self.room_for_command() {
-            return Err((why, moved));
-        }
-        let (command, begun) = (moved.command.clone(), moved.begun);
-        let number = self.command_job(&command, begun, tools::moved(moved));
-        info!(conversation = %self.place.conversation, shell = number, "a command someone waits on moves to the background");
-        Ok(number)
-    }
-
-    /// Whether another background command may run now.
-    fn room_for_command(&self) -> Result<(), String> {
-        let most = self.commands_at_once();
-        if self.jobs.commands() >= most {
-            return Err(format!(
-                "{most} background commands run already: wait for one to end, or stop one with cancel"
-            ));
-        }
-        Ok(())
-    }
-
-    /// Runs `work`, `command` begun at `started`, as a job: its number.
-    fn command_job(
-        &mut self,
-        command: &str,
-        started: Instant,
-        work: impl Future<Output = Finished> + Send + 'static,
-    ) -> u32 {
-        let number = self.jobs.next_shell();
-        let mailbox = self.mailbox.clone();
-        let mut task = Scope::new();
-        task.spawn(move |_| async move {
-            let finished = work.await;
-            let _ = mailbox.send(Event::JobDone {
-                handle: Handle::Shell(number),
-                finished,
-            });
-        });
-        let running = Running {
-            title: format!("$ {}", headline(command)),
-            started,
-            kind: Kind::Command,
-            _task: task,
-        };
-        self.jobs.running.insert(Handle::Shell(number), running);
-        number
-    }
-
     /// Waits for the answer to `question`, put to Max in `to` by Max
     /// here or by agent `by`, as a job: its number. The wait ends with the
     /// answer, or with why none comes; withdrawn, nobody is told, and an
@@ -374,12 +308,11 @@ impl Conversation {
     pub(super) fn question_over(&mut self, ask: u32) -> Option<(Peer, String, Option<AgentWaits>)> {
         match self.jobs.running.remove(&Handle::Ask(ask))?.kind {
             Kind::Question { to, question, by } => Some((to, question, by)),
-            Kind::Agent(_) | Kind::Command => None,
+            Kind::Agent(_) => None,
         }
     }
 
-    /// An agent or a command ended: Max hears how, in the running core or
-    /// a new one.
+    /// An agent ended: Max hears how, in the running core or a new one.
     pub(super) async fn job_done(&mut self, handle: Handle, finished: Finished) -> Result<()> {
         if let Handle::Agent(agent) = handle {
             self.agent_over(agent);
@@ -412,7 +345,7 @@ impl Conversation {
             .map(|(handle, running)| {
                 let calls = match &running.kind {
                     Kind::Agent(_) => format!(" · {} calls", running.progress().calls),
-                    Kind::Command | Kind::Question { .. } => String::new(),
+                    Kind::Question { .. } => String::new(),
                 };
                 format!(
                     "{handle} · {}m{calls} · {}",
@@ -461,30 +394,10 @@ impl Jobs {
     }
 }
 
-#[cfg(test)]
-impl Jobs {
-    /// A background command as if started, with nothing behind it.
-    pub(super) fn pretend_command(&mut self, title: &str) {
-        let number = self.next_shell();
-        let running = Running {
-            title: title.to_owned(),
-            started: Instant::now(),
-            kind: Kind::Command,
-            _task: Scope::new(),
-        };
-        self.running.insert(Handle::Shell(number), running);
-    }
-}
-
 impl Jobs {
     fn next_agent(&mut self) -> u32 {
         self.last.agent += 1;
         self.last.agent
-    }
-
-    fn next_shell(&mut self) -> u32 {
-        self.last.shell += 1;
-        self.last.shell
     }
 
     /// Whether `handle` runs, or waits for its answer.
@@ -498,25 +411,17 @@ impl Jobs {
         self.last.ask
     }
 
-    /// The agents running. They and the background commands have a limit
-    /// each; the questions waiting have none.
+    /// The agents running. They have a limit; the questions waiting have
+    /// none.
     fn agents(&self) -> usize {
         let jobs = self.running.values();
         jobs.filter(|running| matches!(running.kind, Kind::Agent(_)))
             .count()
     }
-
-    /// The background commands running.
-    fn commands(&self) -> usize {
-        let jobs = self.running.values();
-        jobs.filter(|running| matches!(running.kind, Kind::Command))
-            .count()
-    }
 }
 
 impl Running {
-    /// An agent's progress; a background command has none to count, nor
-    /// has a question.
+    /// An agent's progress; a question has none to count.
     fn progress(&self) -> Progress {
         match &self.kind {
             Kind::Agent(agent) => agent
@@ -524,7 +429,7 @@ impl Running {
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .clone(),
-            Kind::Command | Kind::Question { .. } => Progress::default(),
+            Kind::Question { .. } => Progress::default(),
         }
     }
 }
@@ -534,30 +439,8 @@ fn over(handle: Handle) -> String {
         Handle::Ask(_) => format!(
             "{handle} isn't waiting for an answer: it was answered, withdrawn or out of time, or never was"
         ),
-        Handle::Agent(_) | Handle::Shell(_) => {
+        Handle::Agent(_) => {
             format!("{handle} isn't running: it ended, was cancelled, or never was")
         }
-    }
-}
-
-/// A title from the task's first line, when none was given.
-fn headline(task: &str) -> String {
-    let line = task.trim().lines().next().unwrap_or_default();
-    let mut title: String = line.chars().take(30).collect();
-    if line.chars().count() > 30 {
-        title.push('…');
-    }
-    title
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_title_defaults_to_the_tasks_first_line() {
-        assert_eq!(headline("  查一下明天的天气\n背景：……"), "查一下明天的天气");
-        let long = "字".repeat(40);
-        assert_eq!(headline(&long), format!("{}…", "字".repeat(30)));
     }
 }

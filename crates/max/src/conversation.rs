@@ -31,7 +31,6 @@ pub use actor::{Conversation, Outgoing, Shared};
 use crate::inbound::Inbound;
 use crate::job;
 use crate::mcp;
-use crate::tools::{Background, Moved};
 
 /// What arrives in an actor's mailbox: everything that happens to a
 /// conversation, in the order the actor handles it.
@@ -68,7 +67,7 @@ pub enum Event {
         /// The turn it comes from; None from a program, outside any turn.
         origin: Option<TurnId>,
     },
-    /// A background agent or command ended.
+    /// A background agent ended.
     JobDone {
         handle: Handle,
         finished: job::Finished,
@@ -162,24 +161,13 @@ pub enum Request {
         workdir: String,
         reply: Reply<u32>,
     },
-    /// Run a `shell` command in the background: its job.
-    Shell {
-        shell: Background,
-        reply: Reply<u32>,
-    },
-    /// Take a turn's command someone waits on as a background job: its
-    /// job, or the command back with why not.
-    Adopt {
-        moved: Box<Moved>,
-        reply: oneshot::Sender<Result<u32, (String, Box<Moved>)>>,
-    },
     /// Tell a running agent something more.
     Steer {
         agent: u32,
         message: String,
         reply: Reply<()>,
     },
-    /// Stop an agent or a command, or withdraw a question.
+    /// Stop an agent, or withdraw a question.
     Cancel { handle: Handle, reply: Reply<()> },
     /// One job's state, or every running one's.
     Status {
@@ -221,10 +209,9 @@ impl Request {
     pub fn refuse(self, why: &str) {
         let why = why.to_owned();
         match self {
-            Request::Agent { reply, .. }
-            | Request::Shell { reply, .. }
-            | Request::Ask { reply, .. } => drop(reply.send(Err(why))),
-            Request::Adopt { moved, reply } => drop(reply.send(Err((why, moved)))),
+            Request::Agent { reply, .. } | Request::Ask { reply, .. } => {
+                drop(reply.send(Err(why)));
+            }
             Request::Steer { reply, .. }
             | Request::Cancel { reply, .. }
             | Request::Act { reply } => drop(reply.send(Err(why))),
@@ -389,11 +376,6 @@ impl Poster {
         self.request(agent).await
     }
 
-    /// Runs a `shell` command in the background: its number, or why not.
-    pub async fn shell(&self, shell: Background) -> Result<u32, String> {
-        self.request(|reply| Request::Shell { shell, reply }).await
-    }
-
     /// Tells agent `agent` something more.
     pub async fn steer(&self, agent: u32, message: String) -> Result<(), String> {
         let steer = |reply| Request::Steer {
@@ -404,7 +386,7 @@ impl Poster {
         self.request(steer).await
     }
 
-    /// Stops `handle`, an agent or a command, or withdraws it, a question.
+    /// Stops `handle`, an agent, or withdraws it, a question.
     pub async fn cancel(&self, handle: Handle) -> Result<(), String> {
         self.request(|reply| Request::Cancel { handle, reply })
             .await
@@ -454,21 +436,6 @@ impl Poster {
     /// forbids it, and a turn that has ended.
     pub async fn act_alone(&self) -> Result<(), String> {
         self.request(|reply| Request::Act { reply }).await
-    }
-
-    /// Hands a turn's command to the conversation as a background job:
-    /// its number; or why not, with the command back, unless the
-    /// conversation is gone with it.
-    pub async fn adopt(&self, moved: Box<Moved>) -> Result<u32, (String, Option<Box<Moved>>)> {
-        let (reply, answer) = oneshot::channel();
-        let gone = || (GONE.to_owned(), None);
-        self.send(Request::Adopt { moved, reply })
-            .map_err(|_| gone())?;
-        match answer.await {
-            Ok(Ok(job)) => Ok(job),
-            Ok(Err((why, moved))) => Err((why, Some(moved))),
-            Err(_) => Err(gone()),
-        }
     }
 
     /// Sends the request `make` builds around where its answer goes, and

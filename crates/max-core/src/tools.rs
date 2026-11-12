@@ -9,9 +9,7 @@ use serde::Deserialize;
 
 use crate::ids::CallId;
 use crate::item::ToolCall;
-use crate::limits::{
-    BACKGROUND_TIME, BACKGROUND_TIME_MAX, MOVE_AFTER, RUN_TIME, RUN_TIME_MAX, SHOWN_BYTES,
-};
+use crate::limits::{BACKGROUND_TIME, BACKGROUND_TIME_MAX, RUN_TIME, RUN_TIME_MAX, SHOWN_BYTES};
 
 #[derive(Debug)]
 pub struct ToolSpec {
@@ -29,7 +27,6 @@ pub static TOOLS: LazyLock<[ToolSpec; 2]> = LazyLock::new(|| {
     let half = shown / 2;
     let background = BACKGROUND_TIME.as_secs() / 3600;
     let background_max = BACKGROUND_TIME_MAX.as_millis();
-    let move_after = MOVE_AFTER.as_secs();
     [
         ToolSpec {
             name: "run_code",
@@ -49,12 +46,10 @@ pub static TOOLS: LazyLock<[ToolSpec; 2]> = LazyLock::new(|| {
                 stderr together. {run} seconds by default, timeout_ms at most {run_max}. An output over \
                 {shown} KiB comes back as {half} KiB of its head and as much of its tail, the whole of it in \
                 the file under /work/.max/out/ that the result names. The command gets no input: run nothing \
-                interactive. With background true it runs in the background and its handle, shell#N, comes \
-                back at once; {background} hours by default, timeout_ms at most {background_max}; when it \
-                ends, its exit status and output come back to you as [shell#N 完成]. If someone addresses you \
-                while a foreground command runs, one that has run {move_after} seconds moves to the background \
-                and runs on as a background command does, {background} hours from its start, and the result \
-                names its shell#N."
+                interactive. A command not done at its limit is stopped. With background true it runs in the \
+                background instead, as a unit of the VM's systemd whose name, max-job-…, comes back at once; \
+                {background} hours by default, timeout_ms at most {background_max}; when it ends, its exit \
+                status and the end of its output come back to you as [max-job-… 完成]."
             ),
             parameters: r#"{"type":"object","properties":{"command":{"type":"string"},"workdir":{"type":"string","description":"/work by default"},"timeout_ms":{"type":"integer","minimum":1},"background":{"type":"boolean","description":"run in the background and tell you when it ends; false by default"}},"required":["command"]}"#,
         },

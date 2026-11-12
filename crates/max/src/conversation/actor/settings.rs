@@ -26,11 +26,6 @@ impl Conversation {
         Duration::from_secs(self.value(Setting::CallTimeSecs))
     }
 
-    /// How many background commands may run at once.
-    pub(super) fn commands_at_once(&self) -> usize {
-        usize::try_from(self.value(Setting::CommandsAtOnce)).unwrap_or(usize::MAX)
-    }
-
     fn value(&self, setting: Setting) -> u64 {
         self.settings
             .overrides
@@ -130,7 +125,7 @@ impl Conversation {
             None => format!("{name} back to the default, {now}"),
         };
         let effect = match setting {
-            Setting::IdleWindowSecs | Setting::CommandsAtOnce => "takes effect now",
+            Setting::IdleWindowSecs => "takes effect now",
             Setting::CallTimeSecs => "takes effect from Max's next program or command",
         };
         Ok(format!("{set}; {effect}"))

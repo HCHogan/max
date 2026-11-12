@@ -123,7 +123,7 @@ pub struct Called {
 }
 
 /// What runs or waits in the background, as `status` shows it: an agent,
-/// a command, or a question asked from here, by Max or an agent.
+/// or a question asked from here, by Max or an agent.
 #[derive(Debug, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct Status {
     pub handle: String,

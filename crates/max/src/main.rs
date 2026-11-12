@@ -4,7 +4,8 @@
 //! program that calls the MCP service, one that opens a tab in the browser
 //! and one that finds the tab as the first left it, calls the MCP service
 //! with maxx from a command, keeps a unit of its own in /work/.max/systemd
-//! and wakes Max with max-wake, and runs a background command.
+//! and wakes Max with max-wake, and runs a background command, whose end
+//! the guest tells it of.
 
 use std::collections::{BTreeSet, HashMap};
 use std::io::{IsTerminal, Write};
@@ -15,22 +16,21 @@ use std::time::Duration;
 use clap::{Parser, Subcommand};
 use color_eyre::config::{HookBuilder, Theme};
 use color_eyre::eyre::{Result, WrapErr, bail};
-use max_core::ids::{ConversationId, EndpointId, IdentityId, PrincipalId, TurnId};
+use max_core::ids::{ConversationId, EndpointId, IdentityId, PrincipalId};
 use max_core::item::{Part, ToolOutput};
 use max_core::message::Platform;
 use max_core::tools::Tool;
 use max_db::PgPool;
 use max_db::platform::{self, Account, ConversationKind};
 use tokio::signal::unix::{SignalKind, signal};
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
 use max::config::{self, Config};
-use max::conversation::{Event, Place, Poster, Request, Shared, Signal};
+use max::conversation::{Place, Shared, Signal};
 use max::dreamer::Dreamer;
 use max::embedding::Embedder;
-use max::job;
 use max::llm::Models;
 use max::mcp;
 use max::media::caption::Captioner;
@@ -46,7 +46,7 @@ use max::scope::Scope;
 use max::search::{self, Search};
 use max::table::{self, Me, Table};
 use max::tools;
-use max::vm::{Vm, Vms};
+use max::vm::Vms;
 use max::worker::Rows;
 
 // Stopping, in order, within systemd's TimeoutStopSec of 60 seconds.
@@ -118,51 +118,6 @@ fn main() -> Result<()> {
 
 /// On the last slot, which a running service takes last; or the
 /// operations network's last.
-/// A turn's command that someone waits on: past `MOVE_AFTER` it moves to
-/// the background, to a conversation of vm-check's own that runs it on,
-/// and its output there has what it printed before and after.
-async fn moving(vms: &Vms, context: mcp::Context) -> [ToolOutput; 2] {
-    let (mailbox, mut events) = mpsc::unbounded_channel();
-    let (done, finished) = oneshot::channel();
-    let mut conversation = Scope::new();
-    conversation.spawn(move |_| async move {
-        while let Some(event) = events.recv().await {
-            let adopt = match event {
-                Event::Request { request, .. } => request,
-                _ => continue,
-            };
-            if let Request::Adopt { moved, reply } = adopt {
-                let _ = reply.send(Ok(1));
-                let _ = done.send(tools::moved(moved).await);
-                return;
-            }
-        }
-    });
-    let context = mcp::Context {
-        caller: mcp::Caller::Turn(Poster::new(mailbox, TurnId(0))),
-        ..context
-    };
-    let (_someone, waiting) = watch::channel(true);
-    let after = max_core::limits::MOVE_AFTER.as_secs() + 3;
-    let shell = Tool::Shell {
-        command: format!("echo 前台起了; sleep {after}; echo 后台跑完了"),
-        workdir: None,
-        timeout_ms: None,
-        background: false,
-    };
-    let out = tools::run(shell, Some(vms), context, Some(waiting)).await;
-    let ran = match tokio::time::timeout(Duration::from_secs(60), finished).await {
-        Ok(Ok(finished)) => {
-            let text = finished.ending.text.unwrap_or_default();
-            let whole = text.contains("前台起了") && text.contains("后台跑完了");
-            let done = finished.ending.how == job::How::Done && whole;
-            ToolOutput::text(format!("转到后台的命令：{text}"), !done, 0)
-        }
-        _ => ToolOutput::text("命令没转到后台".to_owned(), true, 0),
-    };
-    [out, ran]
-}
-
 fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
     let mut config = Config::load(path)?;
     logging(&config);
@@ -192,9 +147,11 @@ fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
         let (signals, mut heard) = mpsc::unbounded_channel();
         let vms = Vms::start(vm, &mut services, signals, Arc::default())?;
         // What maxx wake would wake Max with, answered here; the other
-        // calls of programs aren't.
+        // calls of programs aren't. A background command's end comes the
+        // same way, from the guest: `told` has each as it comes.
         let woken = Arc::new(Mutex::new(Vec::new()));
         let noted = Arc::clone(&woken);
+        let (tell, mut told) = mpsc::unbounded_channel::<String>();
         services.spawn(move |_| async move {
             while let Some(signal) = heard.recv().await {
                 let (text, reply) = match signal {
@@ -218,7 +175,8 @@ fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
                 noted
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
-                    .push(text);
+                    .push(text.clone());
+                let _ = tell.send(text);
                 if let Some(reply) = reply {
                     let _ = reply.send(Ok(serde_json::json!({ "said": "vm-check 收到了" })));
                 }
@@ -296,30 +254,40 @@ fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
         ];
         let mut outs = Vec::new();
         for tool in steps {
-            outs.push(tools::run(tool, Some(&vms), context()?, None).await);
+            outs.push(tools::run(tool, Some(&vms), context()?).await);
         }
-        // A background command, as a conversation's actor runs one; its
-        // output is in its file before it ends. It has no run's token, as
-        // a unit hasn't: maxx calls as a program's.
-        let unit = Vm::unit();
-        let file = format!("/work/.max/out/{unit}.txt");
-        let shell = tools::Background {
-            command: format!(
-                "echo 后台起了; sleep 1; grep -c 后台起了 {file}; max-wake 'vm-check 叫醒了自己'"
-            ),
+        // A background command: a unit of the guest's, which max doesn't
+        // wait for. Its output is in its file before it ends; it has no
+        // run's token, so its maxx calls as a program's; and the guest
+        // tells of its end with a wake of its own.
+        let background = Tool::Shell {
+            command: "echo 后台起了; sleep 1; \
+                      grep -c 后台起了 \"$(ls -t /work/.max/out/max-job-*.txt | head -1)\"; \
+                      max-wake 'vm-check 叫醒了自己'"
+                .into(),
             workdir: None,
-            limit: Duration::from_secs(60),
-            unit,
+            timeout_ms: Some(60_000),
+            background: true,
         };
-        let finished = tools::background(vms.clone(), ConversationId(0), shell).await;
-        let text = format!(
-            "后台命令：{:?}\n{}",
-            finished.ending.how,
-            finished.ending.text.unwrap_or_default()
-        );
-        let done = finished.ending.how == job::How::Done;
-        outs.push(ToolOutput::text(text, !done, 0));
-        outs.extend(moving(&vms, context()?).await);
+        outs.push(tools::run(background, Some(&vms), context()?).await);
+        let ended = async {
+            while let Some(text) = told.recv().await {
+                if text.starts_with("[max-job-") {
+                    return Some(text);
+                }
+            }
+            None
+        };
+        let notice = tokio::time::timeout(Duration::from_secs(60), ended).await;
+        outs.push(match notice.ok().flatten() {
+            Some(text) => {
+                let whole = text.contains("完成] $ echo 后台起了")
+                    && text.contains("exit status 0")
+                    && text.contains("后台起了\n1\n");
+                ToolOutput::text(format!("后台命令结束的通知：{text}"), !whole, 0)
+            }
+            None => ToolOutput::text("后台命令结束了没人说".to_owned(), true, 0),
+        });
         let woken = woken
             .lock()
             .unwrap_or_else(PoisonError::into_inner)

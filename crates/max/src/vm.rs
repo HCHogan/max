@@ -53,7 +53,7 @@ pub fn work(dir: &Path, conversation: ConversationId) -> PathBuf {
     dir.join(conversation.0.to_string()).join("work")
 }
 
-/// What a VM's own route asks of the service.
+/// What a VM's own route asks of the service, and what its tasks tell it.
 enum Internal {
     /// max-units ran: the group has `count` units.
     Units {
@@ -61,6 +61,9 @@ enum Internal {
         count: u32,
         reply: oneshot::Sender<Result<String, String>>,
     },
+    /// The guest says something of Max's runs in it: a background command,
+    /// which no call of max's waits for.
+    Busy { conversation: ConversationId },
 }
 
 /// How long a VM may idle, by the configuration.
@@ -81,6 +84,8 @@ pub struct Vms {
 
 struct Request {
     conversation: ConversationId,
+    /// Whether to start it if it isn't running.
+    boot: bool,
     reply: oneshot::Sender<Result<Vm, String>>,
 }
 
@@ -152,14 +157,24 @@ impl Vms {
     /// The conversation's VM, started if it isn't running; or why there
     /// isn't one.
     pub async fn get(&self, conversation: ConversationId) -> Result<Vm, String> {
+        self.ask(conversation, true).await
+    }
+
+    /// The conversation's VM if it runs: nothing is started for the
+    /// asking.
+    pub async fn running(&self, conversation: ConversationId) -> Option<Vm> {
+        self.ask(conversation, false).await.ok()
+    }
+
+    async fn ask(&self, conversation: ConversationId, boot: bool) -> Result<Vm, String> {
         let (reply, answer) = oneshot::channel();
         let gone = || "the VM service has stopped".to_owned();
-        self.requests
-            .send(Request {
-                conversation,
-                reply,
-            })
-            .map_err(|_| gone())?;
+        let request = Request {
+            conversation,
+            boot,
+            reply,
+        };
+        self.requests.send(request).map_err(|_| gone())?;
         answer.await.map_err(|_| gone())?
     }
 }
@@ -177,11 +192,18 @@ impl Vm {
         Command::open(&self.connection, unit, line, self.stops.clone()).await
     }
 
-    /// A name for a command's unit. A VM doesn't outlive max, but the
-    /// command's output files in /work are named after the unit, and they
-    /// do; so the name says which start of max it is from, and a file of
-    /// an earlier one isn't in the way. A count alone began again at every
-    /// restart, and a long output then failed: its file was already there.
+    /// Runs `line`, a command of max's own that is no unit, and waits for
+    /// it: what it wrote to stdout.
+    pub async fn ask(&self, line: &str) -> Result<String> {
+        ssh::ask(&self.connection, line).await
+    }
+
+    /// A name for a command's unit, one `max-jobs` takes. A VM doesn't
+    /// outlive max, but the command's output files in /work are named
+    /// after the unit, and they do; so the name says which start of max
+    /// it is from, and a file of an earlier one isn't in the way. A count
+    /// alone began again at every restart, and a long output then failed:
+    /// its file was already there.
     pub fn unit() -> String {
         static NEXT: AtomicU64 = AtomicU64::new(1);
         static STARTED: LazyLock<u64> = LazyLock::new(|| {
@@ -190,7 +212,7 @@ impl Vm {
                 .map_or(0, |since| since.as_secs())
         });
         format!(
-            "max-{:x}-{}",
+            "max-job-{:x}-{}",
             *STARTED,
             NEXT.fetch_add(1, Ordering::Relaxed)
         )
@@ -227,6 +249,8 @@ struct Running {
     work: Arc<PathBuf>,
     lent: Arc<()>,
     idle_since: Instant,
+    /// When the guest last said something of Max's runs in it.
+    busy: Option<Instant>,
     /// When the guest last dropped its caches, or booted.
     trimmed: Instant,
 }
@@ -244,6 +268,12 @@ impl Running {
 
     fn lent(&self) -> bool {
         Arc::strong_count(&self.lent) > 1
+    }
+
+    /// Whether the guest said, at one of the last two times it was asked,
+    /// that something of Max's runs in it.
+    fn busy(&self) -> bool {
+        self.busy.is_some_and(|said| said.elapsed() < 2 * SWEEP)
     }
 
     fn dead(&mut self) -> bool {
@@ -325,13 +355,16 @@ async fn run(
     loop {
         tokio::select! {
             request = requests.recv() => {
-                let Some(Request { conversation, reply }) = request else { break };
-                service.get(conversation, reply);
+                let Some(Request { conversation, boot, reply }) = request else { break };
+                service.get(conversation, boot, reply);
             }
             Some((conversation, result)) = booted_rx.recv() => service.booted(conversation, result),
-            Some(Internal::Units { conversation, count, reply }) = internal_rx.recv() => {
-                let _ = reply.send(Ok(service.units(conversation, count)));
-            }
+            Some(internal) = internal_rx.recv() => match internal {
+                Internal::Units { conversation, count, reply } => {
+                    let _ = reply.send(Ok(service.units(conversation, count)));
+                }
+                Internal::Busy { conversation } => service.busy(conversation),
+            },
             _ = sweep.tick() => service.sweep(),
         }
     }
@@ -340,7 +373,12 @@ async fn run(
 }
 
 impl Service {
-    fn get(&mut self, conversation: ConversationId, reply: oneshot::Sender<Result<Vm, String>>) {
+    fn get(
+        &mut self,
+        conversation: ConversationId,
+        boot: bool,
+        reply: oneshot::Sender<Result<Vm, String>>,
+    ) {
         match self.vms.get_mut(&conversation) {
             Some(State::Running(running)) => {
                 if !running.dead() {
@@ -357,7 +395,21 @@ impl Service {
             }
             None => {}
         }
-        self.start(conversation, vec![reply]);
+        if boot {
+            self.start(conversation, vec![reply]);
+        } else {
+            let _ = reply.send(Err("the VM isn't running".to_owned()));
+        }
+    }
+
+    /// The guest of `conversation`'s VM has something of Max's running: it
+    /// counts as used now.
+    fn busy(&mut self, conversation: ConversationId) {
+        if let Some(State::Running(running)) = self.vms.get_mut(&conversation) {
+            let now = Instant::now();
+            running.idle_since = now;
+            running.busy = Some(now);
+        }
     }
 
     /// Boots the conversation's VM for `waiting`: without Max's units if
@@ -453,6 +505,27 @@ impl Service {
         let mut tasks = Scope::new();
         let held = Arc::clone(&connection);
         tasks.spawn(move |_| ssh::stopper(held, stopped));
+        // A background command is the guest's, and no call of max's holds
+        // the VM for it: the guest is asked whether any runs.
+        let (asked, internal) = (Arc::clone(&connection), self.internal.clone());
+        tasks.spawn(move |stop| async move {
+            let mut every = interval(SWEEP);
+            every.set_missed_tick_behavior(MissedTickBehavior::Delay);
+            loop {
+                tokio::select! {
+                    () = stop.cancelled() => return,
+                    _ = every.tick() => {}
+                }
+                // One that doesn't say isn't kept up for it.
+                let said = ssh::ask(&asked, "max-jobs list --count").await;
+                let jobs = said.ok().and_then(|said| said.trim().parse::<u32>().ok());
+                if jobs.is_some_and(|jobs| jobs > 0)
+                    && internal.send(Internal::Busy { conversation }).is_err()
+                {
+                    return;
+                }
+            }
+        });
         let sessions = self.sessions.clone();
         let host = host::router(conversation, self.internal.clone())
             .merge(api::router(conversation, Arc::clone(&self.apis)));
@@ -471,6 +544,7 @@ impl Service {
             work: Arc::new(work(&self.config.dir, conversation)),
             lent: Arc::new(()),
             idle_since: Instant::now(),
+            busy: None,
             trimmed: Instant::now(),
         };
         for reply in waiting {
@@ -675,8 +749,8 @@ impl Free {
     }
 }
 
-/// Stops the VM that has gone unused longest, if one isn't lent or kept
-/// and its slot is one `fits`, for that slot.
+/// Stops the VM that has gone unused longest, if one isn't lent, busy or
+/// kept and its slot is one `fits`, for that slot.
 fn evict(
     vms: &mut HashMap<ConversationId, State>,
     kept: &BTreeSet<ConversationId>,
@@ -686,7 +760,7 @@ fn evict(
         .iter()
         .filter(|(conversation, _)| !kept.contains(conversation))
         .filter_map(|(conversation, state)| match state {
-            State::Running(running) if !running.lent() && fits(running.slot) => {
+            State::Running(running) if !running.lent() && !running.busy() && fits(running.slot) => {
                 Some((conversation, running.idle_since))
             }
             _ => None,

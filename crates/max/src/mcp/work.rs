@@ -154,16 +154,6 @@ pub(crate) fn write(
     })
 }
 
-/// A new file at `dir/name` under `work`, made as [`write`] makes `dir`,
-/// for writing as it comes. Whatever is at `name` already, a link
-/// included, is left alone and the file isn't made. Blocking.
-pub(crate) fn create(work: &Path, dir: &str, name: &str) -> Result<File, Failure> {
-    let failed = written(dir, name);
-    let dir = make_dir(work, dir).map_err(&failed)?;
-    let file = rustix::fs::openat(&dir, name, CREATED, Mode::from_raw_mode(0o644));
-    Ok(File::from(file.map_err(failed)?))
-}
-
 const CREATED: OFlags = OFlags::WRONLY
     .union(OFlags::CREATE)
     .union(OFlags::EXCL)

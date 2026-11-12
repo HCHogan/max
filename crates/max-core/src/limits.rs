@@ -20,19 +20,15 @@ pub const HOUR: Duration = Duration::from_secs(3600);
 // Commands (shell) and programs (run_code).
 
 /// A command's or a program's wall clock, unless the call asks for
-/// another...
+/// another: the guest ends its unit then...
 pub const RUN_TIME: Duration = Duration::from_secs(120);
 /// ...and the most it may ask for.
 pub const RUN_TIME_MAX: Duration = Duration::from_secs(600);
-/// A background command's, and a foreground one's that moved there,
-/// counted from its start, unless the call asks for another...
+/// A background command's, unless the call asks for another...
 pub const BACKGROUND_TIME: Duration = Duration::from_secs(6 * 60 * 60);
 /// ...and the most it may ask for. A command costs no model calls while
 /// it runs, only room in the VM, so it may run much longer than an agent.
 pub const BACKGROUND_TIME_MAX: Duration = Duration::from_secs(24 * 60 * 60);
-/// How long a command runs before it moves to the background, once
-/// someone addresses Max while it runs: a shorter one finishes first.
-pub const MOVE_AFTER: Duration = Duration::from_secs(15);
 /// Output past this many bytes is cut to its head and tail, each half of
 /// it; the whole goes to a file in /work.
 pub const SHOWN_BYTES: usize = 16 * 1024;
@@ -66,15 +62,11 @@ pub const KEPT_FILE_BYTES: u64 = 64 << 20;
 /// this big takes a minute or two, and what Max says after it waits.
 pub const SENT_FILE_BYTES: u64 = 200 << 20;
 
-// Background agents and commands.
+// Background agents.
 
-/// The most agents a conversation runs at once...
+/// The most agents a conversation runs at once. Background commands have
+/// no count: they are the guest's units, bound by the VM's room.
 pub const JOBS_AT_ONCE: usize = 3;
-/// ...and background commands, besides, by default
-/// ([`Setting::CommandsAtOnce`]): they cost no model calls while they
-/// run, only the VM's room. Three until 2026-11-08, when commands someone
-/// waits on began to move here.
-pub const COMMANDS_AT_ONCE: usize = 8;
 /// How long an agent may take; then it is aborted, and reports how far it
 /// got. Two hours until 2026-11-11, when the owner found it too short.
 pub const JOB_TIME: Duration = Duration::from_secs(6 * 60 * 60);
@@ -126,22 +118,15 @@ pub enum Setting {
     IdleWindowSecs,
     /// [`CALL_TIME`].
     CallTimeSecs,
-    /// [`COMMANDS_AT_ONCE`].
-    CommandsAtOnce,
 }
 
 impl Setting {
-    pub const ALL: [Self; 3] = [
-        Self::IdleWindowSecs,
-        Self::CallTimeSecs,
-        Self::CommandsAtOnce,
-    ];
+    pub const ALL: [Self; 2] = [Self::IdleWindowSecs, Self::CallTimeSecs];
 
     pub fn name(self) -> &'static str {
         match self {
             Self::IdleWindowSecs => "idle_window_secs",
             Self::CallTimeSecs => "call_time_secs",
-            Self::CommandsAtOnce => "commands_at_once",
         }
     }
 
@@ -155,7 +140,6 @@ impl Setting {
         match self {
             Self::IdleWindowSecs => 60..=7200,
             Self::CallTimeSecs => 10..=600,
-            Self::CommandsAtOnce => 1..=16,
         }
     }
 }
@@ -169,8 +153,6 @@ pub struct Overrides {
     pub idle_window_secs: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub call_time_secs: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub commands_at_once: Option<u64>,
 }
 
 impl Overrides {
@@ -178,7 +160,6 @@ impl Overrides {
         match setting {
             Setting::IdleWindowSecs => self.idle_window_secs,
             Setting::CallTimeSecs => self.call_time_secs,
-            Setting::CommandsAtOnce => self.commands_at_once,
         }
     }
 
@@ -187,7 +168,6 @@ impl Overrides {
         let slot = match setting {
             Setting::IdleWindowSecs => &mut self.idle_window_secs,
             Setting::CallTimeSecs => &mut self.call_time_secs,
-            Setting::CommandsAtOnce => &mut self.commands_at_once,
         };
         *slot = value;
     }
@@ -219,7 +199,7 @@ mod tests {
         overrides.set(Setting::CallTimeSecs, None);
         assert_eq!(
             serde_json::to_value(overrides).unwrap(),
-            serde_json::json!({ "idle_window_secs": 60, "commands_at_once": 1 })
+            serde_json::json!({ "idle_window_secs": 60 })
         );
     }
 
@@ -227,8 +207,6 @@ mod tests {
     fn the_defaults_are_in_range() {
         let call_time = CALL_TIME.as_secs();
         assert!(Setting::CallTimeSecs.range().contains(&call_time));
-        let commands = COMMANDS_AT_ONCE as u64;
-        assert!(Setting::CommandsAtOnce.range().contains(&commands));
     }
 
     #[test]

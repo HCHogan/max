@@ -221,8 +221,8 @@ mod tests {
             config(Some("idle_window_secs"), Some("1800"))
         );
         assert_eq!(
-            parse("/config commands_at_once 4 or so"),
-            config(Some("commands_at_once"), Some("4 or so"))
+            parse("/config call_time_secs 90 or so"),
+            config(Some("call_time_secs"), Some("90 or so"))
         );
         assert_eq!(
             parse("/bind 123456"),
