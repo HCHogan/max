@@ -1,10 +1,12 @@
 # What Max runs in a guest, as units (nix/jobs.nix, nix/max-jobs.sh): a
 # call's line, a background command's notice, and what becomes of each
-# when it is stopped, when max is away, and when its caller is. The
+# when it is stopped, when max is away, and when its caller is; and a
+# call of maxx's made while max restarts, which is made again. The
 # machine has the guest's jobs without a VM's shares; a fake /mcp at
 # 127.0.0.1:7777 stands in for max, and keeps what wakes it.
 { pkgs }:
 let
+  runner = import ../runner.nix { inherit pkgs; };
   host = pkgs.writeText "fake-max.js" ''
     const http = require("node:http");
     const fs = require("node:fs");
@@ -13,6 +15,11 @@ let
       let body = "";
       req.on("data", chunk => (body += chunk));
       req.on("end", () => {
+        // As the guest's forwarder answers while max restarts.
+        if (fs.existsSync("/run/away")) {
+          res.writeHead(503, { "max-away": "1", "content-length": "0" });
+          return res.end();
+        }
         const { id, method, params } = JSON.parse(body);
         let result = {};
         if (method === "tools/list") result = { tools: [wake] };
@@ -35,7 +42,11 @@ pkgs.testers.runNixOSTest {
       # As the guest: units find the system's commands.
       systemd.settings.Manager.DefaultEnvironment = "PATH=/run/wrappers/bin:/run/current-system/sw/bin HOME=/work";
       systemd.tmpfiles.rules = [ "d /work 0755 root root -" ];
-      environment.systemPackages = [ pkgs.jq ];
+      environment.systemPackages = [
+        pkgs.jq
+        # maxx.
+        runner
+      ];
       systemd.services.fake-max = {
         wantedBy = [ "multi-user.target" ];
         serviceConfig.ExecStart = "${pkgs.nodejs}/bin/node ${host}";
@@ -156,5 +167,16 @@ pkgs.testers.runNixOSTest {
         assert left("orphan") == [], left("orphan")
         machine.succeed("sleep 2")
         assert len(wakes()) == 3, wakes()
+
+    with subtest("a call made while max restarts is made again until it is back"):
+        machine.succeed("touch /run/away")
+        machine.succeed("(maxx wake --text 回来了吗 > /run/away.out 2>&1; echo $? > /run/away.status) > /dev/null 2>&1 &")
+        machine.succeed("sleep 4")
+        machine.fail("test -e /run/away.status")
+        assert len(wakes()) == 3, wakes()
+        machine.succeed("rm /run/away")
+        machine.wait_until_succeeds("test -e /run/away.status", timeout=30)
+        assert machine.succeed("cat /run/away.status").strip() == "0", machine.succeed("cat /run/away.out")
+        assert wakes()[3] == "回来了吗", wakes()
   '';
 }

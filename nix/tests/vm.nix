@@ -11,6 +11,27 @@
 # tailnet through its namespace, where an ordinary VM can't, its ip rule
 # having outlived networkd.
 { pkgs, module }:
+let
+  # A unit Max might keep in a VM: it asks the VM service how it is, at
+  # the port every program reaches max by, and notes the answer's status
+  # with the boot it runs in.
+  probe = pkgs.writeText "probe.sh" ''
+    while true; do
+      code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' -H 'content-type: application/json' \
+        -d '{"units":1}' http://127.0.0.1:7777/units || true)
+      echo "$(cat /proc/sys/kernel/random/boot_id) $code" >> /work/probe.log
+      sleep 1
+    done
+  '';
+  probeUnit = pkgs.writeText "probe.service" ''
+    [Service]
+    ExecStart=/bin/sh /work/probe.sh
+    Restart=always
+
+    [Install]
+    WantedBy=multi-user.target
+  '';
+in
 pkgs.testers.runNixOSTest {
   name = "max-vm";
   nodes.machine = {
@@ -102,6 +123,60 @@ pkgs.testers.runNixOSTest {
     machine.succeed("systemctl start maxx-vm-check.service")
     again = machine.succeed("journalctl -u maxx-vm-check.service -o cat")
     assert "开机时：active" in again and "记下了 2 次开机" in again, again
+    # vm-check's VM was a unit of its own, and vm-check stopped it.
+    machine.fail("systemctl is-active maxx-vm@check-0.service")
+
+    # A VM outlives max. Conversation 7 has a unit, so max keeps its VM
+    # on: the unit asks the VM service how it is every second, and notes
+    # the answer with the boot it runs in.
+    work = "/var/lib/maxx/vm/7/work"
+    machine.succeed(
+        f"install -d -o maxx -g maxx -m 700 /var/lib/maxx/vm/7 {work} {work}/.max {work}/.max/systemd",
+        f"install -o maxx -g maxx -m 644 ${probeUnit} {work}/.max/systemd/probe.service",
+        f"install -o maxx -g maxx -m 755 ${probe} {work}/probe.sh",
+        "systemctl restart maxx.service",
+    )
+    machine.wait_until_succeeds("systemctl is-active maxx-vm@7.service", timeout=120)
+    machine.wait_until_succeeds(f"grep -q ' 200$' {work}/probe.log", timeout=180)
+    last = f"tail -n 1 {work}/probe.log"
+    pid = machine.succeed("systemctl show -P MainPID maxx-vm@7.service").strip()
+    boot = machine.succeed(f"{last} | cut -d' ' -f1").strip()
+    # What the VM booted is rooted for as long as it runs.
+    machine.succeed("readlink /nix/var/nix/gcroots/per-user/maxx/7 | grep -q max-guest.json")
+    # While max is away the guest is told so, and the VM runs on.
+    machine.succeed("systemctl stop maxx.service")
+    machine.wait_until_succeeds(f"{last} | grep -q ' 503$'", timeout=60)
+    machine.succeed("systemctl is-active maxx-vm@7.service")
+    # The max that comes back attaches to it: the guest reaches it at the
+    # socket bound again, in the same boot of the same VM.
+    machine.succeed("systemctl start maxx.service")
+    machine.wait_until_succeeds(
+        "journalctl -u maxx.service -o cat | grep -q 'attached to a VM that runs'", timeout=120
+    )
+    machine.wait_until_succeeds(f"{last} | grep -q ' 200$'", timeout=120)
+    assert machine.succeed("systemctl show -P MainPID maxx-vm@7.service").strip() == pid
+    assert machine.succeed(f"{last} | cut -d' ' -f1").strip() == boot
+    # A VM whose guest keeps another contract is restarted at once.
+    machine.succeed(
+        "systemctl stop maxx.service",
+        "sed -i 's/\"contract\":[0-9]*/\"contract\":0/' /var/lib/maxx/vm/7/boot.json",
+        "systemctl start maxx.service",
+    )
+    machine.wait_until_succeeds(
+        "journalctl -u maxx.service -o cat | grep -q \"can't be attached to\"", timeout=120
+    )
+    machine.wait_until_succeeds(
+        f"test \"$({last} | cut -d' ' -f1)\" != {boot} && {last} | grep -q ' 200$'", timeout=240
+    )
+    assert machine.succeed("systemctl show -P MainPID maxx-vm@7.service").strip() != pid
+    # Without its unit the VM isn't kept, and a stopped one's root goes.
+    machine.succeed(
+        "systemctl stop maxx.service",
+        f"rm -rf {work}/.max/systemd",
+        "systemctl stop maxx-vm@7.service",
+        "systemctl start maxx.service",
+    )
+    machine.wait_for_unit("maxx.service")
     # The screenshot, among the test's outputs.
     machine.succeed("head -c 8 /var/lib/maxx/vm/check/0/work/.max/browser-check.png | grep -q PNG")
     machine.copy_from_vm("/var/lib/maxx/vm/check/0/work/.max/browser-check.png")

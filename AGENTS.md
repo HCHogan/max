@@ -40,6 +40,15 @@ with no VM inside it. What the host makes of a call's line is in
 nested test, `.#nestedChecks.x86_64-linux.vm`, which needs nested KVM
 and runs on tank.
 
+## The contract with a guest
+
+A VM outlives max, so a new max meets guests an older one booted. Raise
+the number in `nix/contract.nix` with any change to what the two say to
+each other: `max-jobs`' arguments or the line a call prints, the layout
+of `/run/max/jobs`, the runner's input, the routes a guest calls. A VM
+whose guest keeps another number is restarted when max attaches to it;
+one with the same number runs on.
+
 ## Queries
 
 max-db's queries are checked at compile time: against the dev database in

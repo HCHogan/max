@@ -487,17 +487,27 @@ pub struct Qq {
 }
 
 /// The groups' VMs; see "VM processes". The NixOS module fills this in: the
-/// programs, and the taps it made.
+/// unit it made for a VM, the programs max runs itself, and the taps.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Vm {
     /// The guest's kernel, initrd and command line, as the flake's `guest`
     /// writes them.
     pub guest: PathBuf,
-    pub cloud_hypervisor: PathBuf,
-    pub virtiofsd: PathBuf,
     /// mkfs.ext4, for a new VM's store disk.
     pub mkfs: PathBuf,
+    /// systemctl, which starts and stops the VMs' units for max.
+    pub systemctl: PathBuf,
+    /// A VM's unit without its instance, such as `maxx-vm@`: a template of
+    /// the host's systemd, whose instance names the VM's directory under
+    /// the module's. The VMs are units of their own, so that they outlive
+    /// max.
+    pub unit: String,
+    /// Where max links the image each running VM booted, so that the
+    /// host's garbage collector leaves it: a deploy replaces the image,
+    /// and the VMs run on. None roots nothing.
+    #[serde(default)]
+    pub roots: Option<PathBuf>,
     /// Each conversation's VM keeps its files in a directory here.
     pub dir: PathBuf,
     /// One per VM that can run at a time.
@@ -525,6 +535,11 @@ pub struct Vm {
     /// `[github]`.
     #[serde(skip)]
     pub author: Option<Author>,
+    /// What comes before a conversation's number in its VM's instance:
+    /// nothing for max, and `check-` for vm-check, whose VMs are in a
+    /// directory of their own under `dir`.
+    #[serde(skip)]
+    pub instances: String,
 }
 
 /// The operations network: a dedicated Tailscale client in a network
@@ -909,8 +924,8 @@ mod tests {
 
             [vm]
             guest = "/nix/store/x-max-guest.json"
-            cloud_hypervisor = "/nix/store/x-cloud-hypervisor/bin/cloud-hypervisor"
-            virtiofsd = "/nix/store/x-virtiofsd/bin/virtiofsd"
+            systemctl = "/run/current-system/sw/bin/systemctl"
+            unit = "maxx-vm@"
             mkfs = "/nix/store/x-e2fsprogs/bin/mkfs.ext4"
             dir = "/var/lib/maxx/vm"
             dns = ["223.5.5.5", "119.29.29.29"]

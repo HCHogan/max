@@ -139,6 +139,9 @@ fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
     // there with units, and a second boot of a VM maxx runs would take
     // that VM's sockets from it (2026-11-03).
     vm.dir = vm.dir.join("check");
+    // And units of its own, by their instance: max leaves them alone, as
+    // vm-check does max's.
+    vm.instances = "check-".to_owned();
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
@@ -297,6 +300,9 @@ fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
             woken.is_empty(),
             0,
         ));
+        // A VM outlives the service that booted it, as it outlives max:
+        // vm-check stops its own, and the next run boots afresh.
+        vms.shut().await;
         drop(vms);
         services.close(Duration::from_secs(5)).await;
         let _ = std::fs::remove_dir_all(&stored);

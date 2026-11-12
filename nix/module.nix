@@ -83,19 +83,14 @@ let
       "1"
     ];
 
-  # max.service's, and vm-check's, which must run as max does.
-  serviceConfig = {
+  # What max needs from the host: TCP out (QQ, model providers), Postgres's
+  # socket, its state directory. The rest is taken away. A VM's unit gets
+  # back what its processes need (`forVm`); max itself, which only asks
+  # systemd for the VMs, doesn't. See "VM processes".
+  sandbox = forVm: {
     User = name;
     Group = name;
     Slice = "${name}.slice";
-    StateDirectory = name;
-    StateDirectoryMode = "0700";
-    RuntimeDirectory = name;
-    WorkingDirectory = "/var/lib/${name}";
-
-    # What max needs from the host: TCP out (QQ, model providers),
-    # Postgres's socket, its state directory. The rest is taken away,
-    # except what the VMs need back; see "VM processes".
     NoNewPrivileges = true;
     CapabilityBoundingSet = [ "" ];
     AmbientCapabilities = [ "" ];
@@ -111,14 +106,14 @@ let
     ProtectClock = true;
     # These three lay read-only mounts over /proc, and then the kernel
     # won't let virtiofsd mount a proc of its own in its namespaces.
-    ProtectHostname = !vm;
-    ProtectKernelTunables = !vm;
-    ProtectKernelLogs = !vm;
+    ProtectHostname = !forVm;
+    ProtectKernelTunables = !forVm;
+    ProtectKernelLogs = !forVm;
     ProtectKernelModules = true;
     ProtectControlGroups = true;
     # virtiofsd's sandbox.
     RestrictNamespaces =
-      if vm then
+      if forVm then
         [
           "user"
           "mnt"
@@ -134,7 +129,7 @@ let
     MemoryDenyWriteExecute = true;
     RemoveIPC = true;
     SystemCallArchitectures = "native";
-    SystemCallFilter = [ "@system-service" ] ++ lib.optional vm "@mount";
+    SystemCallFilter = [ "@system-service" ] ++ lib.optional forVm "@mount";
     SystemCallErrorNumber = "EPERM";
     # Netlink for getaddrinfo's address sorting; without it a
     # dual-stack host can be tried in the wrong order first.
@@ -146,7 +141,7 @@ let
     ];
     UMask = "0077";
   }
-  // lib.optionalAttrs vm {
+  // lib.optionalAttrs forVm {
     # The store's virtiofsd holds a descriptor for each file the guest has
     # looked up, until the guest forgets it; a guest can walk the host's
     # whole store, 6.4 million files on tank in 2026-10. Each costs the
@@ -161,6 +156,80 @@ let
       "/dev/kvm rw"
       "/dev/net/tun rw"
     ];
+    # The VMs' directories: max's state, which the unit doesn't own.
+    ReadWritePaths = [ vmDir ];
+  };
+
+  # max.service's, and vm-check's, which must run as max does.
+  serviceConfig =
+    sandbox false
+    // {
+      StateDirectory = name;
+      StateDirectoryMode = "0700";
+      RuntimeDirectory = name;
+      WorkingDirectory = "/var/lib/${name}";
+    }
+    // lib.optionalAttrs vm {
+      # Where max roots the images its VMs run; see `roots` below.
+      ReadWritePaths = [ roots ];
+    };
+
+  # Each conversation's VM keeps its files in a directory here.
+  vmDir = "/var/lib/${name}/vm";
+  # A VM's unit, by instance: the VM's directory under `vmDir`.
+  vmUnit = "${name}-vm@";
+  # A link here to a store path is a root of the garbage collector's: max
+  # links the image each running VM booted, which a deploy may have
+  # replaced since.
+  roots = "/nix/var/nix/gcroots/per-user/${name}";
+
+  # A VM's processes: two virtiofsd and cloud-hypervisor, as max started
+  # them itself until 2026-11-12, with the command lines checked on tank.
+  # What differs from boot to boot comes from the unit's EnvironmentFile,
+  # which max writes before it starts the unit. cloud-hypervisor is the
+  # unit's main process: when it ends, the guest having powered off or
+  # been stopped, systemd ends the rest.
+  vmStart = pkgs.writeShellApplication {
+    name = "${name}-vm";
+    runtimeInputs = [ pkgs.coreutils ];
+    text = ''
+      dir=$1
+      cd "$dir"
+      rm -f store.sock work.sock notify.vsock
+      # The guest's root is max on the host; its other users are squashed
+      # to max.
+      uid=$(stat -c %u "$dir")
+      gid=$(stat -c %g "$dir")
+      ${lib.getExe pkgs.virtiofsd} --socket-path="$dir/store.sock" \
+        --shared-dir=/nix/store --readonly --cache=always \
+        > virtiofsd-store.log 2>&1 &
+      ${lib.getExe pkgs.virtiofsd} --socket-path="$dir/work.sock" \
+        --shared-dir="$dir/work" \
+        --translate-uid="map:0:$uid:1" --translate-gid="map:0:$gid:1" \
+        --translate-uid="squash-guest:1:$uid:4294967294" \
+        --translate-gid="squash-guest:1:$gid:4294967294" \
+        > virtiofsd-work.log 2>&1 &
+      for socket in store.sock work.sock; do
+        for _ in $(seq 250); do
+          [ -e "$socket" ] && break
+          sleep 0.02
+        done
+        [ -e "$socket" ] || { echo "virtiofsd didn't make $socket" >&2; exit 1; }
+      done
+      exec ${lib.getExe pkgs.cloud-hypervisor} \
+        --cpus "boot=$CPUS" \
+        --memory "size=''${MEMORY_MIB}M,shared=on" \
+        --kernel "$KERNEL" --initramfs "$INITRD" --cmdline "$CMDLINE" \
+        --seccomp true --landlock --landlock-rules \
+        path=/sys/devices/virtual/net,access=r "path=$dir,access=rw" \
+        --console off --serial "file=$dir/serial.log" \
+        --vsock "cid=3,socket=$dir/notify.vsock" \
+        --balloon deflate_on_oom=on,free_page_reporting=on,size=0M \
+        --disk "path=$dir/nix.img,image_type=raw" \
+        --fs "socket=$dir/store.sock,tag=store" "socket=$dir/work.sock,tag=work" \
+        --net "mac=02:00:00:00:00:01,num_queues=$((2 * CPUS)),tap=$TAP" \
+        > cloud-hypervisor.log 2>&1
+    '';
   };
 
   # A configuration max won't take fails the system build rather than the
@@ -302,10 +371,11 @@ in
       media.dir = lib.mkDefault "/var/lib/${name}/media";
       vm = lib.mkIf vm {
         guest = "${cfg.vm.guest}";
-        cloud_hypervisor = lib.getExe pkgs.cloud-hypervisor;
-        virtiofsd = lib.getExe pkgs.virtiofsd;
         mkfs = "${lib.getBin pkgs.e2fsprogs}/bin/mkfs.ext4";
-        dir = "/var/lib/${name}/vm";
+        dir = vmDir;
+        systemctl = "${config.systemd.package}/bin/systemctl";
+        unit = vmUnit;
+        inherit roots;
         inherit (cfg.vm) dns;
         inherit slots;
         operations = lib.mkIf operations {
@@ -373,12 +443,43 @@ in
         Restart = "on-failure";
         RestartSec = 5;
         # SIGTERM goes to max alone, which stops what it started in order;
-        # whatever is left after it exits, the VMs among it, is killed with
-        # the cgroup.
+        # whatever is left after it exits is killed with the cgroup. The
+        # VMs aren't in it: they are units of their own, and stay.
         KillMode = "mixed";
         TimeoutStopSec = 60;
       };
     };
+
+    # A group's VM, which max starts and stops through systemd and which
+    # outlives max: a restart of max, as at every deploy, leaves the VMs
+    # and what runs in them, and max attaches to them when it is back. A
+    # deploy that changes this unit doesn't restart them either; a VM gets
+    # the new one when it next boots. See "Lifetimes move to systemd" in
+    # docs/rust-rewrite.md.
+    systemd.services.${vmUnit} = lib.mkIf vm {
+      description = "A group's VM (${name}, %I)";
+      partOf = [ "${name}.target" ];
+      restartIfChanged = false;
+      serviceConfig = sandbox true // {
+        EnvironmentFile = "${vmDir}/%I/boot.env";
+        ExecStart = "${vmStart}/bin/${name}-vm ${vmDir}/%I";
+        TimeoutStopSec = 10;
+      };
+    };
+
+    # max's user starts and stops the VMs' units, and no other.
+    security.polkit.enable = lib.mkIf vm true;
+    security.polkit.extraConfig = lib.mkIf vm ''
+      polkit.addRule(function(action, subject) {
+        if (action.id == "org.freedesktop.systemd1.manage-units" &&
+            subject.user == "${name}" &&
+            action.lookup("unit").indexOf("${vmUnit}") == 0) {
+          return polkit.Result.YES;
+        }
+      });
+    '';
+
+    systemd.tmpfiles.rules = lib.mkIf vm [ "d ${roots} 0755 ${name} ${name} -" ];
 
     # `systemctl start ${name}-vm-check` boots a VM on the last slot, runs
     # `uname -a` in it, a program that calls the MCP service and one that

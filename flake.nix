@@ -127,6 +127,8 @@
                   else
                     "${guest.microvm.kernel.out}/${pkgs.stdenv.hostPlatform.linux-kernel.target}";
                 initrd = guest.microvm.initrdPath;
+                # What max and a guest say to each other; see the file.
+                contract = import ./nix/contract.nix;
                 cmdline = "${
                   if x86 then "earlyprintk=ttyS0 console=ttyS0" else "console=ttyAMA0"
                 } reboot=t panic=-1 ${toString guest.microvm.kernelParams}";

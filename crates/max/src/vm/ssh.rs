@@ -287,18 +287,6 @@ async fn stop(connection: &Connection, unit: &str) -> Result<()> {
     .await
 }
 
-/// Has the guest write out and drop its page cache and the files it
-/// remembers, and gather what is free into blocks large enough for free
-/// page reporting to give back.
-pub async fn trim(connection: &Connection) -> Result<()> {
-    exec(
-        connection,
-        "sync; echo 3 > /proc/sys/vm/drop_caches; echo 1 > /proc/sys/vm/compact_memory",
-        &[0],
-    )
-    .await
-}
-
 /// Runs `line` as root and waits for it to end. Fails unless it exits
 /// with a status in `fine`, saying how it did end and what it wrote to
 /// stderr, the start of it.

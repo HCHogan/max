@@ -236,10 +236,20 @@ in
     listenStreams = [ "127.0.0.1:7777" ];
     socketConfig.Accept = true;
   };
+  # While max restarts nothing listens at its end, and the connection
+  # would only close: a caller couldn't tell that from a call max took and
+  # didn't answer. So the port is tried first, and when max is away the
+  # caller is told so, 503 with `max-away`: nothing of its request was
+  # read, and it may ask again (client.js does).
   systemd.services."max-mcp@" = {
     unitConfig.DefaultDependencies = false;
     serviceConfig = {
-      ExecStart = "${pkgs.socat}/bin/socat STDIO VSOCK-CONNECT:2:7777";
+      ExecStart = pkgs.writeShellScript "max-mcp" ''
+        if ${pkgs.socat}/bin/socat -u OPEN:/dev/null VSOCK-CONNECT:2:7777 2> /dev/null; then
+          exec ${pkgs.socat}/bin/socat STDIO VSOCK-CONNECT:2:7777
+        fi
+        printf 'HTTP/1.1 503 Service Unavailable\r\nmax-away: 1\r\ncontent-length: 0\r\nconnection: close\r\n\r\n'
+      '';
       StandardInput = "socket";
       StandardError = "journal";
     };

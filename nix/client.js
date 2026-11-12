@@ -14,6 +14,11 @@ const QUIET = 90_000;
 // How long to wait before opening it again, at first and at most.
 const RETRY = 1_000;
 const MOST_RETRY = 30_000;
+// While max restarts, the guest's forwarder answers for it: 503 with
+// max-away, and nothing of the request read (guest.nix's max-mcp@). A
+// call is made again, with those waits, until max is back or this long
+// has passed. The VM, and what runs in it, outlives max.
+const AWAY = 180_000;
 
 // Waits ms, or until signal aborts, and leaves nothing behind: a listener
 // left on a job's signal at every retry piled up.
@@ -30,6 +35,10 @@ function sleep(ms, signal) {
   });
 }
 
+// What one try of a call came to, besides an outcome.
+const away = Symbol("away");
+const aborted = Symbol("aborted");
+
 class ToolError extends Error {
   constructor(tool, error) {
     super(`${tool}: ${error.message} (${error.code})`);
@@ -43,6 +52,23 @@ function connect({ url = MCP, token }) {
   let nextId = 1;
 
   async function post(method, params, signal) {
+    const cancelled = { ok: false, error: { code: "cancelled", message: "the call was cancelled; what acts in the chat may have taken effect: look at the records before trying again" } };
+    const asked = Date.now();
+    let wait = RETRY;
+    for (;;) {
+      const outcome = await once(method, params, signal);
+      if (outcome !== away) return outcome === aborted ? cancelled : outcome;
+      if (Date.now() - asked + wait > AWAY) {
+        return { ok: false, error: { code: "unreachable", message: `can't reach Max's MCP service: max has been away for ${Math.round((Date.now() - asked) / 1000)} seconds` } };
+      }
+      await sleep(wait, signal);
+      if (signal?.aborted) return cancelled;
+      wait = Math.min(wait * 2, MOST_RETRY);
+    }
+  }
+
+  // One try: the outcome, or `away` when max isn't there to take it.
+  async function once(method, params, signal) {
     let reply;
     try {
       const response = await fetch(url, {
@@ -69,10 +95,11 @@ function connect({ url = MCP, token }) {
           },
         }),
       });
+      if (response.status === 503 && response.headers.get("max-away")) return away;
       reply = JSON.parse(await response.text());
     } catch (error) {
       // As the host says when it cancels a call.
-      if (error.name === "AbortError") return { ok: false, error: { code: "cancelled", message: "the call was cancelled; what acts in the chat may have taken effect: look at the records before trying again" } };
+      if (error.name === "AbortError") return aborted;
       return { ok: false, error: { code: "unreachable", message: `can't reach Max's MCP service: ${error.message}` } };
     }
     if (reply.error) return { ok: false, error: { code: "refused", message: reply.error.message } };

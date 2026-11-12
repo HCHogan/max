@@ -23,6 +23,31 @@ in
     description = "What Max runs: calls, background commands and agents";
   };
 
+  # The guest's caches, dropped when nothing of Max's runs: its page
+  # cache and the files it remembers, which the store's virtiofsd keeps
+  # open on the host, are otherwise never freed while it is up, and what
+  # it frees goes back to the host through the balloon's free page
+  # reporting. max asked for this over SSH until the VMs came to outlive
+  # it.
+  systemd.timers.max-trim = {
+    wantedBy = [ "timers.target" ];
+    timerConfig = {
+      OnBootSec = "10min";
+      OnUnitActiveSec = "10min";
+    };
+  };
+  systemd.services.max-trim = {
+    description = "Drop the caches while nothing of Max's runs";
+    path = [ jobs ];
+    script = ''
+      [ "$(max-jobs list --count)" = 0 ] || exit 0
+      sync
+      echo 3 > /proc/sys/vm/drop_caches
+      echo 1 > /proc/sys/vm/compact_memory
+    '';
+    serviceConfig.Type = "oneshot";
+  };
+
   # A background command's end, told to Max: `maxx wake`, tried again for
   # as long as max doesn't take it, as while it restarts. One that waits
   # is a unit still activating, so `systemctl list-units 'max-notify@*'`
