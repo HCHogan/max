@@ -17,7 +17,7 @@ pub mod tool;
 mod web_search;
 pub(crate) mod work;
 
-pub use forward::{Called, Model, api, router as agents};
+pub use forward::{Called, Models, api, router as agents};
 pub use mute_member::MuteMember;
 pub use service::serve;
 

@@ -12,14 +12,17 @@ use sqlx::PgPool;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, UnixListener, UnixStream};
 
-use super::{Model, router};
+use super::{Models, router};
 use crate::conversation::testing::group;
-use crate::llm::Upstream;
+use crate::llm::{Upstream, Upstreams};
 use crate::mcp::serve;
 use crate::scope::Scope;
 
 /// What the provider was asked: the authorization, and the body.
 type Asked = Arc<Mutex<Vec<(Option<String>, String)>>>;
+
+/// What a provider answers over Responses, and what it used.
+const RESPONDED: &str = "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":70,\"output_tokens\":5}}}\n\n";
 
 /// What the provider answers: a call of `bash`, and what it used.
 const ANSWER: &str = "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c1\",\"function\":{\"name\":\"bash\",\"arguments\":\"{}\"}}]}}]}\n\n\
@@ -37,21 +40,23 @@ async fn provider(scope: &mut Scope, asked: Asked) -> String {
         });
         Body::from_stream(first.chain(futures_util::stream::pending()))
     };
+    let answering = |answer: &'static str| {
+        let asked = Arc::clone(&asked);
+        post(move |headers: axum::http::HeaderMap, body: String| {
+            let asked = Arc::clone(&asked);
+            async move {
+                let authorization = headers
+                    .get("authorization")
+                    .map(|value| value.to_str().unwrap().to_owned());
+                asked.lock().unwrap().push((authorization, body));
+                ([("content-type", "text/event-stream")], answer)
+            }
+        })
+    };
     let app = axum::Router::new()
         .route("/quiet/chat/completions", post(quiet))
-        .route(
-            "/v1/chat/completions",
-            post(move |headers: axum::http::HeaderMap, body: String| {
-                let asked = Arc::clone(&asked);
-                async move {
-                    let authorization = headers
-                        .get("authorization")
-                        .map(|value| value.to_str().unwrap().to_owned());
-                    asked.lock().unwrap().push((authorization, body));
-                    ([("content-type", "text/event-stream")], ANSWER)
-                }
-            }),
-        );
+        .route("/v1/chat/completions", answering(ANSWER))
+        .route("/other/responses", answering(RESPONDED));
     scope.spawn(move |stop| async move {
         let _ = axum::serve(listener, app)
             .with_graceful_shutdown(stop.cancelled_owned())
@@ -79,11 +84,16 @@ async fn send(socket: &FilePath, path: &str, body: Option<&str>) -> (String, Str
     (head.lines().next().unwrap().to_owned(), body.to_owned())
 }
 
-fn upstream(base_url: String) -> Upstream {
+/// The agents' own model alone, asked to think hard.
+fn upstream(base_url: String) -> Upstreams {
     quiet_within(base_url, Duration::from_secs(120))
 }
 
-fn quiet_within(base_url: String, idle: Duration) -> Upstream {
+fn quiet_within(base_url: String, idle: Duration) -> Upstreams {
+    Upstreams::only(flash(base_url, idle), Some("high"))
+}
+
+fn flash(base_url: String, idle: Duration) -> Upstream {
     Upstream {
         provider: "cliproxy".into(),
         protocol: Protocol::Chat,
@@ -93,14 +103,32 @@ fn quiet_within(base_url: String, idle: Duration) -> Upstream {
         model: "gemini-3.8-flash-high".into(),
         window: 1_000_000,
         max_output: None,
-        effort: Some("high".into()),
         idle,
     }
 }
 
+/// The agents' own model, and another provider's, which speaks
+/// Responses and has a key of its own.
+fn two(base_url: &str) -> Upstreams {
+    let mut upstreams = upstream(base_url.to_owned());
+    let other = Upstream {
+        provider: "other".into(),
+        protocol: Protocol::Responses,
+        base_url: base_url.replace("/v1", "/other"),
+        api_key: Some("the-others-key".into()),
+        headers: Vec::new(),
+        model: "team/gpt-6-astra".into(),
+        window: 400_000,
+        max_output: Some(128_000),
+        idle: Duration::from_secs(120),
+    };
+    upstreams.all.insert(other.reference(), Arc::new(other));
+    upstreams
+}
+
 /// The service of a VM of conversation 7 at a socket in a directory of
-/// its own, with the agents' `model`.
-fn vm(scope: &mut Scope, name: &str, model: Option<Model>) -> (PathBuf, PathBuf) {
+/// its own, with the `model`s it may call.
+fn vm(scope: &mut Scope, name: &str, model: Option<Models>) -> (PathBuf, PathBuf) {
     let conversation = ConversationId(7);
     let dir = std::env::temp_dir().join(format!("max-forward-{name}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -122,20 +150,22 @@ async fn an_agents_model_calls_go_on_with_the_providers_key() {
     let mut scope = Scope::new();
     let asked = Asked::default();
     let base_url = provider(&mut scope, Arc::clone(&asked)).await;
-    let (model, mut used) = Model::heard(upstream(base_url));
+    let (model, mut used) = Models::heard(upstream(base_url));
     let (dir, socket) = vm(&mut scope, "calls", Some(model));
 
     // What the agent's harness is told of the model, and no key.
     let (status, body) = send(&socket, "/llm", None).await;
     assert_eq!(status, "HTTP/1.1 200 OK", "{body}");
     let about: Value = serde_json::from_str(&body).unwrap();
-    let told = json!({
+    let flash = json!({
         "api": "openai-completions",
-        "model": "gemini-3.8-flash-high",
+        "model": "cliproxy/gemini-3.8-flash-high",
         "window": 1_000_000,
         "max_output": null,
-        "effort": "high",
     });
+    let mut told = flash.clone();
+    told["effort"] = json!("high");
+    told["models"] = json!([flash]);
     assert_eq!(about, told);
 
     // No token: the socket says whose call it is.
@@ -156,6 +186,12 @@ async fn an_agents_model_calls_go_on_with_the_providers_key() {
     };
     assert_eq!(called.usage, cached);
     assert!(called.timing.first.is_some());
+    // It named no model max knows, and said nothing of how hard to think.
+    assert_eq!(
+        called.upstream.reference(),
+        "cliproxy/gemini-3.8-flash-high"
+    );
+    assert_eq!(called.effort, None);
     {
         let asked = asked.lock().unwrap();
         let (authorization, request) = &asked[0];
@@ -178,6 +214,76 @@ async fn an_agents_model_calls_go_on_with_the_providers_key() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// A call goes to the model it names, with that provider's key, at that
+/// protocol's endpoint; one that names none max knows goes to the
+/// agents' own.
+#[tokio::test]
+async fn a_call_goes_to_the_model_it_names() {
+    let mut scope = Scope::new();
+    let asked = Asked::default();
+    let base_url = provider(&mut scope, Arc::clone(&asked)).await;
+    let (model, mut used) = Models::heard(two(&base_url));
+    let (dir, socket) = vm(&mut scope, "named", Some(model));
+
+    // Both are told of, the agents' own on top with its effort.
+    let (_, body) = send(&socket, "/llm", None).await;
+    let about: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(about["model"], "cliproxy/gemini-3.8-flash-high");
+    assert_eq!(about["effort"], "high");
+    let astra = json!({
+        "api": "openai-responses",
+        "model": "other/team/gpt-6-astra",
+        "window": 400_000,
+        "max_output": 128_000,
+    });
+    assert_eq!(about["models"][1], astra);
+    assert_eq!(about["models"].as_array().unwrap().len(), 2);
+
+    let ask = r#"{"model":"other/team/gpt-6-astra","reasoning":{"effort":"low","summary":"auto"},"input":"你好"}"#;
+    let (status, body) = send(&socket, "/llm/responses", Some(ask)).await;
+    assert_eq!(status, "HTTP/1.1 200 OK", "{body}");
+    let (_, called) = used.recv().await.unwrap();
+    assert_eq!(called.upstream.reference(), "other/team/gpt-6-astra");
+    assert_eq!(called.effort.as_deref(), Some("low"));
+    assert_eq!(called.usage.input, 70);
+    {
+        let asked = asked.lock().unwrap();
+        let (authorization, request) = &asked[0];
+        assert_eq!(authorization.as_deref(), Some("Bearer the-others-key"));
+        // The provider's id for it, and the effort as the agent wrote it.
+        let forwarded = r#"{"model":"team/gpt-6-astra","reasoning":{"effort":"low","summary":"auto"},"input":"你好"}"#;
+        assert_eq!(request, forwarded);
+    }
+
+    // Not at the other protocol's endpoint.
+    let (status, body) = send(&socket, "/llm/chat/completions", Some(ask)).await;
+    assert_eq!(status, "HTTP/1.1 404 Not Found");
+    assert!(
+        body.contains("other/team/gpt-6-astra is called at /llm/responses"),
+        "{body}"
+    );
+
+    // The agents' own by its name, asked to think as the agent says; and
+    // the provider's id alone, which an agent from before a restart of
+    // max may still send, is no name: the agents' own again.
+    for model in ["cliproxy/gemini-3.8-flash-high", "team/gpt-6-astra"] {
+        let ask = json!({ "model": model, "reasoning_effort": "xhigh", "messages": [] });
+        let ask = ask.to_string();
+        let (status, body) = send(&socket, "/llm/chat/completions", Some(&ask)).await;
+        assert_eq!(status, "HTTP/1.1 200 OK", "{body}");
+        let (_, called) = used.recv().await.unwrap();
+        assert_eq!(
+            called.upstream.reference(),
+            "cliproxy/gemini-3.8-flash-high"
+        );
+        assert_eq!(called.effort.as_deref(), Some("xhigh"));
+    }
+    assert_eq!(asked.lock().unwrap().len(), 3);
+
+    scope.close(Duration::from_secs(5)).await;
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 #[tokio::test]
 async fn an_answer_that_stops_coming_is_broken_off() {
     let mut scope = Scope::new();
@@ -186,7 +292,7 @@ async fn an_answer_that_stops_coming_is_broken_off() {
         base_url.replace("/v1", "/quiet"),
         Duration::from_millis(200),
     );
-    let (model, mut used) = Model::heard(quiet);
+    let (model, mut used) = Models::heard(quiet);
     let (dir, socket) = vm(&mut scope, "quiet", Some(model));
 
     // Before its last chunk.
@@ -236,7 +342,7 @@ async fn what_the_agents_use_is_the_conversations(pool: PgPool) {
     let mut scope = Scope::new();
     let asked = Asked::default();
     let base_url = provider(&mut scope, Arc::clone(&asked)).await;
-    let model = Model::start(upstream(base_url), pool.clone(), &mut scope);
+    let model = Models::start(upstream(base_url), pool.clone(), &mut scope);
     let dir = std::env::temp_dir().join(format!("max-forward-used-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let socket = dir.join("mine.sock");

@@ -64,8 +64,8 @@ pub struct Chosen {
     pub caller: Arc<dyn Caller>,
 }
 
-/// Where a background agent's model calls go. The MCP service forwards
-/// them there with the provider's key, which never enters the VM.
+/// Where a model call from a VM goes. The MCP service forwards it there
+/// with the provider's key, which never enters the VM.
 #[derive(Clone, Debug)]
 pub struct Upstream {
     pub provider: String,
@@ -73,19 +73,50 @@ pub struct Upstream {
     pub base_url: String,
     pub api_key: Option<String>,
     pub headers: Vec<(String, String)>,
-    /// The id sent to the API, whatever the agent asks for.
+    /// The id sent to the API.
     pub model: String,
     pub window: u32,
     pub max_output: Option<u32>,
-    pub effort: Option<String>,
     /// How long the provider may keep quiet, before its answer or within it.
     pub idle: Duration,
 }
 
 impl Upstream {
-    /// `provider/model`, as the configuration names it.
+    /// `provider/model`, as the configuration names it, and as a call
+    /// from a VM does.
     pub fn reference(&self) -> String {
         format!("{}/{}", self.provider, self.model)
+    }
+}
+
+/// The models what runs in a VM may call: every configured one, and the
+/// one background agents run on unless they are started on another.
+#[derive(Clone, Debug)]
+pub struct Upstreams {
+    /// The agents' own, `llm.job`, and how hard it is asked to think.
+    pub default: Arc<Upstream>,
+    pub effort: Option<String>,
+    /// Each by its `provider/model`, the agents' own among them.
+    pub all: BTreeMap<String, Arc<Upstream>>,
+}
+
+impl Upstreams {
+    /// One model and no other.
+    pub fn only(upstream: Upstream, effort: Option<&str>) -> Self {
+        let default = Arc::new(upstream);
+        Self {
+            all: BTreeMap::from([(default.reference(), Arc::clone(&default))]),
+            default,
+            effort: effort.map(str::to_owned),
+        }
+    }
+
+    /// The model a call names: the agents' own for no name, and for one
+    /// that isn't configured, so that a program which knows nothing of
+    /// the names here can call a model all the same.
+    pub fn named(&self, name: Option<&str>) -> &Arc<Upstream> {
+        name.and_then(|name| self.all.get(name))
+            .unwrap_or(&self.default)
     }
 }
 
@@ -209,30 +240,44 @@ impl Models {
         Some(self.choose(&dreamer.model, dreamer.effort.as_deref()))
     }
 
-    /// Where background agents' model calls go, when a model is
-    /// configured for them. Reads the provider's key.
-    pub fn job(&self) -> Option<Result<Upstream>> {
+    /// Where model calls from the VMs go, when background agents have a
+    /// model: to any configured one, and to theirs unless another is
+    /// named. Reads the providers' keys.
+    pub fn job(&self) -> Option<Result<Upstreams>> {
         let job = self.llm.job.as_ref()?;
-        Some(self.upstream(&job.model, job.effort.as_deref()))
+        Some(self.upstreams(job))
     }
 
-    fn upstream(&self, reference: &str, effort: Option<&str>) -> Result<Upstream> {
-        let (name, provider, model, settings) = self.llm.model(reference)?;
-        Ok(Upstream {
-            provider: name.to_owned(),
-            protocol: provider.protocol.into(),
-            base_url: provider.base_url.clone(),
-            api_key: provider.api_key()?,
-            headers: provider
-                .headers
-                .iter()
-                .map(|(name, value)| (name.clone(), value.clone()))
-                .collect(),
-            model: model.to_owned(),
-            window: settings.context_window,
-            max_output: settings.max_output,
-            effort: effort.map(str::to_owned),
-            idle: Duration::from_secs(provider.stream_idle_timeout_secs),
+    fn upstreams(&self, job: &config::Selection) -> Result<Upstreams> {
+        let mut all = BTreeMap::new();
+        for (name, provider) in &self.llm.providers {
+            let api_key = provider.api_key()?;
+            for (model, settings) in &provider.models {
+                let upstream = Upstream {
+                    provider: name.clone(),
+                    protocol: provider.protocol.into(),
+                    base_url: provider.base_url.clone(),
+                    api_key: api_key.clone(),
+                    headers: provider
+                        .headers
+                        .iter()
+                        .map(|(name, value)| (name.clone(), value.clone()))
+                        .collect(),
+                    model: model.clone(),
+                    window: settings.context_window,
+                    max_output: settings.max_output,
+                    idle: Duration::from_secs(provider.stream_idle_timeout_secs),
+                };
+                all.insert(upstream.reference(), Arc::new(upstream));
+            }
+        }
+        let default = all
+            .get(&job.model)
+            .ok_or_else(|| eyre!("llm.job names no configured model: {:?}", job.model))?;
+        Ok(Upstreams {
+            default: Arc::clone(default),
+            effort: job.effort.clone(),
+            all,
         })
     }
 
@@ -486,5 +531,34 @@ mod tests {
         assert!(models.turn(Some("test/nope"), None).is_err());
         assert!(models.turn(Some("big"), None).is_err());
         assert_eq!(models.references(), ["test/big", "test/small", "test/wide"]);
+    }
+
+    /// What runs in a VM may call any configured model, and calls the
+    /// agents' own unless it names another.
+    #[test]
+    fn a_vm_calls_any_model_and_the_agents_own_by_default() {
+        let script = Arc::new(Script::default());
+        let mut llm = testing::config();
+        // No model for the agents, no model to call.
+        let none = Models::with_callers(&llm, |_, _| Ok(script.clone() as Arc<dyn Caller>));
+        assert!(none.unwrap().job().is_none());
+
+        llm.job = Some(config::Selection {
+            model: "test/small".into(),
+            effort: Some("low".into()),
+        });
+        let models = Models::with_callers(&llm, |_, _| Ok(script.clone() as Arc<dyn Caller>));
+        let upstreams = models.unwrap().job().unwrap().unwrap();
+        assert_eq!(upstreams.default.reference(), "test/small");
+        assert_eq!(upstreams.effort.as_deref(), Some("low"));
+        let names: Vec<_> = upstreams.all.keys().collect();
+        assert_eq!(names, ["test/big", "test/small", "test/wide"]);
+        let named = |name| upstreams.named(name).reference();
+        assert_eq!(named(Some("test/wide")), "test/wide");
+        assert_eq!(upstreams.named(Some("test/big")).max_output, Some(8000));
+        // No name, the id without its provider, or a stranger's.
+        for name in [None, Some("big"), Some("gpt-4o")] {
+            assert_eq!(named(name), "test/small");
+        }
     }
 }

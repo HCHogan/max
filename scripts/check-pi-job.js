@@ -19,6 +19,11 @@ const [pi] = process.argv.slice(2);
 const repo = path.resolve(__dirname, "..");
 const UNIT = "max-agent-1";
 const TASK = "@小明 帮我查一下\n第二行";
+// The agent's model, as max names one: `provider/model`, and the model's
+// own name may have a / as well.
+const MODEL = "cliproxy/team/model-1";
+// How hard Max told an agent to think: `max-agent start --effort`.
+const EFFORT = { steers: "high", last: "xhigh" };
 // How the agent's own system text begins: nix/agent-system.md.
 const SYSTEM = "你是 Max 的后台 agent。";
 // With what bash would take for the match in a substitution.
@@ -54,7 +59,7 @@ function since(messages) {
 }
 
 function host(scenario) {
-  const seen = { systems: [], calls: [], strangers: [] };
+  const seen = { systems: [], calls: [], asked: [], strangers: [] };
   const server = http.createServer((req, res) => {
     let body = "";
     req.on("data", chunk => (body += chunk));
@@ -66,6 +71,8 @@ function host(scenario) {
       const request = JSON.parse(body);
       seen.systems.push(request.messages.filter(m => m.role === "system" || m.role === "developer").map(m => m.content).join("\n"));
       seen.calls.push(since(request.messages));
+      // The model it calls, and how hard it asks it to think.
+      seen.asked.push([request.model, request.reasoning_effort ?? null]);
       const { content, tool } = SCRIPT[scenario](seen.calls.length);
       const delta = { role: "assistant", content };
       if (tool) {
@@ -126,7 +133,9 @@ async function agent(scenario) {
   fs.writeFileSync(path.join(jobs, "title"), "试试\n");
   fs.writeFileSync(path.join(jobs, "started"), `${Math.floor(Date.now() / 1000)}\n`);
   fs.writeFileSync(path.join(jobs, "limit"), "21600\n");
-  fs.writeFileSync(path.join(jobs, "model.json"), JSON.stringify({ api: "openai-completions", model: "m", window: 100000, max_output: null, effort: null }));
+  // The model as max names it, its provider first, and how hard Max
+  // would have it think.
+  fs.writeFileSync(path.join(jobs, "model.json"), JSON.stringify({ api: "openai-completions", model: MODEL, window: 100000, max_output: null, effort: EFFORT[scenario] ?? null }));
   (STEERS[scenario] ?? []).forEach((steer, n) => fs.writeFileSync(path.join(jobs, "inbox", `${n}`), `${steer}\n`));
   if (scenario === "steers") fs.writeFileSync(path.join(dir, "projects", notesName(cwd)), `${NOTES}\n`);
   // As after `max-agent ask`: the agent waits for its answer.
@@ -247,6 +256,8 @@ const checks = {
       assert.ok(!system.includes(UNTRUSTED), "project system prompts stay untrusted");
       assert.ok(!system.includes(SIBLING), "other projects' context files don't load");
       assert.deepEqual(ran.seen.strangers, [], "calls of anything but the model");
+      const asked = [MODEL, EFFORT[scenario] ?? null];
+      assert.deepEqual(ran.seen.asked, ran.seen.asked.map(() => asked), "the model by max's name for it, asked to think as told");
       // pi exits only once nothing is left to wait for: else this is 60
       // seconds and a kill.
       assert.ok(ran.took < 15_000, `took ${ran.took} ms`);

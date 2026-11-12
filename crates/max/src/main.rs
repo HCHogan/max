@@ -31,7 +31,7 @@ use max::config::{self, Config};
 use max::conversation::{Heard, Place, Shared, Signal};
 use max::dreamer::Dreamer;
 use max::embedding::Embedder;
-use max::llm::{Models, Upstream};
+use max::llm::{Models, Upstream, Upstreams};
 use max::mcp;
 use max::media::caption::Captioner;
 use max::media::download::Download;
@@ -158,7 +158,7 @@ fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
             let served = axum::serve(provider, app);
             let _ = served.with_graceful_shutdown(stop.cancelled_owned()).await;
         });
-        let (agents, mut used) = mcp::Model::heard(Upstream {
+        let only = Upstream {
             provider: "vm-check".into(),
             protocol: max_core::item::Protocol::Chat,
             base_url,
@@ -167,9 +167,9 @@ fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
             model: "vm-check".into(),
             window: 100_000,
             max_output: None,
-            effort: None,
             idle: Duration::from_secs(60),
-        });
+        };
+        let (agents, mut used) = mcp::Models::heard(Upstreams::only(only, None));
         let vms = Vms::start(vm, &mut services, signals, Arc::default(), Some(agents))?;
         // A store of vm-check's own, for what calls show the model.
         let stored = std::env::temp_dir().join(format!("maxx-vm-check-{}", std::process::id()));
@@ -633,11 +633,12 @@ async fn serve(config: Config) -> Result<()> {
     let asking = signals.clone();
     // Their secrets are read now, so a missing one stops max here.
     let apis = Arc::new(mcp::api::Apis::load(&config.api)?);
-    // The background agents' model, whose key is read now as well. The
+    // The models the VMs call, whose keys are read now as well: the
+    // background agents' own, and any other an agent is started on. The
     // agents are units in the VMs: max forwards their model calls, and
     // counts what they use.
     let agents = match models.job().transpose()? {
-        Some(upstream) => Some(mcp::Model::start(upstream, pool.clone(), &mut services)),
+        Some(upstreams) => Some(mcp::Models::start(upstreams, pool.clone(), &mut services)),
         None => {
             info!("no model for background agents: max-agent starts none");
             None

@@ -15,8 +15,9 @@ dir=/run/max/jobs/$unit
 # The unit's, removed when it stops.
 conf=${RUNTIME_DIRECTORY:?max-pi runs with a RuntimeDirectory}
 workdir=$(cat "$dir/workdir")
-# What max says of the model: its api ("openai-completions" or
-# "openai-responses"), id, window, max_output and effort (or null).
+# What max-agent start chose of what max says of the models: its api
+# ("openai-completions" or "openai-responses"), the name max calls it by,
+# window, max_output and effort (or null).
 model=$(cat "$dir/model.json")
 field() { jq -r "$1" <<< "$model"; }
 
@@ -28,6 +29,9 @@ jq -n --argjson model "$model" '{
     models: [{
       id: $model.model,
       reasoning: ($model.effort != null),
+      # The two highest efforts go as they are, for the provider to take
+      # or refuse: to a model outside its own list pi sends high for them.
+      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
       input: ["text", "image"],
       contextWindow: $model.window
     } + (if $model.max_output then { maxTokens: $model.max_output } else {} end)]

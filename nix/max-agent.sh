@@ -3,9 +3,14 @@
 # runs this with shell; max, the host, keeps nothing of an agent. See
 # "Background agents" in docs/rust-rewrite.md.
 #
-#   max-agent start [--title TEXT] [--workdir DIR]
+#   max-agent start [--title TEXT] [--workdir DIR] [--model NAME] [--effort LEVEL]
 #       The task on standard input: starts an agent on it and says its
 #       name, max-agent-N. Its report comes back to Max when it ends.
+#       It runs on the agents' own model, or on the one named, and
+#       thinks as hard as LEVEL says, one of pi's --thinking: the
+#       provider is asked for just that, and may refuse it.
+#   max-agent models
+#       The models an agent can run on, each with its window.
 #   max-agent steer NAME
 #       What to tell a running agent, on standard input: a change of
 #       direction, more to go on, or the answer to what it asked.
@@ -31,15 +36,48 @@ fail() {
   exit 1
 }
 
+# What max says of the models, in a file: the agents' own, and under
+# .models every one a call can name. The keys stay with max.
+told() {
+  local about status
+  about=$(mktemp)
+  status=$(curl -s -m 20 -o "$about" -w '%{http_code}' http://127.0.0.1:7777/llm || true)
+  case "$status" in
+    200) echo "$about" ;;
+    404) rm -f "$about" && fail "no model is configured for background agents" ;;
+    *) rm -f "$about" && fail "max can't be reached for the agents' model just now ($status); try again in a moment" ;;
+  esac
+}
+
+models() {
+  local about
+  about=$(told)
+  # The agents' own first.
+  jq -r '.model as $own | .effort as $effort
+    | [(.models // [.])[] | select(.model == $own)] + [(.models // [])[] | select(.model != $own)]
+    | .[]
+    | "\(.model)  \(.window) tokens"
+      + (if .model == $own then "  (the default" + (if $effort then ", effort \($effort)" else "" end) + ")" else "" end)' "$about"
+  rm -f "$about"
+}
+
 start() {
-  local title="" workdir=/work
+  local title="" workdir=/work model="" effort=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --title) title=$2 && shift 2 ;;
       --workdir) workdir=$2 && shift 2 ;;
-      *) fail "start takes --title and --workdir, not $1; the task comes on standard input" ;;
+      --model) model=$2 && shift 2 ;;
+      --effort) effort=$2 && shift 2 ;;
+      *) fail "start takes --title, --workdir, --model and --effort, not $1; the task comes on standard input" ;;
     esac
   done
+  # pi's levels: it takes any other word for medium, and says so where
+  # nobody reads it.
+  case "$effort" in
+    "" | off | minimal | low | medium | high | xhigh | max) ;;
+    *) fail "--effort is one of off, minimal, low, medium, high, xhigh and max, not $effort" ;;
+  esac
   local task
   task=$(cat)
   [ -n "${task//[[:space:]]/}" ] || fail "the task comes on standard input: max-agent start --title … <<'EOF' … EOF"
@@ -51,15 +89,18 @@ start() {
   running=$(systemctl list-units --no-legend --plain --state=active,activating 'max-agent-*.service' | wc -l)
   [ "$running" -lt "$most" ] || fail "$most background agents run already: wait for one to end, or stop one with systemctl stop"
 
-  # What max says of the agents' model; the key stays with max.
-  local model status
-  model=$(mktemp)
-  status=$(curl -s -m 20 -o "$model" -w '%{http_code}' http://127.0.0.1:7777/llm || true)
-  case "$status" in
-    200) ;;
-    404) rm -f "$model" && fail "no model is configured for background agents" ;;
-    *) rm -f "$model" && fail "max can't be reached for the agents' model just now ($status); try again in a moment" ;;
-  esac
+  # The model it runs on, as max-pi reads it: the agents' own with its
+  # effort, or the one named, which thinks as hard as --effort says or
+  # as it does when nothing is said.
+  local about chosen
+  about=$(told)
+  chosen=$(jq -c --arg model "$model" --arg effort "$effort" '
+    (if $model == "" or $model == .model then del(.models)
+     else (.models // [])[] | select(.model == $model) end)
+    | if $effort == "" then . else .effort = $effort end' "$about")
+  rm -f "$about"
+  [ -n "$chosen" ] || fail "there is no model $model: max-agent models lists them"
+  model=$(jq -r .model <<< "$chosen")
 
   mkdir -p "$workdir" "$kept" /work/.max/projects
   local number unit dir
@@ -73,14 +114,14 @@ start() {
   mkdir -p "$dir/inbox"
   printf '%s\n' "$task" > "$dir/task"
   echo "$workdir" > "$dir/workdir"
-  mv "$model" "$dir/model.json"
+  printf '%s\n' "$chosen" > "$dir/model.json"
   if [ -z "${title//[[:space:]]/}" ]; then
     # The task's first line, cut short.
     title=$(sed -n '/[^[:space:]]/{s/^[[:space:]]*//;p;q}' <<< "$task")
     [ "${#title}" -le 30 ] || title=${title:0:30}…
   fi
   max-jobs start --unit "$unit" --agent --limit "$limit" --title "$title" --workdir "$workdir" -- max-pi "$unit"
-  echo "$unit started in $workdir, for at most $((limit / 3600)) hours. When it ends, its report comes back to you as [$unit 完成]: don't wait for it. To tell it more, max-agent steer $unit with the words on standard input; to stop it, systemctl stop $unit."
+  echo "$unit started in $workdir on $model, for at most $((limit / 3600)) hours. When it ends, its report comes back to you as [$unit 完成]: don't wait for it. To tell it more, max-agent steer $unit with the words on standard input; to stop it, systemctl stop $unit."
 }
 
 steer() {
@@ -118,7 +159,8 @@ $text
 
 case "${1:-}" in
   start) shift && start "$@" ;;
+  models) models ;;
   steer) shift && steer "$@" ;;
   ask) shift && ask "$@" ;;
-  *) fail "start, steer or ask, not '${1:-}'" ;;
+  *) fail "start, models, steer or ask, not '${1:-}'" ;;
 esac

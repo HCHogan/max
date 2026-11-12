@@ -23,10 +23,15 @@ let
       return [{ tool: "sleep 3; echo 查过了" }, { content: "报告：做完了" }][n] ?? { content: "多说了" };
     };
     const text = message => (typeof message.content === "string" ? message.content : (message.content ?? []).map(part => part.text ?? "").join(""));
+    // The models max says a call can name: the agents' own, and another.
+    const own = { api: "openai-completions", model: "test/m", window: 100000, max_output: null };
+    const wide = { api: "openai-completions", model: "test/team/wide", window: 200000, max_output: null };
     const model = (body, res) => {
-      const { messages } = JSON.parse(body);
+      const { messages, model, reasoning_effort } = JSON.parse(body);
       const users = messages.filter(message => message.role === "user").map(text);
       fs.appendFileSync("/run/llm-heard", JSON.stringify(users) + "\n");
+      // The model the call names, and how hard it asks it to think.
+      fs.appendFileSync("/run/llm-asked", JSON.stringify([model, reasoning_effort ?? null]) + "\n");
       const n = messages.filter(message => message.role === "assistant").length;
       const { content, tool } = said(users[0] ?? "", n);
       const delta = { role: "assistant", content };
@@ -49,11 +54,11 @@ let
           res.writeHead(503, { "max-away": "1", "content-length": "0" });
           return res.end();
         }
-        // The agents' model: what max says of it, and its calls.
+        // The models: what max says of them, and their calls.
         if (req.url === "/llm" && fs.existsSync("/run/no-model")) return res.writeHead(404).end();
         if (req.url === "/llm") {
           res.writeHead(200, { "content-type": "application/json" });
-          return res.end(JSON.stringify({ api: "openai-completions", model: "m", window: 100000, max_output: null, effort: null }));
+          return res.end(JSON.stringify({ ...own, effort: null, models: [own, wide] }));
         }
         if (req.url === "/llm/chat/completions") return model(body, res);
         const { id, method, params } = JSON.parse(body);
@@ -243,7 +248,7 @@ pkgs.testers.runNixOSTest {
 
     with subtest("an agent works on its task, is told more, and its report wakes Max"):
         said = machine.succeed("max-agent start --title 试试 --workdir proj <<< '查一下明天的天气'")
-        assert said.startswith("max-agent-1 started in /work/proj, for at most 6 hours."), said
+        assert said.startswith("max-agent-1 started in /work/proj on test/m, for at most 6 hours."), said
         listed = machine.succeed("max-jobs list")
         assert listed.startswith("max-agent-1 · ") and listed.strip().endswith("· agent · 试试"), listed
         machine.wait_until_succeeds("test -s /run/llm-heard", timeout=120)
@@ -254,6 +259,8 @@ pkgs.testers.runNixOSTest {
         assert machine.succeed("cat /work/.max/jobs/max-agent-1.md") == "# max-agent-1 试试\n\n报告：做完了\n"
         heard = machine.succeed("tail -n 1 /run/llm-heard")
         assert "查一下明天的天气" in heard and "顺便看后天" in heard, heard
+        # On the agents' own model, by max's name for it.
+        assert machine.succeed("sort -u /run/llm-asked") == '["test/m",null]\n'
         machine.wait_until_fails("test -e /run/max/jobs/max-agent-1")
         # Its notes are its directory's, and it was told where.
         assert machine.succeed("ls /work/.max/projects /work/proj") == "/work/.max/projects:\n\n/work/proj:\n"
@@ -278,6 +285,21 @@ pkgs.testers.runNixOSTest {
         assert "开始查" in machine.succeed("cat /work/.max/jobs/max-agent-3.md")
         machine.succeed("sleep 3")
         assert len(wakes()) == 7, wakes()
+
+    with subtest("an agent runs on the model Max names, and thinks as hard as told"):
+        listed = machine.succeed("max-agent models")
+        assert listed == "test/m  100000 tokens  (the default)\ntest/team/wide  200000 tokens\n", listed
+        said = machine.succeed("max-agent start --model test/team/wide --effort xhigh --title 换个模型 <<< '查一下后天的天气'")
+        assert said.startswith("max-agent-4 started in /work on test/team/wide, for at most 6 hours."), said
+        notice = woken(8)
+        assert notice.startswith("[max-agent-4 完成] 换个模型\n报告：做完了\n"), notice
+        assert machine.succeed("tail -n 1 /run/llm-asked") == '["test/team/wide","xhigh"]\n'
+        # One max doesn't have starts nothing, and takes no number.
+        refused = machine.fail("max-agent start --model test/nope <<< '查一下' 2>&1")
+        assert "there is no model test/nope: max-agent models lists them" in refused, refused
+        refused = machine.fail("max-agent start --effort hard <<< '查一下' 2>&1")
+        assert "--effort is one of off, minimal, low, medium, high, xhigh and max, not hard" in refused, refused
+        assert machine.succeed("cat /work/.max/jobs/.count").strip() == "4"
 
     with subtest("without a model for them there are no agents"):
         machine.succeed("touch /run/no-model")

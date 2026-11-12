@@ -48,7 +48,9 @@ the number in `nix/contract.nix` with any change to what the two say to
 each other: `max-jobs`' arguments or the line a call prints, the layout
 of `/run/max/jobs`, the runner's input, the routes a guest calls. A VM
 whose guest keeps another number is restarted when max attaches to it;
-one with the same number runs on.
+one with the same number runs on. A change an older guest goes on
+working with, such as a field more in what a route answers, needs no new
+number.
 
 ## Queries
 

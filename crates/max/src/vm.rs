@@ -107,15 +107,15 @@ pub struct Vm {
 
 impl Vms {
     /// Starts the service in `scope`; what programs in the VMs say to Max
-    /// goes to `signals`, the `apis` are theirs to call, and `agents` is
-    /// the model of the background agents that run in them, if there is
-    /// one.
+    /// goes to `signals`, the `apis` are theirs to call, and `agents` are
+    /// the models they may call, if the background agents that run in
+    /// them have one.
     pub fn start(
         config: config::Vm,
         scope: &mut Scope,
         signals: UnboundedSender<Signal>,
         apis: Arc<Apis>,
-        agents: Option<mcp::Model>,
+        agents: Option<mcp::Models>,
     ) -> Result<Self> {
         let guest = Guest::load(&config.guest)?;
         std::fs::create_dir_all(&config.dir)?;
@@ -330,7 +330,7 @@ struct Service {
     config: Arc<config::Vm>,
     guest: Arc<Guest>,
     apis: Arc<Apis>,
-    agents: Option<mcp::Model>,
+    agents: Option<mcp::Models>,
     signals: UnboundedSender<Signal>,
     idle: Duration,
     vms: HashMap<ConversationId, State>,
@@ -348,7 +348,7 @@ async fn run(
     config: config::Vm,
     guest: Guest,
     apis: Arc<Apis>,
-    agents: Option<mcp::Model>,
+    agents: Option<mcp::Models>,
     signals: UnboundedSender<Signal>,
     mut requests: UnboundedReceiver<Request>,
 ) {

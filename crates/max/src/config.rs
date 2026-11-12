@@ -366,9 +366,10 @@ pub struct Llm {
     /// The model that says in words what a picture or sticker shows. It
     /// has to see pictures. Without it, nothing is captioned.
     pub caption: Option<Selection>,
-    /// The model background agents use: pi, in the group's VM, which
-    /// reaches it through the VM's MCP service. Without it, there are no
-    /// background agents.
+    /// The model background agents run on, unless Max starts one on
+    /// another of the configured models: pi, in the group's VM, which
+    /// reaches them through the VM's MCP service. Without it, there are
+    /// no background agents, and nothing in a VM calls a model.
     pub job: Option<Selection>,
     /// The model that tidies Max's memory files at night. Without it,
     /// they aren't tidied.
