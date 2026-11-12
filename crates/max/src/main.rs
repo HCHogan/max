@@ -28,7 +28,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
 use max::config::{self, Config};
-use max::conversation::{Place, Shared, Signal};
+use max::conversation::{Heard, Place, Shared, Signal};
 use max::dreamer::Dreamer;
 use max::embedding::Embedder;
 use max::llm::{Models, Upstream};
@@ -225,9 +225,12 @@ fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
                         let _ = reply.send(mcp::call(&tool, &called, args).await);
                         continue;
                     }
-                    Signal::Notice { text, .. } => (text, None),
+                    Signal::Heard {
+                        heard: Heard::Vm(text),
+                        ..
+                    } => (text, None),
                     // vm-check has no timeline, and one conversation.
-                    Signal::Subscribe { .. } | Signal::Ask { .. } => continue,
+                    Signal::Subscribe { .. } | Signal::Heard { .. } => continue,
                 };
                 // Noted before maxx wake hears back, and vm-check goes on.
                 noted

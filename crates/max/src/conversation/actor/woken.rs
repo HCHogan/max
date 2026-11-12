@@ -1,8 +1,10 @@
-//! Wakes from the group's own VM: `max-wake` from a program Max keeps
-//! there, and what the VM service says about the VM. See "Resident programs" in
-//! docs/rust-rewrite.md.
+//! Wakes from outside the chat: `maxx wake` from something in the group's
+//! own VM, what the VM service says about the VM, and a question or an
+//! answer from another conversation (`asking`). See "Resident programs"
+//! in docs/rust-rewrite.md.
 
 use super::*;
+use crate::conversation::Heard;
 use max_core::limits::HOUR;
 
 /// When the group's programs woke Max, in the last hour. Not a cap: Max
@@ -40,13 +42,39 @@ impl Conversation {
         Ok("woke Max".to_owned())
     }
 
+    /// What Max hears from outside its chat: each a wake, in the running
+    /// core or a new one.
+    pub(super) async fn heard(&mut self, heard: Heard) -> Result<()> {
+        match heard {
+            Heard::Vm(text) => self.vm_notice(&text).await,
+            Heard::Asked(question) => self.asked(question).await,
+            Heard::Answered(answer) => self.answered(answer).await,
+        }
+    }
+
     /// The VM service on the group's VM. Stopped, Max isn't told.
-    pub(super) async fn vm_notice(&mut self, text: String) -> Result<()> {
+    async fn vm_notice(&mut self, text: &str) -> Result<()> {
         if self.refuses(Does::STARTS).is_some() {
             return Ok(());
         }
-        let item = Notice::Vm { text: &text }.item(self.single());
+        let item = Notice::Vm { text }.item(self.single());
         self.wake_with(Reason::Program, item).await
+    }
+
+    /// The most tokens one item may take: the running core's, or the
+    /// next one's.
+    pub(super) fn single(&self) -> u32 {
+        let settings = &self.settings;
+        let window = match &self.core {
+            Some(a) => Some(a.chosen.window),
+            None => self
+                .shared
+                .models
+                .turn(settings.model.as_deref(), settings.effort.as_deref())
+                .ok()
+                .map(|chosen| chosen.window),
+        };
+        Budgets::for_window(window.unwrap_or(0)).single
     }
 }
 

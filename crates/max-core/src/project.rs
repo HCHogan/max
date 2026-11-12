@@ -29,7 +29,7 @@ pub struct Budgets {
     /// little more.
     pub tail_high: u32,
     pub tail_low: u32,
-    /// One message, job result or tool result; longer ones show an excerpt.
+    /// One message, notice or tool result; longer ones show an excerpt.
     pub single: u32,
 }
 

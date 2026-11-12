@@ -1,16 +1,14 @@
 //! What maxx tells Max: notices only the model reads, each the item of a
 //! wake and never a row of the timeline. A program's wake, which is how a
 //! background command and a background agent say they ended, a word about
-//! the VM, a question from another conversation and its answer, and why
-//! the classifier woke Max. How each is worded is here, in one place; the
+//! the VM, a question from another conversation, the answer to one put
+//! to another, and why the classifier woke Max. How each is worded is here, in one place; the
 //! prompt and the tools' guides describe them. The run's own two
 //! reminders are in max-core, with the run.
 
 use std::borrow::Cow;
 
-use max_core::ids::Handle;
 use max_core::item::{Item, ItemKind};
-use max_core::limits;
 use max_core::render::EXCERPT_CHARS;
 use max_db::links::Peer;
 
@@ -23,21 +21,20 @@ pub enum Notice<'a> {
     Woken { text: &'a str, count: usize },
     /// The VM service, on the group's VM.
     Vm { text: &'a str },
-    /// Max in another conversation asks Max here, and waits for `answer`
-    /// to name `number`.
+    /// Max in another conversation asks Max here: `answer` names
+    /// `number` to answer it.
     Asked {
         number: u32,
         from: &'a Peer,
         question: &'a str,
     },
-    /// The wait of question `ask`, put to `to`, is over: the question
-    /// again, since the core that asked may be gone, and the answer or why
-    /// there is none.
+    /// What Max in the conversation `by` said to what Max here asked it,
+    /// or why it says nothing: with the question again, since nothing
+    /// here kept it, and the core that asked may be gone.
     Answered {
-        ask: u32,
-        to: &'a Peer,
+        by: &'a Peer,
         question: &'a str,
-        answer: &'a Result<String, String>,
+        said: &'a Result<String, String>,
     },
 }
 
@@ -70,26 +67,18 @@ impl Notice<'_> {
                 question,
             } => {
                 format!(
-                    "[{} 问] {from}\n{}\n（那个会话的 Max 在等你回答：用 answer 回答，to 填 {number}；{} 小时内没答它就不等了。这个问题和你的回答都不会发到这边的聊天里）",
-                    Handle::Ask(number),
+                    "[ask#{number} 问] {from}\n{}\n（那个会话的 Max 问你的：用 answer 回答，to 填 {number}。它没在等：你答了它才会收到，不答它就什么也收不到。这个问题和你的回答都不会发到这边的聊天里）",
                     fitted(question, single),
-                    limits::ASK_WAIT.as_secs() / 3600,
                 )
             }
-            Notice::Answered {
-                ask,
-                to,
-                question,
-                answer,
-            } => {
-                let ask = Handle::Ask(ask);
+            Notice::Answered { by, question, said } => {
                 let question = fitted(question, single);
-                match answer {
+                match said {
                     Ok(answer) => format!(
-                        "[{ask} 回答] {to}\n问：{question}\n答：{}",
+                        "[回答] {by}\n问：{question}\n答：{}",
                         fitted(answer, single)
                     ),
-                    Err(why) => format!("[{ask} 没答成] {to}：{why}\n问：{question}"),
+                    Err(why) => format!("[没答成] {by}：{why}\n问：{question}"),
                 }
             }
         }

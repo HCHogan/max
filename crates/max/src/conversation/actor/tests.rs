@@ -19,7 +19,7 @@ use crate::command;
 use crate::conversation::testing::{
     from_xiaohong, from_xiaoming, group, private, privately, shared, text,
 };
-use crate::conversation::{Configured, Question};
+use crate::conversation::{Configured, Heard, Question};
 use crate::inbound::{InNode, Quote};
 use crate::llm::testing::{Answer, Script};
 
@@ -30,6 +30,9 @@ struct Harness {
     script: Arc<Script>,
     mailbox: UnboundedSender<Event>,
     outbound: UnboundedReceiver<Outgoing>,
+    /// What the actor sends other conversations' actors, through the
+    /// table.
+    signals: UnboundedReceiver<Signal>,
     done: Option<oneshot::Receiver<()>>,
     _scope: Scope,
 }
@@ -57,15 +60,6 @@ impl Harness {
     /// races the core's calls for the script's answers.
     async fn unprompted(pool: PgPool, idle_window_secs: u64) -> Self {
         Self::start(pool, Group, idle_window_secs, false, false, None, |_| {}).await
-    }
-
-    /// With ask#1, `question` put to c#9, waiting for its answer as far
-    /// as the actor knows.
-    async fn with_job(pool: PgPool, question: &str) -> Self {
-        Self::start(pool, Group, 300, true, false, None, |actor| {
-            actor.jobs.pretend(9, question);
-        })
-        .await
     }
 
     /// In 小明's private chat with Max.
@@ -112,6 +106,8 @@ impl Harness {
         let script = Arc::new(Script::default());
         let (mut shared, outbound) = shared(&pool, &script, idle_window_secs, owners);
         shared.vm_dir = vm_dir;
+        let (signals, heard) = mpsc::unbounded_channel();
+        shared.signals = signals;
         let mut scope = Scope::new();
         let (mailbox, rx) = mpsc::unbounded_channel();
         let mut actor = Conversation::new(Arc::new(shared), place, mailbox.clone())
@@ -128,6 +124,7 @@ impl Harness {
             script,
             mailbox,
             outbound,
+            signals: heard,
             done: Some(done),
             _scope: scope,
         }
@@ -1018,33 +1015,9 @@ async fn a_program_follows_the_rows_as_they_are_committed(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn kill_stops_the_jobs_too(pool: PgPool) {
-    let mut h = Harness::with_job(pool, "票价多少").await;
-    let jobs = h.poster().status(None).await.unwrap();
-    assert_eq!(
-        (jobs[0].handle.as_str(), jobs[0].title.as_str()),
-        ("ask#1", "? c#9: 票价多少")
-    );
-    // What ran in the VM under that name until 2026-11-12 is a unit
-    // there now.
-    let agent = h.poster().cancel(Handle::Agent(1)).await.unwrap_err();
-    assert!(agent.contains("systemctl stop max-agent-1"), "{agent}");
-    h.send(from_xiaoming(0, vec![me(), text(" /status")]));
-    let (_, status) = h.said().await;
-    assert!(
-        status.contains("job       ask#1 · 0m · ? c#9: 票价多少"),
-        "{status}"
-    );
-    h.send(from_xiaoming(1, vec![me(), text(" /kill")]));
-    let (_, killed) = h.said().await;
-    assert!(killed.contains("/kill → jobs stopped: ask#1"), "{killed}");
-    assert_eq!(h.poster().status(None).await, Ok(Vec::new()));
-    h.stop().await;
-}
-
-#[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn stop_ends_the_turn_and_its_jobs_and_nothing_starts_until_start(pool: PgPool) {
-    let mut h = Harness::with_job(pool, "票价多少").await;
+async fn stop_ends_the_turn_and_nothing_starts_until_start(pool: PgPool) {
+    // 小明 owns Max here, and no classifier call races the core's.
+    let mut h = Harness::start(pool, Group, 300, true, false, None, |_| {}).await;
     h.script.push(Answer::Hangs);
     h.send(at_max(0, " 写篇长文"));
     calls_reach(&h, 1).await;
@@ -1054,8 +1027,7 @@ async fn stop_ends_the_turn_and_its_jobs_and_nothing_starts_until_start(pool: Pg
         h.said().await.1,
         command::answer(
             "stop",
-            "stopped: messages are still recorded, but Max won't reply until @maxx /start\n\
-             jobs stopped: ask#1"
+            "stopped: messages are still recorded, but Max won't reply until @maxx /start"
         )
     );
     assert_eq!(h.turns().await[0].1, Some(Outcome::Interrupted));
@@ -1088,7 +1060,7 @@ async fn stop_ends_the_turn_and_its_jobs_and_nothing_starts_until_start(pool: Pg
         Err(stopped.clone())
     );
     h.mailbox
-        .send(Event::VmNotice("VM 起不来了".into()))
+        .send(Event::Heard(Heard::Vm("VM 起不来了".into())))
         .unwrap();
     let (reply, muted) = oneshot::channel();
     let call = Event::Call {
@@ -1101,7 +1073,6 @@ async fn stop_ends_the_turn_and_its_jobs_and_nothing_starts_until_start(pool: Pg
     assert_eq!(muted.await.unwrap().unwrap_err(), refused);
     let asked = h.poster().ask(ConversationId(9), "在吗".into()).await;
     assert_eq!(asked.unwrap_err(), stopped);
-    assert_eq!(h.poster().status(None).await, Ok(Vec::new()));
     assert_eq!(h.turns().await.len(), 1);
 
     // 小明 is Max's owner here.
@@ -1334,18 +1305,21 @@ async fn a_program_call_ends_at_the_conversations_call_time(pool: PgPool) {
     h.stop().await;
 }
 
-/// What Max in conversation 7 asks Max here, and where its answer goes.
-fn question(text: &str) -> (Event, oneshot::Receiver<Result<String, String>>) {
-    let (answer, answered) = oneshot::channel();
+/// What Max in conversation 7 asks Max here, conversation 9 as it names
+/// it.
+fn question(text: &str) -> Event {
     let question = Question {
         from: Peer {
             conversation: ConversationId(7),
             title: Some("hank".into()),
         },
+        to: Peer {
+            conversation: ConversationId(9),
+            title: Some("示波器群".into()),
+        },
         text: text.to_owned(),
-        answer,
     };
-    (Event::Asked(question), answered)
+    Event::Heard(Heard::Asked(question))
 }
 
 /// Max calls `answer` for question `to`.
@@ -1359,8 +1333,7 @@ async fn a_new_core_is_shown_the_questions_still_waiting(pool: PgPool) {
     let mut h = Harness::unprompted(pool, 1).await;
     h.send(from_xiaoming(0, vec![text("明天有活动")]));
     h.script.push(Answer::says("谁知道明天几点开始？"));
-    let (asked, answered) = question("明天的活动\n几点开始？");
-    h.mailbox.send(asked).unwrap();
+    h.mailbox.send(question("明天的活动\n几点开始？")).unwrap();
     assert_eq!(h.said().await.1, "谁知道明天几点开始？");
     let deadline = std::time::Instant::now() + PATIENCE;
     while h.turns().await.first().is_none_or(|turn| turn.1.is_none()) {
@@ -1375,7 +1348,22 @@ async fn a_new_core_is_shown_the_questions_still_waiting(pool: PgPool) {
     let waiting = "\n\n[等你回答的问题]\nask#1 c#7 hank：明天的活动 ⏎ 几点开始？\n\n[新消息]\n";
     assert!(shown.contains(waiting), "{shown}");
     assert_eq!(answer(&h, 1, "八点").await, Ok("c#7 hank".to_owned()));
-    assert_eq!(answered.await.unwrap(), Ok("八点".to_owned()));
+    // The answer goes back to who asked, with the question: nothing
+    // there kept it.
+    let Some(Signal::Heard {
+        conversation,
+        heard: Heard::Answered(answered),
+    }) = h.signals.recv().await
+    else {
+        panic!("no answer went back");
+    };
+    assert_eq!(conversation, ConversationId(7));
+    assert_eq!(answered.by.to_string(), "c#9 示波器群");
+    assert_eq!(answered.question, "明天的活动\n几点开始？");
+    assert_eq!(answered.said, Ok("八点".to_owned()));
+    // Answered, it is listed no more, and can't be answered again.
+    let again = answer(&h, 1, "九点").await.unwrap_err();
+    assert!(again.starts_with("there is no ask#1 to answer"), "{again}");
     h.stop().await;
 }
 

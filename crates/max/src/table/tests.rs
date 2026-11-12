@@ -13,7 +13,7 @@ use tokio::sync::oneshot;
 use super::*;
 use crate::command;
 use crate::conversation::testing::{self, from_xiaoming, offset, shared, text};
-use crate::conversation::{Outgoing, Question, ingest};
+use crate::conversation::{Heard, Outgoing, Question, ingest};
 use crate::inbound::{Chat, InNode, Person};
 use crate::llm::testing::{Answer, Script};
 use crate::mcp::Services;
@@ -470,9 +470,9 @@ async fn a_program_in_the_vm_wakes_a_group_nobody_has_written_in(pool: PgPool) {
     let shown = s.request_tail(0);
     assert!(shown.contains("[max-wake] CI 跑完了：2 failed"), "{shown}");
     // To the actor the wake started.
-    let notice = Signal::Notice {
+    let notice = Signal::Heard {
         conversation: place.conversation,
-        text: "VM 没开起来".into(),
+        heard: Heard::Vm("VM 没开起来".into()),
     };
     s.script.push(Answer::says("VM 出问题了，我去看看"));
     s.signals.send(notice).unwrap();
@@ -506,25 +506,23 @@ async fn a_question_starts_the_conversation_it_is_for(pool: PgPool) {
         .await
         .unwrap();
     drop(conn);
-    let question = |conversation| {
-        let (answer, answered) = oneshot::channel();
-        let question = Question {
-            from: Peer {
-                conversation: ConversationId(7),
-                title: Some("hank".into()),
-            },
-            text: "几点开始？".into(),
-            answer,
-        };
-        let ask = Signal::Ask {
-            conversation,
-            question,
-        };
-        (ask, answered)
+    let peer = |conversation, title: Option<&str>| Peer {
+        conversation,
+        title: title.map(str::to_owned),
     };
+    let ask = |from: Peer, to: Peer| Signal::Heard {
+        conversation: to.conversation,
+        heard: Heard::Asked(Question {
+            from,
+            to,
+            text: "几点开始？".into(),
+        }),
+    };
+    let here = peer(place.conversation, None);
     s.script.push(Answer::says("我看看"));
-    let (ask, mut answered) = question(place.conversation);
-    s.signals.send(ask).unwrap();
+    s.signals
+        .send(ask(peer(ConversationId(7), Some("hank")), here.clone()))
+        .unwrap();
     // Only what Max says is said: the question is its to read.
     assert_eq!(s.said().await, ("group:GROUP1".into(), "我看看".into()));
     let shown = s.request_tail(0);
@@ -532,17 +530,17 @@ async fn a_question_starts_the_conversation_it_is_for(pool: PgPool) {
         shown.contains("[ask#1 问] c#7 hank\n几点开始？\n"),
         "{shown}"
     );
-    // Max there hasn't called `answer`: the asker waits on.
-    assert!(answered.try_recv().is_err());
 
-    // Max serves no chat of this one: the asker hears so at once.
-    let (ask, answered) = question(ConversationId(999));
-    s.signals.send(ask).unwrap();
-    let answered = tokio::time::timeout(PATIENCE, answered).await.unwrap();
-    assert_eq!(
-        answered.unwrap(),
-        Err("Max serves no chat of that conversation".to_owned())
-    );
+    // Max serves no chat of the one it asks next: it hears so at once,
+    // as an answer comes, through the table.
+    s.script.push(Answer::says("那边问不了"));
+    s.signals
+        .send(ask(here, peer(ConversationId(999), Some("别处"))))
+        .unwrap();
+    assert_eq!(s.said().await.1, "那边问不了");
+    let shown = s.request_tail(1);
+    let unanswered = "[没答成] c#999 别处：Max serves no chat of that conversation\n问：几点开始？";
+    assert!(shown.contains(unanswered), "{shown}");
     s.stop().await;
 }
 

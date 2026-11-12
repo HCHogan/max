@@ -45,11 +45,11 @@ async fn a_turn_asks_and_answers_through_its_conversation(pool: PgPool) {
         else {
             panic!("{request:?}");
         };
-        reply.send(Ok(3)).unwrap();
+        reply.send(Ok("c#9 示波器群".to_owned())).unwrap();
         (to, question)
     };
     let (out, sent) = tokio::join!(asked, actor);
-    assert_eq!(out.unwrap(), json!({ "ask": "ask#3" }));
+    assert_eq!(out.unwrap(), json!({ "asked": "c#9 示波器群" }));
     let question = "明天的活动几点开始？".to_owned();
     assert_eq!(sent, (ConversationId(9), question));
 
@@ -76,11 +76,11 @@ async fn a_turn_asks_and_answers_through_its_conversation(pool: PgPool) {
             panic!("{request:?}");
         };
         reply
-            .send(Err("nobody waits for an answer to ask#5".to_owned()))
+            .send(Err("there is no ask#5 to answer".to_owned()))
             .unwrap();
     };
     let (out, ()) = tokio::join!(answered, actor);
-    let refused = Failure::new("not_answered", "nobody waits for an answer to ask#5");
+    let refused = Failure::new("not_answered", "there is no ask#5 to answer");
     assert_eq!(out.unwrap_err(), refused);
 }
 
@@ -133,10 +133,10 @@ async fn a_long_or_empty_question_never_leaves(pool: PgPool) {
         let Request::Ask { reply, .. } = request else {
             panic!("{request:?}");
         };
-        reply.send(Ok(1)).unwrap();
+        reply.send(Ok("c#9".to_owned())).unwrap();
     };
     let (out, ()) = tokio::join!(asked, actor);
-    assert_eq!(out.unwrap(), json!({ "ask": "ask#1" }));
+    assert_eq!(out.unwrap(), json!({ "asked": "c#9" }));
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]

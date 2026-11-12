@@ -1,7 +1,8 @@
 //! Two actors against the real database: 小明's private chat and the
 //! group, each with a row to start from, with a scripted model and a
 //! sender that only queues. A task plays the conversation table's part and
-//! hands a question to the actor it is for.
+//! hands a question, or an answer, to the actor it is for. No test here
+//! waits on a clock: nothing in asking does.
 
 use std::time::Duration;
 
@@ -46,6 +47,7 @@ impl Pair {
         let script = Arc::new(Script::default());
         let (mut shared, outbound) = shared(&pool, &script, 300, BTreeSet::new());
         let (signals, mut heard) = mpsc::unbounded_channel();
+        let back = signals.clone();
         shared.signals = signals;
         let shared = Arc::new(shared);
         let mut scope = Scope::new();
@@ -63,16 +65,21 @@ impl Pair {
         let routes = mailboxes.clone();
         scope.spawn(move |_| async move {
             while let Some(signal) = heard.recv().await {
-                let Signal::Ask {
+                let Signal::Heard {
                     conversation,
-                    question,
+                    heard,
                 } = signal
                 else {
                     panic!("{signal:?}");
                 };
-                match routes.get(&conversation) {
-                    Some(mailbox) => mailbox.send(Event::Asked(question)).unwrap(),
-                    None => question.refuse("Max serves no chat of that conversation"),
+                match (routes.get(&conversation), heard) {
+                    (Some(mailbox), heard) => mailbox.send(Event::Heard(heard)).unwrap(),
+                    // As the table says it.
+                    (None, Heard::Asked(question)) => {
+                        let why = "Max serves no chat of that conversation".to_owned();
+                        back.send(question.answered(Err(why))).unwrap();
+                    }
+                    (None, heard) => panic!("{heard:?}"),
                 }
             }
         });
@@ -106,7 +113,12 @@ impl Pair {
     }
 
     /// Max in `place` calls `ask`.
-    async fn ask(&self, place: &Place, to: ConversationId, question: &str) -> Result<u32, String> {
+    async fn ask(
+        &self,
+        place: &Place,
+        to: ConversationId,
+        question: &str,
+    ) -> Result<String, String> {
         self.max(place).ask(to, question.to_owned()).await
     }
 
@@ -180,29 +192,20 @@ async fn one_max_asks_another_and_no_chat_hears_of_it(pool: PgPool) {
     }
 
     // Max in the private chat asks Max in the group, which wakes for it.
+    let asked = Ok(format!("c#{r}"));
     p.script.push(Answer::says("我问问大家"));
-    assert_eq!(p.ask(&chat, r, " 明天几点开始？\n").await, Ok(1));
+    assert_eq!(p.ask(&chat, r, " 明天几点开始？\n").await, asked);
     p.says(&room, "我问问大家").await;
     let shown = p.request_tail(0);
-    let put = format!("[新消息]\n[ask#1 问] c#{c}\n明天几点开始？\n（那个会话的 Max 在等你回答：");
+    let put = format!("[新消息]\n[ask#1 问] c#{c}\n明天几点开始？\n（那个会话的 Max 问你的：");
     assert!(shown.contains(&put), "{shown}");
     // The group may ask nobody, and the question that woke it is shown
     // once: neither list is there.
     assert!(!shown.contains("[能问的会话]"), "{shown}");
     assert!(!shown.contains("[等你回答的问题]"), "{shown}");
-    // The wait is listed by its handle. Each side numbers the question
-    // its own way: the asker can't answer it.
-    let jobs = p.max(&chat).status(None).await.unwrap();
-    let listed = (jobs[0].handle.as_str(), jobs[0].title.as_str());
-    assert_eq!(
-        listed,
-        ("ask#1", format!("? c#{r}: 明天几点开始？").as_str())
-    );
+    // Who asked kept nothing of it: the number is the group's own.
     let own = p.answer(&chat, 1, "自问自答").await.unwrap_err();
-    assert!(
-        own.starts_with("ask#1 is a question asked from here"),
-        "{own}"
-    );
+    assert!(own.starts_with("there is no ask#1 to answer"), "{own}");
 
     // The answer names the question; it wakes Max in the private chat,
     // whose new core is told what it had asked and whom it may ask.
@@ -210,32 +213,30 @@ async fn one_max_asks_another_and_no_chat_hears_of_it(pool: PgPool) {
     assert_eq!(p.answer(&room, 1, "晚上八点\n").await, Ok(format!("c#{c}")));
     p.says(&chat, "群里说晚上八点").await;
     let shown = p.request_tail(1);
-    let heard = format!("[ask#1 回答] c#{r}\n问：明天几点开始？\n答：晚上八点\n");
+    let heard = format!("[回答] c#{r}\n问：明天几点开始？\n答：晚上八点\n");
     assert!(shown.ends_with(&heard), "{shown}");
     let askable = format!("\n\n[能问的会话]\nc#{r}\n\n[新消息]\n");
     assert!(shown.contains(&askable), "{shown}");
+    // Once.
     let again = p.answer(&room, 1, "九点").await.unwrap_err();
-    assert!(
-        again.contains("nobody waits for an answer to ask#1"),
-        "{again}"
-    );
+    assert!(again.starts_with("there is no ask#1 to answer"), "{again}");
 
-    // Withdrawn, an answer finds nobody, and neither side hears more.
+    // Nobody waits: left unanswered, neither side hears more, and an
+    // answer that comes late arrives all the same.
     p.script.push(Answer::says("等我想想"));
-    assert_eq!(p.ask(&chat, r, "有空吗").await, Ok(2));
+    assert_eq!(p.ask(&chat, r, "有空吗").await, asked);
     p.says(&room, "等我想想").await;
-    assert_eq!(p.max(&chat).cancel(Handle::Ask(2)).await, Ok(()));
-    let late = p.answer(&room, 2, "有").await.unwrap_err();
-    assert!(
-        late.contains("nobody waits for an answer to ask#2"),
-        "{late}"
-    );
     p.quiet().await;
+    p.script.push(Answer::says("知道了"));
+    assert_eq!(p.answer(&room, 2, "有").await, Ok(format!("c#{c}")));
+    p.says(&chat, "知道了").await;
+    let late = format!("[新消息]\n[回答] c#{r}\n问：有空吗\n答：有");
+    assert_eq!(p.request_tail(3), late);
 
-    // /stop there ends the wait of a question not yet answered: both
+    // /stop there answers for what was asked and not yet answered: both
     // cores still run, and read what comes as new input.
     p.script.push(Answer::says("稍等"));
-    assert_eq!(p.ask(&chat, r, "还在吗").await, Ok(3));
+    assert_eq!(p.ask(&chat, r, "还在吗").await, asked);
     p.says(&room, "稍等").await;
     p.script.push(Answer::says("好吧"));
     let me = InNode::MentionMe {
@@ -253,16 +254,19 @@ async fn one_max_asks_another_and_no_chat_hears_of_it(pool: PgPool) {
     expected.sort();
     assert_eq!(heard, expected);
     let why = format!("c#{r}：Max is stopped there (/stop)");
-    let unanswered = format!("[新消息]\n[ask#3 没答成] {why}\n问：还在吗");
-    assert_eq!(p.request_tail(4), unanswered);
+    let unanswered = format!("[新消息]\n[没答成] {why}\n问：还在吗");
+    assert_eq!(p.request_tail(5), unanswered);
+    // Stopped, Max there answers nothing.
+    let gone = p.answer(&room, 3, "在").await.unwrap_err();
+    assert!(gone.contains("Max is stopped here"), "{gone}");
 
     // Stopped, Max there isn't told of a question, and the asker hears
     // why at once.
     p.script.push(Answer::says("嗯"));
-    assert_eq!(p.ask(&chat, r, "真的不在？").await, Ok(4));
+    assert_eq!(p.ask(&chat, r, "真的不在？").await, asked);
     p.says(&chat, "嗯").await;
-    let unanswered = format!("[新消息]\n[ask#4 没答成] {why}\n问：真的不在？");
-    assert_eq!(p.request_tail(5), unanswered);
+    let unanswered = format!("[新消息]\n[没答成] {why}\n问：真的不在？");
+    assert_eq!(p.request_tail(6), unanswered);
     p.quiet().await;
 
     // Nothing of it is a row: maxx said only the command's answer.
@@ -272,38 +276,34 @@ async fn one_max_asks_another_and_no_chat_hears_of_it(pool: PgPool) {
     assert_eq!(p.count(turns).await, 1, "one core took every question");
 }
 
-#[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn max_declines_a_question_and_the_asker_hears_at_once(pool: PgPool) {
-    let mut p = Pair::new(pool).await;
-    let (chat, room) = (Arc::clone(&p.chat), Arc::clone(&p.room));
-    let r = room.conversation;
-    p.link(&chat, &room).await;
-    p.script.push(Answer::says("这个不能说"));
-    assert_eq!(p.ask(&chat, r, "群主的电话是多少？").await, Ok(1));
-    p.says(&room, "这个不能说").await;
-
-    // Declined there, it wakes Max here with why.
-    p.script.push(Answer::says("那边不肯说"));
-    assert_eq!(p.max(&room).cancel(Handle::Ask(1)).await, Ok(()));
-    p.says(&chat, "那边不肯说").await;
-    let declined =
-        format!("[ask#1 没答成] c#{r}：Max there chose not to answer it\n问：群主的电话是多少？\n");
-    assert!(
-        p.request_tail(1).ends_with(&declined),
-        "{}",
-        p.request_tail(1)
-    );
-    assert_eq!(p.max(&chat).status(None).await, Ok(Vec::new()));
-    // Once: nobody waits any more.
-    let again = p.max(&room).cancel(Handle::Ask(1)).await.unwrap_err();
-    assert!(
-        again.starts_with("ask#1 isn't waiting for an answer"),
-        "{again}"
-    );
-    let late = p.answer(&room, 1, "不告诉你").await.unwrap_err();
-    assert!(
-        late.contains("nobody waits for an answer to ask#1"),
-        "{late}"
-    );
-    p.quiet().await;
+/// Who is asked keeps the latest questions, and one pushed out can't be
+/// answered any more.
+#[test]
+fn the_latest_questions_are_kept_for_their_answers() {
+    let peer = |conversation| links::Peer {
+        conversation: ConversationId(conversation),
+        title: None,
+    };
+    let question = |n: usize| Question {
+        from: peer(7),
+        to: peer(9),
+        text: format!("第 {n} 问\n还有一行"),
+    };
+    let mut asked = Asked::default();
+    for n in 1..=ASKED_KEPT + 1 {
+        assert_eq!(asked.keep(question(n)), u32::try_from(n).unwrap());
+    }
+    assert_eq!(asked.kept.len(), ASKED_KEPT);
+    assert!(!asked.kept.contains_key(&1), "the oldest went");
+    let lines = asked.lines();
+    assert_eq!(lines.len(), ASKED_KEPT);
+    assert_eq!(lines[0], "ask#2 c#7：第 2 问 ⏎ 还有一行");
+    // Answered, it is kept no longer; the numbers go on.
+    asked.kept.remove(&2);
+    assert_eq!(asked.lines()[0], "ask#3 c#7：第 3 问 ⏎ 还有一行");
+    let next = u32::try_from(ASKED_KEPT).unwrap() + 2;
+    assert_eq!(asked.keep(question(0)), next);
+    // /stop answers for all of them.
+    assert_eq!(asked.take().len(), ASKED_KEPT);
+    assert!(asked.lines().is_empty());
 }

@@ -28,7 +28,7 @@ use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tracing::{debug, error, info, warn};
 
 use crate::command::{self, Command};
-use crate::conversation::{Conversation, Event, Place, Shared, Signal};
+use crate::conversation::{Conversation, Event, Heard, Place, Shared, Signal};
 use crate::inbound::Inbound;
 use crate::scope::Scope;
 
@@ -185,15 +185,14 @@ impl Table {
                 args,
                 reply,
             } => (conversation, Event::Call { tool, args, reply }),
-            Signal::Notice { conversation, text } => (conversation, Event::VmNotice(text)),
+            Signal::Heard {
+                conversation,
+                heard,
+            } => (conversation, Event::Heard(heard)),
             Signal::Subscribe {
                 conversation,
                 reply,
             } => (conversation, Event::Subscribe(reply)),
-            Signal::Ask {
-                conversation,
-                question,
-            } => (conversation, Event::Asked(question)),
         };
         if let Some(key) = self.chats.get(&conversation)
             && let Some(actor) = self.actors.get(key)
@@ -218,8 +217,11 @@ impl Table {
         drop(conn);
         let Some((key, endpoint, me)) = found else {
             warn!(%conversation, "something for a conversation Max isn't in");
-            if let Event::Asked(question) = event {
-                question.refuse("Max serves no chat of that conversation");
+            // Whoever asked hears why no answer comes, as it would from
+            // the conversation's actor: back through here.
+            if let Event::Heard(Heard::Asked(question)) = event {
+                let why = "Max serves no chat of that conversation".to_owned();
+                let _ = self.shared.signals.send(question.answered(Err(why)));
             }
             return Ok(());
         };

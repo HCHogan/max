@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use color_eyre::eyre::{Report, Result};
-use max_core::ids::{ConversationId, Handle, IdentityId, MessageId, PrincipalId, TurnId};
+use max_core::ids::{ConversationId, IdentityId, MessageId, PrincipalId, TurnId};
 use max_core::intent::{Decision, Entry, EntryKind, Intent, Reason};
 use max_core::item::{Item, ModelOutput, Timing};
 use max_core::message::{Content, Draft, DraftNode, Message, Node, Platform};
@@ -65,14 +65,14 @@ pub(super) struct Does {
 }
 
 impl Does {
-    /// Reads something, or changes a setting or a job already there.
+    /// Reads something, or changes a setting.
     pub(super) const LOOKS: Self = Self::new(false, false);
     /// Has Max say or do something as part of what already runs.
     pub(super) const ACTS: Self = Self::new(true, false);
     /// Starts work that says and does nothing by itself: a program's call
     /// of a tool, which is refused in its turn if it would act.
     pub(super) const RUNS: Self = Self::new(false, true);
-    /// Starts something Max is to act on: a job, a question, a wake.
+    /// Starts something Max is to act on: a question, an answer, a wake.
     pub(super) const STARTS: Self = Self::new(true, true);
 
     const fn new(acts: bool, starts: bool) -> Self {
@@ -158,11 +158,8 @@ pub struct Conversation {
     mailbox: UnboundedSender<Event>,
     /// Who addressed Max in the last [`FOLLOW_UP`], and when they last did.
     addressed: HashMap<IdentityId, Instant>,
-    /// The questions asked from here that wait for their answers; they
-    /// don't outlive the actor.
-    jobs: jobs::Jobs,
-    /// What Max in other conversations asked Max here, and still waits
-    /// to hear.
+    /// What Max in other conversations asked Max here, kept for its
+    /// answers.
     asked: asking::Asked,
     /// The wakes from the group's programs lately, and the held ones.
     woken: woken::Woken,
@@ -226,7 +223,6 @@ impl Conversation {
             next_task: 0,
             mailbox,
             addressed: HashMap::new(),
-            jobs: jobs::Jobs::default(),
             asked: asking::Asked::default(),
             woken: woken::Woken::default(),
             subscribers: broadcast::Sender::new(SUBSCRIBED_ROWS),
@@ -291,21 +287,21 @@ impl Conversation {
         }
     }
 
-    /// After an error: the core and the jobs are stopped, and the
-    /// conversation's unfinished turns end lost, as in a crash, so they
-    /// don't look running. A line says so, with the error, if the database
-    /// lets it. The next message starts the conversation again.
+    /// After an error: the core is stopped, and the conversation's
+    /// unfinished turns end lost, as in a crash, so they don't look
+    /// running. A line says so, with the error, if the database lets it.
+    /// The next message starts the conversation again. What runs in the
+    /// group's VM runs on: it isn't the actor's.
     async fn give_up(&mut self, error: &Report) {
         let core = self.core.take();
-        let jobs = self.cancel_jobs();
         let why = chain(error);
-        if let Err(error) = self.wind_up(core, &jobs, &why).await {
+        if let Err(error) = self.wind_up(core, &why).await {
             let conversation = self.place.conversation;
             warn!(%conversation, %error, "couldn't wind up after the error");
         }
     }
 
-    async fn wind_up(&mut self, core: Option<Active>, jobs: &[Handle], why: &str) -> Result<()> {
+    async fn wind_up(&mut self, core: Option<Active>, why: &str) -> Result<()> {
         let mut conn = self.shared.services.pool.acquire().await?;
         for turn in turns::unfinished(&mut conn, Some(self.place.conversation)).await? {
             turns::close(&mut conn, turn, &Outcome::Lost, Utc::now()).await?;
@@ -313,16 +309,8 @@ impl Conversation {
         drop(conn);
         if let Some(a) = core {
             drop(a.io);
-            let text = failure("the conversation failed", why, &[]);
+            let text = failure("the conversation failed", why);
             self.report_unanswered(&a.run, &text).await?;
-        }
-        if !jobs.is_empty() {
-            let text = failure("the conversation failed", why, jobs);
-            let draft = Draft {
-                reply_to: None,
-                nodes: vec![DraftNode::Text { text }],
-            };
-            self.say(draft, None, None, By::Host, None).await?;
         }
         Ok(())
     }
@@ -394,7 +382,7 @@ impl Conversation {
                 self.decide(decisions).await
             }
             Event::Request(request) => self.request(request).await,
-            Event::VmNotice(text) => self.vm_notice(text).await,
+            Event::Heard(heard) => self.heard(heard).await,
             Event::Call { tool, args, reply } => {
                 self.program_call(tool, args, reply);
                 Ok(())
@@ -409,8 +397,6 @@ impl Conversation {
                 let _ = reply.send(subscription);
                 Ok(())
             }
-            Event::Asked(question) => self.take_question(question).await,
-            Event::Answered { ask, answer } => self.question_answered(ask, answer).await,
             Event::Stop => {
                 self.stop();
                 Ok(())
@@ -819,19 +805,17 @@ impl Conversation {
         info!(turn = %a.turn, ?outcome, rounds = a.run.round(), warned = a.run.warned(), "the core ends");
         drop(conn);
         let why = match how {
-            End::Failed(FailReason::Model { error }) => {
-                failure("the model call failed", &error, &[])
-            }
+            End::Failed(FailReason::Model { error }) => failure("the model call failed", &error),
             End::Failed(FailReason::ContextExhausted) => {
                 let (tokens, limit) = a.run.context_tokens();
                 let reason = format!("{tokens} tokens, limit {limit}");
-                failure("the context is full", &reason, &[])
+                failure("the context is full", &reason)
             }
             End::Stopped => {
                 let grace = self.shared.stop_grace;
                 let reason =
                     format!("Max is shutting down, and the turn outlasted the {grace:?} grace");
-                failure("interrupted", &reason, &[])
+                failure("interrupted", &reason)
             }
             End::Kill(_) | End::Idle => return Ok(()),
         };
@@ -993,18 +977,13 @@ fn chain(error: &Report) -> String {
 
 /// What the host says when something fails, like a log, in a text code
 /// block: `error: what: reason`, the reason as it came on one line, cut
-/// when long; then the jobs stopped with it, if any.
-fn failure(what: &str, reason: &str, stopped: &[Handle]) -> String {
+/// when long.
+fn failure(what: &str, reason: &str) -> String {
     let reason = reason.split_whitespace().collect::<Vec<_>>().join(" ");
     let mut line = format!("error: {what}: ");
     line.extend(reason.chars().take(REASON_CHARS));
     if reason.chars().count() > REASON_CHARS {
         line.push('…');
-    }
-    if !stopped.is_empty() {
-        let jobs: Vec<String> = stopped.iter().map(Handle::to_string).collect();
-        line.push_str("\nstopped: ");
-        line.push_str(&jobs.join(", "));
     }
     command::fenced("text", &line)
 }
@@ -1012,7 +991,6 @@ fn failure(what: &str, reason: &str, stopped: &[Handle]) -> String {
 mod asking;
 mod commands;
 mod follow_up;
-mod jobs;
 mod links;
 mod program;
 mod requests;

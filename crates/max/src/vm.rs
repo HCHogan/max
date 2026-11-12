@@ -27,7 +27,7 @@ use tracing::{info, warn};
 use self::machine::{BOOT, Boot, Booted, Guest, Machine};
 use self::ssh::{Command, Connection};
 use crate::config;
-use crate::conversation::Signal;
+use crate::conversation::{Heard, Signal};
 use crate::mcp;
 use crate::mcp::api::{self, Apis};
 use crate::scope::Scope;
@@ -727,7 +727,11 @@ impl Service {
         // Max was told when it booted so.
         if !units && attached.is_none() {
             let text = "这个群的 VM 最近两次没开起来，或者开着开着自己停了，这次开机就没装 /work/.max/systemd 里的 unit，VM 也不再常开。多半是哪个 unit 的问题：用 systemctl、journalctl 查清楚、改好，再跑 max-units。".to_owned();
-            let _ = self.signals.send(Signal::Notice { conversation, text });
+            let heard = Heard::Vm(text);
+            let _ = self.signals.send(Signal::Heard {
+                conversation,
+                heard,
+            });
         }
     }
 

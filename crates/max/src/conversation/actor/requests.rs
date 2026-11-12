@@ -11,12 +11,6 @@ impl Conversation {
             return Ok(());
         }
         match request {
-            Request::Cancel { handle, reply } => {
-                let _ = reply.send(self.cancel_job(handle));
-            }
-            Request::Status { handle, reply } => {
-                let _ = reply.send(self.jobs_running(handle));
-            }
             Request::Configure { changes, reply } => {
                 self.configure(&changes, "Max").await?;
                 let _ = reply.send(Ok(self.configured()));
@@ -49,6 +43,6 @@ fn does(request: &Request) -> Does {
     match request {
         Request::Ask { .. } | Request::Wake { .. } => Does::STARTS,
         Request::Answer { .. } | Request::Act { .. } => Does::ACTS,
-        Request::Cancel { .. } | Request::Status { .. } | Request::Configure { .. } => Does::LOOKS,
+        Request::Configure { .. } => Does::LOOKS,
     }
 }

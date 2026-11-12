@@ -21,7 +21,6 @@ use super::chat_file::File;
 use super::config::Config;
 use super::find_stickers::FindStickers;
 use super::history::History;
-use super::jobs::{Cancel, Status};
 use super::mute_member::MuteMember;
 use super::program::{Say, Wake};
 use super::recall_message::RecallMessage;
@@ -83,8 +82,6 @@ pub static TOOLS: LazyLock<Vec<Spec>> = LazyLock::new(|| {
         spec::<RecallMessage>(),
         spec::<MuteMember>(),
         spec::<FindStickers>(),
-        spec::<Cancel>(),
-        spec::<Status>(),
         spec::<Ask>(),
         spec::<Answer>(),
         spec::<Config>(),

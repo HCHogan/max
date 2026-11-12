@@ -7,7 +7,6 @@ mod config;
 mod find_stickers;
 mod forward;
 mod history;
-mod jobs;
 mod mute_member;
 mod program;
 mod recall_message;

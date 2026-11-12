@@ -87,9 +87,9 @@ impl Conversation {
     /// [`FOLLOW_UP`], haven't been answered since, and aren't talking to
     /// someone else now. Nothing is lost: the call hasn't said anything,
     /// tools run only after it, and the next one is the same request with
-    /// the row added, which the provider has cached. Other wakes, a job's
-    /// or the classifier's, wait for the next call: they don't change the
-    /// answer someone is waiting for.
+    /// the row added, which the provider has cached. Other wakes, a
+    /// program's or the classifier's, wait for the next call: they don't
+    /// change the answer someone is waiting for.
     pub(super) async fn follow_up(&mut self, committed: &ingest::Committed) -> Result<()> {
         let now = Instant::now();
         let sender = committed.sender.identity;

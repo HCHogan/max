@@ -76,13 +76,8 @@ impl Conversation {
         }
         let answer = match command {
             Command::Status => self.status().await?,
-            Command::Kill => {
-                let jobs = self.kill(committed, name).await?;
-                if jobs.is_empty() {
-                    return Ok(());
-                }
-                stopped_jobs(&jobs)
-            }
+            // Not answered: whoever ran it sees Max stop.
+            Command::Kill => return self.kill(committed, name).await,
             Command::Stop => self.stop_replying(committed).await?,
             Command::Start => self.start_replying().await?,
             Command::Model(argument) => self.model(argument.as_deref()).await?,
@@ -111,11 +106,11 @@ impl Conversation {
         self.answer(name, &answer).await
     }
 
-    /// Ends the running core quietly and stops the jobs, for `/kill` and
-    /// `/stop`, the command `name`: the jobs of max's own that it stopped.
-    /// The background commands are the guest's units, and it is told to
-    /// stop them: a person's way to stop what runs without asking Max.
-    async fn kill(&mut self, committed: &Committed, name: &str) -> Result<Vec<Handle>> {
+    /// Ends the running core quietly, for `/kill` and `/stop`, the command
+    /// `name`. The background commands and agents are the guest's units,
+    /// and it is told to stop them: a person's way to stop what runs
+    /// without asking Max.
+    async fn kill(&mut self, committed: &Committed, name: &str) -> Result<()> {
         // Nothing the model has seen wakes it again, held or not.
         self.seen = self.head;
         if self.core.is_some() {
@@ -123,7 +118,7 @@ impl Conversation {
             self.end(End::Kill(reason)).await?;
         }
         self.stop_commands();
-        Ok(self.cancel_jobs())
+        Ok(())
     }
 
     /// Has the guest stop every background command, if the VM runs: one
@@ -165,16 +160,12 @@ impl Conversation {
         // the classifier, wake nobody now.
         self.intent.forget();
         // Nor is anything another conversation asked answered.
-        self.asked.refuse(asking::STOPPED_THERE);
-        let jobs = self.kill(committed, "stop").await?;
+        self.refuse_questions();
+        self.kill(committed, "stop").await?;
         let how = command::how(self.place.kind, &self.place.my_name, "/start");
-        let mut answer =
-            format!("stopped: messages are still recorded, but Max won't reply until {how}");
-        if !jobs.is_empty() {
-            answer.push('\n');
-            answer.push_str(&stopped_jobs(&jobs));
-        }
-        Ok(answer)
+        Ok(format!(
+            "stopped: messages are still recorded, but Max won't reply until {how}"
+        ))
     }
 
     /// `/start`: what was said while stopped isn't answered, but it is in
@@ -276,9 +267,6 @@ impl Conversation {
                 None => "idle".to_owned(),
             },
         );
-        for job in self.job_lines() {
-            line("job", job);
-        }
         if let Some(dir) = &self.shared.vm_dir {
             let units = vm::units(&vm::work(dir, self.place.conversation));
             if !units.is_empty() {
@@ -450,12 +438,6 @@ impl Conversation {
             "code issued: send {how} {code} in the group to bind, {target}\nvalid for 10 minutes, once"
         ))
     }
-}
-
-/// The jobs `/kill` or `/stop` stopped, as a line of its answer.
-fn stopped_jobs(jobs: &[Handle]) -> String {
-    let jobs: Vec<String> = jobs.iter().map(Handle::to_string).collect();
-    format!("jobs stopped: {}", jobs.join(", "))
 }
 
 /// A model as `/status` shows it: its reference, and the effort if set.

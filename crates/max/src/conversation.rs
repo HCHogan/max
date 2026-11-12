@@ -15,7 +15,7 @@ mod tool;
 use std::fmt;
 use std::sync::Arc;
 
-use max_core::ids::{CallId, ConversationId, EndpointId, Handle, MessageId};
+use max_core::ids::{CallId, ConversationId, EndpointId, MessageId};
 use max_core::intent::Verdict;
 use max_core::item::{ModelOutput, Timing, ToolOutput};
 use max_core::limits::Setting;
@@ -62,8 +62,8 @@ pub enum Event {
     /// A tool asks something of the conversation, and waits for the
     /// answer.
     Request(Request),
-    /// The VM service has something to say about the group's VM.
-    VmNotice(String),
+    /// Something from outside the chat that Max is to hear.
+    Heard(Heard),
     /// Something in the group's VM calls a tool, and waits for the
     /// result.
     Call {
@@ -73,22 +73,14 @@ pub enum Event {
     },
     /// A program in the group's VM follows the timeline: `maxx events`.
     Subscribe(oneshot::Sender<Subscription>),
-    /// Max in another conversation asks Max here, from the table.
-    Asked(Question),
-    /// The question Max here asked, `ask`, was answered, or won't be, and
-    /// why.
-    Answered {
-        ask: u32,
-        answer: Result<String, String>,
-    },
     /// Max restarts: end the core, within a grace, then stop.
     Stop,
 }
 
 /// What goes to a conversation's actor by its conversation, whatever chat
 /// it is in, through the conversation table, which starts the actor if it
-/// isn't running: what the VM service has for it, and a question from
-/// another conversation's actor.
+/// isn't running: what the VM service has for it, and a question or an
+/// answer from another conversation's actor.
 #[derive(Debug)]
 pub enum Signal {
     /// Something in the VM calls a tool: the conversation's actor runs
@@ -99,22 +91,30 @@ pub enum Signal {
         args: serde_json::Value,
         reply: oneshot::Sender<Result<serde_json::Value, mcp::Failure>>,
     },
-    /// Something about the VM Max should hear.
-    Notice {
+    /// Something from outside the chat that Max there is to hear.
+    Heard {
         conversation: ConversationId,
-        text: String,
+        heard: Heard,
     },
     /// A program in the VM follows the conversation's timeline.
     Subscribe {
         conversation: ConversationId,
         reply: oneshot::Sender<Subscription>,
     },
-    /// Max in another conversation asks Max in this one. See "Asking
-    /// another conversation" in docs/rust-rewrite.md.
-    Ask {
-        conversation: ConversationId,
-        question: Question,
-    },
+}
+
+/// What Max hears from outside its chat, each a wake with some words:
+/// one event, whoever it is from.
+#[derive(Debug)]
+pub enum Heard {
+    /// The VM service, about the group's VM.
+    Vm(String),
+    /// Max in another conversation asks Max here. See "Asking another
+    /// conversation" in docs/rust-rewrite.md.
+    Asked(Question),
+    /// Max in another conversation answers what Max here asked it, or it
+    /// can't be asked, and why.
+    Answered(Answer),
 }
 
 /// The timeline from `head` on, for a program in the group's VM: every
@@ -140,38 +140,21 @@ impl fmt::Debug for Subscription {
 /// done.
 pub type Reply<T> = oneshot::Sender<Result<T, String>>;
 
-/// A question asked from here that waits for its answer, as `status`
-/// shows it.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
-pub struct Waits {
-    pub handle: String,
-    pub title: String,
-    pub minutes: u64,
-}
-
 /// What a tool asks of its conversation's actor, each with where its
 /// answer goes.
 #[derive(Debug)]
 pub enum Request {
-    /// Withdraw a question asked from here, or decline one asked of Max
-    /// here.
-    Cancel { handle: Handle, reply: Reply<()> },
-    /// One question's wait, or every one's.
-    Status {
-        handle: Option<Handle>,
-        reply: Reply<Vec<Waits>>,
-    },
     /// Set the conversation's limits, None back to the default: what
     /// each is now.
     Configure {
         changes: Vec<(Setting, Option<u64>)>,
         reply: Reply<Vec<Configured>>,
     },
-    /// Ask Max in conversation `to`: the question's number here.
+    /// Ask Max in conversation `to`: whom it went to.
     Ask {
         to: ConversationId,
         question: String,
-        reply: Reply<u32>,
+        reply: Reply<String>,
     },
     /// Answer question `to`, as it was numbered here, which Max in
     /// another conversation asked: whom the answer went to.
@@ -192,31 +175,50 @@ impl Request {
     pub fn refuse(self, why: &str) {
         let why = why.to_owned();
         match self {
-            Request::Ask { reply, .. } => drop(reply.send(Err(why))),
-            Request::Cancel { reply, .. } | Request::Act { reply } => drop(reply.send(Err(why))),
-            Request::Status { reply, .. } => drop(reply.send(Err(why))),
+            Request::Act { reply } => drop(reply.send(Err(why))),
             Request::Configure { reply, .. } => drop(reply.send(Err(why))),
-            Request::Answer { reply, .. } | Request::Wake { reply, .. } => {
-                drop(reply.send(Err(why)));
-            }
+            Request::Ask { reply, .. }
+            | Request::Answer { reply, .. }
+            | Request::Wake { reply, .. } => drop(reply.send(Err(why))),
         }
     }
 }
 
 /// What Max in one conversation asks Max in another, on its way there.
-#[derive(Debug)]
+/// Nothing waits for the answer: the question carries who asked, which
+/// is all that lets the one asked reach the asker, once.
+#[derive(Clone, Debug)]
 pub struct Question {
     /// The conversation that asks, as the one asked names it.
     pub from: Peer,
+    /// The conversation asked, as the asker names it.
+    pub to: Peer,
     pub text: String,
-    /// Where the answer goes; or why there won't be one.
-    pub answer: oneshot::Sender<Result<String, String>>,
+}
+
+/// The answer to a [`Question`], on its way back to who asked.
+#[derive(Clone, Debug)]
+pub struct Answer {
+    /// The conversation that answers, as the asker names it.
+    pub by: Peer,
+    /// What was asked: the asker kept nothing of it.
+    pub question: String,
+    /// What Max there said; or why nothing comes, where that can be
+    /// told.
+    pub said: Result<String, String>,
 }
 
 impl Question {
-    /// Tells the asker there won't be an answer, and why.
-    pub fn refuse(self, why: &str) {
-        let _ = self.answer.send(Err(why.to_owned()));
+    /// What tells the asker `said` of it: an answer, or why none comes.
+    pub fn answered(self, said: Result<String, String>) -> Signal {
+        Signal::Heard {
+            conversation: self.from.conversation,
+            heard: Heard::Answered(Answer {
+                by: self.to,
+                question: self.text,
+                said,
+            }),
+        }
     }
 }
 
@@ -311,19 +313,6 @@ impl Poster {
         self.act(Act::Unsend(target))?.sent().await
     }
 
-    /// Withdraws `handle`, a question asked from here, or declines it, one
-    /// asked of Max here.
-    pub async fn cancel(&self, handle: Handle) -> Result<(), String> {
-        self.request(|reply| Request::Cancel { handle, reply })
-            .await
-    }
-
-    /// `handle` as it waits, or every question that does.
-    pub async fn status(&self, handle: Option<Handle>) -> Result<Vec<Waits>, String> {
-        self.request(|reply| Request::Status { handle, reply })
-            .await
-    }
-
     /// Sets the conversation's limits, None back to the default: what
     /// each is now, or why not.
     pub async fn configure(
@@ -334,9 +323,9 @@ impl Poster {
             .await
     }
 
-    /// Asks Max in conversation `to`: the question's number here, or why
+    /// Asks Max in conversation `to`: whom the question went to, or why
     /// it wasn't asked.
-    pub async fn ask(&self, to: ConversationId, question: String) -> Result<u32, String> {
+    pub async fn ask(&self, to: ConversationId, question: String) -> Result<String, String> {
         let ask = |reply| Request::Ask {
             to,
             question,

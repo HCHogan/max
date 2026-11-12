@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use crate::ids::{Handle, IdentityId, MessageId};
+use crate::ids::{IdentityId, MessageId};
 use crate::limits::{HOUR, JUDGED_WAKES_PER_HOUR};
 
 pub mod classify;
@@ -25,10 +25,6 @@ pub enum Reason {
     Direct,
     /// The classifier judged that Max should join in, and said why.
     Judged { note: String },
-    /// A question Max asked is answered, or won't be: what it says is the
-    /// wake's item. Until 2026-11-12 a background agent's end and its
-    /// questions too, which are a program's wakes since.
-    Job { job: Handle },
     /// A program in the group's VM ran `maxx wake`, as a background
     /// command and a background agent do when they end, or the VM service
     /// has something to say about the VM: the wake's item says what.
@@ -36,6 +32,13 @@ pub enum Reason {
     /// Max in another conversation asks Max here: the wake's item is the
     /// question.
     Asked,
+    /// Max in another conversation answers what Max here asked it, or
+    /// says why it doesn't: the wake's item is the answer. Read too from
+    /// the wakes the ledger kept as `job`, with the job's handle beside
+    /// it: until 2026-11-12 the host kept a job for a question that
+    /// waited, and for a background agent, whose end woke Max so.
+    #[serde(alias = "job")]
+    Answered,
 }
 
 /// The most messages one classification looks at.

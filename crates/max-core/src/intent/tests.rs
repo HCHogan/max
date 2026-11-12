@@ -194,3 +194,21 @@ fn forgetting_drops_what_is_held_and_waiting() {
     assert!(intent.verdict(verdict(true), clock.at(31)).is_empty());
     assert_eq!(intent.observe(&chat(4), clock.at(40)), [classify(&[4])]);
 }
+
+/// A wake's reason is kept with the turn it started. What the ledger
+/// kept as `job`, a job's handle beside it, is still read.
+#[test]
+fn a_reason_is_read_as_the_ledger_kept_it() {
+    let read = |json: &str| serde_json::from_str::<Reason>(json).unwrap();
+    assert_eq!(read(r#"{"type":"direct"}"#), Reason::Direct);
+    assert_eq!(read(r#"{"type":"asked"}"#), Reason::Asked);
+    assert_eq!(read(r#"{"type":"answered"}"#), Reason::Answered);
+    for job in ["agent#3", "ask#5", "shell#2"] {
+        let kept = format!(r#"{{"type":"job","job":"{job}"}}"#);
+        assert_eq!(read(&kept), Reason::Answered, "{kept}");
+    }
+    assert_eq!(
+        serde_json::to_string(&Reason::Answered).unwrap(),
+        r#"{"type":"answered"}"#
+    );
+}
