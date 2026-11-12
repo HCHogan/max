@@ -52,6 +52,11 @@ pub struct Guest {
     pub cmdline: String,
     /// The contract it keeps with a host: nix/contract.nix.
     pub contract: u32,
+    /// The system it boots into, which a running guest of an older image
+    /// is switched to...
+    pub system: PathBuf,
+    /// ...and that system's paths, for the guest's Nix database.
+    pub registration: PathBuf,
 }
 
 impl Guest {
@@ -70,10 +75,14 @@ pub struct Boot {
     pub slot: usize,
     /// The contract of the guest it booted.
     pub contract: u32,
-    /// What it booted: the configuration's `guest` then.
+    /// The image it runs: the configuration's `guest` when it booted, or
+    /// the one it was switched to since.
     pub guest: PathBuf,
     /// Whether with Max's units.
     pub units: bool,
+    /// What it booted, which no switch changes.
+    pub kernel: PathBuf,
+    pub initrd: PathBuf,
 }
 
 impl Boot {
@@ -85,6 +94,18 @@ impl Boot {
             .wrap_err_with(|| format!("reading {}", path.display()))?;
         Ok(serde_json::from_slice(&text)?)
     }
+
+    async fn write(&self, dir: &Path) -> Result<()> {
+        fs::write(dir.join(RECORD), serde_json::to_vec(self)?).await?;
+        Ok(())
+    }
+
+    /// Whether a VM of this boot has to boot again to run `guest`'s image
+    /// whole: a switch gives it the system, and leaves the kernel and the
+    /// initrd it booted.
+    pub fn reboots_for(&self, guest: &Guest) -> bool {
+        self.kernel != guest.kernel || self.initrd != guest.initrd
+    }
 }
 
 /// A conversation's VM: its unit, and what goes with it on the host.
@@ -94,7 +115,8 @@ pub struct Machine {
     unit: String,
     /// The VM's files.
     pub dir: PathBuf,
-    /// The link that keeps what it booted from the garbage collector.
+    /// The link that keeps what it booted from the garbage collector; one
+    /// beside it, `.now`, keeps the image it was switched to since.
     root: Option<PathBuf>,
 }
 
@@ -121,8 +143,30 @@ impl Machine {
         if let Err(error) = stopping {
             warn!(unit = %self.unit, %error, "couldn't ask systemd to stop a VM");
         }
-        if let Some(root) = &self.root {
+        for root in self.roots() {
             let _ = std::fs::remove_file(root);
+        }
+    }
+
+    /// Its links among the collector's roots: what it booted, and what it
+    /// runs now.
+    fn roots(&self) -> Vec<PathBuf> {
+        let Some(root) = &self.root else {
+            return Vec::new();
+        };
+        let mut now = root.clone().into_os_string();
+        now.push(".now");
+        vec![root.clone(), PathBuf::from(now)]
+    }
+
+    /// Roots `image` at the link `which` of [`Self::roots`].
+    async fn keep(&self, which: usize, image: &Path) {
+        let Some(root) = self.roots().into_iter().nth(which) else {
+            return;
+        };
+        let _ = fs::remove_file(&root).await;
+        if let Err(error) = fs::symlink(image, &root).await {
+            warn!(root = %root.display(), %error, "couldn't root a VM's image");
         }
     }
 
@@ -131,7 +175,7 @@ impl Machine {
         if let Err(error) = self.run(&["stop"]).await {
             warn!(unit = %self.unit, error = format!("{error:#}"), "couldn't stop a VM");
         }
-        if let Some(root) = &self.root {
+        for root in self.roots() {
             let _ = fs::remove_file(root).await;
         }
     }
@@ -276,16 +320,15 @@ pub async fn boot(
         contract: guest.contract,
         guest: config.guest.clone(),
         units,
+        kernel: guest.kernel.clone(),
+        initrd: guest.initrd.clone(),
     };
-    fs::write(dir.join(RECORD), serde_json::to_vec(&record)?).await?;
-    if let Some(root) = &machine.root {
-        // What the guest reads from the host's store, for as long as it
-        // runs.
+    record.write(dir).await?;
+    // What the guest reads from the host's store, for as long as it runs.
+    for root in machine.roots() {
         let _ = fs::remove_file(root).await;
-        if let Err(error) = fs::symlink(&config.guest, root).await {
-            warn!(root = %root.display(), %error, "couldn't root a VM's image");
-        }
     }
+    machine.keep(0, &config.guest).await;
     machine.run(&["start"]).await?;
 
     let key = Arc::new(key);
@@ -343,6 +386,33 @@ pub async fn attach(config: &config::Vm, conversation: ConversationId) -> Result
             Err(_) => sleep(RETRY).await,
         }
     }
+}
+
+/// Has the guest of a VM that runs an older image switch to `guest`'s
+/// system where it runs, with what runs in it left running: whether the
+/// VM must still boot again for the image, its kernel or initrd being
+/// another's. The new image's own `max-switch` does it (nix/guest.nix),
+/// so a guest older than that command is switched too.
+pub async fn switch(
+    config: &config::Vm,
+    guest: &Guest,
+    machine: &Machine,
+    connection: &Connection,
+) -> Result<bool> {
+    let mut boot = Boot::read(&machine.dir).await?;
+    let system = guest.system.display().to_string();
+    let line = format!(
+        "{} {} {}",
+        ssh::quote(&format!("{system}/sw/bin/max-switch")),
+        ssh::quote(&system),
+        ssh::quote(&guest.registration.display().to_string()),
+    );
+    // Rooted before the guest runs it.
+    machine.keep(1, &config.guest).await;
+    ssh::ask(connection, &line).await?;
+    boot.guest.clone_from(&config.guest);
+    boot.write(&machine.dir).await?;
+    Ok(boot.reboots_for(guest))
 }
 
 /// Listens where cloud-hypervisor connects when the guest connects to the
@@ -454,8 +524,36 @@ mod tests {
             contract: 1,
             guest: "/nix/store/x-max-guest.json".into(),
             units: true,
+            kernel: "/nix/store/k-linux/vmlinux".into(),
+            initrd: "/nix/store/i-initrd/initrd".into(),
         };
         let written = serde_json::to_string(&boot).unwrap();
         assert_eq!(serde_json::from_str::<Boot>(&written).unwrap(), boot);
+    }
+
+    /// A switch gives a running guest the new system, not the kernel or
+    /// the initrd.
+    #[test]
+    fn a_vm_boots_again_only_for_a_kernel_or_an_initrd() {
+        let boot = Boot {
+            slot: 0,
+            contract: 1,
+            guest: "/nix/store/a-max-guest.json".into(),
+            units: true,
+            kernel: "/nix/store/k-linux/vmlinux".into(),
+            initrd: "/nix/store/i-initrd/initrd".into(),
+        };
+        let guest = |kernel: &str, initrd: &str| Guest {
+            kernel: kernel.into(),
+            initrd: initrd.into(),
+            cmdline: String::new(),
+            contract: 1,
+            system: "/nix/store/s-nixos-system".into(),
+            registration: "/nix/store/r-closure-info/registration".into(),
+        };
+        let (kernel, initrd) = ("/nix/store/k-linux/vmlinux", "/nix/store/i-initrd/initrd");
+        assert!(!boot.reboots_for(&guest(kernel, initrd)));
+        assert!(boot.reboots_for(&guest("/nix/store/n-linux/vmlinux", initrd)));
+        assert!(boot.reboots_for(&guest(kernel, "/nix/store/n-initrd/initrd")));
     }
 }

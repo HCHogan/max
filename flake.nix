@@ -97,7 +97,10 @@
           # The groups' VMs boot this; nix/guest.nix. What max needs to start
           # one is a JSON file: the kernel, the initrd and the command line,
           # which max appends the VM's own parameters to.
-          guest =
+          guest = guestWith [ ];
+          # With `more` modules: a test's second image.
+          guestWith =
+            more:
             let
               guest =
                 (nixpkgs.lib.nixosSystem {
@@ -112,7 +115,8 @@
                       nix.nixPath = [ "nixpkgs=${nixpkgs}" ];
                       _module.args.pi = inputs.llm-agents.packages.${system}.pi;
                     }
-                  ];
+                  ]
+                  ++ more;
                 }).config;
               # cloud-hypervisor boots the ELF vmlinux on x86_64 and the Image
               # on aarch64, whose serial port is a PL011, as microvm.nix's own
@@ -129,6 +133,11 @@
                 initrd = guest.microvm.initrdPath;
                 # What max and a guest say to each other; see the file.
                 contract = import ./nix/contract.nix;
+                # The system the guest boots into, and its paths for the
+                # guest's Nix database: what max has a running guest of an
+                # older image switch to.
+                system = "${guest.system.build.toplevel}";
+                registration = "${guest.system.build.registration}/registration";
                 cmdline = "${
                   if x86 then "earlyprintk=ttyS0 console=ttyS0" else "console=ttyAMA0"
                 } reboot=t panic=-1 ${toString guest.microvm.kernelParams}";
@@ -245,6 +254,8 @@
           # Linux builder's doesn't.
           nestedChecks = pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
             vm = import ./nix/tests/vm.nix {
+              # A second image, which a deploy in the test brings.
+              newer = guestWith [ { environment.etc."max-image".text = "newer\n"; } ];
               inherit pkgs;
               module = self.nixosModules.maxx;
             };

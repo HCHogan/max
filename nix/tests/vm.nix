@@ -10,16 +10,21 @@
 # max-wake. Then a VM on the operations network reaches a stand-in for the
 # tailnet through its namespace, where an ordinary VM can't, its ip rule
 # having outlived networkd.
-{ pkgs, module }:
+{
+  pkgs,
+  module,
+  newer,
+}:
 let
   # A unit Max might keep in a VM: it asks the VM service how it is, at
   # the port every program reaches max by, and notes the answer's status
-  # with the boot it runs in.
+  # with the boot it runs in and the image the guest is on (`newer` has
+  # /etc/max-image).
   probe = pkgs.writeText "probe.sh" ''
     while true; do
       code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' -H 'content-type: application/json' \
         -d '{"units":1}' http://127.0.0.1:7777/units || true)
-      echo "$(cat /proc/sys/kernel/random/boot_id) $code" >> /work/probe.log
+      echo "$(cat /proc/sys/kernel/random/boot_id) $code $(cat /etc/max-image 2> /dev/null || echo first)" >> /work/probe.log
       sleep 1
     done
   '';
@@ -71,6 +76,8 @@ pkgs.testers.runNixOSTest {
       };
     };
     services.postgresql.package = pkgs.postgresql_16;
+    # A deploy that brings a new image for the VMs.
+    specialisation.newer.configuration.services.maxx.vm.guest = newer;
     boot.kernel.sysctl."net.ipv4.ip_forward" = 1;
     # As on tank: networkd, which removes the ip rules its .network files
     # don't name, and eth1's names the operations network's.
@@ -137,7 +144,7 @@ pkgs.testers.runNixOSTest {
         "systemctl restart maxx.service",
     )
     machine.wait_until_succeeds("systemctl is-active maxx-vm@7.service", timeout=120)
-    machine.wait_until_succeeds(f"grep -q ' 200$' {work}/probe.log", timeout=180)
+    machine.wait_until_succeeds(f"grep -q ' 200 first$' {work}/probe.log", timeout=180)
     last = f"tail -n 1 {work}/probe.log"
     pid = machine.succeed("systemctl show -P MainPID maxx-vm@7.service").strip()
     boot = machine.succeed(f"{last} | cut -d' ' -f1").strip()
@@ -145,7 +152,7 @@ pkgs.testers.runNixOSTest {
     machine.succeed("readlink /nix/var/nix/gcroots/per-user/maxx/7 | grep -q max-guest.json")
     # While max is away the guest is told so, and the VM runs on.
     machine.succeed("systemctl stop maxx.service")
-    machine.wait_until_succeeds(f"{last} | grep -q ' 503$'", timeout=60)
+    machine.wait_until_succeeds(f"{last} | grep -q ' 503 first$'", timeout=60)
     machine.succeed("systemctl is-active maxx-vm@7.service")
     # The max that comes back attaches to it: the guest reaches it at the
     # socket bound again, in the same boot of the same VM.
@@ -153,9 +160,27 @@ pkgs.testers.runNixOSTest {
     machine.wait_until_succeeds(
         "journalctl -u maxx.service -o cat | grep -q 'attached to a VM that runs'", timeout=120
     )
-    machine.wait_until_succeeds(f"{last} | grep -q ' 200$'", timeout=120)
+    machine.wait_until_succeeds(f"{last} | grep -q ' 200 first$'", timeout=120)
     assert machine.succeed("systemctl show -P MainPID maxx-vm@7.service").strip() == pid
     assert machine.succeed(f"{last} | cut -d' ' -f1").strip() == boot
+    # A deploy brings a new image. max restarts with it and the VM's unit
+    # is left; the max that comes back has the guest switch to the new
+    # system where it runs, and the unit in it runs on through that.
+    print(machine.succeed("/run/current-system/specialisation/newer/bin/switch-to-configuration test 2>&1"))
+    machine.wait_until_succeeds(
+        "journalctl -u maxx.service -o cat | grep -q \"a VM's guest is switched to the image max boots\"",
+        timeout=600,
+    )
+    machine.wait_until_succeeds(f"{last} | grep -q ' 200 newer$'", timeout=120)
+    assert machine.succeed("systemctl show -P MainPID maxx-vm@7.service").strip() == pid
+    assert machine.succeed(f"{last} | cut -d' ' -f1").strip() == boot
+    # Both images are rooted: the one it booted, whose kernel it runs,
+    # and the one it is on.
+    roots = machine.succeed("readlink /nix/var/nix/gcroots/per-user/maxx/7 /nix/var/nix/gcroots/per-user/maxx/7.now").split()
+    assert len(set(roots)) == 2 and all("max-guest.json" in root for root in roots), roots
+    assert "stale=false" in machine.succeed(
+        "journalctl -u maxx.service -o cat | grep \"a VM's guest is switched\""
+    )
     # A VM whose guest keeps another contract is restarted at once.
     machine.succeed(
         "systemctl stop maxx.service",
@@ -166,7 +191,7 @@ pkgs.testers.runNixOSTest {
         "journalctl -u maxx.service -o cat | grep -q \"can't be attached to\"", timeout=120
     )
     machine.wait_until_succeeds(
-        f"test \"$({last} | cut -d' ' -f1)\" != {boot} && {last} | grep -q ' 200$'", timeout=240
+        f"test \"$({last} | cut -d' ' -f1)\" != {boot} && {last} | grep -q ' 200 newer$'", timeout=240
     )
     assert machine.succeed("systemctl show -P MainPID maxx-vm@7.service").strip() != pid
     # Without its unit the VM isn't kept, and a stopped one's root goes.

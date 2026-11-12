@@ -61,6 +61,12 @@ enum Internal {
     /// The guest says something of Max's runs in it: a background command,
     /// which no call of max's waits for.
     Busy { conversation: ConversationId },
+    /// A VM on an older image was switched to the one max boots, where it
+    /// runs; `stale` if it must still boot again, for a kernel.
+    Switched {
+        conversation: ConversationId,
+        stale: Stale,
+    },
 }
 
 /// How long a VM may idle, by the configuration.
@@ -248,13 +254,36 @@ enum State {
         /// With Max's units.
         units: bool,
         /// Booted by a max before this one, which attaches to it; and if
-        /// so, whether from an image that isn't the configured one.
-        attached: Option<Stale>,
+        /// so, how it stands to the image max boots.
+        attached: Option<Attached>,
     },
     Running(Box<Running>),
 }
 
-/// Whether a VM runs an image older than the configured one.
+/// How a VM that max attaches to stands to the image max boots now.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Attached {
+    /// It isn't whole on that image; see [`Running::stale`].
+    stale: Stale,
+    /// Its guest is on another image's system, and is to be switched.
+    switch: bool,
+}
+
+impl Attached {
+    /// A VM of `boot`, for a max that boots `guest`, the image at `image`.
+    fn of(boot: &Boot, image: &Path, guest: &Guest) -> Self {
+        let switch = boot.guest != image;
+        Self {
+            // On another system until it is switched, and on another
+            // kernel until it boots again, however long ago it was
+            // switched.
+            stale: switch || boot.reboots_for(guest),
+            switch,
+        }
+    }
+}
+
+/// Whether a VM isn't whole on the image max boots.
 type Stale = bool;
 
 struct Running {
@@ -271,10 +300,13 @@ struct Running {
     idle_since: Instant,
     /// When the guest last said something of Max's runs in it.
     busy: Option<Instant>,
-    /// Booted from an image that isn't the configured one any more: a
-    /// deploy has replaced it since. It gets the new one when it next
-    /// boots, which a quiet moment brings on.
+    /// Not whole on the image max boots, which a deploy has replaced
+    /// since this VM booted: until its guest is switched to it where it
+    /// runs, and after that if the kernel or the initrd changed too. It
+    /// boots the new image at a quiet moment.
     stale: Stale,
+    /// Booted with Max's units.
+    units: bool,
 }
 
 impl Running {
@@ -387,6 +419,11 @@ async fn run(
                     let _ = reply.send(Ok(service.units(conversation, count)));
                 }
                 Internal::Busy { conversation } => service.busy(conversation),
+                Internal::Switched { conversation, stale } => {
+                    if let Some(State::Running(running)) = service.vms.get_mut(&conversation) {
+                        running.stale = stale;
+                    }
+                }
             },
             _ = sweep.tick() => service.sweep(),
         }
@@ -408,10 +445,8 @@ impl Service {
                     let _ = reply.send(Ok(running.lend()));
                     return;
                 }
-                let slot = running.slot;
-                running.machine.stop();
-                self.vms.remove(&conversation);
-                self.died(conversation, slot);
+                self.reattach(conversation, vec![reply]);
+                return;
             }
             Some(State::Booting { waiting, .. }) => {
                 waiting.push(reply);
@@ -521,21 +556,55 @@ impl Service {
                 return;
             }
         };
-        let stale = boot.guest != self.config.guest;
+        let attached = Attached::of(&boot, &self.config.guest, &self.guest);
         self.vms.insert(
             conversation,
             State::Booting {
                 slot: boot.slot,
                 waiting: Vec::new(),
                 units: boot.units,
-                attached: Some(stale),
+                attached: Some(attached),
             },
         );
+        self.attaching(conversation, attached);
+    }
+
+    /// max's connection to `conversation`'s VM is gone. The VM may run
+    /// on, as when its sshd restarted under a switch: max attaches to it
+    /// again, with `waiting` for it, and one it can't reach any more is
+    /// stopped as one that failed.
+    fn reattach(&mut self, conversation: ConversationId, waiting: Waiting) {
+        let Some(State::Running(running)) = self.vms.remove(&conversation) else {
+            return;
+        };
+        warn!(%conversation, "the connection to a VM is gone; attaching to it again");
+        let (slot, units, stale) = (running.slot, running.units, running.stale);
+        // Its tasks end, and the MCP socket is free to bind again.
+        drop(running);
+        // Whatever it was switched to stands: only the connection is new.
+        let attached = Attached {
+            stale,
+            switch: false,
+        };
+        self.vms.insert(
+            conversation,
+            State::Booting {
+                slot,
+                waiting,
+                units,
+                attached: Some(attached),
+            },
+        );
+        self.attaching(conversation, attached);
+    }
+
+    /// Attaches to `conversation`'s VM in a task, which says how it went.
+    fn attaching(&mut self, conversation: ConversationId, attached: Attached) {
         let (config, booted) = (Arc::clone(&self.config), self.booted.clone());
         self.boots.spawn(move |_| async move {
             let result = machine::attach(&config, conversation).await;
             match &result {
-                Ok(_) => info!(%conversation, stale, "attached to a VM that runs"),
+                Ok(_) => info!(%conversation, ?attached, "attached to a VM that runs"),
                 Err(error) => {
                     warn!(%conversation, error = format!("{error:#}"), "couldn't attach to a VM");
                 }
@@ -617,6 +686,25 @@ impl Service {
                 }
             }
         });
+        if attached.is_some_and(|attached| attached.switch) {
+            // An older image's guest moves to the one max boots where it
+            // runs. If it can't, or its kernel isn't that image's either,
+            // the VM stays stale, and boots again at a quiet moment.
+            let (config, guest) = (Arc::clone(&self.config), Arc::clone(&self.guest));
+            let (machine, asked) = (machine.clone(), Arc::clone(&connection));
+            let internal = self.internal.clone();
+            tasks.spawn(move |_| async move {
+                match machine::switch(&config, &guest, &machine, &asked).await {
+                    Ok(stale) => {
+                        info!(%conversation, stale, "a VM's guest is switched to the image max boots");
+                        let _ = internal.send(Internal::Switched { conversation, stale });
+                    }
+                    Err(error) => {
+                        warn!(%conversation, error = format!("{error:#}"), "a VM's guest couldn't be switched to the image max boots");
+                    }
+                }
+            });
+        }
         let sessions = self.sessions.clone();
         let host = host::router(conversation, self.internal.clone())
             .merge(api::router(conversation, Arc::clone(&self.apis)));
@@ -636,7 +724,8 @@ impl Service {
             lent: Arc::new(()),
             idle_since: Instant::now(),
             busy: None,
-            stale: attached.unwrap_or(false),
+            stale: attached.is_some_and(|attached| attached.stale),
+            units,
         };
         for reply in waiting {
             let _ = reply.send(Ok(running.lend()));
@@ -655,21 +744,20 @@ impl Service {
     }
 
     /// Stops idle VMs, but kept ones, and those on an older image once
-    /// they are quiet; finds dead ones; starts kept ones that are down,
-    /// one stopped for its image among them.
+    /// they are quiet; attaches again to those whose connection is gone;
+    /// starts kept ones that are down, one stopped for its image among
+    /// them.
     fn sweep(&mut self) {
         let now = Instant::now();
-        let mut died = Vec::new();
+        let mut lost = Vec::new();
         self.vms.retain(|conversation, state| {
             let State::Running(running) = state else {
                 return true;
             };
             let kept = self.kept.contains(conversation);
             let keep = if running.dead() {
-                // Whatever is left of it.
-                running.machine.stop();
-                died.push((*conversation, running.slot));
-                return false;
+                lost.push(*conversation);
+                return true;
             } else if running.lent() {
                 running.idle_since = now;
                 true
@@ -688,8 +776,8 @@ impl Service {
             }
             keep
         });
-        for (conversation, slot) in died {
-            self.died(conversation, slot);
+        for conversation in lost {
+            self.reattach(conversation, Vec::new());
         }
         let down: Vec<ConversationId> = self
             .kept
@@ -700,13 +788,6 @@ impl Service {
         for conversation in down {
             self.start(conversation, Vec::new());
         }
-    }
-
-    /// The VM on `slot` had stopped by itself; it is gone already.
-    fn died(&mut self, conversation: ConversationId, slot: usize) {
-        warn!(%conversation, "a VM had stopped by itself");
-        self.free.release(slot);
-        self.fail(conversation);
     }
 
     fn fail(&mut self, conversation: ConversationId) {
@@ -940,6 +1021,37 @@ mod tests {
         assert!(!free.take_slot(9, true), "no such slot");
         assert_eq!(free.take(false), Some(0));
         assert_eq!(free.take(true), Some(2));
+    }
+
+    /// A VM is switched if its system isn't the one max boots, and is
+    /// stale until then; one switched already, under a max before this
+    /// one, is still stale if it booted another kernel.
+    #[test]
+    fn a_vm_max_attaches_to_is_measured_against_the_image_max_boots() {
+        let guest = Guest {
+            kernel: "/nix/store/k2-linux/vmlinux".into(),
+            initrd: "/nix/store/i-initrd/initrd".into(),
+            cmdline: String::new(),
+            contract: 1,
+            system: "/nix/store/s2-nixos-system".into(),
+            registration: "/nix/store/r2-closure-info/registration".into(),
+        };
+        let boot = |image: &str, kernel: &str| Boot {
+            slot: 0,
+            contract: 1,
+            guest: image.into(),
+            units: true,
+            kernel: kernel.into(),
+            initrd: "/nix/store/i-initrd/initrd".into(),
+        };
+        let now = Path::new("/nix/store/g2-max-guest.json");
+        let (old, new) = ("/nix/store/k1-linux/vmlinux", "/nix/store/k2-linux/vmlinux");
+        let same = Attached::of(&boot("/nix/store/g2-max-guest.json", new), now, &guest);
+        assert_eq!((same.stale, same.switch), (false, false));
+        let older = Attached::of(&boot("/nix/store/g1-max-guest.json", new), now, &guest);
+        assert_eq!((older.stale, older.switch), (true, true));
+        let switched = Attached::of(&boot("/nix/store/g2-max-guest.json", old), now, &guest);
+        assert_eq!((switched.stale, switched.switch), (true, false));
     }
 
     #[test]

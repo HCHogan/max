@@ -39,8 +39,37 @@ let
     systemd = config.systemd.package;
   };
   wake = import ./max-wake.nix { inherit pkgs runner; };
+  # Moves the running guest to another image's system: its paths into the
+  # Nix database, as register-nix-paths does at boot, and then NixOS's own
+  # switch, in a unit of its own so that it outlives whoever asked. max
+  # runs the new image's copy, by its path, so a guest older than this
+  # command can be switched too. See "VM processes" in
+  # docs/rust-rewrite.md.
+  switch = pkgs.writeShellApplication {
+    name = "max-switch";
+    runtimeInputs = [
+      pkgs.coreutils
+      config.nix.package.out
+      config.systemd.package
+    ];
+    text = ''
+      system=$1
+      registration=$2
+      stamp=/nix/var/nix/max-registered
+      if [ "$(cat "$stamp" 2> /dev/null)" != "$registration" ]; then
+        nix-store --load-db < "$registration"
+        echo "$registration" > "$stamp"
+      fi
+      exec systemd-run --quiet --collect --wait --unit="max-switch-$(date +%s)" \
+        "$system/bin/switch-to-configuration" test
+    '';
+  };
 in
 {
+  # What the flake puts in the guest's JSON, for max to switch a running
+  # guest to this system.
+  system.build.registration = registration;
+
   # Max's calls and background commands, as units.
   imports = [ ./jobs.nix ];
 
@@ -178,6 +207,8 @@ in
   networking.resolvconf.enable = false;
   environment.etc."resolv.conf".source = "/run/max/resolv.conf";
   systemd.services.max-guest = {
+    # What the VM booted with doesn't change with the image.
+    restartIfChanged = false;
     wantedBy = [ "sysinit.target" ];
     before = [
       "sysinit.target"
@@ -212,7 +243,6 @@ in
       done
       install -m 0600 /dev/null /run/max/authorized_keys
       echo "ssh-ed25519 $key max" > /run/max/authorized_keys
-      ln -sfn ${runner}/lib/max-runner/runner.js /run/max/runner.js
       # Commits are by Max's GitHub account, when max has one: name,email.
       if [ -n "''${git:-}" ]; then
         printf '[user]\n\tname = %s\n\temail = %s\n' "''${git%%,*}" "''${git#*,}" > /etc/gitconfig
@@ -226,6 +256,25 @@ in
         printf 'Host * !*.*\n  HostName %%h.%s\nHost *\n  User max\n  BatchMode yes\n  ConnectTimeout 15\n  StrictHostKeyChecking accept-new\n' "$domain" > /run/max/ssh_config
       fi
     '';
+  };
+
+  # run_code's runner, where max runs it. A unit of its own: a switch to
+  # a new image runs it again, and the next program has the new runner.
+  systemd.services.max-runner = {
+    wantedBy = [ "sysinit.target" ];
+    # Before max can log in and run one.
+    before = [
+      "sysinit.target"
+      "sshd-vsock.socket"
+    ];
+    after = [ "max-guest.service" ];
+    requires = [ "max-guest.service" ];
+    unitConfig.DefaultDependencies = false;
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+      ExecStart = "${pkgs.coreutils}/bin/ln -sfn ${runner}/lib/max-runner/runner.js /run/max/runner.js";
+    };
   };
 
   # run_code's programs, maxx, and max-units reach Max's MCP service at
@@ -242,6 +291,8 @@ in
   # caller is told so, 503 with `max-away`: nothing of its request was
   # read, and it may ask again (client.js does).
   systemd.services."max-mcp@" = {
+    # A switch to a new image leaves the calls in flight.
+    restartIfChanged = false;
     unitConfig.DefaultDependencies = false;
     serviceConfig = {
       ExecStart = pkgs.writeShellScript "max-mcp" ''
@@ -262,6 +313,9 @@ in
   # own in ${flags}, such as --load-extension: Chromium, not Google
   # Chrome, still takes that one.
   systemd.services.max-browser = {
+    # A switch to a new image leaves the browser and its tabs: the next
+    # start, in the next boot, has the new one.
+    restartIfChanged = false;
     unitConfig.RequiresMountsFor = "/work";
     environment.TZ = "Asia/Shanghai";
     serviceConfig = {
@@ -457,6 +511,9 @@ in
     # above.
     units
     wake
+    # Moves the guest to a new image where it runs; max runs the new
+    # image's.
+    switch
     # max.video's copies for the model, and programs' own.
     ffmpeg-headless
     poppler-utils
