@@ -1,62 +1,78 @@
-# max-pi: pi in print mode, for one of Max's background jobs. The first
-# line of stdin is the job as JSON, and all max writes; max-job.ts keeps
-# the job's contract with the host (see "Background agents" and
-# "Decoupling from the harness" in docs/rust-rewrite.md). pi's model calls
-# and Max's tools both go to Max's MCP service at 127.0.0.1:7777 with the
-# job's token: the provider's key stays on the host.
-#
-# The job: contract (1), token, task, model (the provider's id), api
-# ("openai-completions" or "openai-responses"), window, max_output and
-# effort (or null), and system, appended to pi's system prompt.
+# max-pi UNIT: pi in print mode, as one of Max's background agents: the
+# unit `max-agent start` made for it (max-agent.sh), with its task, its
+# directory and the model in /run/max/jobs/UNIT. max-agent.ts, pi's
+# plugin, keeps the agent's side: the steers in its inbox, the wrap-up,
+# the stop and the report. pi's model calls go to max at 127.0.0.1:7777,
+# which adds the provider's key; the agent calls Max's tools with maxx,
+# as any program in the VM does. See "Background agents" in
+# docs/rust-rewrite.md.
 
-IFS= read -r job
-field() { jq -r "$1" <<<"$job"; }
+export LC_ALL=C.UTF-8
 
-contract=$(field .contract)
-if [[ $contract != 1 ]]; then
-  echo "max-pi keeps contract 1, not $contract" >&2
-  exit 2
-fi
+# No apostrophe in the message: bash would take it for a quote.
+unit=${1:?max-pi takes the unit of the agent}
+dir=/run/max/jobs/$unit
+# The unit's, removed when it stops.
+conf=${RUNTIME_DIRECTORY:?max-pi runs with a RuntimeDirectory}
+workdir=$(cat "$dir/workdir")
+# What max says of the model: its api ("openai-completions" or
+# "openai-responses"), id, window, max_output and effort (or null).
+model=$(cat "$dir/model.json")
+field() { jq -r "$1" <<< "$model"; }
 
-# The unit's, removed when it stops: the token doesn't outlive the job.
-dir=${RUNTIME_DIRECTORY:?max-pi runs with a RuntimeDirectory}
-
-jq -n --argjson job "$job" '{
+jq -n --argjson model "$model" '{
   providers: { max: {
     baseUrl: "http://127.0.0.1:7777/llm",
-    api: $job.api,
-    apiKey: "$MAX_JOB_TOKEN",
+    api: $model.api,
+    apiKey: "max",
     models: [{
-      id: $job.model,
-      reasoning: ($job.effort != null),
+      id: $model.model,
+      reasoning: ($model.effort != null),
       input: ["text", "image"],
-      contextWindow: $job.window
-    } + (if $job.max_output then { maxTokens: $job.max_output } else {} end)]
+      contextWindow: $model.window
+    } + (if $model.max_output then { maxTokens: $model.max_output } else {} end)]
   } }
-}' >"$dir/models.json"
-
-jq -n '{ mcpServers: { max: {
-  url: "http://127.0.0.1:7777/mcp",
-  headers: { Authorization: "Bearer ${MAX_JOB_TOKEN}" },
-  exposure: "direct"
-} } }' >"$dir/mcp.json"
+}' > "$conf/models.json"
 
 # Steers that a turn's end takes in all go in before the next model call,
-# not one a call.
-jq -n '{ steeringMode: "all" }' >"$dir/settings.json"
+# not one a call. And a model call is tried again for long enough to
+# outlast a restart of max: 3 tries, pi's default, are over in 14 seconds.
+jq -n '{ steeringMode: "all", retry: { maxRetries: 8 } }' > "$conf/settings.json"
+
+# The agents' notes for this directory: named after its path, letters and
+# digits kept and the rest made -, as Claude Code names its projects.
+name=$(realpath -ms "$workdir")
+name=${name#/}
+name=${name//\//-}
+name=${name//[^[:alnum:]]/-}
+name=${name:0:120}
+notes_file=/work/.max/projects/${name:-root}.md
+if [ -L "$notes_file" ]; then
+  notes="（没读到：它是个链接。）"
+elif [ ! -e "$notes_file" ]; then
+  notes="（还没有，这次新建。）"
+elif [ "$(stat -c %s "$notes_file")" -gt 1048576 ]; then
+  notes="（没读到：超过 1 MiB 了。）"
+elif [ "$(stat -c %s "$notes_file")" -gt 16384 ]; then
+  # Cut at a line.
+  notes="$(head -c 16384 "$notes_file" | sed '$d')
+（笔记超过 16 KiB，后面的没加载：更新时精简一下。）"
+else
+  notes=$(cat "$notes_file")
+fi
 
 # Not system.md: where case doesn't count, as on the Mac, that is pi's
 # SYSTEM.md, which takes the place of pi's own prompt.
-field .system >"$dir/job-system.md"
-# The task goes in on stdin: as an argument, an @ at its start would name
-# a file to read.
-jq -j .task <<<"$job" >"$dir/task.md"
+# Quoted: bash would put what it matched for each & in what goes in, and
+# notes say `make && make test`.
+system=$(cat "$MAX_AGENT_SYSTEM")
+system=${system//@WORKDIR@/"$workdir"}
+system=${system//@NOTES_FILE@/"$notes_file"}
+system=${system//@NOTES@/"$notes"}
+printf '%s\n' "$system" > "$conf/agent-system.md"
 
-MAX_JOB_TOKEN=$(field .token)
-# The job's, for max-job.ts and for maxx in pi's shell: it calls as the
-# job.
-MAXX_TOKEN=$MAX_JOB_TOKEN
-export MAX_JOB_TOKEN MAXX_TOKEN PI_CODING_AGENT_DIR=$dir PI_OFFLINE=1 PI_SKIP_VERSION_CHECK=1 PI_TELEMETRY=0
+export MAX_AGENT=$unit MAX_AGENT_DIR=$dir MAX_AGENT_REPORTS=/work/.max/jobs
+export PI_CODING_AGENT_DIR=$conf PI_OFFLINE=1 PI_SKIP_VERSION_CHECK=1 PI_TELEMETRY=0
 
 args=(
   --print
@@ -66,11 +82,14 @@ args=(
   --session-dir /work/.max/jobs
   --provider max
   --model "$(field .model)"
-  --append-system-prompt "$dir/job-system.md"
-  --extension "$MAX_JOB"
+  --append-system-prompt "$conf/agent-system.md"
+  --extension "$MAX_AGENT_PLUGIN"
 )
 effort=$(field '.effort // empty')
 if [[ -n $effort ]]; then
   args+=(--thinking "$effort")
 fi
-exec pi "${args[@]}" <"$dir/task.md"
+cd "$workdir"
+# The task goes in on stdin: as an argument, an @ at its start would name
+# a file to read.
+exec pi "${args[@]}" < "$dir/task"

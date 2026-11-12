@@ -1,16 +1,19 @@
-# max-pi: pi for a background job, in the groups' VMs; see max-pi.sh.
+# max-pi: pi as one of Max's background agents, in the groups' VMs; see
+# max-pi.sh.
 { pkgs, pi }:
 pkgs.writeShellApplication {
   name = "max-pi";
   runtimeInputs = [
     pi
+    pkgs.coreutils
+    pkgs.gnused
     pkgs.jq
   ];
-  # The plugin that keeps the job's contract with the host, and maxx's
-  # client, which it keeps it with; see max-job.ts.
+  # pi's plugin, which keeps the agent's side (max-agent.ts), and what the
+  # agent is told of itself.
   runtimeEnv = {
-    MAX_JOB = "${./max-job.ts}";
-    MAX_CLIENT = "${./client.js}";
+    MAX_AGENT_PLUGIN = "${./max-agent.ts}";
+    MAX_AGENT_SYSTEM = "${./agent-system.md}";
   };
   text = builtins.readFile ./max-pi.sh;
 }

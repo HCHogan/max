@@ -1,16 +1,45 @@
 # What Max runs in a guest, as units (nix/jobs.nix, nix/max-jobs.sh): a
 # call's line, a background command's notice, and what becomes of each
-# when it is stopped, when max is away, and when its caller is; and a
-# call of maxx's made while max restarts, which is made again. The
-# machine has the guest's jobs without a VM's shares; a fake /mcp at
-# 127.0.0.1:7777 stands in for max, and keeps what wakes it.
-{ pkgs }:
+# when it is stopped, when max is away, and when its caller is; a call
+# of maxx's made while max restarts, which is made again; and a
+# background agent (nix/max-agent.sh), pi itself against a model that
+# says what the test has it say. The machine has the guest's jobs without
+# a VM's shares; a fake max at 127.0.0.1:7777 keeps what wakes it and
+# answers for the agents' model.
+{ pkgs, pi }:
 let
   runner = import ../runner.nix { inherit pkgs; };
   host = pkgs.writeText "fake-max.js" ''
     const http = require("node:http");
     const fs = require("node:fs");
     const wake = { name: "wake", description: "Wakes Max.", inputSchema: { type: "object", properties: { text: { type: "string" } }, required: ["text"] } };
+    // What the agents' model says, by the task and by how far it is: a
+    // tool call, or its last words.
+    const said = (task, n) => {
+      if (task.includes("口味")) {
+        return [{ tool: "max-agent ask 要哪种口味" }, { content: "等 Max 回答选哪家" }, { content: "订了火锅" }][n] ?? { content: "多说了" };
+      }
+      if (task.includes("很久")) return { content: "开始查", tool: "sleep 300" };
+      return [{ tool: "sleep 3; echo 查过了" }, { content: "报告：做完了" }][n] ?? { content: "多说了" };
+    };
+    const text = message => (typeof message.content === "string" ? message.content : (message.content ?? []).map(part => part.text ?? "").join(""));
+    const model = (body, res) => {
+      const { messages } = JSON.parse(body);
+      const users = messages.filter(message => message.role === "user").map(text);
+      fs.appendFileSync("/run/llm-heard", JSON.stringify(users) + "\n");
+      const n = messages.filter(message => message.role === "assistant").length;
+      const { content, tool } = said(users[0] ?? "", n);
+      const delta = { role: "assistant", content };
+      if (tool) {
+        const call = { name: "bash", arguments: JSON.stringify({ command: tool }) };
+        delta.tool_calls = [{ index: 0, id: "call_" + n, type: "function", function: call }];
+      }
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.write("data: " + JSON.stringify({ choices: [{ index: 0, delta }] }) + "\n\n");
+      const finish = { index: 0, delta: {}, finish_reason: tool ? "tool_calls" : "stop" };
+      res.write("data: " + JSON.stringify({ choices: [finish], usage: { prompt_tokens: 10, completion_tokens: 2 } }) + "\n\n");
+      res.end("data: [DONE]\n\n");
+    };
     http.createServer((req, res) => {
       let body = "";
       req.on("data", chunk => (body += chunk));
@@ -20,6 +49,13 @@ let
           res.writeHead(503, { "max-away": "1", "content-length": "0" });
           return res.end();
         }
+        // The agents' model: what max says of it, and its calls.
+        if (req.url === "/llm" && fs.existsSync("/run/no-model")) return res.writeHead(404).end();
+        if (req.url === "/llm") {
+          res.writeHead(200, { "content-type": "application/json" });
+          return res.end(JSON.stringify({ api: "openai-completions", model: "m", window: 100000, max_output: null, effort: null }));
+        }
+        if (req.url === "/llm/chat/completions") return model(body, res);
         const { id, method, params } = JSON.parse(body);
         let result = {};
         if (method === "tools/list") result = { tools: [wake] };
@@ -39,6 +75,9 @@ pkgs.testers.runNixOSTest {
     { pkgs, ... }:
     {
       imports = [ ../jobs.nix ];
+      _module.args.pi = pi;
+      # pi and what it runs take more than the default.
+      virtualisation.memorySize = 2048;
       # As the guest: units find the system's commands.
       systemd.settings.Manager.DefaultEnvironment = "PATH=/run/wrappers/bin:/run/current-system/sw/bin HOME=/work";
       systemd.tmpfiles.rules = [ "d /work 0755 root root -" ];
@@ -178,5 +217,54 @@ pkgs.testers.runNixOSTest {
         machine.wait_until_succeeds("test -e /run/away.status", timeout=30)
         assert machine.succeed("cat /run/away.status").strip() == "0", machine.succeed("cat /run/away.out")
         assert wakes()[3] == "回来了吗", wakes()
+
+    def woken(count):
+        machine.wait_until_succeeds(f"test $(wc -l < /run/wakes) -ge {count}", timeout=180)
+        return wakes()[count - 1]
+
+    with subtest("an agent works on its task, is told more, and its report wakes Max"):
+        said = machine.succeed("max-agent start --title 试试 --workdir proj <<< '查一下明天的天气'")
+        assert said.startswith("max-agent-1 started in /work/proj, for at most 6 hours."), said
+        listed = machine.succeed("max-jobs list")
+        assert listed.startswith("max-agent-1 · ") and listed.strip().endswith("· agent · 试试"), listed
+        machine.wait_until_succeeds("test -s /run/llm-heard", timeout=120)
+        machine.succeed("max-agent steer max-agent-1 <<< '顺便看后天'")
+        notice = woken(5)
+        print(notice)
+        assert notice == "[max-agent-1 完成] 试试\n报告：做完了\n（全文在 /work/.max/jobs/max-agent-1.md）", notice
+        assert machine.succeed("cat /work/.max/jobs/max-agent-1.md") == "# max-agent-1 试试\n\n报告：做完了\n"
+        heard = machine.succeed("tail -n 1 /run/llm-heard")
+        assert "查一下明天的天气" in heard and "顺便看后天" in heard, heard
+        machine.wait_until_fails("test -e /run/max/jobs/max-agent-1")
+        # Its notes are its directory's, and it was told where.
+        assert machine.succeed("ls /work/.max/projects /work/proj") == "/work/.max/projects:\n\n/work/proj:\n"
+
+    with subtest("an agent that asks its Max waits for the answer"):
+        machine.succeed("max-agent start <<< '订个餐，问问口味'")
+        asked = woken(6)
+        assert asked.startswith("[max-agent-2 问] 订个餐，问问口味\n要哪种口味\n（回答它用 max-agent steer max-agent-2"), asked
+        machine.succeed("max-agent steer max-agent-2 <<< 火锅")
+        notice = woken(7)
+        assert notice.startswith("[max-agent-2 完成] 订个餐，问问口味\n订了火锅\n"), notice
+        assert "火锅" in machine.succeed("tail -n 1 /run/llm-heard")
+
+    with subtest("a stopped agent tells nobody, and is gone"):
+        machine.succeed("max-agent start --title 久 <<< '这个要查很久'")
+        machine.wait_until_succeeds("grep -q 很久 /run/llm-heard", timeout=120)
+        machine.succeed("sleep 2; systemctl stop max-agent-3.service")
+        machine.wait_until_fails("test -e /run/max/jobs/max-agent-3", timeout=60)
+        refused = machine.fail("max-agent steer max-agent-3 <<< 算了 2>&1")
+        assert "max-agent-3 isn't running" in refused, refused
+        # What it had written is kept, though nobody is woken for it.
+        assert "开始查" in machine.succeed("cat /work/.max/jobs/max-agent-3.md")
+        machine.succeed("sleep 3")
+        assert len(wakes()) == 7, wakes()
+
+    with subtest("without a model for them there are no agents"):
+        machine.succeed("touch /run/no-model")
+        refused = machine.fail("max-agent start <<< '查一下' 2>&1")
+        assert "no model is configured for background agents" in refused, refused
+        machine.succeed("rm /run/no-model")
+        assert "the task comes on standard input" in machine.fail("max-agent start < /dev/null 2>&1")
   '';
 }

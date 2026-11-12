@@ -37,7 +37,6 @@ pub struct Recalled {
 impl Tool for RecallMessage {
     const NAME: &'static str = "recall_message";
     const DESCRIPTION: &'static str = "Recalls a message sent in this chat within the last 2 minutes: your own, or an ordinary member's when you are an admin of the group.";
-    const JOB: bool = false;
 
     type Args = Args;
     type Output = Recalled;

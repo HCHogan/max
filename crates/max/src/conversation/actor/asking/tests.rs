@@ -32,17 +32,6 @@ struct Pair {
 
 impl Pair {
     async fn new(pool: PgPool) -> Self {
-        Self::start(pool, None).await.0
-    }
-
-    /// With an agent titled `title` in the private chat, as if started:
-    /// where its steers go.
-    async fn with_agent(pool: PgPool, title: &str) -> (Self, UnboundedReceiver<String>) {
-        let (pair, steered) = Self::start(pool, Some(title)).await;
-        (pair, steered.unwrap())
-    }
-
-    async fn start(pool: PgPool, agent: Option<&str>) -> (Self, Option<UnboundedReceiver<String>>) {
         let mut conn = pool.acquire().await.unwrap();
         let chat = Arc::new(private(&mut conn).await);
         let room = Arc::new(group(&mut conn).await);
@@ -61,18 +50,11 @@ impl Pair {
         let shared = Arc::new(shared);
         let mut scope = Scope::new();
         let mut mailboxes = HashMap::new();
-        let mut steered = None;
         for place in [&chat, &room] {
             let (mailbox, rx) = mpsc::unbounded_channel();
-            let mut actor =
-                Conversation::new(Arc::clone(&shared), Arc::clone(place), mailbox.clone())
-                    .await
-                    .unwrap();
-            if place.conversation == chat.conversation
-                && let Some(title) = agent
-            {
-                steered = Some(actor.jobs.pretend(title));
-            }
+            let actor = Conversation::new(Arc::clone(&shared), Arc::clone(place), mailbox.clone())
+                .await
+                .unwrap();
             scope.spawn(move |_| async move {
                 actor.run(rx).await.unwrap();
             });
@@ -94,7 +76,7 @@ impl Pair {
                 }
             }
         });
-        let pair = Self {
+        Self {
             pool,
             script,
             chat,
@@ -102,8 +84,7 @@ impl Pair {
             mailboxes,
             outbound,
             _scope: scope,
-        };
-        (pair, steered)
+        }
     }
 
     /// Lets Max in `asker` ask Max in `asked`.
@@ -126,7 +107,7 @@ impl Pair {
 
     /// Max in `place` calls `ask`.
     async fn ask(&self, place: &Place, to: ConversationId, question: &str) -> Result<u32, String> {
-        self.max(place).ask(Some(to), question.to_owned()).await
+        self.max(place).ask(to, question.to_owned()).await
     }
 
     /// Max in `place` calls `answer`.
@@ -289,58 +270,6 @@ async fn one_max_asks_another_and_no_chat_hears_of_it(pool: PgPool) {
     assert_eq!(p.count(lines).await, 1);
     let turns = "select count(*) from turns t join conversations c on c.id = t.conversation_id where c.kind = 'group'";
     assert_eq!(p.count(turns).await, 1, "one core took every question");
-}
-
-#[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn an_agent_asks_another_conversation_and_hears_the_answer_itself(pool: PgPool) {
-    let (mut p, mut steered) = Pair::with_agent(pool, "订餐厅").await;
-    let (chat, room) = (Arc::clone(&p.chat), Arc::clone(&p.room));
-    let (c, r) = (chat.conversation, room.conversation);
-    let agent = Poster::for_agent(p.mailboxes[&c].clone(), 1);
-    // Whom Max may ask, and nobody else.
-    let refused = agent.ask(Some(r), "在吗".into()).await.unwrap_err();
-    assert!(
-        refused.starts_with(&format!("can't ask c#{r}:")),
-        "{refused}"
-    );
-    p.link(&chat, &room).await;
-
-    // Asked as Max in the chat asks.
-    p.script.push(Answer::says("我问问大家"));
-    assert_eq!(agent.ask(Some(r), " 明天几点开始？".into()).await, Ok(1));
-    p.says(&room, "我问问大家").await;
-    let put = format!("[ask#1 问] c#{c}\n明天几点开始？\n（那个会话的 Max 在等你回答：");
-    let shown = p.request_tail(0);
-    assert!(shown.contains(&put), "{shown}");
-    // Max in the chat sees it wait, as the agent's.
-    let jobs = p.max(&chat).status(None).await.unwrap();
-    let listed: Vec<_> = jobs
-        .iter()
-        .map(|job| (job.handle.as_str(), job.title.as_str()))
-        .collect();
-    let title = format!("? c#{r}: 明天几点开始？ (agent#1)");
-    assert_eq!(listed, [("agent#1", "订餐厅"), ("ask#1", title.as_str())]);
-
-    // The answer goes to the agent; Max in the chat isn't woken.
-    assert_eq!(p.answer(&room, 1, "晚上八点").await, Ok(format!("c#{c}")));
-    let heard = format!("[ask#1 回答] c#{r}\n问：明天几点开始？\n答：晚上八点");
-    assert_eq!(steered.recv().await.unwrap(), heard);
-    p.quiet().await;
-
-    // Its questions end with it: an answer afterwards finds nobody.
-    p.script.push(Answer::says("等我想想"));
-    assert_eq!(agent.ask(Some(r), "有空吗".into()).await, Ok(2));
-    p.says(&room, "等我想想").await;
-    assert_eq!(p.max(&chat).cancel(Handle::Agent(1)).await, Ok(()));
-    assert_eq!(p.max(&chat).status(None).await, Ok(Vec::new()));
-    let late = p.answer(&room, 2, "有").await.unwrap_err();
-    assert!(
-        late.contains("nobody waits for an answer to ask#2"),
-        "{late}"
-    );
-    let over = agent.ask(Some(r), "还在吗".into()).await.unwrap_err();
-    assert_eq!(over, "agent#1 has ended");
-    p.quiet().await;
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]

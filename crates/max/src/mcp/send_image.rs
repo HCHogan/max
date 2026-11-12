@@ -38,7 +38,6 @@ pub struct Sent {
 impl Tool for SendImage {
     const NAME: &'static str = "send_image";
     const DESCRIPTION: &'static str = "Sends a picture under /work to this chat, such as a chart you drew, a screenshot or a downloaded picture.";
-    const JOB: bool = false;
 
     type Args = Args;
     type Output = Sent;

@@ -16,7 +16,6 @@ use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 use tracing::warn;
 
-use super::agent::{Agent, AgentSteer};
 use super::ask::{Answer, Ask};
 use super::config::Config;
 use super::find_stickers::FindStickers;
@@ -33,12 +32,9 @@ use super::{Context, Failure, arguments, internal};
 /// A Max tool: what a program calls as `tools.<name>(args)`.
 pub trait Tool: 'static {
     const NAME: &'static str;
-    /// One line for the MCP listing, which is what a background agent's
-    /// model reads of it, with its arguments' descriptions.
+    /// One line for the MCP listing, which is what `maxx` shows of it,
+    /// with its arguments' descriptions.
     const DESCRIPTION: &'static str;
-    /// Whether a background agent may call it: it doesn't speak or act in
-    /// the group.
-    const JOB: bool;
     /// Whether the system prompt declares it. Those it doesn't, `say` and
     /// `wake`, are for the programs Max keeps in the group's VM, and a
     /// turn's programs that call them call as those. See "Resident programs" in
@@ -63,7 +59,6 @@ pub trait Tool: 'static {
 pub struct Spec {
     pub name: &'static str,
     pub description: &'static str,
-    pub job: bool,
     pub turn: bool,
     /// JSON Schemas.
     pub input: Map<String, Value>,
@@ -85,8 +80,6 @@ pub static TOOLS: LazyLock<Vec<Spec>> = LazyLock::new(|| {
         spec::<RecallMessage>(),
         spec::<MuteMember>(),
         spec::<FindStickers>(),
-        spec::<Agent>(),
-        spec::<AgentSteer>(),
         spec::<Cancel>(),
         spec::<Status>(),
         spec::<Ask>(),
@@ -132,7 +125,6 @@ fn spec<T: Tool>() -> Spec {
     Spec {
         name: T::NAME,
         description: T::DESCRIPTION,
-        job: T::JOB,
         turn: T::TURN,
         input,
         output,

@@ -29,7 +29,6 @@ pub struct Results {
 impl Tool for WebSearch {
     const NAME: &'static str = "web_search";
     const DESCRIPTION: &'static str = "Searches the web: the first results' titles, links, summaries and publication dates. What you know ends with your training: search first for anything that may have changed since.";
-    const JOB: bool = true;
 
     type Args = Args;
     type Output = Results;

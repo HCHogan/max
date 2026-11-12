@@ -37,7 +37,6 @@ pub struct Said {
 impl Tool for Say {
     const NAME: &'static str = "say";
     const DESCRIPTION: &'static str = "Says something in this chat as Max, written as Max's replies are; returns the numbers of the messages sent.";
-    const JOB: bool = false;
     const TURN: bool = false;
 
     type Args = SayArgs;
@@ -132,7 +131,6 @@ impl Tool for Wake {
     const NAME: &'static str = "wake";
     const DESCRIPTION: &'static str =
         "Wakes Max and shows it some text; each wake is a turn of Max's.";
-    const JOB: bool = false;
     const TURN: bool = false;
 
     type Args = WakeArgs;

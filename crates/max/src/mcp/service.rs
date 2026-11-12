@@ -1,15 +1,13 @@
 //! The MCP service: JSON-RPC posted over HTTP, stateless, answered with
-//! JSON, on a unix socket per VM. Only what the runner's client and pi's
-//! MCP adapter use: `initialize`, `ping`, `tools/list` and `tools/call`;
-//! notifications are taken and dropped, and a call is cancelled by
-//! closing its connection, which drops it. A token says which run, or
-//! which background agent, a call belongs to; it isn't a permission, as
-//! anything in the VM may leave it out. A background agent's session lists
-//! and calls only the tools that read, and its model calls go through the
-//! same service; see [`super::forward`]. A call without an open token
-//! (none, or one whose run has ended) is from a program Max keeps in the
-//! VM, outside any turn: the VM says which group it is, and the group's
-//! actor runs it; see "Resident programs" in docs/rust-rewrite.md.
+//! JSON, on a unix socket per VM. Only what the runner's client uses:
+//! `ping`, `tools/list` and `tools/call`; notifications are taken and
+//! dropped, and a call is cancelled by closing its connection, which
+//! drops it. A token says which run a call belongs to; it isn't a
+//! permission, as anything in the VM may leave it out. A call without an
+//! open token (none, or one whose run has ended) is from a program Max
+//! keeps in the VM, outside any turn, a background agent among them: the
+//! VM says which group it is, and the group's actor runs it; see
+//! "Resident programs" in docs/rust-rewrite.md.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
@@ -31,7 +29,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use super::tool::{self, Spec};
-use super::{Call, Context, Failure, Route, chat_file, forward, harness, lock, show};
+use super::{Call, Context, Failure, Route, chat_file, lock, show};
 use crate::conversation::Signal;
 use max_core::limits::{CALLS_AT_ONCE, Setting};
 
@@ -40,10 +38,6 @@ use max_core::limits::{CALLS_AT_ONCE, Setting};
 /// timeline, where the model sees whether it happened.
 const MAYBE_DONE: &str =
     "what acts in the chat may have taken effect: look at the records before trying again";
-/// The protocol versions `initialize` agrees to, newest first: a client
-/// gets its own if it is here, else the newest. The runner's client
-/// speaks 2026-07-28, which needs no `initialize`; pi's 2025-11-25.
-const VERSIONS: [&str; 4] = ["2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26"];
 /// JSON-RPC's codes for a request Max doesn't answer.
 const PARSE_ERROR: i32 = -32700;
 const METHOD_NOT_FOUND: i32 = -32601;
@@ -185,8 +179,6 @@ pub async fn serve_with<L>(
     let app = axum::Router::new()
         .route("/mcp", post(rpc))
         .with_state(handler)
-        .merge(forward::router(conversation, sessions.clone()))
-        .merge(harness::router(conversation, sessions))
         .merge(host);
     if let Err(error) = axum::serve(listener, app)
         .with_graceful_shutdown(stop.cancelled_owned())
@@ -275,8 +267,8 @@ async fn rpc(State(handler): State<Handler>, headers: HeaderMap, body: Bytes) ->
         };
         return reply(StatusCode::BAD_REQUEST, &answer);
     };
-    // Such as initialized, and cancelled: closing the connection is what
-    // cancels a call here.
+    // Such as cancelled: closing the connection is what cancels a call
+    // here.
     let Some(id) = request.id else {
         return StatusCode::ACCEPTED.into_response();
     };
@@ -312,7 +304,6 @@ impl Handler {
         authorization: Option<&str>,
     ) -> Result<Answer, Refusal> {
         match method {
-            "initialize" => Ok(Answer::Value(initialized(&params))),
             "ping" => Ok(Answer::Value(json!({}))),
             "tools/list" => {
                 let session = self.session(authorization);
@@ -452,21 +443,6 @@ pub(super) fn late(limit: Duration) -> Failure {
         "timeout",
         format!("not done in {} seconds; {MAYBE_DONE}", limit.as_secs()),
     )
-}
-
-/// The answer to `initialize`, from a client of an older protocol than
-/// the runner's: tools, at the client's version if Max knows it.
-fn initialized(params: &Value) -> Value {
-    let asked = params["protocolVersion"].as_str();
-    let version = VERSIONS
-        .into_iter()
-        .find(|version| Some(*version) == asked)
-        .unwrap_or(VERSIONS[0]);
-    json!({
-        "protocolVersion": version,
-        "capabilities": { "tools": {} },
-        "serverInfo": { "name": "max", "version": env!("CARGO_PKG_VERSION") },
-    })
 }
 
 /// A tool as `tools/list` shows it.
@@ -665,65 +641,48 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    /// A client of the 2025-11-25 protocol, as pi's MCP adapter is: it
-    /// begins with `initialize`, says it is initialized, asks with a GET
-    /// for a stream of the server's own messages and does without, and
-    /// reads a result's text.
+    /// What isn't a call: a notification is taken and dropped, there is
+    /// nothing to GET, and a method Max doesn't have is an error.
     #[sqlx::test(migrator = "max_db::MIGRATOR")]
-    async fn a_client_of_the_older_protocol_is_served(pool: PgPool) {
+    async fn what_isnt_a_call_is_answered_plainly(pool: PgPool) {
         let mut conn = pool.acquire().await.unwrap();
         let place = Arc::new(group(&mut conn).await);
         drop(conn);
         let conversation = place.conversation;
         let sessions = Sessions::default();
         let grant = sessions.open(Context::check(Services::bare(pool), place));
-        let dir = sockets("legacy");
+        let dir = sockets("plain");
         let socket = dir.join("mine.sock");
         let mut scope = Scope::new();
         serve_at(&mut scope, &socket, conversation, &sessions);
-        let first = format!("Authorization: Bearer {}\r\n", grant.token());
-        let then = format!("MCP-Protocol-Version: 2025-11-25\r\n{first}");
-        let rpc = async |headers: &str, body: Value| {
-            let (status, body) = exchange(&socket, "POST", headers, &body.to_string()).await;
+        let headers = format!(
+            "MCP-Protocol-Version: 2026-07-28\r\nAuthorization: Bearer {}\r\n",
+            grant.token()
+        );
+        let rpc = async |body: Value| {
+            let (status, body) = exchange(&socket, "POST", &headers, &body.to_string()).await;
             assert_eq!(status, "HTTP/1.1 200 OK", "{body}");
             serde_json::from_str::<Value>(&body).unwrap()
         };
 
-        let hello = json!({
-            "protocolVersion": "2025-11-25",
-            "capabilities": {},
-            "clientInfo": { "name": "pi", "version": "1.4.0" },
-        });
-        let initialize =
-            json!({ "jsonrpc": "2.0", "id": 0, "method": "initialize", "params": hello });
-        let initialized = rpc(&first, initialize).await;
-        assert_eq!(
-            initialized["result"]["protocolVersion"], "2025-11-25",
-            "{initialized}"
-        );
-        assert_eq!(
-            initialized["result"]["capabilities"],
-            json!({ "tools": {} })
-        );
-        let note = json!({ "jsonrpc": "2.0", "method": "notifications/initialized" });
-        let (status, body) = exchange(&socket, "POST", &then, &note.to_string()).await;
+        let note = json!({ "jsonrpc": "2.0", "method": "notifications/cancelled" });
+        let (status, body) = exchange(&socket, "POST", &headers, &note.to_string()).await;
         assert_eq!(
             (status.as_str(), body.as_str()),
             ("HTTP/1.1 202 Accepted", "")
         );
-        let (status, _) = exchange(&socket, "GET", &then, "").await;
+        let (status, _) = exchange(&socket, "GET", &headers, "").await;
         assert_eq!(status, "HTTP/1.1 405 Method Not Allowed");
 
-        let list = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" });
-        let listed = rpc(&then, list).await;
-        assert_eq!(listed["result"]["tools"][0]["name"], "history", "{listed}");
+        // A result's text is its structured content, for a client that
+        // reads only that.
         let call = json!({
             "jsonrpc": "2.0",
             "id": 2,
             "method": "tools/call",
             "params": { "name": "history", "arguments": { "around": 1 } },
         });
-        let result = rpc(&then, call).await["result"].clone();
+        let result = rpc(call).await["result"].clone();
         assert_eq!(result["isError"], true, "{result}");
         let text = result["content"][0]["text"].as_str().unwrap();
         assert_eq!(
@@ -732,10 +691,12 @@ mod tests {
         );
 
         let ping = json!({ "jsonrpc": "2.0", "id": 3, "method": "ping" });
-        assert_eq!(rpc(&then, ping).await["result"], json!({}));
-        let unknown = json!({ "jsonrpc": "2.0", "id": 4, "method": "resources/list" });
-        assert_eq!(rpc(&then, unknown).await["error"]["code"], METHOD_NOT_FOUND);
-        let (status, body) = exchange(&socket, "POST", &then, "{").await;
+        assert_eq!(rpc(ping).await["result"], json!({}));
+        for method in ["resources/list", "initialize"] {
+            let unknown = json!({ "jsonrpc": "2.0", "id": 4, "method": method });
+            assert_eq!(rpc(unknown).await["error"]["code"], METHOD_NOT_FOUND);
+        }
+        let (status, body) = exchange(&socket, "POST", &headers, "{").await;
         assert_eq!(status, "HTTP/1.1 400 Bad Request", "{body}");
 
         scope.close(Duration::from_secs(5)).await;

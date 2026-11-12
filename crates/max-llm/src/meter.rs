@@ -1,9 +1,8 @@
 //! A response read on its way past, for a call Max didn't make: a
 //! background agent's, which max forwards to the provider and back as the
 //! bytes came. Its usage is read as the protocol's parser reads Max's own,
-//! its tool calls by name, and when the model began to answer.
+//! and when the model began to answer.
 
-use std::collections::BTreeMap;
 use std::mem;
 
 use max_core::item::{Protocol, Usage};
@@ -26,9 +25,6 @@ pub struct Meter {
     data: Option<String>,
     usage: Usage,
     started: bool,
-    completed: bool,
-    /// The tools called, by where the call is in the answer.
-    calls: BTreeMap<u64, String>,
 }
 
 impl Meter {
@@ -40,8 +36,6 @@ impl Meter {
             data: None,
             usage: Usage::default(),
             started: false,
-            completed: false,
-            calls: BTreeMap::new(),
         }
     }
 
@@ -80,16 +74,6 @@ impl Meter {
         self.usage
     }
 
-    /// The tools the model called, in order; none if the response didn't
-    /// complete, since then they don't run.
-    pub fn tools(&self) -> Vec<String> {
-        if !self.completed {
-            return Vec::new();
-        }
-        let named = self.calls.values().filter(|name| !name.is_empty());
-        named.cloned().collect()
-    }
-
     /// One line of the stream.
     fn field(&mut self, line: &[u8]) {
         if line.is_empty() {
@@ -114,10 +98,6 @@ impl Meter {
     }
 
     fn event(&mut self, data: &str) {
-        if data.trim() == "[DONE]" {
-            self.completed = true;
-            return;
-        }
         let Ok(event) = serde_json::from_str::<Value>(data) else {
             return;
         };
@@ -131,28 +111,17 @@ impl Meter {
         if chunk["usage"].is_object() {
             self.usage = chat::usage(&chunk["usage"]);
         }
-        let choice = &chunk["choices"][0];
-        if choice["finish_reason"].is_string() {
-            self.completed = true;
-        }
-        let delta = &choice["delta"];
+        let delta = &chunk["choices"][0]["delta"];
         let wrote = |field: &str| {
             delta[field]
                 .as_str()
                 .is_some_and(|text| !text.trim().is_empty())
         };
-        self.started |= wrote("content") || chat::REASONING.iter().any(|field| wrote(field));
-        let calls = delta["tool_calls"].as_array().map(Vec::as_slice);
-        for (position, call) in calls.unwrap_or_default().iter().enumerate() {
-            self.started = true;
-            let index = call["index"]
-                .as_u64()
-                .unwrap_or(u64::try_from(position).unwrap_or_default());
-            let name = self.calls.entry(index).or_default();
-            if let Some(piece) = call["function"]["name"].as_str() {
-                name.push_str(piece);
-            }
-        }
+        let called = delta["tool_calls"]
+            .as_array()
+            .is_some_and(|calls| !calls.is_empty());
+        self.started |=
+            called || wrote("content") || chat::REASONING.iter().any(|field| wrote(field));
     }
 
     fn response(&mut self, event: &Value) {
@@ -167,17 +136,6 @@ impl Meter {
         let response = &event["response"];
         if response["usage"].is_object() {
             self.usage = responses::usage(&response["usage"]);
-        }
-        if kind != "response.completed" {
-            return;
-        }
-        self.completed = true;
-        let output = response["output"].as_array().map(Vec::as_slice);
-        let calls = output.unwrap_or_default().iter();
-        let calls = calls.filter(|item| item["type"] == "function_call");
-        for (index, call) in (0..).zip(calls) {
-            let name = call["name"].as_str().unwrap_or_default();
-            self.calls.insert(index, name.to_owned());
         }
     }
 }

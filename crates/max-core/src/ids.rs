@@ -46,14 +46,15 @@ impl fmt::Display for CallId {
     }
 }
 
-/// What runs or waits in a conversation's background, as Max is shown it:
-/// a background agent, `agent#3`; a question between Max here and Max in
-/// another conversation, `ask#5`, whichever asked. Each kind is numbered on its
-/// own, within the conversation while max runs, so the name says what it
-/// is and what may be done with it.
+/// What waits in a conversation's background, as Max is shown it: a
+/// question between Max here and Max in another conversation, `ask#5`,
+/// whichever asked, numbered within the conversation while max runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(into = "String", try_from = "String")]
 pub enum Handle {
+    /// A background agent, `agent#3`, as the host named them until
+    /// 2026-11-12, when they became units of the guest's (`max-agent-3`):
+    /// only in the wakes the ledger kept from before.
     Agent(u32),
     Ask(u32),
 }
@@ -78,7 +79,7 @@ impl fmt::Display for Handle {
 
 /// Text that isn't a handle.
 #[derive(Debug, thiserror::Error)]
-#[error("{0} isn't a handle: write agent#3 or ask#5")]
+#[error("{0} isn't a handle: write ask#5")]
 pub struct NotAHandle(String);
 
 impl std::str::FromStr for Handle {
@@ -128,7 +129,7 @@ mod tests {
             let error = text.parse::<Handle>().unwrap_err();
             assert_eq!(
                 error.to_string(),
-                format!("{text} isn't a handle: write agent#3 or ask#5")
+                format!("{text} isn't a handle: write ask#5")
             );
         }
     }

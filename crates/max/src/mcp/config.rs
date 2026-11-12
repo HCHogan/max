@@ -43,7 +43,6 @@ pub struct Shown {
 impl Tool for Config {
     const NAME: &'static str = "config";
     const DESCRIPTION: &'static str = "Shows or sets a few of this chat's settings: how long an idle turn lasts, and how long a tool call may take.";
-    const JOB: bool = false;
 
     type Args = Args;
     type Output = Limits;

@@ -43,7 +43,6 @@ pub struct Sticker {
 impl Tool for FindStickers {
     const NAME: &'static str = "find_stickers";
     const DESCRIPTION: &'static str = "Finds stickers in the library by meaning: their handles and descriptions. It finds, and doesn't send.";
-    const JOB: bool = false;
 
     type Args = Args;
     type Output = Found;

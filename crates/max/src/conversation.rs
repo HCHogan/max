@@ -29,7 +29,6 @@ use tokio::sync::{broadcast, oneshot};
 pub use actor::{Conversation, Outgoing, Shared};
 
 use crate::inbound::Inbound;
-use crate::job;
 use crate::mcp;
 
 /// What arrives in an actor's mailbox: everything that happens to a
@@ -66,11 +65,6 @@ pub enum Event {
         request: Request,
         /// The turn it comes from; None from a program, outside any turn.
         origin: Option<TurnId>,
-    },
-    /// A background agent ended.
-    JobDone {
-        handle: Handle,
-        finished: job::Finished,
     },
     /// The VM service has something to say about the group's VM.
     VmNotice(String),
@@ -150,29 +144,26 @@ impl fmt::Debug for Subscription {
 /// done.
 pub type Reply<T> = oneshot::Sender<Result<T, String>>;
 
+/// A question asked from here that waits for its answer, as `status`
+/// shows it.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
+pub struct Waits {
+    pub handle: String,
+    pub title: String,
+    pub minutes: u64,
+}
+
 /// What a tool asks of its conversation's actor, each with where its
-/// answer goes. A job is named by its number.
+/// answer goes.
 #[derive(Debug)]
 pub enum Request {
-    /// Start a background agent: its job.
-    Agent {
-        task: String,
-        title: Option<String>,
-        workdir: String,
-        reply: Reply<u32>,
-    },
-    /// Tell a running agent something more.
-    Steer {
-        agent: u32,
-        message: String,
-        reply: Reply<()>,
-    },
-    /// Stop an agent, or withdraw a question.
+    /// Withdraw a question asked from here, or decline one asked of Max
+    /// here.
     Cancel { handle: Handle, reply: Reply<()> },
-    /// One job's state, or every running one's.
+    /// One question's wait, or every one's.
     Status {
         handle: Option<Handle>,
-        reply: Reply<Vec<job::Status>>,
+        reply: Reply<Vec<Waits>>,
     },
     /// Set the conversation's limits, None back to the default: what
     /// each is now.
@@ -180,21 +171,17 @@ pub enum Request {
         changes: Vec<(Setting, Option<u64>)>,
         reply: Reply<Vec<Configured>>,
     },
-    /// Ask Max in conversation `to`; or, for agent `by`, with no `to`,
-    /// Max here: the question's number here.
+    /// Ask Max in conversation `to`: the question's number here.
     Ask {
-        to: Option<ConversationId>,
+        to: ConversationId,
         question: String,
-        by: Option<u32>,
         reply: Reply<u32>,
     },
     /// Answer question `to`, as it was numbered here, which Max in
-    /// another conversation or an agent here asked; `by` an agent, the
-    /// one answering: whom the answer went to.
+    /// another conversation asked: whom the answer went to.
     Answer {
         to: u32,
         text: String,
-        by: Option<u32>,
         reply: Reply<String>,
     },
     /// Wake Max with a program's `text`: what the program is told.
@@ -209,12 +196,8 @@ impl Request {
     pub fn refuse(self, why: &str) {
         let why = why.to_owned();
         match self {
-            Request::Agent { reply, .. } | Request::Ask { reply, .. } => {
-                drop(reply.send(Err(why)));
-            }
-            Request::Steer { reply, .. }
-            | Request::Cancel { reply, .. }
-            | Request::Act { reply } => drop(reply.send(Err(why))),
+            Request::Ask { reply, .. } => drop(reply.send(Err(why))),
+            Request::Cancel { reply, .. } | Request::Act { reply } => drop(reply.send(Err(why))),
             Request::Status { reply, .. } => drop(reply.send(Err(why))),
             Request::Configure { reply, .. } => drop(reply.send(Err(why))),
             Request::Answer { reply, .. } | Request::Wake { reply, .. } => {
@@ -293,16 +276,14 @@ const GONE: &str = "this conversation's actor has stopped";
 /// ...or went before it answered.
 const UNANSWERED: &str = "the conversation stopped before answering";
 
-/// Lets a tool act in its conversation: say something, or run a
-/// background agent, for its turn, or for a program Max keeps in the
-/// group's VM; or ask and answer, for a background agent.
+/// Lets a tool act in its conversation: say something, ask another
+/// conversation or answer one, for its turn, or for a program Max keeps
+/// in the group's VM.
 #[derive(Clone, Debug)]
 pub struct Poster {
     mailbox: UnboundedSender<Event>,
-    /// None for a program's, or an agent's.
+    /// None for a program's.
     origin: Option<TurnId>,
-    /// The agent's number, for an agent's.
-    agent: Option<u32>,
 }
 
 impl Poster {
@@ -310,7 +291,6 @@ impl Poster {
         Self {
             mailbox,
             origin: Some(origin),
-            agent: None,
         }
     }
 
@@ -319,16 +299,6 @@ impl Poster {
         Self {
             mailbox,
             origin: None,
-            agent: None,
-        }
-    }
-
-    /// For background agent `agent`, which may only ask and answer.
-    pub fn for_agent(mailbox: UnboundedSender<Event>, agent: u32) -> Self {
-        Self {
-            mailbox,
-            origin: None,
-            agent: Some(agent),
         }
     }
 
@@ -360,40 +330,15 @@ impl Poster {
         self.act(Act::Unsend(target))?.sent().await
     }
 
-    /// Starts a background agent: its number, or why not.
-    pub async fn agent(
-        &self,
-        task: String,
-        title: Option<String>,
-        workdir: String,
-    ) -> Result<u32, String> {
-        let agent = |reply| Request::Agent {
-            task,
-            title,
-            workdir,
-            reply,
-        };
-        self.request(agent).await
-    }
-
-    /// Tells agent `agent` something more.
-    pub async fn steer(&self, agent: u32, message: String) -> Result<(), String> {
-        let steer = |reply| Request::Steer {
-            agent,
-            message,
-            reply,
-        };
-        self.request(steer).await
-    }
-
-    /// Stops `handle`, an agent, or withdraws it, a question.
+    /// Withdraws `handle`, a question asked from here, or declines it, one
+    /// asked of Max here.
     pub async fn cancel(&self, handle: Handle) -> Result<(), String> {
         self.request(|reply| Request::Cancel { handle, reply })
             .await
     }
 
-    /// `handle` as it runs, or every running job.
-    pub async fn status(&self, handle: Option<Handle>) -> Result<Vec<job::Status>, String> {
+    /// `handle` as it waits, or every question that does.
+    pub async fn status(&self, handle: Option<Handle>) -> Result<Vec<Waits>, String> {
         self.request(|reply| Request::Status { handle, reply })
             .await
     }
@@ -408,28 +353,22 @@ impl Poster {
             .await
     }
 
-    /// Asks Max in conversation `to`, or an agent's Max, with no `to`:
-    /// the question's number here, or why it wasn't asked.
-    pub async fn ask(&self, to: Option<ConversationId>, question: String) -> Result<u32, String> {
+    /// Asks Max in conversation `to`: the question's number here, or why
+    /// it wasn't asked.
+    pub async fn ask(&self, to: ConversationId, question: String) -> Result<u32, String> {
         let ask = |reply| Request::Ask {
             to,
             question,
-            by: self.agent,
             reply,
         };
         self.request(ask).await
     }
 
-    /// Answers question `to`, which Max in another conversation or an
-    /// agent here asked: whom it went to, or why it wasn't taken.
+    /// Answers question `to`, which Max in another conversation asked:
+    /// whom it went to, or why it wasn't taken.
     pub async fn answer(&self, to: u32, text: String) -> Result<String, String> {
-        let answer = |reply| Request::Answer {
-            to,
-            text,
-            by: self.agent,
-            reply,
-        };
-        self.request(answer).await
+        self.request(|reply| Request::Answer { to, text, reply })
+            .await
     }
 
     /// Asks whether the tool may act in the chat by itself: `/stop`

@@ -92,7 +92,6 @@ enum Bound {
 impl Tool for History {
     const NAME: &'static str = "history";
     const DESCRIPTION: &'static str = "Looks through this conversation's chat records, with the descriptions of pictures and stickers: by content, speaker or time, or around one message. With query it returns the passages that match; without, the messages themselves in order of time.";
-    const JOB: bool = true;
 
     type Args = Args;
     type Output = Found;

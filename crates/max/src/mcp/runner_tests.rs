@@ -733,7 +733,7 @@ async fn commands_call_max_tools_with_maxx(pool: PgPool) {
         ("file", true),
         ("events", true),
         ("mute_member", true),
-        ("agent", true),
+        ("ask", true),
         ("show", false),
         ("video", false),
     ] {

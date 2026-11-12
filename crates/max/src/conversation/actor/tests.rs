@@ -21,7 +21,6 @@ use crate::conversation::testing::{
 };
 use crate::conversation::{Configured, Question};
 use crate::inbound::{InNode, Quote};
-use crate::job::{Ending, Finished, How};
 use crate::llm::testing::{Answer, Script};
 
 const PATIENCE: Duration = Duration::from_secs(5);
@@ -60,15 +59,13 @@ impl Harness {
         Self::start(pool, Group, idle_window_secs, false, false, None, |_| {}).await
     }
 
-    /// With agent#1, titled `title`, running as far as the actor knows:
-    /// where its steers go.
-    async fn with_job(pool: PgPool, title: &str) -> (Self, UnboundedReceiver<String>) {
-        let mut steered = None;
-        let h = Self::start(pool, Group, 300, true, false, None, |actor| {
-            steered = Some(actor.jobs.pretend(title));
+    /// With ask#1, `question` put to c#9, waiting for its answer as far
+    /// as the actor knows.
+    async fn with_job(pool: PgPool, question: &str) -> Self {
+        Self::start(pool, Group, 300, true, false, None, |actor| {
+            actor.jobs.pretend(9, question);
         })
-        .await;
-        (h, steered.unwrap())
+        .await
     }
 
     /// In 小明's private chat with Max.
@@ -760,8 +757,8 @@ async fn kill_stops_the_core_quietly(pool: PgPool) {
     h.mailbox.send(Event::Post(late)).unwrap();
     assert!(sent.await.unwrap().is_err());
     let late = Poster::new(h.mailbox.clone(), turn);
-    let started = late.agent("查票价".into(), None, "/work".into()).await;
-    assert!(started.is_err());
+    let asked = late.ask(ConversationId(9), "票价多少".into()).await;
+    assert!(asked.is_err());
     h.stop().await;
     assert!(h.outbound.try_recv().is_err(), "/kill isn't answered");
 }
@@ -1040,142 +1037,34 @@ async fn a_program_follows_the_rows_as_they_are_committed(pool: PgPool) {
     assert!(subscription.rows.recv().await.is_err());
 }
 
-fn finished(how: How, text: &str) -> Finished {
-    Finished {
-        ending: Ending {
-            how,
-            text: Some(text.to_owned()),
-            unsent: 0,
-        },
-        file: Some("/work/.max/jobs/agent-1.md".to_owned()),
-    }
-}
-
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn a_jobs_report_wakes_max(pool: PgPool) {
-    let (mut h, _) = Harness::with_job(pool, "查票价").await;
-    // The turn that started the job had rows to start from.
-    h.send(from_xiaoming(0, vec![text("票价多少来着")]));
-    h.script.push(Answer::says("票价查到了，一百块"));
-    let finished = finished(How::Done, "一百块。");
-    let handle = Handle::Agent(1);
-    h.mailbox.send(Event::JobDone { handle, finished }).unwrap();
-    assert_eq!(h.said().await.1, "票价查到了，一百块");
-    let volatile = h.request_tail(0);
-    assert!(
-        volatile
-            .ends_with("[agent#1 完成] 查票价\n一百块。\n（全文在 /work/.max/jobs/agent-1.md）\n"),
-        "{volatile}"
-    );
-    // It ended: no more steering it.
-    let steered = h.poster().steer(1, "再查查".into()).await;
-    assert!(steered.unwrap_err().contains("agent#1 isn't running"));
-    h.stop().await;
-}
-
-#[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn an_agents_question_wakes_max_whose_answer_goes_to_it(pool: PgPool) {
-    let (mut h, mut steered) = Harness::with_job(pool, "订餐厅").await;
-    h.send(from_xiaoming(0, vec![text("帮我们订个餐厅")]));
-    h.script.push(Answer::says("我问问大家"));
-    let agent = Poster::for_agent(h.mailbox.clone(), 1);
-    assert_eq!(agent.ask(None, "选火锅还是烧烤？".into()).await, Ok(1));
-    assert_eq!(h.said().await.1, "我问问大家");
-    let volatile = h.request_tail(0);
-    assert!(
-        volatile.ends_with(
-            "[ask#1 问] agent#1 订餐厅\n选火锅还是烧烤？\n（你的后台 agent 在等你回答：用 answer 回答，to 填 1；它没别的可做时最多再等 10 分钟，等不到就自己判断。这个问题和你的回答都不会发到这边的聊天里）\n"
-        ),
-        "{volatile}"
-    );
-    // Max asks with to; the agent can't answer itself.
-    let missing = h.poster().ask(None, "几点？".into()).await.unwrap_err();
-    assert!(missing.starts_with("to is missing"), "{missing}");
-    let own = agent.answer(1, "火锅".into()).await.unwrap_err();
-    assert_eq!(own, "ask#1 is your own question: its answer comes to you");
-    let answered = h.poster().answer(1, " 火锅\n".into()).await;
-    assert_eq!(answered, Ok("agent#1 订餐厅".to_owned()));
-    let heard = "[ask#1 回答] Max\n问：选火锅还是烧烤？\n答：火锅";
-    assert_eq!(steered.recv().await.unwrap(), heard);
-    let again = h.poster().answer(1, "烧烤".into()).await.unwrap_err();
-    assert!(
-        again.starts_with("nobody waits for an answer to ask#1"),
-        "{again}"
-    );
-    // Declined, it hears so at once.
-    h.script.push(Answer::says("这个你自己定"));
-    assert_eq!(agent.ask(None, "几点出发？".into()).await, Ok(2));
-    assert_eq!(h.said().await.1, "这个你自己定");
-    assert_eq!(h.poster().cancel(Handle::Ask(2)).await, Ok(()));
-    let declined = "[ask#2 没答成] Max：Max chose not to answer it\n问：几点出发？";
-    assert_eq!(steered.recv().await.unwrap(), declined);
-    // Cancelled, it asks no more.
-    assert_eq!(h.poster().cancel(Handle::Agent(1)).await, Ok(()));
-    let over = agent.ask(None, "那几点？".into()).await.unwrap_err();
-    assert_eq!(over, "agent#1 has ended");
-    h.stop().await;
-    assert_eq!(h.turns().await.len(), 1);
-}
-
-#[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn a_job_is_steered_listed_and_cancelled(pool: PgPool) {
-    let (mut h, mut steered) = Harness::with_job(pool, "查票价").await;
-    assert_eq!(h.poster().steer(1, "只要硬座".into()).await, Ok(()));
-    assert_eq!(steered.recv().await.unwrap(), "只要硬座");
+async fn kill_stops_the_jobs_too(pool: PgPool) {
+    let mut h = Harness::with_job(pool, "票价多少").await;
     let jobs = h.poster().status(None).await.unwrap();
     assert_eq!(
         (jobs[0].handle.as_str(), jobs[0].title.as_str()),
-        ("agent#1", "查票价")
+        ("ask#1", "? c#9: 票价多少")
     );
-    assert_eq!(jobs[0].calls, 0);
-    let handle = Handle::Agent(1);
-    assert_eq!(h.poster().cancel(handle).await, Ok(()));
-    assert_eq!(
-        h.poster().cancel(handle).await.unwrap_err(),
-        "agent#1 isn't running: it ended, was cancelled, or never was"
-    );
-    // What a cancelled job says when it ends wakes nobody.
-    let finished = finished(How::Done, "一百块。");
-    h.mailbox.send(Event::JobDone { handle, finished }).unwrap();
-    assert_eq!(h.poster().status(None).await, Ok(Vec::new()));
-    h.stop().await;
-    assert!(h.turns().await.is_empty());
-}
-
-/// No job model: no agent.
-#[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn no_agent_starts_without_its_model(pool: PgPool) {
-    let mut h = Harness::new(pool, 300).await;
-    let start = h
-        .poster()
-        .agent("查一下".into(), None, "/work".into())
-        .await;
-    assert_eq!(
-        start.unwrap_err(),
-        "no model is configured for background agents"
-    );
-    h.stop().await;
-}
-
-#[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn kill_stops_the_jobs_too(pool: PgPool) {
-    let (mut h, _) = Harness::with_job(pool, "查票价").await;
+    // What ran in the VM under that name until 2026-11-12 is a unit
+    // there now.
+    let agent = h.poster().cancel(Handle::Agent(1)).await.unwrap_err();
+    assert!(agent.contains("systemctl stop max-agent-1"), "{agent}");
     h.send(from_xiaoming(0, vec![me(), text(" /status")]));
     let (_, status) = h.said().await;
     assert!(
-        status.contains("job       agent#1 · 0m · 0 calls · 查票价"),
+        status.contains("job       ask#1 · 0m · ? c#9: 票价多少"),
         "{status}"
     );
     h.send(from_xiaoming(1, vec![me(), text(" /kill")]));
     let (_, killed) = h.said().await;
-    assert!(killed.contains("/kill → jobs stopped: agent#1"), "{killed}");
+    assert!(killed.contains("/kill → jobs stopped: ask#1"), "{killed}");
     assert_eq!(h.poster().status(None).await, Ok(Vec::new()));
     h.stop().await;
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
 async fn stop_ends_the_turn_and_its_jobs_and_nothing_starts_until_start(pool: PgPool) {
-    let (mut h, _) = Harness::with_job(pool, "查票价").await;
+    let mut h = Harness::with_job(pool, "票价多少").await;
     h.script.push(Answer::Hangs);
     h.send(at_max(0, " 写篇长文"));
     calls_reach(&h, 1).await;
@@ -1186,7 +1075,7 @@ async fn stop_ends_the_turn_and_its_jobs_and_nothing_starts_until_start(pool: Pg
         command::answer(
             "stop",
             "stopped: messages are still recorded, but Max won't reply until @maxx /start\n\
-             jobs stopped: agent#1"
+             jobs stopped: ask#1"
         )
     );
     assert_eq!(h.turns().await[0].1, Some(Outcome::Interrupted));
@@ -1201,8 +1090,8 @@ async fn stop_ends_the_turn_and_its_jobs_and_nothing_starts_until_start(pool: Pg
     h.send(from_xiaohong(4, vec![me(), text("/status")]));
     let status = h.said().await.1;
     assert!(status.contains("\nstate     stopped\n"), "{status}");
-    // The programs can't post, wake Max, mute or start a job; they can
-    // still read.
+    // The programs can't post, wake Max, mute or ask another
+    // conversation; they can still read.
     let draft = Draft {
         reply_to: None,
         nodes: vec![DraftNode::Text {
@@ -1230,11 +1119,8 @@ async fn stop_ends_the_turn_and_its_jobs_and_nothing_starts_until_start(pool: Pg
     h.mailbox.send(call).unwrap();
     let refused = mcp::Failure::new("refused", stopped.clone());
     assert_eq!(muted.await.unwrap().unwrap_err(), refused);
-    let start = h
-        .poster()
-        .agent("查一下".into(), None, "/work".into())
-        .await;
-    assert_eq!(start.unwrap_err(), stopped);
+    let asked = h.poster().ask(ConversationId(9), "在吗".into()).await;
+    assert_eq!(asked.unwrap_err(), stopped);
     assert_eq!(h.poster().status(None).await, Ok(Vec::new()));
     assert_eq!(h.turns().await.len(), 1);
 

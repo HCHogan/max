@@ -504,8 +504,8 @@ in
     runner
     # A page's text, as Markdown; PDFs through pdftotext.
     (import ./webread.nix { inherit pkgs; })
-    # Background agents: pi, which programs can run too.
-    (import ./max-pi.nix { inherit pkgs pi; })
+    # Background agents' harness, which programs can run too; max-agent
+    # and max-pi are with the jobs (jobs.nix).
     pi
     # Max's own units, and how their programs wake Max; see max-units
     # above.

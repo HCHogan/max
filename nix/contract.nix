@@ -7,4 +7,8 @@
 # prints; the layout of /run/max/jobs; the runner's input; the routes a
 # guest calls (/mcp, /llm, /api, /events, /units). See "Lifetimes move to
 # systemd" in docs/rust-rewrite.md.
-1
+#
+# 2 (2026-11-12): a background agent is a unit of the guest's. /job is
+# gone, /llm takes any call from the VM and says what the model is, and
+# /run/max/jobs keeps an agent's task, inbox and model.
+2

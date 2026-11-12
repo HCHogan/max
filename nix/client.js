@@ -2,8 +2,7 @@
 // command share: a call is one POST, the outcome {ok: true, value} or
 // {ok: false, error: {code, message}}. Without a token it calls as a
 // program Max keeps in the VM, outside any turn. See "The MCP channel" in
-// docs/rust-rewrite.md. A background agent's harness keeps its job with job();
-// see "Decoupling from the harness" there.
+// docs/rust-rewrite.md.
 "use strict";
 
 const MCP = "http://127.0.0.1:7777/mcp";
@@ -21,7 +20,7 @@ const MOST_RETRY = 30_000;
 const AWAY = 180_000;
 
 // Waits ms, or until signal aborts, and leaves nothing behind: a listener
-// left on a job's signal at every retry piled up.
+// left on a signal at every retry piled up.
 function sleep(ms, signal) {
   return new Promise(resolve => {
     if (signal?.aborted) return resolve();
@@ -124,91 +123,6 @@ function connect({ url = MCP, token }) {
   return { request, list };
 }
 
-// What only a background job does, by its token; see "Decoupling from the
-// harness" in docs/rust-rewrite.md. Each but stopped() gives an outcome, as
-// a call does.
-//   turn({settling}) at the end of a turn, and once more as the agent is
-//                   about to settle: {steers, stop}, the steers Max sent
-//                   since the last, the answers to the agent's questions
-//                   among them, and whether to stop now. About to settle
-//                   with questions open, it waits for what comes, as long
-//                   as the host holds it
-//   stopped(signal) waits until the host says stop, opening the stream
-//                   again if it breaks or goes quiet: true then, false
-//                   once the job is over or `signal` ends the wait
-//   report({text, error})  once the agent has settled: ends the job
-function job({ url = MCP, token }) {
-  const headers = { "content-type": "application/json", authorization: `Bearer ${token}` };
-  const at = path => new URL(path, url);
-
-  // A POST; the answer's text.
-  async function post(path, body, signal) {
-    try {
-      const response = await fetch(at(path), { method: "POST", signal, headers, body: JSON.stringify(body) });
-      if (!response.ok) return { ok: false, error: { code: "refused", message: await refused(response) } };
-      return { ok: true, value: await response.text() };
-    } catch (error) {
-      if (error.name === "AbortError") return { ok: false, error: { code: "cancelled", message: "withdrawn" } };
-      return { ok: false, error: { code: "unreachable", message: `can't reach Max's MCP service: ${error.message}` } };
-    }
-  }
-
-  // The first line with something on it: lines with nothing keep a wait
-  // alive.
-  const first = text => text.split("\n").find(line => line.trim() !== "");
-
-  async function turn({ settling = false } = {}) {
-    const outcome = await post("/job/turn", { settling });
-    if (!outcome.ok) return outcome;
-    const line = first(outcome.value);
-    if (line === undefined) return { ok: false, error: { code: "over", message: "the job ended before the turn was answered" } };
-    return { ok: true, value: JSON.parse(line) };
-  }
-
-  async function stopped(signal) {
-    let wait = RETRY;
-    while (!signal?.aborted) {
-      // A stream quiet for longer than its heartbeat is broken.
-      const quiet = new AbortController();
-      let timer;
-      const listen = () => {
-        clearTimeout(timer);
-        timer = setTimeout(() => quiet.abort(), QUIET);
-      };
-      try {
-        listen();
-        const either = signal ? AbortSignal.any([signal, quiet.signal]) : quiet.signal;
-        const response = await fetch(at("/job/stop"), { headers, signal: either });
-        // Not a job's, or not any more.
-        if (!response.ok && response.status < 500) return false;
-        if (response.ok) {
-          wait = RETRY;
-          const decoder = new TextDecoder();
-          for await (const chunk of response.body) {
-            if (decoder.decode(chunk, { stream: true }).trim() !== "") return true;
-            listen();
-          }
-        }
-      } catch {
-        // Broken, or quiet: opened again.
-      } finally {
-        clearTimeout(timer);
-      }
-      // pi exits only once nothing is left to wait for.
-      await sleep(wait, signal);
-      wait = Math.min(wait * 2, MOST_RETRY);
-    }
-    return false;
-  }
-
-  async function report({ text = null, error = null }) {
-    const outcome = await post("/job/report", { text, error });
-    return outcome.ok ? { ok: true, value: null } : outcome;
-  }
-
-  return { turn, stopped, report };
-}
-
 // The group's rows after the one numbered `after`, or from now, as the
 // host's /events sends them, an object each; `told` hears why a stream
 // broke and when it opens again. A stream that ends or goes quiet is
@@ -271,4 +185,4 @@ async function refused(response) {
   }
 }
 
-module.exports = { MCP, ToolError, connect, events, job };
+module.exports = { MCP, ToolError, connect, events };

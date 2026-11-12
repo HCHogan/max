@@ -1,13 +1,12 @@
 //! What maxx tells Max: notices only the model reads, each the item of a
-//! wake and never a row of the timeline. A job's end, a program's wake, a
-//! word about the VM, a question from another conversation or an agent
-//! and its answer, and why the classifier woke Max. An agent hears the
-//! answers to its questions as `Answered` too, as a steer. How each is
-//! worded is here, in one place; the prompt and the tools' guides describe
-//! them. The run's own two reminders are in max-core, with the run.
+//! wake and never a row of the timeline. A program's wake, which is how a
+//! background command and a background agent say they ended, a word about
+//! the VM, a question from another conversation and its answer, and why
+//! the classifier woke Max. How each is worded is here, in one place; the
+//! prompt and the tools' guides describe them. The run's own two
+//! reminders are in max-core, with the run.
 
 use std::borrow::Cow;
-use std::fmt::{self, Display, Write};
 
 use max_core::ids::Handle;
 use max_core::item::{Item, ItemKind};
@@ -15,27 +14,20 @@ use max_core::limits;
 use max_core::render::EXCERPT_CHARS;
 use max_db::links::Peer;
 
-use crate::job::{Finished, How};
 use crate::tokens;
 
 pub enum Notice<'a> {
     /// The classifier judged that Max should join in, and why.
     Judged { note: &'a str },
-    /// An agent ended: how, and its last words; the whole is in its file.
-    Ended {
-        handle: Handle,
-        title: &'a str,
-        finished: &'a Finished,
-    },
     /// A program in the group's VM ran `maxx wake`, the hour's `count`th.
     Woken { text: &'a str, count: usize },
     /// The VM service, on the group's VM.
     Vm { text: &'a str },
-    /// Max in another conversation, or an agent here, asks Max here, and
-    /// waits for `answer` to name `number`.
+    /// Max in another conversation asks Max here, and waits for `answer`
+    /// to name `number`.
     Asked {
         number: u32,
-        from: Asker<'a>,
+        from: &'a Peer,
         question: &'a str,
     },
     /// The wait of question `ask`, put to `to`, is over: the question
@@ -43,31 +35,10 @@ pub enum Notice<'a> {
     /// there is none.
     Answered {
         ask: u32,
-        to: Asker<'a>,
+        to: &'a Peer,
         question: &'a str,
         answer: &'a Result<String, String>,
     },
-}
-
-/// Who is asked a question, or asks one.
-#[derive(Clone, Copy)]
-pub enum Asker<'a> {
-    /// Max in another conversation.
-    Peer(&'a Peer),
-    /// A background agent here, and its title.
-    Agent(u32, &'a str),
-    /// Max here, as an agent here sees it.
-    Max,
-}
-
-impl Display for Asker<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Asker::Peer(peer) => peer.fmt(f),
-            Asker::Agent(agent, title) => write!(f, "{} {title}", Handle::Agent(*agent)),
-            Asker::Max => f.write_str("Max"),
-        }
-    }
 }
 
 impl Notice<'_> {
@@ -84,11 +55,6 @@ impl Notice<'_> {
     pub fn text(&self, single: u32) -> String {
         match *self {
             Notice::Judged { note } => format!("[判定：{note}]"),
-            Notice::Ended {
-                handle,
-                title,
-                finished,
-            } => ended(handle, title, finished, single),
             // The count once there has been more than one this hour.
             Notice::Woken { text, count } => {
                 let text = fitted(text.trim(), single);
@@ -103,20 +69,11 @@ impl Notice<'_> {
                 from,
                 question,
             } => {
-                let wait = match from {
-                    Asker::Agent(..) => format!(
-                        "你的后台 agent 在等你回答：用 answer 回答，to 填 {number}；它没别的可做时最多再等 {} 分钟，等不到就自己判断",
-                        limits::QUESTION_WAIT.as_secs() / 60,
-                    ),
-                    Asker::Peer(_) | Asker::Max => format!(
-                        "那个会话的 Max 在等你回答：用 answer 回答，to 填 {number}；{} 小时内没答它就不等了",
-                        limits::ASK_WAIT.as_secs() / 3600,
-                    ),
-                };
                 format!(
-                    "[{} 问] {from}\n{}\n（{wait}。这个问题和你的回答都不会发到这边的聊天里）",
+                    "[{} 问] {from}\n{}\n（那个会话的 Max 在等你回答：用 answer 回答，to 填 {number}；{} 小时内没答它就不等了。这个问题和你的回答都不会发到这边的聊天里）",
                     Handle::Ask(number),
                     fitted(question, single),
+                    limits::ASK_WAIT.as_secs() / 3600,
                 )
             }
             Notice::Answered {
@@ -139,39 +96,6 @@ impl Notice<'_> {
     }
 }
 
-fn ended(handle: Handle, title: &str, finished: &Finished, single: u32) -> String {
-    let mut text = match &finished.ending.how {
-        How::Done => format!("[{handle} 完成] {title}"),
-        // Whether a command stopped is in its text: the guest may not have
-        // said so.
-        How::OutOfTime => format!("[{handle} 到点了，下面是做到一半的] {title}"),
-        How::Failed(why) => format!("[{handle} 失败] {title}：{why}"),
-    };
-    let words = finished.ending.text.as_deref().map(str::trim);
-    match words.filter(|words| !words.is_empty()) {
-        Some(words) => {
-            text.push('\n');
-            text.push_str(&fitted(words, single));
-        }
-        // pi's session is there too, as JSONL.
-        None if !matches!(finished.ending.how, How::Failed(_)) => {
-            text += "\n（它没留下报告；做的过程在 /work/.max/jobs 里它的会话记录）";
-        }
-        None => {}
-    }
-    if let Some(file) = &finished.file {
-        let _ = write!(text, "\n（全文在 {file}）");
-    }
-    match finished.ending.unsent {
-        0 => {}
-        1 => text += "\n（你最后补充的那条它没收到）",
-        unsent => {
-            let _ = write!(text, "\n（你最后补充的 {unsent} 条它没收到）");
-        }
-    }
-    text
-}
-
 /// `words`, or their beginning, saying so, if they take over `single`
 /// tokens.
 fn fitted(words: &str, single: u32) -> Cow<'_, str> {
@@ -188,67 +112,16 @@ fn fitted(words: &str, single: u32) -> Cow<'_, str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::job::Ending;
-
-    fn finished(how: How, text: Option<&str>, file: Option<&str>) -> Finished {
-        Finished {
-            ending: Ending {
-                how,
-                text: text.map(str::to_owned),
-                unsent: 0,
-            },
-            file: file.map(str::to_owned),
-        }
-    }
-
-    fn ended(finished: &Finished) -> String {
-        let notice = Notice::Ended {
-            handle: Handle::Agent(3),
-            title: "查票价",
-            finished,
-        };
-        notice.text(2000)
-    }
 
     #[test]
-    fn a_report_says_how_the_job_ended() {
-        let done = finished(
-            How::Done,
-            Some("结论：能。\n"),
-            Some("/work/.max/jobs/agent-3.md"),
-        );
-        assert_eq!(
-            ended(&done),
-            "[agent#3 完成] 查票价\n结论：能。\n（全文在 /work/.max/jobs/agent-3.md）"
-        );
-        let half = finished(How::OutOfTime, Some("查了一半"), None);
-        assert_eq!(
-            ended(&half),
-            "[agent#3 到点了，下面是做到一半的] 查票价\n查了一半"
-        );
-        let failed = finished(How::Failed("429".into()), None, None);
-        assert_eq!(ended(&failed), "[agent#3 失败] 查票价：429");
-        let silent = finished(How::Done, Some("  "), None);
-        assert_eq!(
-            ended(&silent),
-            "[agent#3 完成] 查票价\n（它没留下报告；做的过程在 /work/.max/jobs 里它的会话记录）"
-        );
-        let cut = finished(How::OutOfTime, None, None);
-        assert!(ended(&cut).ends_with("它的会话记录）"));
-        let mut late = finished(How::Done, Some("好了"), None);
-        late.ending.unsent = 2;
-        assert_eq!(
-            ended(&late),
-            "[agent#3 完成] 查票价\n好了\n（你最后补充的 2 条它没收到）"
-        );
-    }
-
-    #[test]
-    fn a_long_report_shows_its_beginning() {
+    fn a_long_wake_shows_its_beginning() {
         let long = "长".repeat(EXCERPT_CHARS * 3);
-        let done = finished(How::Done, Some(&long), Some("/work/.max/jobs/agent-3.md"));
-        let text = ended(&done);
-        assert!(text.contains("长…（太长，只有开头）\n（全文在 /work/.max/jobs/agent-3.md）"));
+        let text = Notice::Woken {
+            text: &long,
+            count: 1,
+        }
+        .text(2000);
+        assert!(text.ends_with("长…（太长，只有开头）"), "{text}");
         let (excerpt, _) = text.split_once('…').unwrap();
         assert_eq!(
             excerpt.chars().filter(|c| *c == '长').count(),

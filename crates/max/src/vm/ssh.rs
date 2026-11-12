@@ -4,7 +4,6 @@
 //! command; each command is a transient unit in the guest, so that it can
 //! be stopped by name.
 
-use std::convert::Infallible;
 use std::path::Path;
 use std::pin::pin;
 use std::sync::Arc;
@@ -16,7 +15,7 @@ use futures_util::stream::FuturesUnordered;
 use russh::client::{self, Handle, Msg};
 use russh::keys::{PrivateKey, PrivateKeyWithHashAlg, PublicKeyOrCertificate};
 use russh::{Channel, ChannelMsg};
-use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::time::timeout;
@@ -111,45 +110,10 @@ impl Command {
         Ok(command)
     }
 
-    /// Runs `line` like [`Command::start`], with its input left open: what
-    /// goes into the writer is the command's stdin, and shutting the
-    /// writer down ends it.
-    pub async fn open(
-        connection: &Connection,
-        unit: String,
-        line: &str,
-        stops: UnboundedSender<String>,
-    ) -> Result<(Self, Input)> {
-        let channel = connection.channel_open_session().await?;
-        let command = Self {
-            channel,
-            unit: Some(unit),
-            stops,
-            status: None,
-        };
-        command.channel.exec(true, line).await?;
-        // Boxed, as its type would keep the channel borrowed.
-        let input: Input = Box::new(command.channel.make_writer());
-        Ok((command, input))
-    }
-
-    /// Hands each piece of output to `sink` until the channel closes: the
-    /// exit status, if the guest sent one. Dropped, it may leave `sink` with
-    /// a piece half handed over; to stop waiting, use [`Self::wait_or`].
-    pub async fn wait(&mut self, sink: &mut impl Sink) -> Result<Option<u32>> {
-        match self
-            .wait_or(sink, std::future::pending::<Infallible>())
-            .await?
-        {
-            Waited::Exited(status) => Ok(status),
-            Waited::Interrupted(never) => match never {},
-        }
-    }
-
-    /// Hands each piece of output to `sink`, as [`Self::wait`] does, until
-    /// the channel closes or `until` is done. `until` is checked only
-    /// between pieces, so `sink` never has one cut off halfway; what is
-    /// still to be read stays for the next wait.
+    /// Hands each piece of output to `sink` until the channel closes, with
+    /// the exit status if the guest sent one, or until `until` is done.
+    /// `until` is checked only between pieces, so `sink` never has one cut
+    /// off halfway; what is still to be read stays for the next wait.
     pub async fn wait_or<T>(
         &mut self,
         sink: &mut impl Sink,
@@ -171,9 +135,6 @@ impl Drop for Command {
         }
     }
 }
-
-/// A command's stdin.
-pub type Input = Box<dyn AsyncWrite + Send + Unpin>;
 
 /// Where a command's output goes as it arrives.
 pub trait Sink {

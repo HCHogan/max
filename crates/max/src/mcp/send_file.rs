@@ -47,7 +47,6 @@ pub struct Sent {
 impl Tool for SendFile {
     const NAME: &'static str = "send_file";
     const DESCRIPTION: &'static str = "Sends a file under /work to this chat, such as a document, a spreadsheet or an archive you made.";
-    const JOB: bool = false;
 
     type Args = Args;
     type Output = Sent;

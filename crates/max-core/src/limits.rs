@@ -27,7 +27,8 @@ pub const RUN_TIME_MAX: Duration = Duration::from_secs(600);
 /// A background command's, unless the call asks for another...
 pub const BACKGROUND_TIME: Duration = Duration::from_secs(6 * 60 * 60);
 /// ...and the most it may ask for. A command costs no model calls while
-/// it runs, only room in the VM, so it may run much longer than an agent.
+/// it runs, only room in the VM, so it may run much longer than an agent,
+/// whose own time is the guest's to say (nix/max-agent.sh).
 pub const BACKGROUND_TIME_MAX: Duration = Duration::from_secs(24 * 60 * 60);
 /// Output past this many bytes is cut to its head and tail, each half of
 /// it; the whole goes to a file in /work.
@@ -61,21 +62,6 @@ pub const KEPT_FILE_BYTES: u64 = 64 << 20;
 /// time. 32 MiB took 14 seconds to upload from tank on 2026-10-29, so one
 /// this big takes a minute or two, and what Max says after it waits.
 pub const SENT_FILE_BYTES: u64 = 200 << 20;
-
-// Background agents.
-
-/// The most agents a conversation runs at once. Background commands have
-/// no count: they are the guest's units, bound by the VM's room.
-pub const JOBS_AT_ONCE: usize = 3;
-/// How long an agent may take; then it is aborted, and reports how far it
-/// got. Two hours until 2026-11-11, when the owner found it too short.
-pub const JOB_TIME: Duration = Duration::from_secs(6 * 60 * 60);
-/// How long an agent with nothing left to do but wait for the answers to
-/// its questions is held; then it goes on by itself.
-pub const QUESTION_WAIT: Duration = Duration::from_secs(10 * 60);
-/// The most of its directory's notes an agent is shown; past this, the
-/// rest isn't, and it is asked to trim them.
-pub const JOB_NOTES_BYTES: u64 = 16 << 10;
 
 // Asking another conversation.
 

@@ -4,18 +4,35 @@
 # end. A module of its own, so that its test boots it without a VM's
 # shares and command line. See "Lifetimes move to systemd" in
 # docs/rust-rewrite.md.
-{ config, pkgs, ... }:
+{
+  config,
+  pkgs,
+  pi,
+  ...
+}:
 let
   runner = import ./runner.nix { inherit pkgs; };
   jobs = import ./max-jobs.nix {
     inherit pkgs runner;
     systemd = config.systemd.package;
   };
+  # pi as one of Max's background agents, and the command that starts
+  # one, tells it more and lets it ask.
+  max-pi = import ./max-pi.nix { inherit pkgs pi; };
+  agent = import ./max-agent.nix {
+    inherit pkgs runner jobs;
+    systemd = config.systemd.package;
+    pi = max-pi;
+  };
 in
 {
   # On the PATH: a unit's hook runs the system's, whichever image started
   # the unit.
-  environment.systemPackages = [ jobs ];
+  environment.systemPackages = [
+    jobs
+    agent
+    max-pi
+  ];
 
   # Calls, background commands and agents. No limits of its own: they are
   # the VM's work, which Max's own units (max-units.slice) yield to.

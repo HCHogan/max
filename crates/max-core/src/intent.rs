@@ -25,12 +25,13 @@ pub enum Reason {
     Direct,
     /// The classifier judged that Max should join in, and said why.
     Judged { note: String },
-    /// A background agent ended, an agent asks Max, or a
-    /// question Max asked is answered or won't be: what it says is the
-    /// wake's item.
+    /// A question Max asked is answered, or won't be: what it says is the
+    /// wake's item. Until 2026-11-12 a background agent's end and its
+    /// questions too, which are a program's wakes since.
     Job { job: Handle },
-    /// A program in the group's VM ran `max-wake`, or the VM service has
-    /// something to say about the VM: the wake's item says what.
+    /// A program in the group's VM ran `maxx wake`, as a background
+    /// command and a background agent do when they end, or the VM service
+    /// has something to say about the VM: the wake's item says what.
     Program,
     /// Max in another conversation asks Max here: the wake's item is the
     /// question.

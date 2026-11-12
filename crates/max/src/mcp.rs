@@ -1,13 +1,11 @@
 //! Max's tools, which programs in a group's VM call through the MCP
 //! service; see "The MCP channel". Each declares itself as a [`tool::Tool`].
 
-mod agent;
 mod ask;
 mod chat_file;
 mod config;
 mod find_stickers;
 mod forward;
-mod harness;
 mod history;
 mod jobs;
 mod mute_member;
@@ -21,7 +19,7 @@ pub mod tool;
 mod web_search;
 pub(crate) mod work;
 
-pub use forward::api;
+pub use forward::{Called, Model, api, router as agents};
 pub use mute_member::MuteMember;
 pub use service::{Grant, Sessions, serve, serve_with};
 
@@ -40,7 +38,6 @@ use tracing::warn;
 
 use crate::conversation::{Place, Poster};
 use crate::embedding::Embedder;
-use crate::job::Link;
 use crate::media::store::Store;
 use crate::qq::groups::Groups;
 use crate::search::Search;
@@ -108,9 +105,6 @@ pub enum Caller {
     /// says goes through the turn; and the programs' own, which run as a
     /// program's.
     Turn(Poster),
-    /// A background agent: only the tools marked `job`, and its model
-    /// calls forwarded to its upstream.
-    Job(Arc<Link>),
     /// A program Max keeps in the group's VM, outside any turn: only the
     /// tools marked `program`, and what it says is the program's.
     Program(Poster),
@@ -120,26 +114,23 @@ pub enum Caller {
 
 impl Caller {
     /// Says things in the conversation for the turn, or the program, that
-    /// called; or asks and answers for the agent.
+    /// called.
     pub fn poster(&self) -> Option<&Poster> {
         match self {
             Caller::Turn(poster) | Caller::Program(poster) => Some(poster),
-            Caller::Job(link) => Some(&link.poster),
             Caller::Check => None,
         }
     }
 
     /// Where a call of this caller's goes: the one place that says who may
     /// call what. A turn has every tool the prompt declares, and the
-    /// runner's own requests. A background agent has the tools marked for
-    /// it and nothing else. A program Max keeps in the VM has all of Max's
-    /// tools, as the turn that wrote it could: Max decides what its
+    /// runner's own requests. A program Max keeps in the VM has all of
+    /// Max's tools, as the turn that wrote it could: Max decides what its
     /// programs do (2026-11-05); and the chat's files, but nothing that
-    /// shows a model something, having none.
+    /// shows a model something, having none. A background agent is such a
+    /// program (2026-11-12): its `maxx` has no token.
     pub fn route(&self, call: Call) -> Route {
         match (self, call) {
-            (Caller::Job(_), Call::Tool(tool)) if tool.job => Route::Here,
-            (Caller::Job(_), _) => Route::Refused,
             // What only programs have, so that Max can try out from a
             // turn's command the program it writes.
             (Caller::Turn(_) | Caller::Check, Call::Tool(tool)) if !tool.turn => Route::AsProgram,
@@ -152,7 +143,6 @@ impl Caller {
     /// What a caller is told of a call that isn't its to make.
     pub fn refusal(&self, call: Call) -> Failure {
         let whose = match self {
-            Caller::Job(_) => "a background agent",
             Caller::Program(_) => "a program kept in the VM",
             Caller::Turn(_) | Caller::Check => "a turn",
         };

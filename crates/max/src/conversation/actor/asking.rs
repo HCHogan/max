@@ -1,81 +1,39 @@
-//! Max here asks Max in another conversation, and is asked by one, or
-//! by a background agent here, which may also ask another conversation:
-//! the question's way between the actors. Neither the question nor the
-//! answer is said in a chat: each reaches Max as a wake's item, as a job's
-//! report does, and an agent as a steer. See "Asking another conversation"
-//! and "Background agents" in docs/rust-rewrite.md.
+//! Max here asks Max in another conversation, and is asked by one: the
+//! question's way between the actors. Neither the question nor the answer
+//! is said in a chat: each reaches Max as a wake's item. See "Asking
+//! another conversation" in docs/rust-rewrite.md.
 
 use std::collections::BTreeMap;
 
 use max_db::links::{self, Peer};
 use tokio::sync::oneshot;
 
-use super::jobs::AgentWaits;
 use super::links::peer;
 use super::*;
 use crate::conversation::Question;
-use crate::conversation::notice::Asker;
 
-/// What Max in other conversations, or agents here, asked Max here and
-/// still wait to hear, by the number each question got here, `ask#5`:
-/// numbered with the questions asked from here (`Jobs::next_ask`).
-/// Forgotten with the actor.
+/// What Max in other conversations asked Max here and still wait to
+/// hear, by the number each question got here, `ask#5`: numbered with the
+/// questions asked from here (`Jobs::next_ask`). Forgotten with the
+/// actor.
 #[derive(Default)]
 pub(super) struct Asked {
     waiting: BTreeMap<u32, Waiting>,
 }
 
-/// A question, and who waits on it.
+/// A question, who asked it, and where the answer goes.
 struct Waiting {
     text: String,
-    from: From,
-}
-
-/// Who asked, and where the answer goes.
-enum From {
-    Peer {
-        peer: Peer,
-        answer: oneshot::Sender<Result<String, String>>,
-    },
-    Agent {
-        waits: AgentWaits,
-        title: String,
-    },
-}
-
-impl From {
-    fn gone(&self) -> bool {
-        match self {
-            From::Peer { answer, .. } => answer.is_closed(),
-            From::Agent { waits, .. } => waits.gone(),
-        }
-    }
-
-    fn asker(&self) -> Asker<'_> {
-        match self {
-            From::Peer { peer, .. } => Asker::Peer(peer),
-            From::Agent { waits, title } => Asker::Agent(waits.agent, title),
-        }
-    }
+    from: Peer,
+    answer: oneshot::Sender<Result<String, String>>,
 }
 
 impl Asked {
-    /// Tells every other conversation that waits that no answer comes,
-    /// and why; the agents here end with Max.
+    /// Tells every conversation that waits that no answer comes, and why.
     pub(super) fn refuse(&mut self, why: &str) {
         for (_, waiting) in std::mem::take(&mut self.waiting) {
-            if let From::Peer { answer, .. } = waiting.from {
-                let _ = answer.send(Err(why.to_owned()));
-            }
+            let _ = waiting.answer.send(Err(why.to_owned()));
         }
-    }
-
-    /// Agent `agent` is over: it waits for nothing.
-    pub(super) fn forget(&mut self, agent: u32) {
-        self.waiting.retain(|_, waiting| match &waiting.from {
-            From::Agent { waits, .. } => waits.agent != agent,
-            From::Peer { .. } => true,
-        });
     }
 
     /// For a new core, which saw none of them asked: a line for each
@@ -83,50 +41,32 @@ impl Asked {
     pub(super) fn lines(&self) -> Vec<String> {
         let waiting = self.waiting.iter();
         waiting
-            .filter(|(_, waiting)| !waiting.from.gone())
+            .filter(|(_, waiting)| !waiting.answer.is_closed())
             .map(|(number, waiting)| {
                 let text = waiting.text.replace('\n', " ⏎ ");
-                let from = waiting.from.asker();
-                format!("{} {from}：{text}", Handle::Ask(*number))
+                format!("{} {}：{text}", Handle::Ask(*number), waiting.from)
             })
             .collect()
     }
 
     fn keep(&mut self, number: u32, waiting: Waiting) {
         // Those nobody waits on any more: withdrawn, or out of time.
-        self.waiting.retain(|_, waiting| !waiting.from.gone());
+        self.waiting
+            .retain(|_, waiting| !waiting.answer.is_closed());
         self.waiting.insert(number, waiting);
     }
 }
 
 impl Conversation {
-    /// `ask`: Max's, or agent `by`'s, question goes to the actor of
-    /// conversation `to`, and a job waits for the answer; an agent's with
-    /// no `to` wakes Max here. The question's number here, or why nothing
-    /// was asked.
+    /// `ask`: Max's question goes to the actor of conversation `to`, and
+    /// a job waits for the answer. The question's number here, or why
+    /// nothing was asked.
     pub(super) async fn ask(
         &mut self,
-        to: Option<ConversationId>,
+        to: ConversationId,
         question: &str,
-        by: Option<u32>,
     ) -> Result<Result<u32, String>> {
         let question = question.trim();
-        let by = match by.map(|agent| (agent, self.agent_waits(agent))) {
-            None => None,
-            Some((_, Some(waits))) => Some(waits),
-            // Cancelled meanwhile.
-            Some((agent, None)) => {
-                return Ok(Err(format!("{} has ended", Handle::Agent(agent))));
-            }
-        };
-        let Some(to) = to else {
-            let Some((waits, title)) = by else {
-                return Ok(Err(
-                    "to is missing: the number of the conversation to ask, 9 for c#9 under [能问的会话]".into(),
-                ));
-            };
-            return self.agent_asks(waits, title, question).await.map(Ok);
-        };
         let here = self.place.conversation;
         let mut conn = self.shared.services.pool.acquire().await?;
         // A conversation there is no edge to and one that doesn't exist
@@ -150,37 +90,9 @@ impl Conversation {
         };
         // The table is gone only as Max stops: the wait then ends at once.
         let _ = self.shared.signals.send(asked);
-        let by = by.map(|(waits, _)| waits);
-        let agent = by.as_ref().map(|waits| waits.agent);
-        let ask = self.question_job(to, question, answered, by);
-        info!(conversation = %here, ask, ?agent, "a question to another conversation");
+        let ask = self.question_job(to, question, answered);
+        info!(conversation = %here, ask, "a question to another conversation");
         Ok(Ok(ask))
-    }
-
-    /// An agent asks Max here: the question wakes Max, in the running
-    /// core or a new one, and the agent hears the answer as a steer once
-    /// `answer` names it.
-    async fn agent_asks(
-        &mut self,
-        waits: AgentWaits,
-        title: String,
-        question: &str,
-    ) -> Result<u32> {
-        let number = self.jobs.next_ask();
-        let agent = Handle::Agent(waits.agent);
-        info!(conversation = %self.place.conversation, %agent, question = number, "an agent asks Max");
-        let from = From::Agent { waits, title };
-        let notice = Notice::Asked {
-            number,
-            from: from.asker(),
-            question,
-        };
-        let item = notice.item(self.single());
-        // Before it is kept, as another conversation's.
-        self.wake_with(Reason::Job { job: agent }, item).await?;
-        let text = question.to_owned();
-        self.asked.keep(number, Waiting { text, from });
-        Ok(number)
     }
 
     /// Max in another conversation asks Max here: the question wakes Max,
@@ -197,28 +109,22 @@ impl Conversation {
         let Question { from, text, answer } = question;
         let number = self.jobs.next_ask();
         info!(conversation = %self.place.conversation, from = %from.conversation, question = number, "Max is asked from another conversation");
-        let from = From::Peer { peer: from, answer };
         let notice = Notice::Asked {
             number,
-            from: from.asker(),
+            from: &from,
             question: &text,
         };
         let item = notice.item(self.single());
         // Before it is kept: a core this wake starts lists the questions
         // kept, and reads this one once.
         self.wake_with(Reason::Asked, item).await?;
-        self.asked.keep(number, Waiting { text, from });
+        self.asked.keep(number, Waiting { text, from, answer });
         Ok(())
     }
 
-    /// `answer` to question `to`, Max's or agent `by`'s: it goes to
-    /// whoever waits on it. Whom it went to, or why it wasn't taken.
-    pub(super) fn answer_question(
-        &mut self,
-        to: u32,
-        text: &str,
-        by: Option<u32>,
-    ) -> Result<String, String> {
+    /// `answer` to question `to`: it goes to the conversation that waits
+    /// on it. Whom it went to, or why it wasn't taken.
+    pub(super) fn answer_question(&mut self, to: u32, text: &str) -> Result<String, String> {
         let handle = Handle::Ask(to);
         if self.jobs.has(handle) {
             return Err(format!(
@@ -230,70 +136,33 @@ impl Conversation {
                 "nobody waits for an answer to {handle}: there is no such question, or it was answered, withdrawn or out of time, or Max has restarted since; nothing was sent"
             )
         };
-        let waiting = self.asked.waiting.get(&to).ok_or_else(nobody)?;
-        if let (Some(by), From::Agent { waits, .. }) = (by, &waiting.from)
-            && waits.agent == by
-        {
-            return Err(format!(
-                "{handle} is your own question: its answer comes to you"
-            ));
-        }
-        let Some(Waiting {
-            text: question,
-            from,
-        }) = self.asked.waiting.remove(&to)
-        else {
-            return Err(nobody());
-        };
-        let text = text.trim().to_owned();
+        let waiting = self.asked.waiting.remove(&to).ok_or_else(nobody)?;
+        let sent = waiting.answer.send(Ok(text.trim().to_owned()));
+        sent.map_err(|_| nobody())?;
         let conversation = self.place.conversation;
-        match from {
-            From::Peer { peer, answer } => {
-                answer.send(Ok(text)).map_err(|_| nobody())?;
-                info!(%conversation, to = %peer.conversation, question = to, "an answer to another conversation");
-                Ok(peer.to_string())
-            }
-            From::Agent { waits, title } => {
-                let notice = Notice::Answered {
-                    ask: to,
-                    to: Asker::Max,
-                    question: &question,
-                    answer: &Ok(text),
-                };
-                if !waits.tell(notice.text(self.single())) {
-                    return Err(nobody());
-                }
-                let agent = Handle::Agent(waits.agent);
-                info!(%conversation, %agent, question = to, "an answer to an agent");
-                Ok(format!("{agent} {title}"))
-            }
-        }
+        info!(%conversation, to = %waiting.from.conversation, question = to, "an answer to another conversation");
+        Ok(waiting.from.to_string())
     }
 
-    /// The wait of question `ask`, which Max or an agent here asked, is
-    /// over: Max hears what was answered, or that nothing was and why, in
-    /// the running core or a new one; the agent, as a steer.
+    /// The wait of question `ask`, which Max here asked, is over: Max
+    /// hears what was answered, or that nothing was and why, in the
+    /// running core or a new one.
     pub(super) async fn question_answered(
         &mut self,
         ask: u32,
         answer: Result<String, String>,
     ) -> Result<()> {
-        // Withdrawn since, or its agent is over.
-        let Some((to, question, by)) = self.question_over(ask) else {
+        // Withdrawn since.
+        let Some((to, question)) = self.question_over(ask) else {
             return Ok(());
         };
         info!(conversation = %self.place.conversation, ask, answered = answer.is_ok(), "a question's wait is over");
         let notice = Notice::Answered {
             ask,
-            to: Asker::Peer(&to),
+            to: &to,
             question: &question,
             answer: &answer,
         };
-        if let Some(by) = by {
-            // Gone meanwhile: nobody to tell.
-            let _ = by.tell(notice.text(self.single()));
-            return Ok(());
-        }
         let item = notice.item(self.single());
         let job = Handle::Ask(ask);
         self.wake_with(Reason::Job { job }, item).await
@@ -302,21 +171,10 @@ impl Conversation {
     /// Max won't answer question `number`, asked of it: whoever waits
     /// hears so at once, as if out of time. Whether someone waited.
     pub(super) fn decline(&mut self, number: u32) -> bool {
-        let Some(Waiting { text, from }) = self.asked.waiting.remove(&number) else {
+        let Some(waiting) = self.asked.waiting.remove(&number) else {
             return false;
         };
-        match from {
-            From::Peer { answer, .. } => answer.send(Err(DECLINED_THERE.to_owned())).is_ok(),
-            From::Agent { waits, .. } => {
-                let notice = Notice::Answered {
-                    ask: number,
-                    to: Asker::Max,
-                    question: &text,
-                    answer: &Err(DECLINED.to_owned()),
-                };
-                waits.tell(notice.text(self.single()))
-            }
-        }
+        waiting.answer.send(Err(DECLINED_THERE.to_owned())).is_ok()
     }
 
     /// What a new core is shown of the questions asked before it started.
@@ -326,10 +184,8 @@ impl Conversation {
 }
 
 /// Why a question Max declined with `cancel` has no answer, as the asker
-/// in another conversation hears it...
+/// in another conversation hears it.
 const DECLINED_THERE: &str = "Max there chose not to answer it";
-/// ...and as an agent here does.
-const DECLINED: &str = "Max chose not to answer it";
 
 /// Why a conversation that is stopped doesn't answer.
 pub(super) const STOPPED_THERE: &str = "Max is stopped there (/stop)";

@@ -11,21 +11,6 @@ impl Conversation {
             return Ok(());
         }
         match request {
-            Request::Agent {
-                task,
-                title,
-                workdir,
-                reply,
-            } => {
-                let _ = reply.send(self.start_job(task, title, workdir));
-            }
-            Request::Steer {
-                agent,
-                message,
-                reply,
-            } => {
-                let _ = reply.send(self.steer_job(agent, message));
-            }
             Request::Cancel { handle, reply } => {
                 let _ = reply.send(self.cancel_job(handle));
             }
@@ -39,19 +24,13 @@ impl Conversation {
             Request::Ask {
                 to,
                 question,
-                by,
                 reply,
             } => {
-                let asked = self.ask(to, &question, by).await?;
+                let asked = self.ask(to, &question).await?;
                 let _ = reply.send(asked);
             }
-            Request::Answer {
-                to,
-                text,
-                by,
-                reply,
-            } => {
-                let _ = reply.send(self.answer_question(to, &text, by));
+            Request::Answer { to, text, reply } => {
+                let _ = reply.send(self.answer_question(to, &text));
             }
             Request::Wake { text, reply } => {
                 let woke = self.woken(&text).await?;
@@ -68,11 +47,8 @@ impl Conversation {
 /// What a request would have the conversation do.
 fn does(request: &Request) -> Does {
     match request {
-        Request::Agent { .. } | Request::Ask { .. } | Request::Wake { .. } => Does::STARTS,
+        Request::Ask { .. } | Request::Wake { .. } => Does::STARTS,
         Request::Answer { .. } | Request::Act { .. } => Does::ACTS,
-        Request::Steer { .. }
-        | Request::Cancel { .. }
-        | Request::Status { .. }
-        | Request::Configure { .. } => Does::LOOKS,
+        Request::Cancel { .. } | Request::Status { .. } | Request::Configure { .. } => Does::LOOKS,
     }
 }

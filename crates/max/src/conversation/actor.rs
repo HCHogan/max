@@ -162,7 +162,8 @@ pub struct Conversation {
     mailbox: UnboundedSender<Event>,
     /// Who addressed Max in the last [`FOLLOW_UP`], and when they last did.
     addressed: HashMap<IdentityId, Instant>,
-    /// The background agents running; they don't outlive the actor.
+    /// The questions asked from here that wait for their answers; they
+    /// don't outlive the actor.
     jobs: jobs::Jobs,
     /// What Max in other conversations asked Max here, and still waits
     /// to hear.
@@ -397,7 +398,6 @@ impl Conversation {
                 self.decide(decisions).await
             }
             Event::Request { request, origin } => self.request(request, origin).await,
-            Event::JobDone { handle, finished } => self.job_done(handle, finished).await,
             Event::VmNotice(text) => self.vm_notice(text).await,
             Event::Call { tool, args, reply } => {
                 self.program_call(tool, args, reply);

@@ -25,7 +25,7 @@ use tokio::time::{Instant, MissedTickBehavior, interval, timeout};
 use tracing::{info, warn};
 
 use self::machine::{BOOT, Boot, Booted, Guest, Machine};
-use self::ssh::{Command, Connection, Input};
+use self::ssh::{Command, Connection};
 use crate::config;
 use crate::conversation::Signal;
 use crate::mcp::api::{self, Apis};
@@ -108,12 +108,15 @@ pub struct Vm {
 
 impl Vms {
     /// Starts the service in `scope`; what programs in the VMs say to Max
-    /// goes to `signals`, and the `apis` are theirs to call.
+    /// goes to `signals`, the `apis` are theirs to call, and `agents` is
+    /// the model of the background agents that run in them, if there is
+    /// one.
     pub fn start(
         config: config::Vm,
         scope: &mut Scope,
         signals: UnboundedSender<Signal>,
         apis: Arc<Apis>,
+        agents: Option<mcp::Model>,
     ) -> Result<Self> {
         let guest = Guest::load(&config.guest)?;
         std::fs::create_dir_all(&config.dir)?;
@@ -130,7 +133,7 @@ impl Vms {
         let sessions = Sessions::with_programs(signals.clone());
         let served = sessions.clone();
         let called = Arc::clone(&apis);
-        scope.spawn(move |_| run(config, guest, served, called, signals, rx));
+        scope.spawn(move |_| run(config, guest, served, called, agents, signals, rx));
         Ok(Self {
             requests,
             sessions,
@@ -151,8 +154,8 @@ impl Vms {
         self.idle
     }
 
-    /// The MCP service's sessions, which programs and background agents
-    /// in the VMs call through.
+    /// The MCP service's sessions, which the turns' programs in the VMs
+    /// call through.
     pub fn sessions(&self) -> &Sessions {
         &self.sessions
     }
@@ -202,12 +205,6 @@ impl Vm {
     /// the unit `unit`, from `Vm::unit`.
     pub async fn command(&self, unit: String, line: &str, input: &[u8]) -> Result<Command> {
         Command::start(&self.connection, unit, line, input, self.stops.clone()).await
-    }
-
-    /// Like [`Vm::command`], with the command's input left open; see
-    /// [`Command::open`].
-    pub async fn open(&self, unit: String, line: &str) -> Result<(Command, Input)> {
-        Command::open(&self.connection, unit, line, self.stops.clone()).await
     }
 
     /// Runs `line`, a command of max's own that is no unit, and waits for
@@ -344,6 +341,7 @@ struct Service {
     guest: Arc<Guest>,
     sessions: Sessions,
     apis: Arc<Apis>,
+    agents: Option<mcp::Model>,
     signals: UnboundedSender<Signal>,
     idle: Duration,
     vms: HashMap<ConversationId, State>,
@@ -362,6 +360,7 @@ async fn run(
     guest: Guest,
     sessions: Sessions,
     apis: Arc<Apis>,
+    agents: Option<mcp::Model>,
     signals: UnboundedSender<Signal>,
     mut requests: UnboundedReceiver<Request>,
 ) {
@@ -375,6 +374,7 @@ async fn run(
         guest: Arc::new(guest),
         sessions,
         apis,
+        agents,
         signals,
         vms: HashMap::new(),
         boots: Scope::new(),
@@ -707,7 +707,8 @@ impl Service {
         }
         let sessions = self.sessions.clone();
         let host = host::router(conversation, self.internal.clone())
-            .merge(api::router(conversation, Arc::clone(&self.apis)));
+            .merge(api::router(conversation, Arc::clone(&self.apis)))
+            .merge(mcp::agents(conversation, self.agents.clone()));
         let signals = self.signals.clone();
         tasks.spawn(move |stop| {
             // The timeline's streams end with the service, which waits for them.

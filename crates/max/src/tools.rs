@@ -301,7 +301,7 @@ impl Sink for Said {
     }
 }
 
-/// A command's or an agent's directory in the guest: `dir` if absolute,
+/// A command's directory in the guest: `dir` if absolute,
 /// else under /work. A guest path, left to the guest to resolve: the VM,
 /// not the directory, is the boundary.
 pub fn guest_dir(dir: Option<&str>) -> String {

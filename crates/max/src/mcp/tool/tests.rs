@@ -170,13 +170,13 @@ fn arguments_keep_to_their_bounds() {
     assert_eq!(bounded(json!({ "name": "猫", "which": "job#3" })), Ok(()));
     assert_eq!(bounded(json!({ "name": 3, "limit": null, "x": 1 })), Ok(()));
 
-    let agent = &find("agent").unwrap().input;
-    let title =
-        |title: String| super::bounded(agent, &json!({ "task": "查票价", "title": title }), "");
-    assert_eq!(title("票".repeat(40)), Ok(()));
+    let ask = &find("ask").unwrap().input;
+    let question =
+        |question: String| super::bounded(ask, &json!({ "to": 9, "question": question }), "");
+    assert_eq!(question("票".repeat(2000)), Ok(()));
     assert_eq!(
-        title("票".repeat(41)).unwrap_err(),
-        "title is at most 40 characters"
+        question("票".repeat(2001)).unwrap_err(),
+        "question is at most 2000 characters"
     );
 }
 
@@ -284,7 +284,7 @@ fn what_isnt_checked_is_caught() {
         };
         checked(&schema, "t(args)")
     };
-    // An optional one of two, as `agent_status` has.
+    // An optional one of two.
     let job = json!({ "anyOf": [{ "type": "string" }, { "type": "integer", "minimum": 0 }] });
     let job = json!({ "anyOf": [job, { "type": "null" }] });
     assert_eq!(checked(json!({ "properties": { "job": job } })), Ok(()));

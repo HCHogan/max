@@ -31,7 +31,7 @@ use max::config::{self, Config};
 use max::conversation::{Place, Shared, Signal};
 use max::dreamer::Dreamer;
 use max::embedding::Embedder;
-use max::llm::Models;
+use max::llm::{Models, Upstream};
 use max::mcp;
 use max::media::caption::Captioner;
 use max::media::download::Download;
@@ -148,7 +148,29 @@ fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
     let outs = runtime.block_on(async {
         let mut services = Scope::new();
         let (signals, mut heard) = mpsc::unbounded_channel();
-        let vms = Vms::start(vm, &mut services, signals, Arc::default())?;
+        // The background agents' model: a provider of vm-check's own,
+        // which says one thing to whatever it is asked.
+        let provider = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let base_url = format!("http://{}/v1", provider.local_addr()?);
+        services.spawn(move |stop| async move {
+            let says = || async { ([("content-type", "text/event-stream")], AGENT_SAYS) };
+            let app = axum::Router::new().route("/v1/chat/completions", axum::routing::post(says));
+            let served = axum::serve(provider, app);
+            let _ = served.with_graceful_shutdown(stop.cancelled_owned()).await;
+        });
+        let (agents, mut used) = mcp::Model::heard(Upstream {
+            provider: "vm-check".into(),
+            protocol: max_core::item::Protocol::Chat,
+            base_url,
+            api_key: None,
+            headers: Vec::new(),
+            model: "vm-check".into(),
+            window: 100_000,
+            max_output: None,
+            effort: None,
+            idle: Duration::from_secs(60),
+        });
+        let vms = Vms::start(vm, &mut services, signals, Arc::default(), Some(agents))?;
         // What maxx wake would wake Max with, answered here; the other
         // calls of programs aren't. A background command's end comes the
         // same way, from the guest: `told` has each as it comes.
@@ -273,16 +295,7 @@ fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
             background: true,
         };
         outs.push(tools::run(background, Some(&vms), context()?).await);
-        let ended = async {
-            while let Some(text) = told.recv().await {
-                if text.starts_with("[max-job-") {
-                    return Some(text);
-                }
-            }
-            None
-        };
-        let notice = tokio::time::timeout(Duration::from_secs(60), ended).await;
-        outs.push(match notice.ok().flatten() {
+        outs.push(match told_of(&mut told, "[max-job-", 60).await {
             Some(text) => {
                 let whole = text.contains("完成] $ echo 后台起了")
                     && text.contains("exit status 0")
@@ -291,6 +304,29 @@ fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
             }
             None => ToolOutput::text("后台命令结束了没人说".to_owned(), true, 0),
         });
+        // A background agent: a unit of the guest's too, pi itself, whose
+        // model calls come through max to vm-check's provider, and whose
+        // report the guest wakes Max with.
+        let agent = command("max-agent start --title 检查 <<< '说一句话就行'");
+        outs.push(tools::run(agent, Some(&vms), context()?).await);
+        outs.push(match told_of(&mut told, "[max-agent-", 180).await {
+            Some(text) => {
+                let whole = text.contains("完成] 检查\nvm-check 的 agent 说完了");
+                ToolOutput::text(format!("后台 agent 的报告：{text}"), !whole, 0)
+            }
+            None => ToolOutput::text("后台 agent 结束了没人说".to_owned(), true, 0),
+        });
+        let mut calls = 0;
+        let mut output = 0;
+        while let Ok((_, called)) = used.try_recv() {
+            calls += 1;
+            output += called.usage.output;
+        }
+        outs.push(ToolOutput::text(
+            format!("后台 agent 的模型调用：{calls} 次，写了 {output} tokens"),
+            calls == 0,
+            0,
+        ));
         let woken = woken
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -322,6 +358,31 @@ fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
     }
     Ok(())
 }
+
+/// The next thing the guest wakes Max with that begins with `prefix`, if
+/// it comes within `secs` seconds.
+async fn told_of(
+    told: &mut mpsc::UnboundedReceiver<String>,
+    prefix: &str,
+    secs: u64,
+) -> Option<String> {
+    let next = async {
+        while let Some(text) = told.recv().await {
+            if text.starts_with(prefix) {
+                return Some(text);
+            }
+        }
+        None
+    };
+    let waited = tokio::time::timeout(Duration::from_secs(secs), next).await;
+    waited.ok().flatten()
+}
+
+/// What vm-check's provider answers a background agent's model call with:
+/// its report, and what the call used.
+const AGENT_SAYS: &str = "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"vm-check 的 agent 说完了\"}}]}\n\n\
+     data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":7}}\n\n\
+     data: [DONE]\n\n";
 
 /// maxx from a command: a call the history refuses, as the program's was,
 /// and the tools it lists.
@@ -556,8 +617,18 @@ async fn serve(config: Config) -> Result<()> {
     let asking = signals.clone();
     // Their secrets are read now, so a missing one stops max here.
     let apis = Arc::new(mcp::api::Apis::load(&config.api)?);
+    // The background agents' model, whose key is read now as well. The
+    // agents are units in the VMs: max forwards their model calls, and
+    // counts what they use.
+    let agents = match models.job().transpose()? {
+        Some(upstream) => Some(mcp::Model::start(upstream, pool.clone(), &mut services)),
+        None => {
+            info!("no model for background agents: max-agent starts none");
+            None
+        }
+    };
     let vms = match config.vm {
-        Some(vm) => Some(Vms::start(vm, &mut services, signals, apis)?),
+        Some(vm) => Some(Vms::start(vm, &mut services, signals, apis, agents)?),
         None => {
             info!("no VMs: the tools can't run");
             None

@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Checks that the pinned pi keeps a job's contract with the host, with
-# max-pi.sh and max-job.ts, against a fake host (check-pi-job.js). pi's
+# Checks that the pinned pi keeps what a background agent rests on, with
+# max-pi.sh and max-agent.ts, against a fake /llm (check-pi-job.js). pi's
 # extension API has no version: run this after moving the llm-agents pin,
-# or after changing max-job.ts, max-pi.sh or the job part of client.js.
+# or after changing max-agent.ts, max-pi.sh or agent-system.md.
 # Runs in the dev shell, which has Node and jq; PI=path/to/pi runs another
-# pi. It checks pi, not the host: the host's side has max's tests.
+# pi. It checks pi and the plugin, not max-agent or max-jobs: those have
+# the NixOS test, checks.<system>.jobs.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

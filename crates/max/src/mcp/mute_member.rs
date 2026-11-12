@@ -46,7 +46,6 @@ pub struct Muted {
 impl Tool for MuteMember {
     const NAME: &'static str = "mute_member";
     const DESCRIPTION: &'static str = "Mutes an ordinary member of this group, or lifts a mute; you have to be an admin of the group.";
-    const JOB: bool = false;
 
     type Args = Args;
     type Output = Muted;

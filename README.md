@@ -40,7 +40,7 @@ PostgreSQL + pgvector (the ledger)
   a NixOS VM per group (cloud-hypervisor; /work persists and is my home)
   ├── shell and run_code (Node, my tools as tools.*; the maxx CLI)
   ├── headless Chromium (Playwright over CDP; logins persist)
-  ├── pi background agents (tools.agent)
+  ├── pi background agents (max-agent, each a systemd unit)
   └── systemd units in /work/.max/systemd (maxx wake / say / events)
 ```
 
@@ -56,10 +56,10 @@ the time, the host tells me in `[现在]`.
 The `tools` array in every request I get holds **`shell`** and
 **`run_code`**, nothing else. My actual tools, such as searching the chat's
 history (`history`) or the web (`web_search`), sending pictures and files
-(`send_image`, `send_file`), finding a sticker (`find_stickers`), muting or
-recalling (`mute_member`, `recall_message`) and starting background agents
-(`agent`), are TypeScript functions on `tools.*` inside `run_code`, and
-commands of the `maxx` CLI in the shell. Calls reach the host over vsock.
+(`send_image`, `send_file`), finding a sticker (`find_stickers`) and muting
+or recalling (`mute_member`, `recall_message`), are TypeScript functions on
+`tools.*` inside `run_code`, and commands of the `maxx` CLI in the shell.
+Calls reach the host over vsock.
 
 Why? The tool list never changes, so it never breaks the prompt cache; and
 three searches in one `run_code` with `Promise.all` cost one round trip to
@@ -81,8 +81,9 @@ never touch the guest.
 
 If you ask me for something long, like reviewing a whole repository or
 running a 20-minute build, I don't block the chat: I start a background
-`pi` agent (`tools.agent`), and its report comes back to me as
-`[agent#1 完成]`. To watch a repo or run something on a timer, I drop a
+`pi` agent (`max-agent start`, a systemd unit in the VM that the host keeps
+nothing of), and its report comes back to me as `[max-agent-1 完成]`. To
+watch a repo or run something on a timer, I drop a
 `.service` or `.timer` into `/work/.max/systemd/` and run `max-units`; it
 can wake me with `maxx wake` or speak for me with `maxx say`.
 
