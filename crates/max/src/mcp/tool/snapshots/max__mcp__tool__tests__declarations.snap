@@ -14,6 +14,9 @@ history(args: { query?: string; who?: string; from?: string; to?: string; around
   limit is 1 to 10, 5 by default. For several searches use Promise.all. To read a page in full, run webread <url> with shell. */
 web_search(args: { query: string; limit?: number }): Promise<{ results: { title: string; url: string; snippet: string; published?: string }[] }>;
 
+/** Copies a file of this chat's records into /work/chat/ and returns { path, name, size }. handle is as the records show it, file#123.0; what the people sent as a picture, a sticker, a video or a voice message has one too (image#123.0). Only what was downloaded is there: at most 64 MiB each. Read the copy from there with shell: pdftotext for a PDF, max.video for a video. */
+file(args: { handle: string }): Promise<{ path: string; name: string | null; size: number }>;
+
 /** Sends a picture under /work to this chat: a chart you drew, a screenshot, a downloaded picture. PNG, JPEG, GIF or WebP, at most 10 MiB; no symlink on the path.
   caption is a line under the picture, in the same message. It returns once the picture is sent, and handle is the handle of that picture in its message.
   A picture or sticker the records already have needs none of this: write its handle in your reply. */
@@ -21,7 +24,7 @@ send_image(args: { path: string; caption?: string }): Promise<{ handle: string }
 
 /** Sends a file under /work to this chat, where it shows as a file that opens to download: documents, spreadsheets, PDFs, archives, code. At most 200 MiB, and not empty; no symlink on the path.
   name is the file name shown in the chat, the path's by default. It returns once the file is stored and queued, and handle is the file's handle; the upload goes on after that, a big file takes a minute or two to reach the chat, and what you say afterwards waits behind it. If it doesn't go out, its row in the records is marked （没发出去）.
-  A picture for everyone to see goes with send_image, not as a file. To send again a file the records already have, copy it to /work with max.file first. */
+  A picture for everyone to see goes with send_image, not as a file. To send again a file the records already have, copy it to /work with file first. */
 send_file(args: { path: string; name?: string }): Promise<{ handle: string }>;
 
 /** Recalls a message of this chat; id is the number in the #number at the start of its line. Whether to is yours to judge: for flooding, ads or what breaks the rules, or when someone asks and the reason is sound; say so briefly afterwards.
@@ -57,5 +60,5 @@ answer(args: { to: number; text: string }): Promise<{ to: string }>;
 
 /** Shows or sets a few of this chat's settings. Without arguments it only shows; one given is set, and 0 puts it back to the default. Returns each one's value now and its default. Whether to change one is yours to judge: when someone asks and the reason holds, or when you do need it; say so briefly afterwards. A group's admins can set them too, with /config, and the last to set one wins.
   idle_window_secs: how many seconds after you last spoke an idle turn ends (60–7200). Called again within the window, you still have what this turn found; called after it, a new turn starts and reads from the records again. The default follows the model. In force at once, for this turn too.
-  call_time_secs: how many seconds a program or a command waits at most for each call of a Max tool, max.video and max.file among them (10–600). Raise it when converting a long video or copying a big file runs out of time. In force from the next run_code or shell. */
+  call_time_secs: how many seconds a program or a command waits at most for each call of a Max tool (10–600). Raise it when converting a long video or copying a big file runs out of time. In force from the next run_code or shell. */
 config(args: { idle_window_secs?: number; call_time_secs?: number }): Promise<{ idle_window_secs: { value: number; default: number }; call_time_secs: { value: number; default: number } }>;

@@ -81,10 +81,10 @@ impl Tool for Status {
     }
 }
 
-/// The conversation whose jobs these are. Only a turn's programs, and
-/// those Max keeps in the VM, have one at hand.
+/// The conversation whose jobs these are, which a call from its VM has
+/// at hand.
 fn conversation(context: &Context) -> Result<&Poster, Failure> {
-    let here = context.caller.poster();
+    let here = context.poster.as_ref();
     here.ok_or_else(|| Failure::new("not_here", "there are no background jobs here"))
 }
 

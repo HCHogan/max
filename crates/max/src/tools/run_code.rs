@@ -1,37 +1,32 @@
-//! `run_code`: a program in the guest's runner, which calls Max's tools
-//! as the run.
+//! `run_code`: a program in the guest's runner, which calls Max's tools.
 
 use super::*;
 
-/// What the runner reads on its stdin: the program, its arguments, the
-/// token it calls Max's tools with, and their names.
+/// What the runner reads on its stdin: the program, its arguments, and
+/// the names of Max's tools.
 #[derive(Serialize)]
 struct RunnerInput<'a> {
     code: &'a str,
     args: Option<serde_json::Value>,
-    token: &'a str,
     tools: &'static [&'static str],
 }
 
-/// The tools a program in a turn may call: all of them, as its `maxx`
-/// may. Those the prompt doesn't declare, `say` and `wake`, run as a
-/// program's; see [`mcp::Caller::route`].
+/// The tools a program may call: all of them, as its `maxx` may, those
+/// the prompt doesn't declare too.
 static TOOL_NAMES: LazyLock<Vec<&'static str>> =
     LazyLock::new(|| mcp::tool::TOOLS.iter().map(|tool| tool.name).collect());
 
-/// What the model is shown, and whether the program failed. The result
-/// and the console are cut as `shell`'s output is.
+/// What the model is told of the program. The result and the console are
+/// cut as `shell`'s output is.
 pub(super) async fn run_code(
     vm: &Vm,
-    grant: &Grant,
     code: &str,
     args: Option<serde_json::Value>,
     limit: Duration,
-) -> Result<(String, bool)> {
+) -> Result<Told> {
     let input = RunnerInput {
         code,
         args,
-        token: grant.token(),
         tools: &TOOL_NAMES,
     };
     let input = serde_json::to_vec(&input).expect("the runner's input is JSON");
@@ -39,13 +34,15 @@ pub(super) async fn run_code(
         title: "run_code",
         workdir: "/work",
         limit,
-        // The runner has the token from its input.
-        token: None,
         split: true,
     };
     let ended = wait(vm, unit, "exec node /run/max/runner.js", Some(&input)).await?;
     if let Some(why) = &ended.failed {
-        return Ok((format!("the program didn't run: {}", why.trim()), true));
+        return Ok(Told {
+            text: format!("the program didn't run: {}", why.trim()),
+            error: true,
+            left: Vec::new(),
+        });
     }
     let result = shown(ended.out.as_ref());
     let (head, error) = match ended.ran() {
@@ -65,12 +62,15 @@ pub(super) async fn run_code(
             true,
         ),
     };
-    let mut shown = head;
-    let console = super::shown(ended.err.as_ref());
+    let mut text = head;
+    let console = shown(ended.err.as_ref());
     if !console.is_empty() {
-        shown.push_str("\nconsole output:\n");
-        shown.push_str(&console);
+        text.push_str("\nconsole output:\n");
+        text.push_str(&console);
     }
-    shown.push_str(&called(&grant.calls()));
-    Ok((shown, error))
+    Ok(Told {
+        text,
+        error,
+        left: ended.shown,
+    })
 }

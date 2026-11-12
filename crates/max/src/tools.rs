@@ -6,15 +6,16 @@
 //! and the guest tells Max when it ends. A unit is one or the other from
 //! its start. See "Lifetimes move to systemd" in docs/rust-rewrite.md.
 //!
-//! Both call Max's tools through the MCP service as the run, and can show
-//! the model pictures and videos after their result: the runner's SDK, and
-//! `maxx` from a command, with the token in MAXX_TOKEN.
+//! Both call Max's tools through the MCP service, as anything in the VM
+//! does: the runner's SDK, and `maxx` from a command. And both can show
+//! the model pictures and videos after their result, which the call's
+//! line lists and the host reads from /work; see [`show`].
 
-use std::collections::BTreeMap;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use color_eyre::eyre::{Result, WrapErr, bail};
+use max_core::ids::ConversationId;
 use max_core::item::{Part, ToolOutput};
 use max_core::project::{PICTURE_TOKENS, VIDEO_TOKENS_PER_SECOND};
 use max_core::tools::Tool;
@@ -22,7 +23,8 @@ use serde::{Deserialize, Serialize};
 use tokio::time::{Instant, sleep};
 use tracing::info;
 
-use crate::mcp::{self, Grant};
+use crate::mcp;
+use crate::media::store::Store;
 use crate::tokens;
 use crate::vm::ssh::{Sink, Stream, Waited, quote};
 use crate::vm::{Vm, Vms};
@@ -30,9 +32,29 @@ use max_core::limits::{BACKGROUND_TIME, BACKGROUND_TIME_MAX, RUN_TIME, RUN_TIME_
 
 mod run_code;
 mod shell;
+pub(crate) mod show;
 
 use self::run_code::run_code;
 use self::shell::shell;
+use self::show::Left;
+
+/// What a tool call is for: the conversation whose VM it runs in, and
+/// what showing its model a picture or a video takes.
+pub struct Context {
+    pub conversation: ConversationId,
+    /// Keeps what is shown; None where there is no content store.
+    pub store: Option<Arc<Store>>,
+    /// Whether the turn's model watches videos.
+    pub video: bool,
+}
+
+/// What the model is told of a call that ran: whether it failed, and what
+/// it left to show.
+struct Told {
+    text: String,
+    error: bool,
+    left: Vec<Left>,
+}
 
 /// How long past a call's limit max waits for the guest to say how the
 /// unit ended: the guest ends it at the limit, and one that says nothing
@@ -43,10 +65,10 @@ const GUEST_MARGIN: Duration = Duration::from_secs(30);
 /// as six.
 const LINE_KEPT: usize = 16 * SHOWN_BYTES;
 
-/// Runs `tool` for a call from `context`'s conversation, and logs how it
+/// Runs `tool` in the VM of `context`'s conversation, and logs how it
 /// went: what a task took in steps, and how many failed.
-pub async fn run(tool: Tool, vms: Option<&Vms>, context: mcp::Context) -> ToolOutput {
-    let conversation = context.place.conversation;
+pub async fn run(tool: Tool, vms: Option<&Vms>, context: &Context) -> ToolOutput {
+    let conversation = context.conversation;
     let (name, browser) = match &tool {
         Tool::RunCode { code, .. } => ("run_code", browses(code)),
         Tool::Shell {
@@ -55,7 +77,7 @@ pub async fn run(tool: Tool, vms: Option<&Vms>, context: mcp::Context) -> ToolOu
         Tool::Shell { .. } => ("shell", false),
     };
     let started = Instant::now();
-    let (output, calls) = call(tool, vms, context).await;
+    let output = call(tool, vms, context).await;
     info!(
         %conversation,
         tool = name,
@@ -63,7 +85,6 @@ pub async fn run(tool: Tool, vms: Option<&Vms>, context: mcp::Context) -> ToolOu
         took_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
         error = output.error,
         tokens = output.tokens,
-        calls = tally(&calls),
         "a tool call ends"
     );
     output
@@ -76,25 +97,8 @@ fn browses(code: &str) -> bool {
         .any(|call| code.contains(call))
 }
 
-/// The Max tools a program called, for the log: `history 2, send 1/1`
-/// with the failures after the slash.
-fn tally(calls: &BTreeMap<String, (u32, u32)>) -> String {
-    let each: Vec<String> = calls
-        .iter()
-        .map(|(tool, (succeeded, failed))| match failed {
-            0 => format!("{tool} {succeeded}"),
-            _ => format!("{tool} {succeeded}/{failed}"),
-        })
-        .collect();
-    each.join(", ")
-}
-
-/// Runs `tool`: what the model is shown, and the Max tools it called.
-async fn call(
-    tool: Tool,
-    vms: Option<&Vms>,
-    context: mcp::Context,
-) -> (ToolOutput, BTreeMap<String, (u32, u32)>) {
+/// Runs `tool`: what the model is shown.
+async fn call(tool: Tool, vms: Option<&Vms>, context: &Context) -> ToolOutput {
     let text = |text: String, error| {
         let tokens = tokens::count(&text);
         ToolOutput::text(text, error, tokens)
@@ -104,12 +108,11 @@ async fn call(
         Tool::Shell { timeout_ms, .. } => ("shell", *timeout_ms),
     };
     let Some(vms) = vms else {
-        let shown = text(format!("there are no VMs here, so {name} can't run"), true);
-        return (shown, BTreeMap::new());
+        return text(format!("there are no VMs here, so {name} can't run"), true);
     };
-    let vm = match vms.get(context.place.conversation).await {
+    let vm = match vms.get(context.conversation).await {
         Ok(vm) => vm,
-        Err(error) => return (text(error, true), BTreeMap::new()),
+        Err(error) => return text(error, true),
     };
     if let Tool::Shell {
         command,
@@ -122,38 +125,40 @@ async fn call(
             .map_or(BACKGROUND_TIME, Duration::from_millis)
             .clamp(Duration::from_secs(1), BACKGROUND_TIME_MAX);
         let started = shell::start(&vm, &command, workdir.as_deref(), limit).await;
-        let shown = match started {
+        return match started {
             Ok(shown) => text(shown, false),
             Err(error) => text(format!("the command didn't start: {error:#}"), true),
         };
-        return (shown, BTreeMap::new());
     }
     let limit = timeout_ms
         .map_or(RUN_TIME, Duration::from_millis)
         .clamp(Duration::from_secs(1), RUN_TIME_MAX);
-    let context = mcp::Context {
-        work: Some(vm.work().to_owned()),
-        ..context
-    };
-    let grant = vms.sessions().open(context);
     let ran = match tool {
-        Tool::RunCode { code, args, .. } => run_code(&vm, &grant, &code, args, limit).await,
+        Tool::RunCode { code, args, .. } => run_code(&vm, &code, args, limit).await,
         Tool::Shell {
             command, workdir, ..
-        } => shell(&vm, &grant, &command, workdir.as_deref(), limit).await,
+        } => shell(&vm, &command, workdir.as_deref(), limit).await,
     };
-    let mut output = match ran {
-        Ok((shown, error)) => text(shown, error),
-        Err(error) => text(format!("{name} didn't run: {error:#}"), true),
+    let mut told = match ran {
+        Ok(told) => told,
+        Err(error) => return text(format!("{name} didn't run: {error:#}"), true),
     };
-    for part in grant.shown() {
+    // What it left for the model to see, read now that it is over; and
+    // what of that can't be shown, said here, the program being gone.
+    let shown = show::shown(context, vm.work(), &told.left).await;
+    for refused in &shown.refused {
+        told.text.push('\n');
+        told.text.push_str(refused);
+    }
+    let mut output = text(told.text, told.error);
+    for part in shown.parts {
         output.tokens += match part {
             Part::Video { seconds, .. } => seconds * VIDEO_TOKENS_PER_SECOND,
             _ => PICTURE_TOKENS,
         };
         output.parts.push(part);
     }
-    (output, grant.calls())
+    output
 }
 
 /// A call's unit, as `max-jobs run` is asked for it.
@@ -164,9 +169,6 @@ struct Unit<'a> {
     workdir: &'a str,
     /// The guest ends it then.
     limit: Duration,
-    /// The run's, for the command's own `maxx`; a program has it from its
-    /// input.
-    token: Option<&'a str>,
     /// Its stderr apart from its stdout.
     split: bool,
 }
@@ -184,6 +186,9 @@ struct Ended {
     status: String,
     out: Option<Piece>,
     err: Option<Piece>,
+    /// What it left for the model to see, in order.
+    #[serde(default)]
+    shown: Vec<Left>,
     /// Why there was no unit, if there wasn't.
     failed: Option<String>,
 }
@@ -252,12 +257,6 @@ async fn wait(vm: &Vm, unit: Unit<'_>, command: &str, input: Option<&[u8]>) -> R
         quote(unit.title),
         quote(unit.workdir),
     );
-    if let Some(token) = unit.token {
-        line.push_str(&format!(
-            " --setenv {}",
-            quote(&format!("MAXX_TOKEN={token}"))
-        ));
-    }
     if unit.split {
         line.push_str(" --split");
     }
@@ -340,22 +339,6 @@ fn with(head: String, shown: &str) -> String {
     }
 }
 
-/// The Max tools a program called, for the model to see what happened.
-fn called(calls: &BTreeMap<String, (u32, u32)>) -> String {
-    let each: Vec<String> = calls
-        .iter()
-        .map(|(tool, (succeeded, failed))| match failed {
-            0 => format!("{tool} {succeeded}"),
-            _ => format!("{tool} {} ({failed} failed)", succeeded + failed),
-        })
-        .collect();
-    if each.is_empty() {
-        String::new()
-    } else {
-        format!("\nMax tools called: {}", each.join(", "))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -382,6 +365,7 @@ mod tests {
             status: status.to_owned(),
             out: None,
             err: None,
+            shown: Vec::new(),
             failed: None,
         };
         assert_eq!(ended("success", "exited", "0").ran(), Ran::Exited(0));
@@ -396,9 +380,11 @@ mod tests {
     #[test]
     fn a_calls_line_is_read_and_a_long_output_shows_its_ends() {
         let line = r#"{"result":"exit-code","code":"exited","status":"2","seconds":1,
-            "out":{"bytes":3,"head":"hi\n","tail":"","file":null},"err":null,"failed":null}"#;
+            "out":{"bytes":3,"head":"hi\n","tail":"","file":null},"err":null,
+            "shown":[{"kind":"image","path":"/work/a.png"}],"failed":null}"#;
         let ended: Ended = serde_json::from_str(line).unwrap();
         assert_eq!(ended.ran(), Ran::Exited(2));
+        assert_eq!(ended.shown.len(), 1);
         assert_eq!(shown(ended.out.as_ref()), "hi\n");
         assert_eq!(shown(ended.err.as_ref()), "");
         let long = Piece {
@@ -417,20 +403,6 @@ mod tests {
             refused.failed.as_deref(),
             Some("there is no directory /nowhere")
         );
-    }
-
-    #[test]
-    fn calls_are_summed_up_per_tool() {
-        assert_eq!(called(&BTreeMap::new()), "");
-        let calls = BTreeMap::from([
-            ("history".to_owned(), (3, 1)),
-            ("memory_list".to_owned(), (1, 0)),
-        ]);
-        assert_eq!(
-            called(&calls),
-            "\nMax tools called: history 4 (1 failed), memory_list 1"
-        );
-        assert_eq!(tally(&calls), "history 3/1, memory_list 1");
     }
 
     #[test]

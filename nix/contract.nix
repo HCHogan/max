@@ -11,4 +11,9 @@
 # 2 (2026-11-12): a background agent is a unit of the guest's. /job is
 # gone, /llm takes any call from the VM and says what the model is, and
 # /run/max/jobs keeps an agent's task, inbox and model.
-2
+#
+# 3 (2026-11-12): one caller. Nothing in a guest has a token: max-jobs
+# takes no --setenv, the runner's input has none, and /mcp runs every
+# call for the VM. A call's unit has MAX_CALL, and the line it prints
+# lists what it left for the model to see.
+3

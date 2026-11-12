@@ -103,9 +103,12 @@ pkgs.testers.runNixOSTest {
     assert '"kept":"还在"' in shown, shown
     # The browser loads an extension by Max's own flags.
     assert "浏览器重启了" in shown and '"hello":"扩展在"' in shown, shown
-    # The guest's ffmpeg made a clip and the model's copy of it, whose
-    # length the host read.
-    assert '{"seconds":3}' in shown, shown
+    # The guest's ffmpeg made a clip and the model's copy of it, and
+    # left it and a picture for the model in the call's directory; the
+    # host read both from /work, and said what it couldn't show.
+    assert '{"seconds":3}' in shown and '{"path":"/work/.max/check.png"}' in shown, shown
+    assert "给模型看的视频：3 秒" in shown and "给模型看的图片" in shown, shown
+    assert "/work/.max/check.txt wasn't shown: it isn't a PNG, JPEG, GIF or WebP that decodes" in shown, shown
     # maxx calls the MCP service from a command, as the program did, and
     # lists the tools.
     assert " (not_found)\nmaxx 退出码 1\n1\n" in shown, shown

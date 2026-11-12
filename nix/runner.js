@@ -2,22 +2,20 @@
 // `node /run/max/runner.js`; see "Running in the group VM" in
 // docs/rust-rewrite.md.
 //
-// stdin is one JSON object: {code, args, token, tools}. code is an async
+// stdin is one JSON object: {code, args, tools}. code is an async
 // function body; tools.<name>(args) calls one of Max's tools through the
-// MCP service with the run's token (client.js), max.image() shows the
-// model a picture after the result, max.video() a video (video.js),
-// max.file() has the host copy a file of the chat's record into
-// /work/chat, and max.browser() and max.page() reach the VM's browser
-// (browser.js). stdout gets the program's result
-// and nothing else: its console and its own writes go to stderr. The exit
-// status is 0 when the program returned, 1 when it threw.
+// MCP service (client.js), max.image() leaves a picture for the model to
+// see after the result (shown.js), max.video() a video (video.js), and
+// max.browser() and max.page() reach the VM's browser (browser.js).
+// stdout gets the program's result and nothing else: its console and its
+// own writes go to stderr. The exit status is 0 when the program
+// returned, 1 when it threw.
 "use strict";
 
-const { randomUUID } = require("node:crypto");
-const { mkdir, rm, writeFile } = require("node:fs/promises");
 const { format, inspect } = require("node:util");
 const { browser, page, snapshot } = require("./browser.js");
 const { MCP, ToolError, connect } = require("./client.js");
+const show = require("./shown.js");
 const { watch } = require("./video.js");
 
 const result = process.stdout.write.bind(process.stdout);
@@ -35,10 +33,9 @@ async function main() {
   const url = input.mcp ?? MCP;
   const work = input.work ?? "/work";
 
-  // Programs' own child processes, such as maxx, call as the run too.
-  process.env.MAXX_TOKEN = input.token;
+  // Programs' own child processes, such as maxx, call where it does.
   process.env.MAXX_MCP = url;
-  const { request } = connect({ url, token: input.token });
+  const { request } = connect({ url });
 
   // A call's promise, and what cancels it. Using one without await reads
   // a field of a Promise; say so instead of quietly giving undefined.
@@ -81,24 +78,12 @@ async function main() {
   // A picture for the model to see after the result: a file in /work, or
   // its bytes, which go to one there for the host to read.
   const image = async src => {
-    let path = src;
-    let written;
-    if (src instanceof Uint8Array) {
-      const name = randomUUID();
-      await mkdir(`${work}/.max/shown`, { recursive: true });
-      written = `${work}/.max/shown/${name}`;
-      await writeFile(written, src);
-      path = `/work/.max/shown/${name}`;
-    } else if (typeof src !== "string") {
+    if (typeof src !== "string" && !(src instanceof Uint8Array)) {
       throw new TypeError("max.image takes the path of a picture under /work, or a picture's Buffer");
     }
-    try {
-      const outcome = await request("max.image", { path });
-      if (!outcome.ok) throw new ToolError("max.image", outcome.error);
-      return outcome.value;
-    } finally {
-      if (written) await rm(written, { force: true });
-    }
+    const outcome = await show.image(work, src);
+    if (!outcome.ok) throw new ToolError("max.image", outcome.error);
+    return outcome.value;
   };
 
   // A video for the model to watch after the result, or a part of it: a
@@ -106,23 +91,14 @@ async function main() {
   const video = async (path, options = {}) => {
     if (typeof path !== "string") throw new TypeError("max.video takes a video's path, such as /work/chat/a.mp4");
     if (!options || typeof options !== "object") throw new TypeError("max.video's second argument is {start, end}");
-    const outcome = await watch(request, work, path, options);
+    const outcome = await watch(work, path, options);
     if (!outcome.ok) throw new ToolError("max.video", outcome.error);
-    return outcome.value;
-  };
-
-  // A file of the chat's record, by its handle, which the host copies
-  // into /work/chat.
-  const file = async handle => {
-    if (typeof handle !== "string") throw new TypeError("max.file takes a handle from the records, such as 'file#123.0'");
-    const outcome = await request("max.file", { handle });
-    if (!outcome.ok) throw new ToolError("max.file", outcome.error);
     return outcome.value;
   };
 
   const tools = Object.create(null);
   for (const name of input.tools) tools[name] = args => call(name, args);
-  const max = Object.freeze({ raw, cancel, race, image, video, file, browser, page, snapshot });
+  const max = Object.freeze({ raw, cancel, race, image, video, browser, page, snapshot });
   const AsyncFunction = (async () => {}).constructor;
   const program = new AsyncFunction("tools", "max", "args", input.code);
   return program(Object.freeze(tools), max, input.args);

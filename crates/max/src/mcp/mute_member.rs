@@ -67,7 +67,7 @@ impl Tool for MuteMember {
 async fn mute(context: &Context, Args { member, seconds }: Args) -> Result<Muted, Failure> {
     // A mute goes to QQ from here, not through the conversation's actor,
     // which then couldn't refuse it once Max is stopped: it is asked.
-    if let Some(conversation) = context.caller.poster() {
+    if let Some(conversation) = context.poster.as_ref() {
         let allowed = conversation.act_alone().await;
         allowed.map_err(|why| Failure::new("refused", why))?;
     }

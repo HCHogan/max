@@ -1,7 +1,8 @@
-//! What only the programs Max keeps in the group's VM call, outside any
-//! turn: `say`, which says something in the group as Max would, and
-//! `wake`, which wakes Max. A turn says things in its own output, and is
-//! awake. See "Resident programs" in docs/rust-rewrite.md.
+//! What the programs Max keeps in the group's VM are for, and the system
+//! prompt doesn't declare: `say`, which says something in the group as
+//! Max would, and `wake`, which wakes Max. A turn says things in its own
+//! output, and is awake; its programs may call these all the same. See
+//! "Resident programs" in docs/rust-rewrite.md.
 
 use max_core::ids::PrincipalId;
 use max_core::project;
@@ -47,7 +48,7 @@ impl Tool for Say {
     }
 
     async fn run(context: &Context, SayArgs { text }: SayArgs) -> Result<Said, Failure> {
-        let Some(poster) = context.caller.poster() else {
+        let Some(poster) = &context.poster else {
             return Err(Failure::new("unavailable", "nothing can be said from here"));
         };
         // As the model's output is read: a handle of someone the group
@@ -141,7 +142,7 @@ impl Tool for Wake {
     }
 
     async fn run(context: &Context, WakeArgs { text }: WakeArgs) -> Result<Woken, Failure> {
-        let Some(poster) = context.caller.poster() else {
+        let Some(poster) = &context.poster else {
             return Err(Failure::new("unavailable", "Max can't be woken from here"));
         };
         let said = poster

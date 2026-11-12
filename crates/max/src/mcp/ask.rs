@@ -118,7 +118,7 @@ impl Tool for Answer {
 
 /// The conversation the call comes from: a turn's, or a program's.
 fn conversation(context: &Context) -> Result<&Poster, Failure> {
-    let here = context.caller.poster();
+    let here = context.poster.as_ref();
     here.ok_or_else(|| {
         Failure::new(
             "not_here",

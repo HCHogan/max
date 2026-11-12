@@ -1,35 +1,67 @@
-//! `max.file`: a medium of the conversation's record, by its handle,
-//! copied into /work/chat for a program to read. Not one of Max's tools:
-//! the runner's SDK calls it by this name. See "Reading files".
+//! `file`: a medium of the conversation's record, by its handle, copied
+//! into /work/chat for a program to read. Until 2026-11-12 it was a
+//! request of the runner's own, `max.file`. See "Reading files".
 
 use max_core::ids::MessageId;
 use max_db::media::{self, Stored};
-use serde::Deserialize;
-use serde_json::{Value, json};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use tokio::task::spawn_blocking;
 
+use super::tool::Tool;
 use super::work::put;
-use super::{Context, Failure, arguments, internal};
+use super::{Context, Failure, internal};
 use max_core::limits::KEPT_FILE_BYTES;
 
-pub const NAME: &str = "max.file";
 /// Where in /work the files go.
 const DIR: &str = "chat";
 /// The most of a file's name kept, in bytes.
 const LONGEST_NAME: usize = 150;
 
-#[derive(Deserialize)]
+pub struct File;
+
+#[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct Args {
+pub struct Args {
+    #[schemars(
+        length(min = 1),
+        description = "the handle, as the records show it: file#123.0, or image#, sticker#, video#, audio#"
+    )]
     handle: String,
 }
 
-pub async fn run(context: &Context, args: Value) -> Result<Value, Failure> {
-    let Args { handle } = arguments(NAME, args)?;
+/// Where the copy is, and what the record says of the file.
+#[derive(Serialize, JsonSchema)]
+pub struct Fetched {
+    path: String,
+    name: Option<String>,
+    size: u64,
+}
+
+impl Tool for File {
+    const NAME: &'static str = "file";
+    const DESCRIPTION: &'static str = "Copies a file of this chat's records into /work/chat, by its handle (file#123.0), and returns {path, name, size}.";
+
+    type Args = Args;
+    type Output = Fetched;
+
+    fn guide() -> String {
+        format!(
+            "Copies a file of this chat's records into /work/chat/ and returns {{ path, name, size }}. handle is as the records show it, file#123.0; what the people sent as a picture, a sticker, a video or a voice message has one too (image#123.0). Only what was downloaded is there: at most {} MiB each. Read the copy from there with shell: pdftotext for a PDF, max.video for a video.",
+            KEPT_FILE_BYTES >> 20
+        )
+    }
+
+    async fn run(context: &Context, Args { handle }: Args) -> Result<Fetched, Failure> {
+        fetch(context, &handle).await
+    }
+}
+
+async fn fetch(context: &Context, handle: &str) -> Result<Fetched, Failure> {
     let (Some(work), Some(store)) = (&context.work, &context.services.store) else {
         return Err(Failure::new("unavailable", "files can't be fetched here"));
     };
-    let Some((message, ordinal)) = parse(&handle) else {
+    let Some((message, ordinal)) = parse(handle) else {
         return Err(Failure::new(
             "bad_handle",
             format!("{handle} isn't a handle: write it like file#123.0"),
@@ -53,7 +85,11 @@ pub async fn run(context: &Context, args: Value) -> Result<Value, Failure> {
     spawn_blocking(move || put(&work, DIR, &to, &from))
         .await
         .map_err(|_| internal())??;
-    Ok(json!({ "path": format!("/work/{DIR}/{name}"), "name": stored.name, "size": stored.size }))
+    Ok(Fetched {
+        path: format!("/work/{DIR}/{name}"),
+        name: stored.name,
+        size: stored.size,
+    })
 }
 
 /// `file#123.0`, also as the record shows it: in brackets, with what it

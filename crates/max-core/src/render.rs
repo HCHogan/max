@@ -50,7 +50,8 @@ pub enum Mark {
     NotSent,
     /// Max said it and crashed before hearing back from the platform.
     MaybeNotSent,
-    /// A program Max keeps in the group's VM said it, outside any turn.
+    /// A tool called from the group's VM said it: a program Max keeps
+    /// there, or a turn's own, which the host doesn't tell apart.
     Program,
     /// maxx said it on Max's account: a command's answer, or a notice
     /// that a trigger went unanswered.

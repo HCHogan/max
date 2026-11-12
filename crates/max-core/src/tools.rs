@@ -1,7 +1,7 @@
 //! The model's two tools. They are the same in every request, so the
 //! request prefix stays cached: `run_code` runs a program that can call
-//! Max's tools, `shell` runs a command. Both run in the group's VM. Which
-//! Max tools a program may call is up to the run's spec, not the tool list.
+//! Max's tools, `shell` runs a command. Both run in the group's VM, where
+//! anything may call every tool of Max's.
 
 use std::sync::LazyLock;
 

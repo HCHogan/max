@@ -2,24 +2,22 @@
 //! JSON, on a unix socket per VM. Only what the runner's client uses:
 //! `ping`, `tools/list` and `tools/call`; notifications are taken and
 //! dropped, and a call is cancelled by closing its connection, which
-//! drops it. A token says which run a call belongs to; it isn't a
-//! permission, as anything in the VM may leave it out. A call without an
-//! open token (none, or one whose run has ended) is from a program Max
-//! keeps in the VM, outside any turn, a background agent among them: the
-//! VM says which group it is, and the group's actor runs it; see
-//! "Resident programs" in docs/rust-rewrite.md.
+//! drops it. A call is the VM's: the socket says which conversation it
+//! is, whose actor runs it, and nothing says which program in the VM
+//! made it. A turn's program, a background command, an agent and a unit
+//! of Max's own call alike, and have every tool. Until 2026-11-12 a
+//! token named the run a call belonged to; see "The MCP channel" in
+//! docs/rust-rewrite.md.
 
-use std::collections::{BTreeMap, HashMap};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::Bytes;
 use axum::extract::State;
-use axum::http::{HeaderMap, StatusCode, header};
+use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use max_core::ids::ConversationId;
-use max_core::item::Part;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use tokio::sync::mpsc::UnboundedSender;
@@ -28,8 +26,8 @@ use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
+use super::Failure;
 use super::tool::{self, Spec};
-use super::{Call, Context, Failure, Route, chat_file, lock, show};
 use crate::conversation::Signal;
 use max_core::limits::{CALLS_AT_ONCE, Setting};
 
@@ -43,126 +41,14 @@ const PARSE_ERROR: i32 = -32700;
 const METHOD_NOT_FOUND: i32 = -32601;
 const INVALID_PARAMS: i32 = -32602;
 
-/// The open sessions, by token, and where calls without one go.
-#[derive(Clone, Default)]
-pub struct Sessions {
-    table: Arc<Mutex<HashMap<String, Arc<Session>>>>,
-    /// To the conversations' actors, for the programs Max keeps in the
-    /// VMs; None where there are none, as in most tests.
-    programs: Option<UnboundedSender<Signal>>,
-}
-
-pub(super) struct Session {
-    pub(super) context: Context,
-    /// Cancelled when the session closes; its calls in flight end with it.
-    pub(super) closed: CancellationToken,
-    slots: Semaphore,
-    /// Per tool: calls that succeeded, and that failed.
-    calls: Mutex<BTreeMap<String, (u32, u32)>>,
-    /// The pictures and videos the program has shown the model, in order.
-    shown: Mutex<Vec<Part>>,
-}
-
-/// An open session. Dropping it closes the session: the token stops
-/// working and calls in flight end.
-pub struct Grant {
-    sessions: Sessions,
-    token: String,
-    session: Arc<Session>,
-}
-
-impl Sessions {
-    /// Sessions whose VMs' programs call through `programs` without a
-    /// token.
-    pub fn with_programs(programs: UnboundedSender<Signal>) -> Self {
-        Self {
-            programs: Some(programs),
-            ..Self::default()
-        }
-    }
-
-    /// A session for `context`'s caller, in its conversation.
-    pub fn open(&self, context: Context) -> Grant {
-        let token = format!(
-            "{:032x}{:032x}",
-            rand::random::<u128>(),
-            rand::random::<u128>()
-        );
-        let session = Arc::new(Session {
-            context,
-            closed: CancellationToken::new(),
-            slots: Semaphore::new(CALLS_AT_ONCE),
-            calls: Mutex::default(),
-            shown: Mutex::default(),
-        });
-        lock(&self.table).insert(token.clone(), Arc::clone(&session));
-        Grant {
-            sessions: self.clone(),
-            token,
-            session,
-        }
-    }
-
-    pub(super) fn get(&self, token: &str) -> Option<Arc<Session>> {
-        lock(&self.table).get(token).cloned()
-    }
-
-    /// The session `authorization` names, if it is open and belongs to
-    /// `conversation`'s VM.
-    pub(super) fn bearer(
-        &self,
-        authorization: Option<&str>,
-        conversation: ConversationId,
-    ) -> Option<Arc<Session>> {
-        authorization
-            .and_then(|value| value.strip_prefix("Bearer "))
-            .and_then(|token| self.get(token))
-            .filter(|session| session.context.place.conversation == conversation)
-    }
-}
-
-impl Grant {
-    pub fn token(&self) -> &str {
-        &self.token
-    }
-
-    /// Per tool called so far: how many calls succeeded, and failed.
-    pub fn calls(&self) -> BTreeMap<String, (u32, u32)> {
-        lock(&self.session.calls).clone()
-    }
-
-    /// The pictures and videos shown so far, in order.
-    pub fn shown(&self) -> Vec<Part> {
-        lock(&self.session.shown).clone()
-    }
-}
-
-impl Drop for Grant {
-    fn drop(&mut self) {
-        lock(&self.sessions.table).remove(&self.token);
-        self.session.closed.cancel();
-    }
-}
-
-/// Serves the VM of `conversation` on `listener` until `stop`. A VM's
-/// listener is a unix socket; tests' are TCP, which Node's fetch reaches.
+/// Serves the VM of `conversation` on `listener` until `stop`: `/mcp`,
+/// whose calls go to the conversation's actor through `calls`, and the VM
+/// service's own routes, `host`. A VM's listener is a unix socket; tests'
+/// are TCP, which Node's fetch reaches.
 pub async fn serve<L>(
     listener: L,
     conversation: ConversationId,
-    sessions: Sessions,
-    stop: CancellationToken,
-) where
-    L: axum::serve::Listener,
-    L::Addr: std::fmt::Debug,
-{
-    serve_with(listener, conversation, sessions, axum::Router::new(), stop).await;
-}
-
-/// As `serve`, with the VM service's own routes, `host`.
-pub async fn serve_with<L>(
-    listener: L,
-    conversation: ConversationId,
-    sessions: Sessions,
+    calls: UnboundedSender<Signal>,
     host: axum::Router,
     stop: CancellationToken,
 ) where
@@ -171,11 +57,11 @@ pub async fn serve_with<L>(
 {
     let handler = Handler {
         conversation,
-        sessions: sessions.clone(),
-        programs: Arc::new(Semaphore::new(CALLS_AT_ONCE)),
+        calls,
+        slots: Arc::new(Semaphore::new(CALLS_AT_ONCE)),
     };
-    // Only POST: with no sessions there is nothing to stream or end, so a
-    // GET or a DELETE gets 405, which clients take for that.
+    // Only POST: there is nothing to stream or end, so a GET or a DELETE
+    // gets 405, which clients take for that.
     let app = axum::Router::new()
         .route("/mcp", post(rpc))
         .with_state(handler)
@@ -191,10 +77,10 @@ pub async fn serve_with<L>(
 #[derive(Clone)]
 struct Handler {
     conversation: ConversationId,
-    sessions: Sessions,
-    /// The calls the VM's programs make outside any turn, together, as a
-    /// session's slots.
-    programs: Arc<Semaphore>,
+    /// To the conversations' actors, through the table.
+    calls: UnboundedSender<Signal>,
+    /// How many calls the VM makes at once; more wait their turn.
+    slots: Arc<Semaphore>,
 }
 
 /// A JSON-RPC request, or with no id a notification.
@@ -257,7 +143,7 @@ enum Answer {
     Called(ToolResult),
 }
 
-async fn rpc(State(handler): State<Handler>, headers: HeaderMap, body: Bytes) -> Response {
+async fn rpc(State(handler): State<Handler>, body: Bytes) -> Response {
     let Ok(request) = serde_json::from_slice::<Request>(&body) else {
         let error = Refusal::new(PARSE_ERROR, "not a JSON-RPC request");
         let answer = Envelope {
@@ -272,13 +158,7 @@ async fn rpc(State(handler): State<Handler>, headers: HeaderMap, body: Bytes) ->
     let Some(id) = request.id else {
         return StatusCode::ACCEPTED.into_response();
     };
-    let authorization = headers
-        .get(header::AUTHORIZATION)
-        .map(|value| value.to_str().unwrap_or_default());
-    let outcome = match handler
-        .answer(&request.method, request.params, authorization)
-        .await
-    {
+    let outcome = match handler.answer(&request.method, request.params).await {
         Ok(result) => Outcome::Result(result),
         Err(refusal) => Outcome::Error(refusal),
     };
@@ -297,28 +177,14 @@ fn reply(status: StatusCode, body: &Envelope) -> Response {
 }
 
 impl Handler {
-    async fn answer(
-        &self,
-        method: &str,
-        params: Value,
-        authorization: Option<&str>,
-    ) -> Result<Answer, Refusal> {
+    async fn answer(&self, method: &str, params: Value) -> Result<Answer, Refusal> {
         match method {
             "ping" => Ok(Answer::Value(json!({}))),
             "tools/list" => {
-                let session = self.session(authorization);
-                // With no session, a program's: every tool is its.
-                let listed_to = |spec: &&'static Spec| match &session {
-                    Some(session) => {
-                        session.context.caller.route(Call::Tool(spec)) != Route::Refused
-                    }
-                    None => true,
-                };
-                let tools = tool::TOOLS.iter().filter(listed_to).map(listed).collect();
+                let tools = tool::TOOLS.iter().map(listed).collect();
                 Ok(Answer::Tools { tools })
             }
             "tools/call" => {
-                let session = self.session(authorization);
                 let Called { name, arguments } =
                     serde_json::from_value(params).map_err(|error| {
                         Refusal::new(
@@ -327,9 +193,7 @@ impl Handler {
                         )
                     })?;
                 let args = Value::Object(arguments.unwrap_or_default());
-                Ok(Answer::Called(called(
-                    self.call(session, &name, args).await,
-                )))
+                Ok(Answer::Called(called(self.call(&name, args).await)))
             }
             _ => Err(Refusal::new(
                 METHOD_NOT_FOUND,
@@ -338,49 +202,12 @@ impl Handler {
         }
     }
 
-    /// The session whose token the request carries, if it is open and
-    /// belongs to this VM's conversation. Else the call is a program's,
-    /// outside any turn: one with no token, or with a token that outlived
-    /// its run, as a command moved to the background does. Refusing it
-    /// would keep nothing out, since the token can be left out.
-    fn session(&self, authorization: Option<&str>) -> Option<Arc<Session>> {
-        self.sessions.bearer(authorization, self.conversation)
-    }
-
-    /// Runs `name` in its session, or as a program's call outside any turn
-    /// with no session, or when only programs make it: so Max can try out
-    /// from a turn's command the program it writes.
-    async fn call(
-        &self,
-        session: Option<Arc<Session>>,
-        name: &str,
-        args: Value,
-    ) -> Result<Value, Failure> {
-        let Some(call) = Call::find(name) else {
-            return Err(super::unknown(name));
-        };
-        let route = match &session {
-            Some(session) => session.context.caller.route(call),
-            None => Route::AsProgram,
-        };
-        match (session, route) {
-            // A refusal is the session's to count.
-            (Some(session), Route::Here | Route::Refused) => session.run(call, args).await,
-            _ => self.program(name, args).await,
-        }
-    }
-
-    /// Has the conversation's actor run a program's call: its result. The
-    /// actor stops it when this stops waiting.
-    async fn program(&self, tool: &str, args: Value) -> Result<Value, Failure> {
-        let Some(programs) = &self.sessions.programs else {
-            return Err(Failure::new(
-                "unavailable",
-                "programs kept in the VM can't call from here",
-            ));
-        };
+    /// Has the conversation's actor run the call: its result. The actor
+    /// stops it when this stops waiting, as when the caller closes its
+    /// connection.
+    async fn call(&self, tool: &str, args: Value) -> Result<Value, Failure> {
         let call = async {
-            let _slot = self.programs.acquire().await;
+            let _slot = self.slots.acquire().await;
             let (reply, result) = oneshot::channel();
             let call = Signal::Call {
                 conversation: self.conversation,
@@ -388,7 +215,7 @@ impl Handler {
                 args,
                 reply,
             };
-            programs
+            self.calls
                 .send(call)
                 .map_err(|_| Failure::new("closed", "Max is stopping"))?;
             result
@@ -401,39 +228,6 @@ impl Handler {
         timeout(longest, call)
             .await
             .unwrap_or_else(|_| Err(late(longest)))
-    }
-}
-
-impl Session {
-    /// Runs `call` if the caller may make it, and counts it if it is one
-    /// of Max's tools: the model sees the pictures and videos shown
-    /// themselves, and a file fetched is the program's.
-    async fn run(&self, call: Call, args: Value) -> Result<Value, Failure> {
-        let outcome = match self.context.caller.route(call) {
-            Route::Refused => Err(self.context.caller.refusal(call)),
-            Route::Here | Route::AsProgram => tokio::select! {
-                outcome = async {
-                    let _slot = self.slots.acquire().await;
-                    timeout(self.context.call_time, self.dispatch(call, args)).await
-                } => outcome.unwrap_or_else(|_| Err(late(self.context.call_time))),
-                () = self.closed.cancelled() => Err(Failure::new("closed", "this run has ended")),
-            },
-        };
-        if let Call::Tool(spec) = call {
-            let mut calls = lock(&self.calls);
-            let (succeeded, failed) = calls.entry(spec.name.to_owned()).or_default();
-            *if outcome.is_ok() { succeeded } else { failed } += 1;
-        }
-        outcome
-    }
-
-    async fn dispatch(&self, call: Call, args: Value) -> Result<Value, Failure> {
-        match call {
-            Call::Tool(spec) => spec.call(&self.context, args).await,
-            Call::Image => show::image(&self.context, &self.shown, args).await,
-            Call::Video => show::video(&self.context, &self.shown, args).await,
-            Call::File => chat_file::run(&self.context, args).await,
-        }
     }
 }
 
@@ -509,7 +303,7 @@ mod tests {
     use super::*;
     use crate::conversation::ingest;
     use crate::conversation::testing::{from_xiaoming, group, offset, text};
-    use crate::mcp::Services;
+    use crate::mcp::{Context, Services, testing};
     use crate::scope::Scope;
 
     /// A directory of the test's own for its sockets.
@@ -519,17 +313,14 @@ mod tests {
         dir
     }
 
-    /// Serves `conversation`'s VM on the unix socket `socket`, in `scope`.
-    fn serve_at(
-        scope: &mut Scope,
-        socket: &Path,
-        conversation: ConversationId,
-        sessions: &Sessions,
-    ) {
+    /// Serves the VM of `context`'s conversation on the unix socket
+    /// `socket`, in `scope`, its calls run in `context`.
+    fn serve_at(scope: &mut Scope, socket: &Path, context: Context) {
         let _ = std::fs::remove_file(socket);
         let listener = UnixListener::bind(socket).unwrap();
-        let sessions = sessions.clone();
-        scope.spawn(move |stop| serve(listener, conversation, sessions, stop));
+        let conversation = context.place.conversation;
+        let calls = testing::answering(scope, context);
+        scope.spawn(move |stop| serve(listener, conversation, calls, axum::Router::new(), stop));
     }
 
     /// Sends `body` to /mcp at `socket` with `method` and `headers`, each a
@@ -551,7 +342,7 @@ mod tests {
 
     /// A JSON-RPC request as the runner sends it: the reply's `result` or
     /// `error`.
-    async fn post(socket: &Path, token: &str, method: &str, params: Value) -> Value {
+    async fn post(socket: &Path, method: &str, params: Value) -> Value {
         let mut params = params;
         let name = params["name"]
             .as_str()
@@ -562,10 +353,7 @@ mod tests {
             "io.modelcontextprotocol/clientCapabilities": {},
         });
         let body = json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params });
-        let headers = format!(
-            "MCP-Protocol-Version: 2026-07-28\r\nMcp-Method: {method}\r\n{name}\
-             Authorization: Bearer {token}\r\n"
-        );
+        let headers = format!("MCP-Protocol-Version: 2026-07-28\r\nMcp-Method: {method}\r\n{name}");
         let (_, reply) = exchange(socket, "POST", &headers, &body.to_string()).await;
         let reply: Value = serde_json::from_str(&reply).unwrap();
         reply
@@ -576,7 +364,7 @@ mod tests {
     }
 
     #[sqlx::test(migrator = "max_db::MIGRATOR")]
-    async fn a_program_calls_with_its_runs_token(pool: PgPool) {
+    async fn a_call_is_its_vms_conversations(pool: PgPool) {
         let mut conn = pool.acquire().await.unwrap();
         let place = Arc::new(group(&mut conn).await);
         let hello = ingest::inbound(
@@ -589,53 +377,51 @@ mod tests {
         .await
         .unwrap();
         drop(conn);
-        let conversation = place.conversation;
-        let sessions = Sessions::default();
-        let grant = sessions.open(Context::check(Services::bare(pool), place));
-
-        let dir = sockets("token");
-        let (socket, other) = (dir.join("mine.sock"), dir.join("other.sock"));
+        let dir = sockets("calls");
+        let socket = dir.join("mine.sock");
         let mut scope = Scope::new();
-        serve_at(&mut scope, &socket, conversation, &sessions);
-        let elsewhere = ConversationId(conversation.0 + 1);
-        serve_at(&mut scope, &other, elsewhere, &sessions);
+        let context = Context::check(Services::bare(pool), place);
+        serve_at(&mut scope, &socket, context);
 
-        let listed = post(&socket, grant.token(), "tools/list", json!({})).await;
+        // Every tool, those the prompt doesn't declare too.
+        let listed = post(&socket, "tools/list", json!({})).await;
         assert_eq!(listed["tools"][0]["name"], "history", "{listed}");
         assert_eq!(listed["tools"][0]["outputSchema"]["type"], "object");
+        let names: Vec<&str> = listed["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap())
+            .collect();
+        let all: Vec<&str> = tool::TOOLS.iter().map(|tool| tool.name).collect();
+        assert_eq!(names, all);
+        assert!(
+            names.contains(&"say") && names.contains(&"file"),
+            "{names:?}"
+        );
 
         let id = hello.message.id.0;
         let one = json!({ "around": id, "before": 0, "after": 0 });
         let read = json!({ "name": "history", "arguments": one });
-        let result = post(&socket, grant.token(), "tools/call", read.clone()).await;
+        let result = post(&socket, "tools/call", read).await;
         assert_eq!(result["isError"], false, "{result}");
         assert_eq!(
             result["structuredContent"]["text"],
             format!("[12:01 小明 #{id}]: 你好")
         );
         let missing = json!({ "name": "history", "arguments": { "around": id + 1 } });
-        let result = post(&socket, grant.token(), "tools/call", missing).await;
+        let result = post(&socket, "tools/call", missing).await;
         assert_eq!(result["isError"], true, "{result}");
         assert_eq!(result["structuredContent"]["code"], "not_found");
-        assert_eq!(grant.calls()["history"], (1, 1));
-        let typo = json!({ "name": "histroy", "arguments": {} });
-        let result = post(&socket, grant.token(), "tools/call", typo).await;
-        assert_eq!(result["structuredContent"]["code"], "unknown_tool");
-
-        // Another conversation's VM, a wrong token, a run that ended: none
-        // of them the run's, but a program's call, which here has no
-        // programs to go to.
-        let programs = |reply: &Value| reply["structuredContent"]["code"] == "unavailable";
-        assert!(programs(
-            &post(&other, grant.token(), "tools/call", read.clone()).await
-        ));
-        assert!(programs(
-            &post(&socket, "nope", "tools/call", read.clone()).await
-        ));
-        assert_eq!(grant.calls()["history"], (1, 1));
-        let token = grant.token().to_owned();
-        drop(grant);
-        assert!(programs(&post(&socket, &token, "tools/call", read).await));
+        // What the runner asked the host for until 2026-11-12 isn't a tool.
+        for name in ["histroy", "max.image", "max.file"] {
+            let typo = json!({ "name": name, "arguments": {} });
+            let result = post(&socket, "tools/call", typo).await;
+            assert_eq!(
+                result["structuredContent"]["code"], "unknown_tool",
+                "{name}"
+            );
+        }
 
         scope.close(Duration::from_secs(5)).await;
         let _ = std::fs::remove_dir_all(dir);
@@ -648,30 +434,29 @@ mod tests {
         let mut conn = pool.acquire().await.unwrap();
         let place = Arc::new(group(&mut conn).await);
         drop(conn);
-        let conversation = place.conversation;
-        let sessions = Sessions::default();
-        let grant = sessions.open(Context::check(Services::bare(pool), place));
         let dir = sockets("plain");
         let socket = dir.join("mine.sock");
         let mut scope = Scope::new();
-        serve_at(&mut scope, &socket, conversation, &sessions);
-        let headers = format!(
-            "MCP-Protocol-Version: 2026-07-28\r\nAuthorization: Bearer {}\r\n",
-            grant.token()
+        serve_at(
+            &mut scope,
+            &socket,
+            Context::check(Services::bare(pool), place),
         );
+        // A token, as an older guest's client still sends: nobody reads it.
+        let headers = "MCP-Protocol-Version: 2026-07-28\r\nAuthorization: Bearer old\r\n";
         let rpc = async |body: Value| {
-            let (status, body) = exchange(&socket, "POST", &headers, &body.to_string()).await;
+            let (status, body) = exchange(&socket, "POST", headers, &body.to_string()).await;
             assert_eq!(status, "HTTP/1.1 200 OK", "{body}");
             serde_json::from_str::<Value>(&body).unwrap()
         };
 
         let note = json!({ "jsonrpc": "2.0", "method": "notifications/cancelled" });
-        let (status, body) = exchange(&socket, "POST", &headers, &note.to_string()).await;
+        let (status, body) = exchange(&socket, "POST", headers, &note.to_string()).await;
         assert_eq!(
             (status.as_str(), body.as_str()),
             ("HTTP/1.1 202 Accepted", "")
         );
-        let (status, _) = exchange(&socket, "GET", &headers, "").await;
+        let (status, _) = exchange(&socket, "GET", headers, "").await;
         assert_eq!(status, "HTTP/1.1 405 Method Not Allowed");
 
         // A result's text is its structured content, for a client that
@@ -696,7 +481,7 @@ mod tests {
             let unknown = json!({ "jsonrpc": "2.0", "id": 4, "method": method });
             assert_eq!(rpc(unknown).await["error"]["code"], METHOD_NOT_FOUND);
         }
-        let (status, body) = exchange(&socket, "POST", &headers, "{").await;
+        let (status, body) = exchange(&socket, "POST", headers, "{").await;
         assert_eq!(status, "HTTP/1.1 400 Bad Request", "{body}");
 
         scope.close(Duration::from_secs(5)).await;

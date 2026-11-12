@@ -60,7 +60,7 @@ async fn send(context: &Context, Args { path, caption }: Args) -> Result<Sent, F
     let (Some(work), Some(store), Some(poster)) = (
         &context.work,
         &context.services.store,
-        context.caller.poster(),
+        context.poster.as_ref(),
     ) else {
         return Err(Failure::new(
             "unavailable",

@@ -15,7 +15,7 @@ mod tool;
 use std::fmt;
 use std::sync::Arc;
 
-use max_core::ids::{CallId, ConversationId, EndpointId, Handle, MessageId, TurnId};
+use max_core::ids::{CallId, ConversationId, EndpointId, Handle, MessageId};
 use max_core::intent::Verdict;
 use max_core::item::{ModelOutput, Timing, ToolOutput};
 use max_core::limits::Setting;
@@ -59,17 +59,13 @@ pub enum Event {
     },
     /// The classifier's answer; None if it failed.
     Verdict(Option<Verdict>),
-    /// A tool, or a program Max keeps in the group's VM, asks something
-    /// of the conversation, and waits for the answer.
-    Request {
-        request: Request,
-        /// The turn it comes from; None from a program, outside any turn.
-        origin: Option<TurnId>,
-    },
+    /// A tool asks something of the conversation, and waits for the
+    /// answer.
+    Request(Request),
     /// The VM service has something to say about the group's VM.
     VmNotice(String),
-    /// A program Max keeps in the group's VM calls a tool, outside any
-    /// turn, and waits for the result.
+    /// Something in the group's VM calls a tool, and waits for the
+    /// result.
     Call {
         tool: String,
         args: serde_json::Value,
@@ -95,8 +91,8 @@ pub enum Event {
 /// another conversation's actor.
 #[derive(Debug)]
 pub enum Signal {
-    /// A program Max keeps in the VM calls a tool, outside any turn: the
-    /// conversation's actor runs it, and says how it went.
+    /// Something in the VM calls a tool: the conversation's actor runs
+    /// it, and says how it went.
     Call {
         conversation: ConversationId,
         tool: String,
@@ -224,14 +220,13 @@ impl Question {
     }
 }
 
-/// What Max says or does that isn't the model's text: committed by the
-/// actor and sent like a segment. See "Sending via `Post`".
+/// What Max says or does that isn't the model's text, which a tool
+/// called from the VM asked for: committed by the actor and sent like a
+/// segment. Its row is no turn's, and marked as a program's: the host
+/// doesn't know what in the VM called. See "Sending via `Post`".
 #[derive(Debug)]
 pub struct Post {
     pub act: Act,
-    /// The turn it comes from: the row's turn. None from a program Max
-    /// keeps in the group's VM, outside any turn.
-    pub origin: Option<TurnId>,
     /// Told how the sending went.
     pub receipt: Option<Receipt>,
 }
@@ -277,29 +272,15 @@ const GONE: &str = "this conversation's actor has stopped";
 const UNANSWERED: &str = "the conversation stopped before answering";
 
 /// Lets a tool act in its conversation: say something, ask another
-/// conversation or answer one, for its turn, or for a program Max keeps
-/// in the group's VM.
+/// conversation or answer one.
 #[derive(Clone, Debug)]
 pub struct Poster {
     mailbox: UnboundedSender<Event>,
-    /// None for a program's.
-    origin: Option<TurnId>,
 }
 
 impl Poster {
-    pub fn new(mailbox: UnboundedSender<Event>, origin: TurnId) -> Self {
-        Self {
-            mailbox,
-            origin: Some(origin),
-        }
-    }
-
-    /// For a program Max keeps in the group's VM.
-    pub fn program(mailbox: UnboundedSender<Event>) -> Self {
-        Self {
-            mailbox,
-            origin: None,
-        }
+    pub fn new(mailbox: UnboundedSender<Event>) -> Self {
+        Self { mailbox }
     }
 
     /// Wakes Max with a program's `text`: what the program is told, or
@@ -372,7 +353,7 @@ impl Poster {
     }
 
     /// Asks whether the tool may act in the chat by itself: `/stop`
-    /// forbids it, and a turn that has ended.
+    /// forbids it.
     pub async fn act_alone(&self) -> Result<(), String> {
         self.request(|reply| Request::Act { reply }).await
     }
@@ -386,8 +367,7 @@ impl Poster {
     }
 
     fn send(&self, request: Request) -> Result<(), String> {
-        let origin = self.origin;
-        let sent = self.mailbox.send(Event::Request { request, origin });
+        let sent = self.mailbox.send(Event::Request(request));
         sent.map_err(|_| GONE.to_owned())
     }
 
@@ -395,7 +375,6 @@ impl Poster {
         let (receipt, sent) = oneshot::channel();
         let post = Post {
             act,
-            origin: self.origin,
             receipt: Some(receipt),
         };
         self.mailbox

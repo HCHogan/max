@@ -83,9 +83,6 @@ impl Does {
 /// Why the conversation won't do what an event asks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Refusal {
-    /// The turn the event comes from has ended, by `/kill` or otherwise,
-    /// though its call was on the way.
-    Ended,
     /// `/stop` stopped Max here.
     Stopped,
     /// Max is shutting down.
@@ -96,7 +93,6 @@ impl Refusal {
     /// As whoever asked is told.
     pub(super) fn why(self) -> &'static str {
         match self {
-            Refusal::Ended => "this turn has ended, so this wasn't done",
             Refusal::Stopped => "Max is stopped here (/stop), so this wasn't done",
             Refusal::Stopping => "Max is restarting, so this wasn't done",
         }
@@ -397,7 +393,7 @@ impl Conversation {
                 let decisions = self.intent.verdict(verdict, std::time::Instant::now());
                 self.decide(decisions).await
             }
-            Event::Request { request, origin } => self.request(request, origin).await,
+            Event::Request(request) => self.request(request).await,
             Event::VmNotice(text) => self.vm_notice(text).await,
             Event::Call { tool, args, reply } => {
                 self.program_call(tool, args, reply);
@@ -623,7 +619,7 @@ impl Conversation {
     }
 
     async fn start_core(&mut self, wake: Wake) -> Result<()> {
-        if self.refuses(None, Does::STARTS).is_some() {
+        if self.refuses(Does::STARTS).is_some() {
             return Ok(());
         }
         let settings = &self.settings;
@@ -682,7 +678,6 @@ impl Conversation {
     /// After every event: what the core does next, if nothing is in flight.
     async fn advance(&mut self) -> Result<()> {
         loop {
-            let call_time = self.call_time();
             let Some(a) = self.core.as_mut() else {
                 return Ok(());
             };
@@ -727,12 +722,10 @@ impl Conversation {
                         let task = TaskId(self.next_task);
                         a.live.insert(task);
                         let vms = self.shared.vms.clone();
-                        let caller = mcp::Caller::Turn(Poster::new(self.mailbox.clone(), a.turn));
-                        let pages = Budgets::for_window(a.chosen.window).single;
-                        let services = &self.shared.services;
-                        let context = mcp::Context {
+                        let context = crate::tools::Context {
+                            conversation: self.place.conversation,
+                            store: self.shared.services.store.clone(),
                             video: a.chosen.video,
-                            ..mcp::Context::new(services, &self.place, caller, pages, call_time)
                         };
                         let mailbox = self.mailbox.clone();
                         a.io.spawn(move |_| tool::call(vms, context, call, task, mailbox));
@@ -865,60 +858,43 @@ impl Conversation {
         Ok(())
     }
 
-    /// Whether the conversation refuses what an event of `origin`'s turn
-    /// asks, a program's being of no turn: the one place that says what
-    /// goes on after `/stop`, as Max shuts down, and for a turn that has
-    /// ended. Only the running core's tools act; `/stop` ends the turn and
-    /// starts none.
-    pub(super) fn refuses(&self, origin: Option<TurnId>, does: Does) -> Option<Refusal> {
-        if let Some(turn) = origin
-            && !self.core.as_ref().is_some_and(|a| a.turn == turn)
-        {
-            debug!(%turn, "refused a tool of a turn that has ended");
-            return Some(Refusal::Ended);
-        }
+    /// Whether the conversation refuses what an event asks: the one place
+    /// that says what goes on after `/stop` and as Max shuts down. What
+    /// asks is something in the VM, and which of the things there, a
+    /// turn's program or another, the host doesn't know: a turn killed
+    /// while its program runs may see one more thing said, in the moment
+    /// before the program's unit is stopped.
+    pub(super) fn refuses(&self, does: Does) -> Option<Refusal> {
         if does.acts && self.settings.stopped {
             return Some(Refusal::Stopped);
         }
         (does.starts && self.stopping.is_some()).then_some(Refusal::Stopping)
     }
 
-    /// What a tool says or does: a running core's, whose programs' results
-    /// tell the core what they did, or a program's Max keeps in the VM.
+    /// What a tool says or does, called from the VM: by a turn's program,
+    /// whose result tells the core what it did, or by any other there.
     async fn post(&mut self, post: Post) -> Result<()> {
-        let Post {
-            act,
-            origin,
-            receipt,
-        } = post;
-        if let Some(refused) = self.refuses(origin, Does::ACTS) {
+        let Post { act, receipt } = post;
+        if let Some(refused) = self.refuses(Does::ACTS) {
             if let Some(receipt) = receipt {
                 let _ = receipt.send(Err(refused.why().to_owned()));
             }
             return Ok(());
         }
-        let by = if origin.is_none() {
-            By::Program
-        } else {
-            By::Max
-        };
-        let committed = match act {
-            Act::Say(draft) => self.say(draft, origin, None, by, receipt).await?,
+        match act {
+            Act::Say(draft) => {
+                self.say(draft, None, None, By::Program, receipt).await?;
+            }
             Act::Queue(draft) => {
-                let said = self.say(draft, origin, None, by, None).await?;
+                let said = self.say(draft, None, None, By::Program, None).await?;
                 if let Some(receipt) = receipt {
                     let row = said.map(|(id, _)| id);
                     let _ = receipt.send(row.ok_or_else(|| NOTHING_TO_SAY.to_owned()));
                 }
-                said
             }
-            Act::Unsend(target) => self.unsend(target, origin, receipt).await?,
-        };
-        if let Some((_, at)) = committed
-            && let Some(a) = self.core.as_mut()
-            && Some(a.turn) == origin
-        {
-            a.last_at = Some(at);
+            Act::Unsend(target) => {
+                self.unsend(target, receipt).await?;
+            }
         }
         Ok(())
     }
@@ -955,7 +931,6 @@ impl Conversation {
     async fn unsend(
         &mut self,
         target: MessageId,
-        turn: Option<TurnId>,
         receipt: Option<Receipt>,
     ) -> Result<Option<(MessageId, DateTime<Utc>)>> {
         let mut conn = self.shared.services.pool.acquire().await?;
@@ -963,7 +938,7 @@ impl Conversation {
             &mut conn,
             &self.place,
             target,
-            turn,
+            None,
             Utc::now(),
             self.shared.services.offset,
         )

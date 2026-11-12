@@ -42,7 +42,7 @@ impl Conversation {
 
     /// The VM service on the group's VM. Stopped, Max isn't told.
     pub(super) async fn vm_notice(&mut self, text: String) -> Result<()> {
-        if self.refuses(None, Does::STARTS).is_some() {
+        if self.refuses(Does::STARTS).is_some() {
             return Ok(());
         }
         let item = Notice::Vm { text: &text }.item(self.single());

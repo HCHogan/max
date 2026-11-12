@@ -15,7 +15,7 @@ use tokio::net::{TcpListener, UnixListener, UnixStream};
 use super::{Model, router};
 use crate::conversation::testing::group;
 use crate::llm::Upstream;
-use crate::mcp::{Sessions, serve_with};
+use crate::mcp::serve;
 use crate::scope::Scope;
 
 /// What the provider was asked: the authorization, and the body.
@@ -108,7 +108,9 @@ fn vm(scope: &mut Scope, name: &str, model: Option<Model>) -> (PathBuf, PathBuf)
     let _ = std::fs::remove_file(&socket);
     let listener = UnixListener::bind(&socket).unwrap();
     let host = router(conversation, model);
-    scope.spawn(move |stop| serve_with(listener, conversation, Sessions::default(), host, stop));
+    // Nothing calls a tool here.
+    let calls = tokio::sync::mpsc::unbounded_channel().0;
+    scope.spawn(move |stop| serve(listener, conversation, calls, host, stop));
     (dir, socket)
 }
 
@@ -241,7 +243,8 @@ async fn what_the_agents_use_is_the_conversations(pool: PgPool) {
     let _ = std::fs::remove_file(&socket);
     let listener = UnixListener::bind(&socket).unwrap();
     let host = router(conversation, Some(model));
-    scope.spawn(move |stop| serve_with(listener, conversation, Sessions::default(), host, stop));
+    let calls = tokio::sync::mpsc::unbounded_channel().0;
+    scope.spawn(move |stop| serve(listener, conversation, calls, host, stop));
 
     let (status, body) = send(&socket, "/llm/chat/completions", Some(ASK)).await;
     assert_eq!(status, "HTTP/1.1 200 OK", "{body}");

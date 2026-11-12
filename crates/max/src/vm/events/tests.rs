@@ -278,7 +278,6 @@ async fn maxx_prints_the_rows_and_opens_the_stream_again(pool: PgPool) {
         .arg(MAXX)
         .args(["events", "--after", &format!("#{}", first.id)])
         .env("MAXX_MCP", url.replace("/events", "/mcp"))
-        .env_remove("MAXX_TOKEN")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true)

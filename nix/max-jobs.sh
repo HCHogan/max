@@ -5,7 +5,8 @@
 #
 #   max-jobs run OPTIONS -- COMMAND...
 #       A call: runs COMMAND as a unit, waits for its end, and prints one
-#       line of JSON: how it ended, and its output.
+#       line of JSON: how it ended, its output, and what it left for the
+#       model to see.
 #   max-jobs start OPTIONS -- COMMAND...
 #       A background command: starts the unit and returns. Max is told of
 #       its end, unless it was stopped on request. With --agent it is a
@@ -18,10 +19,15 @@
 #
 # OPTIONS: --unit NAME and --limit SECONDS, which a unit must have;
 # --title TEXT, what it is, for the list and the notice; --workdir DIR,
-# /work without it; --setenv NAME=VALUE, any number; and for a call,
-# --split, which keeps stderr apart from stdout, --input, which gives
-# COMMAND this command's own input, and --shown BYTES, how much of an
-# output the line carries.
+# /work without it; and for a call, --split, which keeps stderr apart
+# from stdout, --input, which gives COMMAND this command's own input, and
+# --shown BYTES, how much of an output the line carries.
+#
+# A call's unit has its directory in MAX_CALL. A picture or a video for
+# the model is a line of `shown` there, which max.image and maxx show
+# write (shown.js): {"kind": "image", "path": "/work/…"}. The call's line
+# carries them, and the host reads the files. What isn't a call has no
+# MAX_CALL, and nobody to show anything to.
 #
 # A unit is a call, a background command or an agent from its start to
 # its end; none becomes another. A call whose caller went away ends by itself
@@ -76,14 +82,12 @@ launch() {
   local kind=$1
   shift
   local unit="" limit="" title="" workdir=/work split="" input="" shown=16384
-  local setenv=()
   while [ $# -gt 0 ]; do
     case "$1" in
       --unit) unit=$2 && shift 2 ;;
       --limit) limit=$2 && shift 2 ;;
       --title) title=$2 && shift 2 ;;
       --workdir) workdir=$2 && shift 2 ;;
-      --setenv) setenv+=("--setenv=$2") && shift 2 ;;
       --shown) shown=$2 && shift 2 ;;
       --split) split=1 && shift ;;
       --agent) kind=agent && shift ;;
@@ -103,7 +107,7 @@ launch() {
       usage "there is no directory $workdir"
     fi
     jq -nc --arg failed "there is no directory $workdir" \
-      '{result: "", code: "", status: "", seconds: 0, out: null, err: null, failed: $failed}'
+      '{result: "", code: "", status: "", seconds: 0, out: null, err: null, shown: [], failed: $failed}'
     return
   fi
 
@@ -120,7 +124,6 @@ launch() {
     --property=RuntimeMaxSec="$limit"
     --property=StandardOutput="append:$out/$unit.txt"
     --property=ExecStopPost="$self ended $unit"
-    "${setenv[@]}"
   )
   if [ "$kind" = agent ]; then
     # pi exits at once on SIGTERM, with nothing reported: its plugin
@@ -147,6 +150,10 @@ launch() {
     return
   fi
 
+  # What earlier calls left in /work for the model to see, which the host
+  # has read long since: a call is over within minutes.
+  find /work/.max/shown -mindepth 1 -maxdepth 1 -mmin +60 -exec rm -rf {} + 2> /dev/null || true
+  args+=(--setenv=MAX_CALL="$dir")
   # Held for as long as the call waits: without it, the unit's end is
   # nobody's, and its hook clears up.
   exec 9> "$dir/waiting"
@@ -168,11 +175,19 @@ launch() {
   else
     echo null > "$dir/err.json"
   fi
+  # What it left to show, a line each; one that isn't such a line is
+  # nothing to show.
+  touch "$dir/shown"
   jq -nc --arg result "$result" --arg code "$code" --arg status "$status" \
     --argjson seconds "$seconds" --rawfile failed "$dir/failed" \
     --slurpfile out "$dir/out.json" --slurpfile err "$dir/err.json" \
+    --rawfile left "$dir/shown" \
     '{result: $result, code: $code, status: $status, seconds: $seconds,
-      out: $out[0], err: $err[0], failed: ($failed | if . == "" then null else . end)}'
+      out: $out[0], err: $err[0],
+      shown: [$left | split("\n")[] | fromjson?
+        | select(type == "object" and (.kind | type) == "string" and (.path | type) == "string")
+        | {kind, path}],
+      failed: ($failed | if . == "" then null else . end)}'
   rm -rf "$dir"
 }
 

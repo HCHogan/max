@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use max_core::ids::TurnId;
 use max_db::PgPool;
 use serde_json::{Value, json};
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
@@ -8,16 +7,16 @@ use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 use super::*;
 use crate::conversation::testing::group_named;
 use crate::conversation::{Event, Poster, Request};
-use crate::mcp::{Caller, Services};
+use crate::mcp::Services;
 
-/// A turn's context whose conversation is `mailbox`, which a test
+/// A call's context whose conversation is `mailbox`, which a test
 /// answers.
 async fn context(pool: &PgPool) -> (Context, UnboundedReceiver<Event>) {
     let mut conn = pool.acquire().await.unwrap();
     let place = Arc::new(group_named(&mut conn, "group:GROUP1").await);
     let (mailbox, events) = unbounded_channel();
     let context = Context {
-        caller: Caller::Turn(Poster::new(mailbox, TurnId(1))),
+        poster: Some(Poster::new(mailbox)),
         ..Context::check(Services::bare(pool.clone()), place)
     };
     (context, events)
@@ -28,11 +27,7 @@ async fn answer(
     events: &mut UnboundedReceiver<Event>,
     answer: Result<Vec<Configured>, String>,
 ) -> Vec<(Setting, Option<u64>)> {
-    let Some(Event::Request {
-        request: Request::Configure { changes, reply },
-        ..
-    }) = events.recv().await
-    else {
+    let Some(Event::Request(Request::Configure { changes, reply })) = events.recv().await else {
         panic!("no Configure");
     };
     reply.send(answer).unwrap();

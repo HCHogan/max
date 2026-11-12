@@ -7,13 +7,12 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use super::report::Report;
 use super::{Event, TaskId};
-use crate::mcp;
 use crate::tools;
 use crate::vm::Vms;
 
 pub async fn call(
     vms: Option<Vms>,
-    context: mcp::Context,
+    context: tools::Context,
     call: Call,
     task: TaskId,
     mailbox: UnboundedSender<Event>,
@@ -24,7 +23,7 @@ pub async fn call(
         call: id,
         out: ToolOutput::text("the tool call broke off without a result", true, 20),
     });
-    let out = tools::run(call.tool, vms.as_ref(), context).await;
+    let out = tools::run(call.tool, vms.as_ref(), &context).await;
     report.send(Event::ToolDone {
         task,
         call: call.id,

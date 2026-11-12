@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use max_core::ids::TurnId;
 use max_db::PgPool;
 use serde_json::json;
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
@@ -8,25 +7,25 @@ use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 use super::*;
 use crate::conversation::testing::group_named;
 use crate::conversation::{Event, Request};
-use crate::mcp::{Caller, Services};
+use crate::mcp::Services;
 
-/// A turn's context whose conversation is `mailbox`, which a test
+/// A call's context whose conversation is `mailbox`, which a test
 /// answers.
 async fn context(pool: &PgPool) -> (Context, UnboundedReceiver<Event>) {
     let mut conn = pool.acquire().await.unwrap();
     let place = Arc::new(group_named(&mut conn, "group:GROUP1").await);
     let (mailbox, events) = unbounded_channel();
     let context = Context {
-        caller: Caller::Turn(Poster::new(mailbox, TurnId(1))),
+        poster: Some(Poster::new(mailbox)),
         ..Context::check(Services::bare(pool.clone()), place)
     };
     (context, events)
 }
 
-/// The next request the conversation is sent, and the turn it is from.
-async fn next(events: &mut UnboundedReceiver<Event>) -> (Request, Option<TurnId>) {
+/// The next request the conversation is sent.
+async fn next(events: &mut UnboundedReceiver<Event>) -> Request {
     match events.recv().await {
-        Some(Event::Request { request, origin }) => (request, origin),
+        Some(Event::Request(request)) => request,
         other => panic!("{other:?}"),
     }
 }
@@ -37,7 +36,7 @@ async fn a_turn_asks_and_answers_through_its_conversation(pool: PgPool) {
     let asking = json!({ "to": 9, "question": "明天的活动几点开始？" });
     let asked = crate::mcp::call(Ask::NAME, &context, asking);
     let actor = async {
-        let (request, origin) = next(&mut events).await;
+        let request = next(&mut events).await;
         let Request::Ask {
             to,
             question,
@@ -47,17 +46,17 @@ async fn a_turn_asks_and_answers_through_its_conversation(pool: PgPool) {
             panic!("{request:?}");
         };
         reply.send(Ok(3)).unwrap();
-        (to, question, origin)
+        (to, question)
     };
     let (out, sent) = tokio::join!(asked, actor);
     assert_eq!(out.unwrap(), json!({ "ask": "ask#3" }));
     let question = "明天的活动几点开始？".to_owned();
-    assert_eq!(sent, (ConversationId(9), question, Some(TurnId(1))));
+    assert_eq!(sent, (ConversationId(9), question));
 
     let answering = json!({ "to": 5, "text": "晚上八点" });
     let answered = crate::mcp::call(Answer::NAME, &context, answering);
     let actor = async {
-        let (request, _) = next(&mut events).await;
+        let request = next(&mut events).await;
         let Request::Answer { to, text, reply } = request else {
             panic!("{request:?}");
         };
@@ -72,7 +71,7 @@ async fn a_turn_asks_and_answers_through_its_conversation(pool: PgPool) {
     let answering = json!({ "to": 5, "text": "九点" });
     let answered = crate::mcp::call(Answer::NAME, &context, answering);
     let actor = async {
-        let (request, _) = next(&mut events).await;
+        let request = next(&mut events).await;
         let Request::Answer { reply, .. } = request else {
             panic!("{request:?}");
         };
@@ -130,7 +129,7 @@ async fn a_long_or_empty_question_never_leaves(pool: PgPool) {
     // As long as may be, it goes.
     let asked = crate::mcp::call(Ask::NAME, &context, json!({ "to": 9, "question": most }));
     let actor = async {
-        let (request, _) = next(&mut events).await;
+        let request = next(&mut events).await;
         let Request::Ask { reply, .. } = request else {
             panic!("{request:?}");
         };

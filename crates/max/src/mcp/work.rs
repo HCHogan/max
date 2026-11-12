@@ -18,7 +18,7 @@ use super::Failure;
 
 /// The path under /work that `path` names, from /work: absolute within
 /// it, or relative to it. No `..`.
-pub(super) fn beneath_work(path: &str) -> Result<PathBuf, Failure> {
+pub(crate) fn beneath_work(path: &str) -> Result<PathBuf, Failure> {
     let path = Path::new(path);
     let path = path.strip_prefix("/work").unwrap_or(path);
     let mut relative = PathBuf::new();

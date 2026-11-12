@@ -137,9 +137,9 @@ impl Harness {
         self.mailbox.send(Event::Inbound(inbound)).unwrap();
     }
 
-    /// Asks as a program in the group's VM does: outside any turn.
+    /// Asks as a tool called from the group's VM does.
     fn poster(&self) -> Poster {
-        Poster::program(self.mailbox.clone())
+        Poster::new(self.mailbox.clone())
     }
 
     /// The next message Max sends, and its text.
@@ -738,27 +738,8 @@ async fn kill_stops_the_core_quietly(pool: PgPool) {
         assert!(Instant::now() < deadline, "the core didn't end");
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    let (turn, outcome) = h.turns().await.remove(0);
+    let (_, outcome) = h.turns().await.remove(0);
     assert_eq!(outcome, Some(Outcome::Interrupted));
-
-    // A tool of the killed turn's, its call on the way: refused.
-    let (receipt, sent) = oneshot::channel();
-    let draft = Draft {
-        reply_to: None,
-        nodes: vec![DraftNode::Text {
-            text: "迟到的".into(),
-        }],
-    };
-    let late = Post {
-        act: Act::Say(draft),
-        origin: Some(turn),
-        receipt: Some(receipt),
-    };
-    h.mailbox.send(Event::Post(late)).unwrap();
-    assert!(sent.await.unwrap().is_err());
-    let late = Poster::new(h.mailbox.clone(), turn);
-    let asked = late.ask(ConversationId(9), "票价多少".into()).await;
-    assert!(asked.is_err());
     h.stop().await;
     assert!(h.outbound.try_recv().is_err(), "/kill isn't answered");
 }
@@ -833,7 +814,6 @@ fn post(act: Act) -> (Post, oneshot::Receiver<Result<MessageId, String>>) {
     let (receipt, sent) = oneshot::channel();
     let post = Post {
         act,
-        origin: None,
         receipt: Some(receipt),
     };
     (post, sent)
@@ -1198,18 +1178,12 @@ async fn who_stops_max(pool: PgPool) {
     h.stop().await;
 }
 
-/// Max's `config`, as a program in the group's VM would ask: what each
-/// limit is now, or why not.
+/// Max's `config`, as its tool asks: what each limit is now, or why not.
 async fn configure(
     h: &Harness,
     changes: Vec<(Setting, Option<u64>)>,
-    origin: Option<TurnId>,
 ) -> Result<Vec<Configured>, String> {
-    let poster = match origin {
-        Some(turn) => Poster::new(h.mailbox.clone(), turn),
-        None => h.poster(),
-    };
-    poster.configure(changes).await
+    h.poster().configure(changes).await
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
@@ -1218,17 +1192,11 @@ async fn max_sets_the_idle_window_of_the_running_turn(pool: PgPool) {
     h.script.push(Answer::says("好"));
     h.send(at_max(0, " 在吗"));
     h.said().await;
-    let refused = configure(
-        &h,
-        vec![(Setting::IdleWindowSecs, Some(1))],
-        Some(TurnId(999)),
-    );
-    assert_eq!(refused.await.unwrap_err(), Refusal::Ended.why());
     assert_eq!(h.turns().await[0].1, None, "the turn goes on");
 
     // Below what the tool allows, so the test is short: the actor
     // trusts the command and the tool to keep to the ranges.
-    let configured = configure(&h, vec![(Setting::IdleWindowSecs, Some(1))], None)
+    let configured = configure(&h, vec![(Setting::IdleWindowSecs, Some(1))])
         .await
         .unwrap();
     let idle = configured
@@ -1411,8 +1379,8 @@ async fn a_new_core_is_shown_the_questions_still_waiting(pool: PgPool) {
     h.stop().await;
 }
 
-/// What goes on after `/stop`, as Max shuts down, and for a turn that
-/// has ended: by what an event would do, not by which event it is.
+/// What goes on after `/stop` and as Max shuts down: by what an event
+/// would do, not by which event it is.
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
 async fn one_rule_says_what_is_refused(pool: PgPool) {
     let mut conn = pool.acquire().await.unwrap();
@@ -1425,20 +1393,19 @@ async fn one_rule_says_what_is_refused(pool: PgPool) {
         .await
         .unwrap();
     let kinds = [Does::LOOKS, Does::ACTS, Does::RUNS, Does::STARTS];
-    let refused = |actor: &Conversation, origin| kinds.map(|does| actor.refuses(origin, does));
+    let refused = |actor: &Conversation| kinds.map(|does| actor.refuses(does));
     let (stopped, stopping) = (Some(Refusal::Stopped), Some(Refusal::Stopping));
 
-    // A program, of no turn, is refused nothing; a tool of a turn that
-    // isn't running is refused everything.
-    assert_eq!(refused(&actor, None), [None; 4]);
-    assert_eq!(refused(&actor, Some(TurnId(1))), [Some(Refusal::Ended); 4]);
+    // Whatever calls from the VM, with or without a turn running, is
+    // refused nothing.
+    assert_eq!(refused(&actor), [None; 4]);
     // After /stop, what has Max say or do something.
     actor.settings.stopped = true;
-    assert_eq!(refused(&actor, None), [None, stopped, None, stopped]);
+    assert_eq!(refused(&actor), [None, stopped, None, stopped]);
     // As Max shuts down, what starts work.
     actor.settings.stopped = false;
     actor.stopping = Some(Instant::now());
-    assert_eq!(refused(&actor, None), [None, None, stopping, stopping]);
+    assert_eq!(refused(&actor), [None, None, stopping, stopping]);
     actor.settings.stopped = true;
-    assert_eq!(refused(&actor, None), [None, stopped, stopping, stopped]);
+    assert_eq!(refused(&actor), [None, stopped, stopping, stopped]);
 }

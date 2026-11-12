@@ -117,7 +117,7 @@ pkgs.testers.runNixOSTest {
         said = call("ok", "echo hi; (exit 3)", "--limit 30")
         assert (said["result"], said["code"], said["status"]) == ("exit-code", "exited", "3"), said
         assert said["out"] == {"bytes": 3, "head": "hi\n", "tail": "", "file": None}, said
-        assert said["err"] is None and said["failed"] is None, said
+        assert said["err"] is None and said["failed"] is None and said["shown"] == [], said
         assert left("ok") == [], left("ok")
 
     with subtest("a call at its limit is stopped, and says so"):
@@ -133,15 +133,34 @@ pkgs.testers.runNixOSTest {
         assert left("long") == [file], left("long")
         assert machine.succeed(f"wc -l < {file}").strip() == "200"
 
-    with subtest("a call has its input, its environment and its directory, and its stderr apart"):
+    with subtest("a call has its input, its own directory and its working directory, and its stderr apart"):
         machine.succeed("mkdir -p /work/project")
         said = call(
-            "input", "cat; echo $FOO >&2; pwd >&2",
-            "--limit 30 --split --input --setenv FOO=bar --workdir /work/project",
+            "input", "cat; echo $MAX_CALL >&2; pwd >&2",
+            "--limit 30 --split --input --workdir /work/project",
             before="echo given | ",
         )
         assert said["out"]["head"] == "given\n", said
-        assert said["err"]["head"] == "bar\n/work/project\n", said
+        assert said["err"]["head"] == "/run/max/jobs/max-job-input\n/work/project\n", said
+
+    with subtest("what a call leaves for the model to see comes back on its line"):
+        machine.succeed("printf x > /work/a.png; mkdir -p /work/.max/shown/max-job-old && touch -d '2 hours ago' /work/.max/shown/max-job-old")
+        # A file, by maxx; one that isn't there, which maxx refuses; a
+        # line a program wrote itself; and one that is no such line.
+        said = call(
+            "show",
+            "maxx show a.png; maxx show nope.png; "
+            "echo \"{\\\"kind\\\":\\\"video\\\",\\\"path\\\":\\\"/work/b.mp4\\\"}\" >> $MAX_CALL/shown; echo junk >> $MAX_CALL/shown",
+            "--limit 30",
+        )
+        assert said["shown"] == [
+            {"kind": "image", "path": "/work/a.png"},
+            {"kind": "video", "path": "/work/b.mp4"},
+        ], said
+        assert "show: nope.png doesn't exist (not_found)" in said["out"]["head"], said
+        assert left("show") == [], left("show")
+        # What an earlier call left in /work for the host is cleared away.
+        machine.fail("test -e /work/.max/shown/max-job-old")
 
     with subtest("a call that can't start says why"):
         said = call("nowhere", "true", "--limit 30 --workdir /no/such/directory")

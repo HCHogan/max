@@ -58,7 +58,7 @@ impl Tool for RecallMessage {
 
 async fn recall(context: &Context, id: i64) -> Result<(), Failure> {
     let place = &context.place;
-    let (Some(poster), Platform::Qq) = (context.caller.poster(), place.platform) else {
+    let (Some(poster), Platform::Qq) = (context.poster.as_ref(), place.platform) else {
         return Err(Failure::new(
             "unavailable",
             "messages can't be recalled from here",

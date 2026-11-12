@@ -32,7 +32,7 @@ const IDLE: Duration = Duration::from_secs(60);
 
 /// A program's headers that don't go on: its connection's, `Expect`
 /// among them, which the host's own server answers (curl sends one with a
-/// large body); and its own key, which may be its run's token.
+/// large body); and its own key.
 const DROPPED: [HeaderName; 11] = [
     header::HOST,
     header::AUTHORIZATION,

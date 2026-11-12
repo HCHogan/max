@@ -171,9 +171,42 @@ fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
             idle: Duration::from_secs(60),
         });
         let vms = Vms::start(vm, &mut services, signals, Arc::default(), Some(agents))?;
-        // What maxx wake would wake Max with, answered here; the other
-        // calls of programs aren't. A background command's end comes the
-        // same way, from the guest: `told` has each as it comes.
+        // A store of vm-check's own, for what calls show the model.
+        let stored = std::env::temp_dir().join(format!("maxx-vm-check-{}", std::process::id()));
+        let store = Arc::new(Store::open(&stored).await?);
+        // What something in the VM calls is run here, as a conversation's
+        // actor would run it, with nobody to say anything for. No
+        // conversation has id 0, so its history finds nothing, from the
+        // database.
+        let called = mcp::Context {
+            services: Arc::new(mcp::Services {
+                pool: PgPool::connect_lazy(&config.database.url)?,
+                offset: config.utc_offset,
+                search: None,
+                store: Some(Arc::clone(&store)),
+                embedder: None,
+                groups: None,
+            }),
+            place: Arc::new(Place {
+                conversation: ConversationId(0),
+                kind: ConversationKind::Group,
+                endpoint: EndpointId(0),
+                platform: Platform::Qq,
+                native_id: "vm-check".into(),
+                me: Account {
+                    identity: IdentityId(0),
+                    principal: PrincipalId(0),
+                },
+                my_name: "maxx".into(),
+            }),
+            page_tokens: 2000,
+            work: None,
+            call_time: Duration::from_secs(config.limits.call_time_secs),
+            poster: None,
+        };
+        // But what maxx wake would wake Max with, which is noted. A
+        // background command's end comes that way, from the guest: `told`
+        // has each as it comes.
         let woken = Arc::new(Mutex::new(Vec::new()));
         let noted = Arc::clone(&woken);
         let (tell, mut told) = mpsc::unbounded_channel::<String>();
@@ -186,10 +219,10 @@ fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
                         let text = args["text"].as_str().unwrap_or_default().to_owned();
                         (text, Some(reply))
                     }
-                    Signal::Call { tool, reply, .. } => {
-                        let refused =
-                            mcp::Failure::new("unavailable", format!("vm-check 不答 {tool}"));
-                        let _ = reply.send(Err(refused));
+                    Signal::Call {
+                        tool, args, reply, ..
+                    } => {
+                        let _ = reply.send(mcp::call(&tool, &called, args).await);
                         continue;
                     }
                     Signal::Notice { text, .. } => (text, None),
@@ -207,40 +240,11 @@ fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
                 }
             }
         });
-        // A store of vm-check's own, for what programs show the model.
-        let stored = std::env::temp_dir().join(format!("maxx-vm-check-{}", std::process::id()));
-        let store = Arc::new(Store::open(&stored).await?);
-        // No conversation has id 0, so the program's history finds nothing,
-        // from the database.
-        let context = || {
-            let services = mcp::Services {
-                pool: PgPool::connect_lazy(&config.database.url)?,
-                offset: config.utc_offset,
-                search: None,
-                store: Some(Arc::clone(&store)),
-                embedder: None,
-                groups: None,
-            };
-            Ok::<_, sqlx::Error>(mcp::Context {
-                services: Arc::new(services),
-                place: Arc::new(Place {
-                    conversation: ConversationId(0),
-                    kind: ConversationKind::Group,
-                    endpoint: EndpointId(0),
-                    platform: Platform::Qq,
-                    native_id: "vm-check".into(),
-                    me: Account {
-                        identity: IdentityId(0),
-                        principal: PrincipalId(0),
-                    },
-                    my_name: "maxx".into(),
-                }),
-                page_tokens: 2000,
-                video: true,
-                work: None,
-                call_time: Duration::from_secs(config.limits.call_time_secs),
-                caller: mcp::Caller::Check,
-            })
+        // A model that watches what the calls show it.
+        let context = tools::Context {
+            conversation: ConversationId(0),
+            store: Some(store),
+            video: true,
         };
         let shell = Tool::Shell {
             command,
@@ -279,12 +283,12 @@ fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
         ];
         let mut outs = Vec::new();
         for tool in steps {
-            outs.push(tools::run(tool, Some(&vms), context()?).await);
+            outs.push(tools::run(tool, Some(&vms), &context).await);
         }
         // A background command: a unit of the guest's, which max doesn't
-        // wait for. Its output is in its file before it ends; it has no
-        // run's token, so its maxx calls as a program's; and the guest
-        // tells of its end with a wake of its own.
+        // wait for. Its output is in its file before it ends; its maxx
+        // calls as a call's does; and the guest tells of its end with a
+        // wake of its own.
         let background = Tool::Shell {
             command: "echo 后台起了; sleep 1; \
                       grep -c 后台起了 \"$(ls -t /work/.max/out/max-job-*.txt | head -1)\"; \
@@ -294,7 +298,7 @@ fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
             timeout_ms: Some(60_000),
             background: true,
         };
-        outs.push(tools::run(background, Some(&vms), context()?).await);
+        outs.push(tools::run(background, Some(&vms), &context).await);
         outs.push(match told_of(&mut told, "[max-job-", 60).await {
             Some(text) => {
                 let whole = text.contains("完成] $ echo 后台起了")
@@ -308,7 +312,7 @@ fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
         // model calls come through max to vm-check's provider, and whose
         // report the guest wakes Max with.
         let agent = command("max-agent start --title 检查 <<< '说一句话就行'");
-        outs.push(tools::run(agent, Some(&vms), context()?).await);
+        outs.push(tools::run(agent, Some(&vms), &context).await);
         outs.push(match told_of(&mut told, "[max-agent-", 180).await {
             Some(text) => {
                 let whole = text.contains("完成] 检查\nvm-check 的 agent 说完了");
@@ -348,8 +352,11 @@ fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
     let mut stdout = std::io::stdout();
     for out in &outs {
         for part in &out.parts {
-            if let Part::Text { text } = part {
-                writeln!(stdout, "{text}")?;
+            match part {
+                Part::Text { text } => writeln!(stdout, "{text}")?,
+                // What the host read of what a call left to show.
+                Part::Video { seconds, .. } => writeln!(stdout, "给模型看的视频：{seconds} 秒")?,
+                Part::Media { .. } => writeln!(stdout, "给模型看的图片")?,
             }
         }
         if out.error {
@@ -431,10 +438,16 @@ const hello = await page.evaluate(() => document.documentElement.dataset.hello);
 await page.close();
 return { hello };"#;
 
-/// A video for the model, from a command: ffmpeg in the VM makes a clip
-/// and the copy for the model, and the host reads the copy's length.
+/// A video and a picture for the model, from a command: ffmpeg in the VM
+/// makes a clip and the copy for the model, the call's line says where
+/// they are, and the host reads the copy's length and the picture. A file
+/// that isn't a picture is said so in the result.
 const VIDEO: &str = r#"ffmpeg -v error -y -f lavfi -i testsrc2=s=1280x720:r=30:d=3 -f lavfi -i sine=d=3 -shortest /work/.max/check.mkv
-maxx video /work/.max/check.mkv | jq -c ."#;
+ffmpeg -v error -y -f lavfi -i testsrc2=s=64x64 -frames:v 1 /work/.max/check.png
+maxx video /work/.max/check.mkv | jq -c .
+maxx show /work/.max/check.png | jq -c .
+echo 不是图 > /work/.max/check.txt
+maxx show /work/.max/check.txt > /dev/null"#;
 
 /// vm-check's tab in the browser: how long the browser took to start and
 /// the page to load, the snapshot, a field filled by its ref, a screenshot

@@ -1,12 +1,11 @@
 // maxx: Max's tools on the command line, for shell commands and programs
-// in any language in a group's VM. It calls the MCP service as the run
-// it is part of, by the token in MAXX_TOKEN, which shell commands and
-// run_code's programs have; without one, as a program Max keeps in the
-// VM, such as a unit's, which has no show or video. Its options come from the
-// tools' schemas, as the service lists them: nothing here is about one
-// tool. See "maxx" in docs/rust-rewrite.md.
+// in any language in a group's VM. Its options come from the tools'
+// schemas, as the MCP service lists them: nothing here is about one tool.
+// show and video are its own, and ask the host nothing: they leave a
+// picture or a video for the model to see after the result of the call
+// they run in (shown.js). See "maxx" in docs/rust-rewrite.md.
 //
-//   maxx                                   the tools this caller may call
+//   maxx                                   the tools
 //   maxx history --help                    one tool's arguments
 //   maxx history --who 小明 --limit 5       a call: its result as JSON
 //   maxx history 示波器                     the same, by position
@@ -20,25 +19,27 @@
 
 const { once } = require("node:events");
 const { MCP, connect, events } = require("./client.js");
+const { image } = require("./shown.js");
 const { watch } = require("./video.js");
 
 // Where /work is: tests have their own.
 const WORK = process.env.MAXX_WORK ?? "/work";
 const TIME = { type: ["number", "string"] };
 
-// The runner's own calls, which tools/list leaves out; show only a run's.
-// One with a call of its own makes it, in place of the host's.
+// What maxx does itself, which tools/list leaves out: each with its
+// arguments, and what it does with them.
 const OWN = {
-  show: { tool: "max.image", argument: "path", run: true, description: "Shows yourself a picture under /work, after the result of this shell or run_code: maxx show <path>" },
-  video: {
-    tool: "max.video",
+  show: {
     argument: "path",
-    run: true,
+    call: ({ path }) => image(WORK, path),
+    description: "Shows yourself a picture under /work, after the result of this shell or run_code: maxx show <path>",
+  },
+  video: {
+    argument: "path",
     options: { start: { ...TIME, description: 'where to start: seconds, or "1:30"' }, end: { ...TIME, description: "where to stop" } },
-    call: (client, { path, start, end }) => watch(client.request, WORK, path, { start, end }),
+    call: ({ path, start, end }) => watch(WORK, path, { start, end }),
     description: "Shows yourself a piece of video, after the result of this shell or run_code, at most 10 minutes at a time: maxx video <path> [--start 1:30] [--end 2:00]",
   },
-  file: { tool: "max.file", argument: "handle", description: "Copies a file of this chat's records into /work/chat, and returns {path, name, size}: maxx file file#123.0" },
 };
 
 // Not a call: the timeline, from the host's /events.
@@ -47,31 +48,28 @@ const EVENTS = "The chat's new messages, a line of JSON each, for as long as it 
 class Usage extends Error {}
 
 async function main(argv) {
-  const token = process.env.MAXX_TOKEN || undefined;
   const mcp = process.env.MAXX_MCP ?? MCP;
-  const client = connect({ url: mcp, token });
-  const own = Object.fromEntries(Object.entries(OWN).filter(([, call]) => token || !call.run));
+  const client = connect({ url: mcp });
   const [first, ...rest] = argv;
   if (first === undefined || first === "help" || first === "--help" || first === "-h") {
-    return [listing(await tools(client), own), 0];
+    return [listing(await tools(client), OWN), 0];
   }
   if (first === "events") return [await follow(new URL("/events", mcp).href, rest), 0];
   const name = first.replaceAll("-", "_");
-  const called = own[name];
+  const own = Object.hasOwn(OWN, name) ? OWN[name] : undefined;
   let tool;
-  if (called) {
-    const properties = { [called.argument]: { type: "string" }, ...called.options };
-    tool = { name: called.tool, description: called.description, inputSchema: { type: "object", properties, required: [called.argument] } };
+  if (own) {
+    const properties = { [own.argument]: { type: "string" }, ...own.options };
+    tool = { name, description: own.description, inputSchema: { type: "object", properties, required: [own.argument] } };
   } else {
     const listed = await tools(client);
     tool = listed.find(tool => tool.name === name);
-    if (!tool) throw new Usage(`there is no tool named ${first}; there are: ${[...listed.map(tool => tool.name), ...Object.keys(own)].join(", ")}`);
+    if (!tool) throw new Usage(`there is no tool named ${first}; there are: ${[...listed.map(tool => tool.name), ...Object.keys(OWN)].join(", ")}`);
   }
-  const shown = called ? name : tool.name;
-  if (rest.includes("--help") || rest.includes("-h")) return [help(shown, tool), 0];
+  if (rest.includes("--help") || rest.includes("-h")) return [help(name, tool), 0];
   const args = await parse(rest, tool.inputSchema);
-  const outcome = await (called?.call ? called.call(client, args) : client.request(tool.name, args));
-  if (!outcome.ok) return [`${shown}: ${outcome.error.message} (${outcome.error.code})`, 1];
+  const outcome = await (own ? own.call(args) : client.request(name, args));
+  if (!outcome.ok) return [`${name}: ${outcome.error.message} (${outcome.error.code})`, 1];
   const value = outcome.value;
   return [typeof value === "string" ? value : JSON.stringify(value, null, 2), 0];
 }

@@ -1,10 +1,10 @@
 # run_code's runner and its SDK (runner.js, browser.js, client.js,
-# video.js), with what max.browser() needs beside them: playwright-core,
-# which connects to the VM's Chromium (guest.nix) and has no dependencies
-# of its own. max.video runs the guest's ffmpeg, from the PATH. The
-# guest links /run/max/runner.js here, and Node resolves the link, so the
-# runner finds browser.js and node_modules next to it. bin/maxx is the
-# same client on the command line (maxx.js).
+# shown.js, video.js), with what max.browser() needs beside them:
+# playwright-core, which connects to the VM's Chromium (guest.nix) and has
+# no dependencies of its own. max.video runs the guest's ffmpeg, from the
+# PATH. The guest links /run/max/runner.js here, and Node resolves the
+# link, so the runner finds browser.js and node_modules next to it.
+# bin/maxx is the same client on the command line (maxx.js).
 { pkgs }:
 let
   playwright = pkgs.fetchurl {
@@ -19,6 +19,7 @@ pkgs.runCommand "max-runner" { } ''
   cp ${./runner.js} $out/lib/max-runner/runner.js
   cp ${./browser.js} $out/lib/max-runner/browser.js
   cp ${./client.js} $out/lib/max-runner/client.js
+  cp ${./shown.js} $out/lib/max-runner/shown.js
   cp ${./video.js} $out/lib/max-runner/video.js
   cp ${./maxx.js} $out/lib/max-runner/maxx.js
   mkdir -p $out/bin

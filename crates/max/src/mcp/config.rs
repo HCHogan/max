@@ -55,14 +55,14 @@ impl Tool for Config {
         format!(
             "Shows or sets a few of this chat's settings. Without arguments it only shows; one given is set, and 0 puts it back to the default. Returns each one's value now and its default. Whether to change one is yours to judge: when someone asks and the reason holds, or when you do need it; say so briefly afterwards. A group's admins can set them too, with /config, and the last to set one wins.\n  \
             idle_window_secs: how many seconds after you last spoke an idle turn ends ({}). Called again within the window, you still have what this turn found; called after it, a new turn starts and reads from the records again. The default follows the model. In force at once, for this turn too.\n  \
-            call_time_secs: how many seconds a program or a command waits at most for each call of a Max tool, max.video and max.file among them ({}). Raise it when converting a long video or copying a big file runs out of time. In force from the next run_code or shell.",
+            call_time_secs: how many seconds a program or a command waits at most for each call of a Max tool ({}). Raise it when converting a long video or copying a big file runs out of time. In force from the next run_code or shell.",
             range(Setting::IdleWindowSecs),
             range(Setting::CallTimeSecs),
         )
     }
 
     async fn run(context: &Context, args: Args) -> Result<Limits, Failure> {
-        let Some(poster) = context.caller.poster() else {
+        let Some(poster) = context.poster.as_ref() else {
             return Err(Failure::new(
                 "not_here",
                 "settings can't be changed from here",

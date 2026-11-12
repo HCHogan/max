@@ -28,8 +28,8 @@ use self::machine::{BOOT, Boot, Booted, Guest, Machine};
 use self::ssh::{Command, Connection};
 use crate::config;
 use crate::conversation::Signal;
+use crate::mcp;
 use crate::mcp::api::{self, Apis};
-use crate::mcp::{self, Sessions};
 use crate::scope::Scope;
 
 /// How often idle and dead VMs are looked for, and kept ones that are
@@ -78,7 +78,6 @@ fn idle(config: &config::Vm) -> Duration {
 #[derive(Clone)]
 pub struct Vms {
     requests: UnboundedSender<Request>,
-    sessions: Sessions,
     apis: Arc<Apis>,
     idle: Duration,
     /// The groups on the operations network.
@@ -130,13 +129,10 @@ impl Vms {
                 .collect(),
         );
         let (requests, rx) = mpsc::unbounded_channel();
-        let sessions = Sessions::with_programs(signals.clone());
-        let served = sessions.clone();
         let called = Arc::clone(&apis);
-        scope.spawn(move |_| run(config, guest, served, called, agents, signals, rx));
+        scope.spawn(move |_| run(config, guest, called, agents, signals, rx));
         Ok(Self {
             requests,
-            sessions,
             apis,
             idle,
             operating,
@@ -152,12 +148,6 @@ impl Vms {
     /// unless it is kept on.
     pub fn idle(&self) -> Duration {
         self.idle
-    }
-
-    /// The MCP service's sessions, which the turns' programs in the VMs
-    /// call through.
-    pub fn sessions(&self) -> &Sessions {
-        &self.sessions
     }
 
     /// The HTTP APIs the VMs call through the host.
@@ -339,7 +329,6 @@ type Waiting = Vec<oneshot::Sender<Result<Vm, String>>>;
 struct Service {
     config: Arc<config::Vm>,
     guest: Arc<Guest>,
-    sessions: Sessions,
     apis: Arc<Apis>,
     agents: Option<mcp::Model>,
     signals: UnboundedSender<Signal>,
@@ -358,7 +347,6 @@ struct Service {
 async fn run(
     config: config::Vm,
     guest: Guest,
-    sessions: Sessions,
     apis: Arc<Apis>,
     agents: Option<mcp::Model>,
     signals: UnboundedSender<Signal>,
@@ -372,7 +360,6 @@ async fn run(
         free: Free::new(&config),
         config: Arc::new(config),
         guest: Arc::new(guest),
-        sessions,
         apis,
         agents,
         signals,
@@ -705,15 +692,15 @@ impl Service {
                 }
             });
         }
-        let sessions = self.sessions.clone();
         let host = host::router(conversation, self.internal.clone())
             .merge(api::router(conversation, Arc::clone(&self.apis)))
             .merge(mcp::agents(conversation, self.agents.clone()));
         let signals = self.signals.clone();
         tasks.spawn(move |stop| {
             // The timeline's streams end with the service, which waits for them.
+            let calls = signals.clone();
             let host = host.merge(events::router(conversation, signals, stop.clone()));
-            mcp::serve_with(mcp, conversation, sessions, host, stop)
+            mcp::serve(mcp, conversation, calls, host, stop)
         });
         let mut running = Running {
             slot,

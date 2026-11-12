@@ -17,6 +17,7 @@ use serde_json::{Map, Value};
 use tracing::warn;
 
 use super::ask::{Answer, Ask};
+use super::chat_file::File;
 use super::config::Config;
 use super::find_stickers::FindStickers;
 use super::history::History;
@@ -36,8 +37,9 @@ pub trait Tool: 'static {
     /// with its arguments' descriptions.
     const DESCRIPTION: &'static str;
     /// Whether the system prompt declares it. Those it doesn't, `say` and
-    /// `wake`, are for the programs Max keeps in the group's VM, and a
-    /// turn's programs that call them call as those. See "Resident programs" in
+    /// `wake`, are for the programs Max keeps in the group's VM: a turn
+    /// says things in its own output, and is awake. Anything in the VM
+    /// may call either all the same. See "Resident programs" in
     /// docs/rust-rewrite.md.
     const TURN: bool = true;
 
@@ -75,6 +77,7 @@ pub static TOOLS: LazyLock<Vec<Spec>> = LazyLock::new(|| {
     vec![
         spec::<History>(),
         spec::<WebSearch>(),
+        spec::<File>(),
         spec::<SendImage>(),
         spec::<SendFile>(),
         spec::<RecallMessage>(),

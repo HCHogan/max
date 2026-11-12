@@ -5,38 +5,43 @@
 
 use super::*;
 
-/// What the model is shown, and whether the command failed to finish.
+/// What the model is told of the command: it failed if it didn't finish.
 pub(super) async fn shell(
     vm: &Vm,
-    grant: &Grant,
     command: &str,
     workdir: Option<&str>,
     limit: Duration,
-) -> Result<(String, bool)> {
+) -> Result<Told> {
     let unit = Unit {
         title: &title(command),
         workdir: &guest_dir(workdir),
         limit,
-        token: Some(grant.token()),
         split: false,
     };
     let ended = wait(vm, unit, command, None).await?;
     if let Some(why) = &ended.failed {
-        return Ok((format!("the command didn't run: {}", why.trim()), true));
+        return Ok(Told {
+            text: format!("the command didn't run: {}", why.trim()),
+            error: true,
+            left: Vec::new(),
+        });
     }
     let output = shown(ended.out.as_ref());
-    let (mut shown, error) = match ended.ran() {
+    let (text, error) = match ended.ran() {
         Ran::Exited(status) => (with(format!("exit status {status}"), &output), false),
         Ran::OutOfTime => (with(out_of_time(limit), &output), true),
         Ran::Killed(how) => (with(format!("ended by {how}"), &output), true),
     };
-    shown.push_str(&called(&grant.calls()));
-    Ok((shown, error))
+    Ok(Told {
+        text,
+        error,
+        left: ended.shown,
+    })
 }
 
 /// Starts `command` in the background, for at most `limit`: what the
-/// model is told of it. It has no run's token, as it outlives the run:
-/// its `maxx` calls as a program's.
+/// model is told of it. It is no call, and has nobody to show a picture
+/// to.
 pub(super) async fn start(
     vm: &Vm,
     command: &str,

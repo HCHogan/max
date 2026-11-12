@@ -2,7 +2,6 @@ use std::io::Cursor;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use max_core::ids::TurnId;
 use max_core::message::{MediaKind, MediaMeta, MediaRef, Node};
 use serde_json::{Value, json};
 use sqlx::PgPool;
@@ -11,8 +10,8 @@ use tokio::sync::mpsc;
 use super::*;
 use crate::conversation::testing::{group, offset};
 use crate::conversation::{Act, Event, Poster, ingest};
+use crate::mcp::Services;
 use crate::mcp::tool::Tool;
-use crate::mcp::{Caller, Services};
 use crate::media::store::Store;
 use crate::scope::Scope;
 
@@ -82,7 +81,7 @@ async fn a_chart_goes_out_with_its_caption(pool: PgPool) {
     let context = Context {
         work: Some(scratch.work()),
         call_time: max_core::limits::CALL_TIME,
-        caller: Caller::Turn(Poster::new(mailbox, TurnId(1))),
+        poster: Some(Poster::new(mailbox)),
         ..Context::check(
             Services {
                 store: Some(Arc::clone(&store)),
@@ -147,7 +146,7 @@ async fn a_chart_goes_out_with_its_caption(pool: PgPool) {
     let not_one = run(&context, json!({ "path": "notes.txt" })).await;
     assert_eq!(not_one.unwrap_err().code, "not_a_picture");
     let elsewhere = Context {
-        caller: Caller::Check,
+        poster: None,
         ..context
     };
     let refused = run(&elsewhere, json!({ "path": "charts/daily.webp" })).await;

@@ -5,8 +5,8 @@ use super::*;
 use crate::conversation::Request;
 
 impl Conversation {
-    pub(super) async fn request(&mut self, request: Request, origin: Option<TurnId>) -> Result<()> {
-        if let Some(refused) = self.refuses(origin, does(&request)) {
+    pub(super) async fn request(&mut self, request: Request) -> Result<()> {
+        if let Some(refused) = self.refuses(does(&request)) {
             request.refuse(refused.why());
             return Ok(());
         }

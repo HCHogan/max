@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use max_core::ids::TurnId;
 use max_core::message::{MediaKind, MediaRef, Node};
 use serde_json::{Value, json};
 use sqlx::PgPool;
@@ -10,8 +9,8 @@ use tokio::sync::mpsc;
 use super::*;
 use crate::conversation::testing::{group, offset};
 use crate::conversation::{Act, Event, Poster, ingest};
+use crate::mcp::Services;
 use crate::mcp::tool::Tool;
-use crate::mcp::{Caller, Services};
 use crate::media::store::Store;
 use crate::scope::Scope;
 
@@ -82,7 +81,7 @@ async fn a_report_goes_out_under_its_name(pool: PgPool) {
     let context = Context {
         work: Some(work.clone()),
         call_time: max_core::limits::CALL_TIME,
-        caller: Caller::Turn(Poster::new(mailbox, TurnId(1))),
+        poster: Some(Poster::new(mailbox)),
         ..Context::check(
             Services {
                 store: Some(Arc::clone(&store)),
@@ -148,7 +147,7 @@ async fn a_report_goes_out_under_its_name(pool: PgPool) {
     let renamed = json!({ "path": "out/report.pdf", "name": "../x" });
     assert_eq!(code(sent(renamed).await), "bad_name");
     let elsewhere = Context {
-        caller: Caller::Check,
+        poster: None,
         ..context
     };
     let refused = run(&elsewhere, json!({ "path": "out/report.pdf" })).await;

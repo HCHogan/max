@@ -55,7 +55,7 @@ impl Tool for SendFile {
         format!(
             "Sends a file under /work to this chat, where it shows as a file that opens to download: documents, spreadsheets, PDFs, archives, code. At most {} MiB, and not empty; no symlink on the path.\n  \
             name is the file name shown in the chat, the path's by default. It returns once the file is stored and queued, and handle is the file's handle; the upload goes on after that, a big file takes a minute or two to reach the chat, and what you say afterwards waits behind it. If it doesn't go out, its row in the records is marked （没发出去）.\n  \
-            A picture for everyone to see goes with send_image, not as a file. To send again a file the records already have, copy it to /work with max.file first.",
+            A picture for everyone to see goes with send_image, not as a file. To send again a file the records already have, copy it to /work with file first.",
             SENT_FILE_BYTES >> 20
         )
     }
@@ -69,7 +69,7 @@ async fn send(context: &Context, Args { path, name }: Args) -> Result<Sent, Fail
     let (Some(work), Some(store), Some(poster)) = (
         &context.work,
         &context.services.store,
-        context.caller.poster(),
+        context.poster.as_ref(),
     ) else {
         return Err(Failure::new("unavailable", "files can't be sent from here"));
     };

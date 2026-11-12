@@ -2,7 +2,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::DateTime;
-use max_core::ids::TurnId;
 use max_core::message::{Draft, DraftNode};
 use max_db::ledger::Sent;
 use serde_json::{Value, json};
@@ -12,8 +11,8 @@ use tokio::sync::mpsc;
 use super::*;
 use crate::conversation::testing::{from_xiaohong, from_xiaoming, group, offset, text};
 use crate::conversation::{Act, Event, Place, Poster, ingest};
+use crate::mcp::Services;
 use crate::mcp::tool::Tool;
-use crate::mcp::{Caller, Services};
 use crate::scope::Scope;
 
 /// Calls the tool as a program does, its arguments checked.
@@ -95,7 +94,7 @@ async fn what_qq_would_refuse_is_refused_here(pool: PgPool) {
         }
     });
     let context = Context {
-        caller: Caller::Turn(Poster::new(mailbox, TurnId(1))),
+        poster: Some(Poster::new(mailbox)),
         ..Context::check(Services::bare(pool.clone()), Arc::clone(&place))
     };
     let now = Utc::now();
@@ -141,7 +140,7 @@ async fn what_qq_would_refuse_is_refused_here(pool: PgPool) {
         .unwrap();
     assert_eq!(code(&context, MessageId(unsend)).await, "not_found");
     let elsewhere = Context {
-        caller: Caller::Check,
+        poster: None,
         ..context
     };
     assert_eq!(code(&elsewhere, fresh).await, "unavailable");

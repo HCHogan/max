@@ -99,10 +99,10 @@ impl Conversation {
     /// in the running core or a new one, and the asker waits until
     /// `answer` names it. Stopped, Max here isn't told.
     pub(super) async fn take_question(&mut self, question: Question) -> Result<()> {
-        if let Some(refused) = self.refuses(None, Does::STARTS) {
+        if let Some(refused) = self.refuses(Does::STARTS) {
             question.refuse(match refused {
                 Refusal::Stopped => STOPPED_THERE,
-                _ => "Max is restarting there",
+                Refusal::Stopping => "Max is restarting there",
             });
             return Ok(());
         }

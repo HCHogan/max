@@ -102,7 +102,7 @@ impl Pair {
 
     /// Max in `place`, asking of its conversation as a tool does.
     fn max(&self, place: &Place) -> Poster {
-        Poster::program(self.mailboxes[&place.conversation].clone())
+        Poster::new(self.mailboxes[&place.conversation].clone())
     }
 
     /// Max in `place` calls `ask`.

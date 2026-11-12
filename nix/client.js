@@ -1,8 +1,7 @@
 // The client of Max's MCP service that run_code's runner and the maxx
 // command share: a call is one POST, the outcome {ok: true, value} or
-// {ok: false, error: {code, message}}. Without a token it calls as a
-// program Max keeps in the VM, outside any turn. See "The MCP channel" in
-// docs/rust-rewrite.md.
+// {ok: false, error: {code, message}}. A call is the VM's: nothing says
+// which program made it. See "The MCP channel" in docs/rust-rewrite.md.
 "use strict";
 
 const MCP = "http://127.0.0.1:7777/mcp";
@@ -46,8 +45,8 @@ class ToolError extends Error {
   }
 }
 
-// A client for the run whose token it is, if any, at url.
-function connect({ url = MCP, token }) {
+// A client of the service at url.
+function connect({ url = MCP } = {}) {
   let nextId = 1;
 
   async function post(method, params, signal) {
@@ -79,7 +78,6 @@ function connect({ url = MCP, token }) {
           "mcp-protocol-version": VERSION,
           "mcp-method": method,
           ...(params.name ? { "mcp-name": params.name } : {}),
-          ...(token ? { authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({
           jsonrpc: "2.0",
@@ -105,7 +103,7 @@ function connect({ url = MCP, token }) {
     return { ok: true, value: reply.result };
   }
 
-  // One call of a tool, or of the runner's own max.image and max.file.
+  // One call of a tool.
   async function request(tool, args, signal) {
     const outcome = await post("tools/call", { name: tool, arguments: args }, signal);
     if (!outcome.ok) return outcome;
@@ -114,7 +112,7 @@ function connect({ url = MCP, token }) {
     return { ok: true, value: structuredContent };
   }
 
-  // The tools this run, or program, may call, with their schemas.
+  // Max's tools, with their schemas.
   async function list() {
     const outcome = await post("tools/list", {});
     return outcome.ok ? { ok: true, value: outcome.value.tools } : outcome;
