@@ -1,0 +1,296 @@
+[
+  {
+    "name": "show",
+    "words": ["show"],
+    "run": "node",
+    "turn": true,
+    "description": "Shows yourself a picture under /work, after the result of this shell or run_code: maxx show <path>",
+    "guide": "Shows yourself a picture, after the result of this run_code or shell; the chat doesn't see it. path is a PNG, JPEG, GIF or WebP under /work. In run_code a picture's bytes do as well, in place of args: tools.show(await page.screenshot()).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": { "type": "string", "description": "a picture under /work" }
+      },
+      "required": ["path"]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": { "path": { "type": "string" } },
+      "required": ["path"]
+    }
+  },
+  {
+    "name": "video",
+    "words": ["video"],
+    "run": "node",
+    "turn": true,
+    "description": "Shows yourself a piece of video, after the result of this shell or run_code, at most 10 minutes at a time: maxx video <path> [--start 1:30] [--end 2:00]",
+    "guide": "Shows yourself a piece of video, picture and sound, after the result of this run_code or shell. path is a video file in the VM; start and end are seconds, or a time such as '1:30'. seconds is how long the piece is.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": { "type": "string", "description": "a video file in the VM, under /work unless it says otherwise" },
+        "start": { "type": ["number", "string"], "description": "where to start: seconds, or \"1:30\"" },
+        "end": { "type": ["number", "string"], "description": "where to stop" }
+      },
+      "required": ["path"]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": { "seconds": { "type": "number" } }
+    }
+  },
+  {
+    "name": "agent_start",
+    "words": ["agent", "start"],
+    "run": "agent",
+    "turn": true,
+    "description": "Starts a background agent on a task: maxx agent start --title <line> --workdir <dir> --task - <<'EOF' … EOF",
+    "guide": "Starts a background agent on task, a unit of the VM's that works on it for hours while you go on talking. title is a line for the list and its report; workdir is where it works, /work by default, and one that isn't absolute is under /work; model is one of agent_models', and effort how hard it thinks: off, minimal, low, medium, high, xhigh or max. Returns at once: name is the agent's, max-agent-N, and said what becomes of it.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "task": { "type": "string", "description": "what it is to do: all it knows of the matter" },
+        "title": { "type": "string", "description": "a line for the list and the report; the task's first line without it" },
+        "workdir": { "type": "string", "description": "the directory it works in, /work by default" },
+        "model": { "type": "string", "description": "one of agent models'; the default without it" },
+        "effort": { "type": "string", "description": "off, minimal, low, medium, high, xhigh or max" }
+      },
+      "required": ["task"]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": { "name": { "type": "string" }, "said": { "type": "string" } },
+      "required": ["name", "said"]
+    }
+  },
+  {
+    "name": "agent_steer",
+    "words": ["agent", "steer"],
+    "run": "agent",
+    "turn": true,
+    "description": "Tells a running agent more: maxx agent steer <name> <text>, or --text - for standard input",
+    "guide": "Tells a running agent more: a change of direction, more to go on, or the answer to what it asked. name is the agent's, max-agent-N; it reads text at the end of the step it is in.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "the agent's name, max-agent-N" },
+        "text": { "type": "string", "description": "what to tell it" }
+      },
+      "required": ["name", "text"]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": { "said": { "type": "string" } },
+      "required": ["said"]
+    }
+  },
+  {
+    "name": "agent_models",
+    "words": ["agent", "models"],
+    "run": "agent",
+    "turn": true,
+    "description": "The models an agent can run on, each with its window",
+    "guide": "The models an agent can run on, each with its context window in tokens; default is the one an agent runs on when none is named.",
+    "inputSchema": { "type": "object", "properties": {} },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "models": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "model": { "type": "string" },
+              "window": { "type": "number" },
+              "default": { "type": "boolean" },
+              "effort": { "type": "string" }
+            },
+            "required": ["model", "window", "default"]
+          }
+        }
+      },
+      "required": ["models"]
+    }
+  },
+  {
+    "name": "agent_ask",
+    "words": ["agent", "ask"],
+    "run": "agent",
+    "turn": false,
+    "description": "For an agent itself: asks its Max something: maxx agent ask <text>, or --text - for standard input",
+    "guide": "For a background agent itself: asks its Max text. Returns at once; the answer appears in the agent's conversation.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "text": { "type": "string", "description": "the question" }
+      },
+      "required": ["text"]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": { "said": { "type": "string" } },
+      "required": ["said"]
+    }
+  },
+  {
+    "name": "units_list",
+    "words": ["units", "list"],
+    "run": "jobs",
+    "turn": true,
+    "description": "What of yours runs in the VM: background commands, agents, and the units /work/.max/systemd keeps",
+    "guide": "What of yours runs in the VM. kind is job for a background command, agent for a background agent and call for a shell or run_code under way, each with its title and the seconds it has run; unit is one /work/.max/systemd keeps, with state as systemd has it. systemctl stop <name> stops one.",
+    "inputSchema": { "type": "object", "properties": {} },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "units": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "kind": { "type": "string" },
+              "title": { "type": "string" },
+              "seconds": { "type": "number" },
+              "state": { "type": "string" }
+            },
+            "required": ["name", "kind"]
+          }
+        }
+      },
+      "required": ["units"]
+    }
+  },
+  {
+    "name": "units_apply",
+    "words": ["units", "apply"],
+    "run": "units",
+    "turn": true,
+    "description": "Makes the unit files in /work/.max/systemd the ones the VM runs",
+    "guide": "Makes the unit files in /work/.max/systemd the ones the VM runs: new and changed ones are installed and started, and those gone are stopped and removed. Call it after changing the directory. units is each with its state as systemd has it, and the end of the log of one that failed; skipped is the files that weren't installed, and why; said is whether the VM stays on for them.",
+    "inputSchema": { "type": "object", "properties": {} },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "units": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "state": { "type": "string" },
+              "log": { "type": "string" }
+            },
+            "required": ["name", "state"]
+          }
+        },
+        "skipped": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": { "name": { "type": "string" }, "why": { "type": "string" } },
+            "required": ["name", "why"]
+          }
+        },
+        "removed": { "type": "array", "items": { "type": "string" } },
+        "said": { "type": "string" }
+      },
+      "required": ["units", "skipped", "removed"]
+    }
+  },
+  {
+    "name": "units_start",
+    "words": ["units", "start"],
+    "run": "jobs",
+    "turn": false,
+    "description": "Starts a command in the background, as a unit; its end is told to Max: maxx units start <command>",
+    "guide": "Starts command in the background, as a unit of the VM's: what shell does with background. limit is the seconds it may run, 6 hours by default. Returns at once: unit is its name, and said what becomes of it.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "command": { "type": "string", "description": "what bash -lc runs" },
+        "title": { "type": "string", "description": "what it is, for the list and the notice; the command's first line without it" },
+        "workdir": { "type": "string", "description": "the directory it runs in, /work by default" },
+        "limit": { "type": "integer", "description": "the seconds it may run: 6 hours by default, a day at most", "minimum": 1, "maximum": 86400 },
+        "unit": { "type": "string", "description": "its name, max-job-…; one is made without it" }
+      },
+      "required": ["command"]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "unit": { "type": "string" },
+        "limit": { "type": "number" },
+        "said": { "type": "string" }
+      },
+      "required": ["unit", "limit", "said"]
+    }
+  },
+  {
+    "name": "units_run",
+    "words": ["units", "run"],
+    "run": "jobs",
+    "turn": false,
+    "description": "Runs a command as a unit and waits for its end: what shell and run_code are made of",
+    "guide": "Runs command as a unit of the VM's and waits for its end, as shell does: how systemd says it ended (result, code, status), the seconds it took, and its output, whole in head while it fits in shown bytes and else its head and tail, with the file that has it all. Its caller holds this command's standard input open: when that ends, the unit is stopped.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "command": { "type": "string", "description": "what bash -lc runs" },
+        "title": { "type": "string", "description": "what it is, for the list; the command's first line without it" },
+        "workdir": { "type": "string", "description": "the directory it runs in, /work by default" },
+        "limit": { "type": "integer", "description": "the seconds it may run: 120 by default", "minimum": 1, "maximum": 86400 },
+        "split": { "type": "boolean", "description": "its stderr apart from its stdout, in err" },
+        "shown": { "type": "integer", "description": "how many bytes of an output come back: 16384 by default", "minimum": 1 },
+        "input": { "type": "integer", "description": "how many bytes of this command's own standard input are the command's", "minimum": 0 },
+        "unit": { "type": "string", "description": "its name, max-job-…; one is made without it" }
+      },
+      "required": ["command"]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "result": { "type": "string" },
+        "code": { "type": "string" },
+        "status": { "type": "string" },
+        "seconds": { "type": "number" },
+        "out": { "type": ["object", "null"] },
+        "err": { "type": ["object", "null"] },
+        "shown": { "type": "array", "items": { "type": "object" } },
+        "failed": { "type": ["string", "null"] }
+      },
+      "required": ["result", "code", "status", "seconds", "shown"]
+    }
+  },
+  {
+    "name": "units_stop_all",
+    "words": ["units", "stop-all"],
+    "run": "jobs",
+    "turn": false,
+    "description": "Stops what was started: every call, background command and agent; the units /work/.max/systemd keeps run on",
+    "guide": "Stops every call, background command and agent that runs, and says which; none of them is told of. The units /work/.max/systemd keeps run on.",
+    "inputSchema": { "type": "object", "properties": {} },
+    "outputSchema": {
+      "type": "object",
+      "properties": { "stopped": { "type": "array", "items": { "type": "string" } } },
+      "required": ["stopped"]
+    }
+  },
+  {
+    "name": "events",
+    "words": ["events"],
+    "run": "node",
+    "stream": true,
+    "turn": false,
+    "description": "The chat's new messages, a line of JSON each, for as long as it runs: maxx events [--after <number>]",
+    "guide": "The chat's new messages as they come, for as long as the program reads them: for await (const row of tools.events({ after })). A row is {id, at, sender, person, by, reply_to, text}.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "after": { "type": "integer", "description": "from after this message, catching up on at most the latest 1000; without it, from now" }
+      }
+    },
+    "outputSchema": { "type": "object" }
+  }
+]

@@ -348,14 +348,14 @@ fn a_programs_pictures_go_in_its_output() {
         json!([
             { "type": "input_text", "text": "返回值：\n截好了" },
             { "type": "input_image", "image_url": "data:image/png;base64,AA==", "detail": "auto" },
-            { "type": "input_text", "text": "[这张图省略了，要看再 max.image]" },
+            { "type": "input_text", "text": "[这张图省略了，要看再 tools.show]" },
         ])
     );
     // Without pictures to send, the output stays text.
     let body = sent(&request, &Options::default(), &Pictures::default());
     assert_eq!(
         body["input"][0]["output"],
-        "返回值：\n截好了\n[这张图省略了，要看再 max.image]\n[这张图省略了，要看再 max.image]"
+        "返回值：\n截好了\n[这张图省略了，要看再 tools.show]\n[这张图省略了，要看再 tools.show]"
     );
 }
 

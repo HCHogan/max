@@ -3,20 +3,20 @@
 // docs/rust-rewrite.md.
 //
 // stdin is one JSON object: {code, args, tools}. code is an async
-// function body; tools.<name>(args) calls one of Max's tools through the
-// MCP service (client.js), max.image() leaves a picture for the model to
-// see after the result (shown.js), max.video() a video (video.js), and
-// max.browser() and max.page() reach the VM's browser (browser.js).
-// stdout gets the program's result and nothing else: its console and its
-// own writes go to stderr. The exit status is 0 when the program
-// returned, 1 when it threw.
+// function body; tools.<name>(args) calls one of Max's tools, the host's
+// through its service or the guest's own, as maxx does on the command
+// line (tools.js): tools.show() and tools.video() leave the model
+// something to see after the result, and tools.events() is the chat's
+// rows as they come. max.browser() and max.page() reach the VM's browser
+// (browser.js). stdout gets the program's result and nothing else: its
+// console and its own writes go to stderr. The exit status is 0 when the
+// program returned, 1 when it threw.
 "use strict";
 
 const { format, inspect } = require("node:util");
 const { browser, page, snapshot } = require("./browser.js");
-const { MCP, ToolError, connect } = require("./client.js");
-const show = require("./shown.js");
-const { watch } = require("./video.js");
+const { MCP, ToolError } = require("./client.js");
+const { LOCAL, open } = require("./tools.js");
 
 const result = process.stdout.write.bind(process.stdout);
 const log = text => process.stderr.write(text);
@@ -35,7 +35,7 @@ async function main() {
 
   // Programs' own child processes, such as maxx, call where it does.
   process.env.MAXX_MCP = url;
-  const { request } = connect({ url });
+  const { request, follow } = open({ url, work });
 
   // A call's promise, and what cancels it. Using one without await reads
   // a field of a Promise; say so instead of quietly giving undefined.
@@ -75,30 +75,14 @@ async function main() {
     )));
   };
 
-  // A picture for the model to see after the result: a file in /work, or
-  // its bytes, which go to one there for the host to read.
-  const image = async src => {
-    if (typeof src !== "string" && !(src instanceof Uint8Array)) {
-      throw new TypeError("max.image takes the path of a picture under /work, or a picture's Buffer");
-    }
-    const outcome = await show.image(work, src);
-    if (!outcome.ok) throw new ToolError("max.image", outcome.error);
-    return outcome.value;
-  };
-
-  // A video for the model to watch after the result, or a part of it: a
-  // file in the VM, under /work unless the path says otherwise.
-  const video = async (path, options = {}) => {
-    if (typeof path !== "string") throw new TypeError("max.video takes a video's path, such as /work/chat/a.mp4");
-    if (!options || typeof options !== "object") throw new TypeError("max.video's second argument is {start, end}");
-    const outcome = await watch(work, path, options);
-    if (!outcome.ok) throw new ToolError("max.video", outcome.error);
-    return outcome.value;
-  };
-
+  // The host's tools, by the names it gave, and the guest's own. One
+  // that isn't a call gives what it follows, to read with for await.
   const tools = Object.create(null);
   for (const name of input.tools) tools[name] = args => call(name, args);
-  const max = Object.freeze({ raw, cancel, race, image, video, browser, page, snapshot });
+  for (const tool of LOCAL) {
+    tools[tool.name] = tool.stream ? (args = {}) => follow({ after: args?.after }) : args => call(tool.name, args);
+  }
+  const max = Object.freeze({ raw, cancel, race, browser, page, snapshot });
   const AsyncFunction = (async () => {}).constructor;
   const program = new AsyncFunction("tools", "max", "args", input.code);
   return program(Object.freeze(tools), max, input.args);

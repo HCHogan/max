@@ -7,7 +7,7 @@
 # ffmpeg made, calls the MCP service with maxx from a command, and keeps a
 # unit in
 # /work/.max/systemd, which the next boot starts again, and wakes Max with
-# max-wake. Then a VM on the operations network reaches a stand-in for the
+# maxx wake. Then a VM on the operations network reaches a stand-in for the
 # tailnet through its namespace, where an ordinary VM can't, its ip rule
 # having outlived networkd.
 {
@@ -128,19 +128,19 @@ pkgs.testers.runNixOSTest {
     assert "max-agent-1 started in /work on vm-check/vm-check, for at most 6 hours." in shown, shown
     assert "后台 agent 的报告：[max-agent-1 完成] 检查\nvm-check 的 agent 说完了" in shown, shown
     assert "后台 agent 的模型调用：1 次，写了 7 tokens" in shown, shown
-    # A unit in /work/.max/systemd, started by max-units, with the
+    # A unit in /work/.max/systemd, started by maxx units apply, with the
     # system's commands on its PATH.
     assert "boot-note.service：active" in shown, shown
     assert "开机时：inactive" in shown and "记下了 1 次开机" in shown, shown
     # Commands and units have /work for a home, and the login shell's PATH
     # is built from it.
     assert "家：/work，unit 的家：/work" in shown and "PATH 里有家里的 profile" in shown, shown
-    # max-units tells the VM service, which keeps the VM on; max-wake, from
+    # maxx units apply tells the VM service, which keeps the VM on; maxx wake, from
     # the background command, calls as a program and reaches vm-check,
     # standing in for the group's actor.
     assert "This chat's VM stays on" in shown, shown
     assert "后台起了\n1\nvm-check 收到了" in shown and "叫醒：vm-check 叫醒了自己" in shown, shown
-    # The next boot starts it before vm-check runs max-units.
+    # The next boot starts it before vm-check runs maxx units apply.
     machine.succeed("systemctl start maxx-vm-check.service")
     again = machine.succeed("journalctl -u maxx-vm-check.service -o cat")
     assert "开机时：active" in again and "记下了 2 次开机" in again, again

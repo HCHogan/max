@@ -3,7 +3,8 @@
 //! used and how it runs. The JSON Schemas the MCP service lists, the
 //! checks on a call's arguments and the TypeScript the system prompt
 //! declares it with all come from there. See "Tool contract" in
-//! docs/rust-rewrite.md.
+//! docs/rust-rewrite.md. The guest has tools of its own, which need no
+//! host: those are declared once too, in nix/local.json ([`LOCAL`]).
 
 use std::future::Future;
 use std::sync::LazyLock;
@@ -11,8 +12,8 @@ use std::sync::LazyLock;
 use futures_util::future::BoxFuture;
 use schemars::JsonSchema;
 use schemars::generate::SchemaSettings;
-use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use tracing::warn;
 
@@ -90,14 +91,61 @@ pub static TOOLS: LazyLock<Vec<Spec>> = LazyLock::new(|| {
     ]
 });
 
-/// The declarations of a turn's tools, for the system prompt.
+/// One of the guest's own tools, as nix/local.json has it: what `maxx`
+/// and a program call in the VM without the host, which the guest's
+/// systemd or its runner does. Here for the system prompt alone, which
+/// declares them with the host's.
+#[derive(Deserialize)]
+pub struct Local {
+    pub name: String,
+    /// Whether the system prompt declares it, as [`Tool::TURN`] says of
+    /// one of the host's.
+    pub turn: bool,
+    guide: String,
+    #[serde(rename = "inputSchema")]
+    input: Map<String, Value>,
+    #[serde(rename = "outputSchema")]
+    output: Map<String, Value>,
+}
+
+impl Local {
+    /// As [`Spec::declaration`]; one that takes nothing is called with
+    /// nothing.
+    fn declaration(&self) -> String {
+        let properties = self.input.get("properties").and_then(Value::as_object);
+        let takes = match properties {
+            Some(properties) if !properties.is_empty() => {
+                format!("args: {}", typescript(&self.input))
+            }
+            _ => String::new(),
+        };
+        format!(
+            "/** {} */\n{}({takes}): Promise<{}>;",
+            self.guide,
+            self.name,
+            typescript(&self.output)
+        )
+    }
+}
+
+/// The guest's own tools, in the order the system prompt declares them.
+pub static LOCAL: LazyLock<Vec<Local>> = LazyLock::new(|| {
+    serde_json::from_str(include_str!("../../../../nix/local.json"))
+        .expect("nix/local.json is the guest's own tools")
+});
+
+/// The declarations of a turn's tools, for the system prompt: the host's,
+/// and then the guest's own.
 pub static DECLARATIONS: LazyLock<String> = LazyLock::new(|| {
-    let declarations: Vec<&str> = TOOLS
+    let host = TOOLS
         .iter()
         .filter(|tool| tool.turn)
-        .map(|tool| tool.declaration.as_str())
-        .collect();
-    declarations.join("\n\n")
+        .map(|tool| tool.declaration.clone());
+    let guest = LOCAL
+        .iter()
+        .filter(|tool| tool.turn)
+        .map(Local::declaration);
+    host.chain(guest).collect::<Vec<_>>().join("\n\n")
 });
 
 pub fn find(name: &str) -> Option<&'static Spec> {

@@ -25,8 +25,12 @@ let
   # travels on the kernel command line (microvm.kernelParams stays out of the
   # toplevel), which avoids a self-reference.
   registration = pkgs.closureInfo { rootPaths = [ config.system.build.toplevel ]; };
-  # run_code's runner, with the SDK its programs drive the browser with.
-  runner = import ./runner.nix { inherit pkgs; };
+  # Max's tools in the guest, with run_code's runner and the SDK its
+  # programs drive the browser with.
+  maxx = import ./maxx.nix {
+    inherit pkgs pi;
+    systemd = config.systemd.package;
+  };
   # The browser's profile: cookies and logins outlive the VM.
   profile = "/work/.max/chromium";
   # Max's own flags for the browser, a line each, after ours: extensions,
@@ -34,11 +38,6 @@ let
   flags = "/work/.max/chromium-flags";
   # Chromium's own, without "HeadlessChrome" in it.
   userAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${lib.versions.major pkgs.chromium.version}.0.0.0 Safari/537.36";
-  units = import ./max-units.nix {
-    inherit pkgs;
-    systemd = config.systemd.package;
-  };
-  wake = import ./max-wake.nix { inherit pkgs runner; };
   # Moves the running guest to another image's system: its paths into the
   # Nix database, as register-nix-paths does at boot, and then NixOS's own
   # switch, in a unit of its own so that it outlives whoever asked. max
@@ -258,8 +257,10 @@ in
     '';
   };
 
-  # run_code's runner, where max runs it. A unit of its own: a switch to
-  # a new image runs it again, and the next program has the new runner.
+  # run_code's runner, where max runs it, and Max's tools for a program of
+  # its own in JS, where one requires them (tools.js). A unit of its own:
+  # a switch to a new image runs it again, and the next program has the
+  # new runner.
   systemd.services.max-runner = {
     wantedBy = [ "sysinit.target" ];
     # Before max can log in and run one.
@@ -273,11 +274,14 @@ in
     serviceConfig = {
       Type = "oneshot";
       RemainAfterExit = true;
-      ExecStart = "${pkgs.coreutils}/bin/ln -sfn ${runner}/lib/max-runner/runner.js /run/max/runner.js";
+      ExecStart = [
+        "${pkgs.coreutils}/bin/ln -sfn ${maxx}/lib/max-runner/runner.js /run/max/runner.js"
+        "${pkgs.coreutils}/bin/ln -sfn ${maxx}/lib/max-runner/tools.js /run/max/tools.js"
+      ];
     };
   };
 
-  # run_code's programs, maxx, and max-units reach Max's MCP service at
+  # run_code's programs and maxx reach Max's MCP service at
   # 127.0.0.1:7777. It is on the host, at the hybrid vsock's port 7777: one
   # socat per connection.
   systemd.sockets.max-mcp = {
@@ -360,7 +364,7 @@ in
   };
 
   # Max's own units, in /work/.max/systemd: installed at every boot, and by
-  # max-units when Max changes them. They run in max-units.slice, which
+  # `maxx units apply` when Max changes them. They run in max-units.slice, which
   # yields to commands and can't take all the memory. max.units=off on the
   # command line leaves them out, for a VM they keep from coming up. See
   # "Resident programs" in docs/rust-rewrite.md.
@@ -380,7 +384,7 @@ in
     serviceConfig = {
       Type = "oneshot";
       RemainAfterExit = true;
-      ExecStart = "${units}/bin/max-units";
+      ExecStart = "${maxx}/bin/maxx units apply '{}'";
     };
   };
   systemd.slices.max-units.sliceConfig = {
@@ -500,21 +504,16 @@ in
     perl
     # run_code's runner, and programs' own child processes.
     nodejs
-    # maxx: Max's tools from shell commands, and programs in any language.
-    runner
     # A page's text, as Markdown; PDFs through pdftotext.
     (import ./webread.nix { inherit pkgs; })
-    # Background agents' harness, which programs can run too; max-agent
-    # and max-pi are with the jobs (jobs.nix).
+    # Background agents' harness, which programs can run too. maxx, Max's
+    # tools from shell commands and programs in any language, is with the
+    # jobs (jobs.nix).
     pi
-    # Max's own units, and how their programs wake Max; see max-units
-    # above.
-    units
-    wake
     # Moves the guest to a new image where it runs; max runs the new
     # image's.
     switch
-    # max.video's copies for the model, and programs' own.
+    # tools.video's copies for the model, and programs' own.
     ffmpeg-headless
     poppler-utils
     jq

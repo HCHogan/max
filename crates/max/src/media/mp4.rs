@@ -1,4 +1,4 @@
-//! The length of an MP4, by its movie header, for `max.video`: the host
+//! The length of an MP4, by its movie header, for `tools.video`: the host
 //! never decodes a video, the VM's ffmpeg made it (video.js).
 
 /// The length in seconds of the MP4 in `bytes`, by its movie header: one

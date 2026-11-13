@@ -3,8 +3,8 @@
 # between images. A VM outlives max, so a new max meets guests an older
 # one booted; one whose number isn't max's is restarted at once.
 #
-# Raise it with any change to: max-jobs' arguments or the line a call
-# prints; the layout of /run/max/jobs; the runner's input; the routes a
+# Raise it with any change to: the arguments of what max runs with maxx,
+# or the line a call prints; the layout of /run/max/jobs; the runner's input; the routes a
 # guest calls (/mcp, /llm, /api, /events, /units). See "Lifetimes move to
 # systemd" in docs/rust-rewrite.md.
 #
@@ -20,4 +20,11 @@
 # 4 (2026-11-13): a call ends with its caller. max-jobs run takes
 # --input BYTES, and the rest of its input is the caller's to hold open:
 # when that ends, the guest stops the unit. max stops none by name.
-4
+#
+# 5 (2026-11-14): one command. max-jobs, max-agent, max-units and
+# max-wake are maxx's own `units` and `agent`, beside the host's tools:
+# max runs `maxx units run`, `start`, `list` and `stop-all`, each with
+# its arguments as a JSON object and its answer as one. A program has
+# them as tools.<name>, with tools.show and tools.video where max.image
+# and max.video were.
+5

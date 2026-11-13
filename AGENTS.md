@@ -33,7 +33,8 @@ with the guest's jobs, below.
 
 ## The guest's jobs
 
-After changing `nix/max-jobs.sh`, `nix/max-agent.sh` or `nix/jobs.nix`, build
+After changing `nix/max-jobs.sh`, `nix/max-agent.sh`, `nix/max-units.sh`,
+`nix/maxx.nix`, `nix/local.json` or `nix/jobs.nix`, build
 `.#checks.<system>.jobs` for a Linux system (`aarch64-linux` on a Mac
 with a Linux builder): a NixOS test of what Max runs in a VM as units,
 with no VM inside it. What the host makes of a call's line is in
@@ -45,8 +46,9 @@ and runs on tank.
 
 A VM outlives max, so a new max meets guests an older one booted. Raise
 the number in `nix/contract.nix` with any change to what the two say to
-each other: `max-jobs`' arguments or the line a call prints, the layout
-of `/run/max/jobs`, the runner's input, the routes a guest calls. A VM
+each other: the arguments of what max runs with `maxx`, or the line a
+call prints, the layout of `/run/max/jobs`, the runner's input, the
+routes a guest calls. A VM
 whose guest keeps another number is restarted when max attaches to it;
 one with the same number runs on. A change an older guest goes on
 working with, such as a field more in what a route answers, needs no new

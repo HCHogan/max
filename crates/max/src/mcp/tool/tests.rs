@@ -303,6 +303,18 @@ fn what_isnt_checked_is_caught() {
     );
 }
 
+/// A name is the host's or the guest's, and maxx and a program know which
+/// by the guest's table alone.
+#[test]
+fn the_guests_tools_have_names_of_their_own() {
+    let mut names: Vec<&str> = TOOLS.iter().map(|tool| tool.name).collect();
+    names.extend(LOCAL.iter().map(|tool| tool.name.as_str()));
+    let all = names.len();
+    names.sort_unstable();
+    names.dedup();
+    assert_eq!(names.len(), all, "{names:?}");
+}
+
 /// What the system prompt says of the tools; a change shows here.
 #[test]
 fn declarations() {

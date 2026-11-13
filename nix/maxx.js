@@ -1,102 +1,98 @@
 // maxx: Max's tools on the command line, for shell commands and programs
-// in any language in a group's VM. Its options come from the tools'
-// schemas, as the MCP service lists them: nothing here is about one tool.
-// show and video are its own, and ask the host nothing: they leave a
-// picture or a video for the model to see after the result of the call
-// they run in (shown.js). See "maxx" in docs/rust-rewrite.md.
+// in any language in a group's VM, and for max itself, which runs what
+// the guest's systemd does with it. Its options come from the tools'
+// schemas, the host's as its service lists them and the guest's own from
+// local.json: nothing here is about one tool. See "maxx" in
+// docs/rust-rewrite.md.
 //
 //   maxx                                   the tools
 //   maxx history --help                    one tool's arguments
 //   maxx history --who 小明 --limit 5       a call: its result as JSON
 //   maxx history 示波器                     the same, by position
 //   maxx history '{"query": "示波器"}'      or as JSON; - reads it from stdin
+//   maxx agent start --task - <<'EOF'      a value of - is standard input
+//   maxx units list                        one of the guest's own, by its words
 //   maxx events --after 123                the group's rows after #123 as
 //                                          they come, a JSON line each
 //
 // The result goes to stdout; a failure's reason to stderr, with exit
-// status 1. A wrong command line exits with 2.
+// status 1. A wrong command line exits with 2. One of the guest's own
+// given its words and a JSON object alone never comes here: bin/maxx
+// runs it itself (maxx.nix), which is how the host calls, and how this
+// does once it has read the options.
 "use strict";
 
 const { once } = require("node:events");
-const { MCP, connect, events } = require("./client.js");
-const { image } = require("./shown.js");
-const { watch } = require("./video.js");
+const { MCP } = require("./client.js");
+const { LOCAL, open } = require("./tools.js");
 
 // Where /work is: tests have their own.
 const WORK = process.env.MAXX_WORK ?? "/work";
-const TIME = { type: ["number", "string"] };
-
-// What maxx does itself, which tools/list leaves out: each with its
-// arguments, and what it does with them.
-const OWN = {
-  show: {
-    argument: "path",
-    call: ({ path }) => image(WORK, path),
-    description: "Shows yourself a picture under /work, after the result of this shell or run_code: maxx show <path>",
-  },
-  video: {
-    argument: "path",
-    options: { start: { ...TIME, description: 'where to start: seconds, or "1:30"' }, end: { ...TIME, description: "where to stop" } },
-    call: ({ path, start, end }) => watch(WORK, path, { start, end }),
-    description: "Shows yourself a piece of video, after the result of this shell or run_code, at most 10 minutes at a time: maxx video <path> [--start 1:30] [--end 2:00]",
-  },
-};
-
-// Not a call: the timeline, from the host's /events.
-const EVENTS = "The chat's new messages, a line of JSON each, for as long as it runs: maxx events [--after <number>]";
 
 class Usage extends Error {}
 
+// A tool as the command line names it: the guest's own by its words.
+const named = tool => (tool.words ? tool.words.join(" ") : tool.name);
+
 async function main(argv) {
-  const mcp = process.env.MAXX_MCP ?? MCP;
-  const client = connect({ url: mcp });
-  const [first, ...rest] = argv;
+  const tools = open({ url: process.env.MAXX_MCP ?? MCP, work: WORK });
+  const [first, second] = argv;
   if (first === undefined || first === "help" || first === "--help" || first === "-h") {
-    return [listing(await tools(client), OWN), 0];
+    return [listing(await listed(tools)), 0];
   }
-  if (first === "events") return [await follow(new URL("/events", mcp).href, rest), 0];
-  const name = first.replaceAll("-", "_");
-  const own = Object.hasOwn(OWN, name) ? OWN[name] : undefined;
-  let tool;
-  if (own) {
-    const properties = { [own.argument]: { type: "string" }, ...own.options };
-    tool = { name, description: own.description, inputSchema: { type: "object", properties, required: [own.argument] } };
-  } else {
-    const listed = await tools(client);
-    tool = listed.find(tool => tool.name === name);
-    if (!tool) throw new Usage(`there is no tool named ${first}; there are: ${[...listed.map(tool => tool.name), ...Object.keys(OWN)].join(", ")}`);
+  // One of the guest's own, by its words as they are written and no
+  // other way; else one of the host's.
+  let tool =
+    LOCAL.find(tool => tool.words.length === 2 && tool.words[0] === first && tool.words[1] === second) ??
+    LOCAL.find(tool => tool.words.length === 1 && tool.words[0] === first);
+  const rest = argv.slice(tool ? tool.words.length : 1);
+  if (!tool) {
+    const group = LOCAL.filter(tool => tool.words.length === 2 && tool.words[0] === first);
+    if (group.length) {
+      const lines = [`${first} takes one of:`, ...table(group)].join("\n");
+      if (second === undefined || second === "--help" || second === "-h") return [lines, 0];
+      throw new Usage(`there is no ${first} ${second}\n${lines}`);
+    }
+    const name = first.replaceAll("-", "_");
+    const all = await listed(tools);
+    tool = all.find(tool => !tool.words && tool.name === name);
+    if (!tool) throw new Usage(`there is no tool named ${first}; there are: ${all.map(named).join(", ")}`);
   }
-  if (rest.includes("--help") || rest.includes("-h")) return [help(name, tool), 0];
+  if (tool.stream) return [await follow(tools, rest), 0];
+  if (rest.includes("--help") || rest.includes("-h")) return [help(tool), 0];
   const args = await parse(rest, tool.inputSchema);
-  const outcome = await (own ? own.call(args) : client.request(name, args));
-  if (!outcome.ok) return [`${name}: ${outcome.error.message} (${outcome.error.code})`, 1];
+  const outcome = await tools.request(tool.name, args);
+  if (!outcome.ok) return [`${named(tool)}: ${outcome.error.message} (${outcome.error.code})`, 1];
   const value = outcome.value;
   return [typeof value === "string" ? value : JSON.stringify(value, null, 2), 0];
 }
 
-async function tools(client) {
-  const outcome = await client.list();
+async function listed(tools) {
+  const outcome = await tools.list();
   if (!outcome.ok) throw new Failed(`${outcome.error.message} (${outcome.error.code})`);
   return outcome.value;
 }
 
 class Failed extends Error {}
 
-function listing(tools, own) {
-  const width = Math.max(...[...tools.map(tool => tool.name), ...Object.keys(own), "events"].map(name => name.length));
-  const line = (name, description) => `  ${name.padEnd(width)}  ${description}`;
+// A line for each tool: its name, and what it is.
+function table(tools) {
+  const width = Math.max(...tools.map(tool => named(tool).length));
+  return tools.map(tool => `  ${named(tool).padEnd(width)}  ${tool.description}`);
+}
+
+function listing(tools) {
   return [
     "Usage: maxx <tool> --<argument> <value> ..., or maxx <tool> '{\"argument\": value}', or maxx <tool> - to read JSON from standard input.",
+    "A value of - is read from standard input: maxx agent start --task - <<'EOF'.",
     "The result is JSON, printed to standard output; a failure prints why to standard error and exits with 1. maxx <tool> --help shows a tool's arguments.",
     "Tools:",
-    ...tools.map(tool => line(tool.name, tool.description)),
-    ...Object.entries(own).map(([name, call]) => line(name, call.description)),
-    line("events", EVENTS),
+    ...table(tools),
   ].join("\n");
 }
 
 // maxx events: the rows, a JSON line each, until whoever reads them stops.
-async function follow(url, words) {
+async function follow(tools, words) {
   if (words.includes("--help") || words.includes("-h")) return EVENTS_HELP;
   let after;
   for (let i = 0; i < words.length; i++) {
@@ -109,10 +105,12 @@ async function follow(url, words) {
   // Whoever read the rows is gone.
   process.stdout.on("error", () => process.exit(0));
   const told = (why, wait) => process.stderr.write(`maxx events: ${why}; reconnecting in ${wait / 1000} seconds\n`);
-  for await (const row of events({ url, after, told })) {
+  for await (const row of tools.follow({ after, told })) {
     if (!process.stdout.write(`${JSON.stringify(row)}\n`)) await once(process.stdout, "drain");
   }
 }
+
+const EVENTS = LOCAL.find(tool => tool.name === "events").description;
 
 const EVENTS_HELP = [
   `events: ${EVENTS}`,
@@ -124,7 +122,7 @@ const EVENTS_HELP = [
   "  --after <number>  from after this message, catching up on at most the latest 1000; without it, from now.",
 ].join("\n");
 
-function help(name, tool) {
+function help(tool) {
   const properties = Object.entries(tool.inputSchema?.properties ?? {});
   const required = new Set(tool.inputSchema?.required ?? []);
   const flag = ([property, schema]) => {
@@ -133,7 +131,7 @@ function help(name, tool) {
     const about = schema?.description ? `: ${schema.description}` : "";
     return `  --${property} (${kind}${must})${about}`;
   };
-  return [`${name}: ${tool.description}`, ...(properties.length ? ["Arguments:", ...properties.map(flag)] : ["No arguments."])].join("\n");
+  return [`${named(tool)}: ${tool.description}`, ...(properties.length ? ["Arguments:", ...properties.map(flag)] : ["No arguments."])].join("\n");
 }
 
 const KINDS = { boolean: "true/false" };
@@ -147,8 +145,9 @@ function types(schema) {
 }
 
 // The call's arguments: --name value, --name=value, a bare --name for
-// true, --no-name for false; JSON, or - for JSON on stdin; and words by
-// position, for the required arguments first and then the rest in order.
+// true, --no-name for false, and - for a text's value to read it from
+// stdin; JSON, or - for JSON on stdin; and words by position, for the
+// required arguments first and then the rest in order.
 async function parse(words, schema) {
   const properties = schema?.properties ?? {};
   const args = {};
@@ -182,6 +181,9 @@ async function parse(words, schema) {
         if (i + 1 >= words.length) throw new Usage(`--${flag} needs a value`);
         text = words[++i];
       }
+      // Text too long or too odd for a command line, as a heredoc gives
+      // it: without the newlines that end it.
+      if (text === "-" && kinds.includes("string")) text = (await stdin()).replace(/\n+$/, "");
       put(args, name, text, properties[name]);
     } else positional.push(word);
   }
@@ -238,10 +240,15 @@ function object(text, where) {
   return value;
 }
 
-async function stdin() {
-  const chunks = [];
-  for await (const chunk of process.stdin) chunks.push(chunk);
-  return Buffer.concat(chunks).toString("utf8");
+// Standard input, read once however often it is asked for.
+let given;
+function stdin() {
+  given ??= (async () => {
+    const chunks = [];
+    for await (const chunk of process.stdin) chunks.push(chunk);
+    return Buffer.concat(chunks).toString("utf8");
+  })();
+  return given;
 }
 
 function exit(text, code) {

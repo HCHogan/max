@@ -204,7 +204,7 @@ fn wire(piece: Piece<'_>) -> Part<'_> {
             image_url: DataUrl(medium),
             detail: "auto",
         },
-        // max.video refuses on a model that doesn't watch videos.
+        // tools.video refuses on a model that doesn't watch videos.
         Piece::Video(_) => Part::InputText {
             text: NO_VIDEO.into(),
         },

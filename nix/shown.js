@@ -1,8 +1,8 @@
 // What a call shows the model after its result: the pictures and videos a
-// program hands over with max.image and max.video, and a command with
+// program hands over with tools.show and tools.video, and a command with
 // maxx show and maxx video. Nothing is asked of the host for it. A call's
 // unit has its directory in MAX_CALL (max-jobs.sh), and each thing to
-// show is a line of its `shown` there: max-jobs gives the list back on
+// show is a line of its `shown` there: maxx units run gives the list back on
 // the call's line, and the host reads the files from /work as it puts the
 // result together. One it can't show, it says so in the result. What
 // isn't part of a call (a background command, an agent, a unit of Max's)
@@ -22,7 +22,7 @@ const NOBODY = "nobody is there to see it: only a shell or run_code call of Max'
 const local = (work, path) => (path.startsWith("/") ? path.replace(/^\/work(?=\/|$)/, work) : `${work}/${path}`);
 
 // A file of this call's own in /work, where the host reads it: where to
-// write it, and what the host is told. max-jobs clears them away later.
+// write it, and what the host is told. The next calls clear them away.
 async function scratch(work, extension = "") {
   const dir = `.max/shown/${basename(process.env.MAX_CALL)}`;
   await mkdir(`${work}/${dir}`, { recursive: true });

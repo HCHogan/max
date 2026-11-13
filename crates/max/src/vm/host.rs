@@ -1,4 +1,4 @@
-//! The VM service's own route on each group's MCP service: max-units
+//! The VM service's own route on each group's MCP service: `maxx units apply`
 //! POSTs `{"units": 2}` to `/units` and gets `{"ok": true, "said": "…"}`
 //! back. Which group it comes from is the VM's own socket's to say, so
 //! there is no token. See "Resident programs" in docs/rust-rewrite.md.

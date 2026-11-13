@@ -1,4 +1,4 @@
-// max.video's half in the VM, which the runner and maxx share: the copy
+// tools.video's half in the VM, which the runner and maxx share: the copy
 // of a video the model watches, made here with ffmpeg so that the host
 // never decodes one. A frame a second, as Gemini samples them, at most
 // 640 pixels a side, the sound in mono: ten minutes come to a few MiB,

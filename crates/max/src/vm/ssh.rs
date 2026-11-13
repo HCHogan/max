@@ -71,7 +71,7 @@ pub async fn connect(socket: &Path, key: Arc<PrivateKey>) -> Result<Connection> 
 /// [`closer`].
 pub type Closes = UnboundedSender<Channel<Msg>>;
 
-/// A call running in the guest: `max-jobs run`, which stops the call's
+/// A call running in the guest: `maxx units run`, which stops the call's
 /// unit when its input ends. The input stays open for as long as this is
 /// held; dropped before the call has ended, as when the turn is killed,
 /// its channel goes to the VM's closer, since closing one has to wait.

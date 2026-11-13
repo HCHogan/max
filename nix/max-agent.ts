@@ -4,11 +4,11 @@
 // that unit's; max keeps nothing of it. What this plugin keeps, with files
 // in the agent's directory, MAX_AGENT_DIR (/run/max/jobs/<unit>):
 // - at the end of each turn it takes the steers in `inbox`, which
-//   `max-agent steer` put there, and they go in before the next model
+//   `maxx agent steer` put there, and they go in before the next model
 //   call; an agent that had asked its Max something has its answer then,
 //   and waits for none;
 // - as pi is about to settle, it takes them once more: if the agent has
-//   asked its Max something (`max-agent ask` left `asked`) and nothing has
+//   asked its Max something (`maxx agent ask` left `asked`) and nothing has
 //   come, it waits a while for an answer, and what comes is one more
 //   turn's input;
 // - a few minutes before the unit's limit it tells the agent to wrap up;
@@ -17,7 +17,7 @@
 //   at once on SIGTERM, with nothing reported;
 // - once pi has settled, it writes the last text the agent wrote as its
 //   report, and the last model call's error, if it failed, in `error`.
-// The unit's ExecStopPost (max-jobs ended) tells Max of the end from
+// The unit's ExecStopPost (maxx units ended) tells Max of the end from
 // those.
 import * as fs from "node:fs";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";

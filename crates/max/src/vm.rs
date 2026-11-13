@@ -22,6 +22,7 @@ use color_eyre::eyre::Result;
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
 use max_core::ids::ConversationId;
+use serde::Deserialize;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot;
 use tokio::time::{Instant, MissedTickBehavior, interval, timeout};
@@ -45,8 +46,27 @@ const QUIET: Duration = Duration::from_secs(10 * 60);
 /// A VM that failed to boot, or stopped by itself, twice within this long
 /// boots once without Max's units: one of them may be what stops it.
 const FAILING: Duration = Duration::from_secs(30 * 60);
-/// The files max-units installs.
+/// The files `maxx units apply` installs.
 const UNIT_KINDS: [&str; 5] = ["service", "socket", "timer", "path", "target"];
+
+/// What `maxx units list` says (nix/max-jobs.sh): what runs in a guest.
+#[derive(Deserialize)]
+struct Listed {
+    units: Vec<Listing>,
+}
+
+/// One of them: `unit` for one /work/.max/systemd keeps, and for what was
+/// started `call`, `job` or `agent`.
+#[derive(Deserialize)]
+struct Listing {
+    kind: String,
+}
+
+/// What `maxx units stop-all` says: the units it stopped.
+#[derive(Deserialize)]
+pub struct Stopped {
+    pub stopped: Vec<String>,
+}
 
 /// Where `conversation`'s /work is on the host, under the VMs' `dir`,
 /// whether or not its VM runs.
@@ -56,7 +76,7 @@ pub fn work(dir: &Path, conversation: ConversationId) -> PathBuf {
 
 /// What a VM's own route asks of the service, and what its tasks tell it.
 enum Internal {
-    /// max-units ran: the group has `count` units.
+    /// `maxx units apply` ran: the group has `count` units.
     Units {
         conversation: ConversationId,
         count: u32,
@@ -195,7 +215,7 @@ impl Vms {
 }
 
 impl Vm {
-    /// Starts `line`, a call (`max-jobs run`), in the guest's shell, and
+    /// Starts `line`, a call (`maxx units run`), in the guest's shell, and
     /// gives it `input`. The guest stops the call when what this returns
     /// is dropped, or max's connection goes.
     pub async fn command(&self, line: &str, input: &[u8]) -> Result<Command> {
@@ -214,7 +234,7 @@ impl Vm {
         about::read(&self.ask(&about::line(units)).await?)
     }
 
-    /// A name for a command's unit, one `max-jobs` takes. A VM outlives
+    /// A name for a command's unit, one `maxx units` takes. A VM outlives
     /// max, and so do the command's output files in /work, which are
     /// named after the unit; so the name says which start of max it is
     /// from, and neither a unit nor a file of an earlier one is in the
@@ -725,12 +745,21 @@ impl Service {
                     () = stop.cancelled() => return,
                     _ = every.tick() => {}
                 }
-                // One that doesn't say isn't kept up for it. The count is
-                // the last line: the group's .bashrc may write before it.
-                let said = ssh::ask(&asked, "max-jobs list --count").await;
-                let jobs = said
-                    .ok()
-                    .and_then(|said| said.lines().last()?.trim().parse::<u32>().ok());
+                // One that doesn't say isn't kept up for it. What runs
+                // is the last line: the group's .bashrc may write before
+                // it. A unit /work/.max/systemd keeps isn't work under
+                // way: the VM is kept on for those another way.
+                let said = ssh::ask(&asked, "maxx units list '{}'").await;
+                let jobs = said.ok().and_then(|said| {
+                    let listed: Listed = serde_json::from_str(said.lines().last()?).ok()?;
+                    Some(
+                        listed
+                            .units
+                            .iter()
+                            .filter(|unit| unit.kind != "unit")
+                            .count(),
+                    )
+                });
                 if jobs.is_some_and(|jobs| jobs > 0)
                     && internal.send(Internal::Busy { conversation }).is_err()
                 {
@@ -786,12 +815,12 @@ impl Service {
         self.vms
             .insert(conversation, State::Running(Box::new(running)));
         if !units {
-            // Kept on again once Max runs max-units.
+            // Kept on again once Max runs maxx units apply.
             self.kept.remove(&conversation);
         }
         // Max was told when it booted so.
         if !units && attached.is_none() {
-            let text = "这个群的 VM 最近两次没开起来，或者开着开着自己停了，这次开机就没装 /work/.max/systemd 里的 unit，VM 也不再常开。多半是哪个 unit 的问题：用 systemctl、journalctl 查清楚、改好，再跑 max-units。".to_owned();
+            let text = "这个群的 VM 最近两次没开起来，或者开着开着自己停了，这次开机就没装 /work/.max/systemd 里的 unit，VM 也不再常开。多半是哪个 unit 的问题：用 systemctl、journalctl 查清楚、改好，再跑 maxx units apply。".to_owned();
             let heard = Heard::Vm(text);
             let _ = self.signals.send(Signal::Heard {
                 conversation,
@@ -867,9 +896,9 @@ impl Service {
         times.len() >= 2
     }
 
-    /// max-units says the group has `count` units: what becomes of its VM,
-    /// for max-units to show. Failures stay counted: max-units runs at
-    /// every boot, before a unit has had the time to fail.
+    /// `maxx units apply` says the group has `count` units: what becomes of
+    /// its VM, for it to show. Failures stay counted: it runs at every
+    /// boot, before a unit has had the time to fail.
     fn units(&mut self, conversation: ConversationId, count: u32) -> String {
         let idle = self.idle.as_secs() / 60;
         match keep(&mut self.kept, self.config.kept, conversation, count) {
@@ -937,7 +966,7 @@ fn has_units(work: &Path) -> bool {
 }
 
 /// The units Max keeps in a group's /work, by name, in order: the files
-/// max-units installs.
+/// `maxx units apply` installs.
 pub fn units(work: &Path) -> Vec<String> {
     let Ok(entries) = std::fs::read_dir(work.join(".max/systemd")) else {
         return Vec::new();

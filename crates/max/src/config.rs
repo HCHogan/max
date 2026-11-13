@@ -452,7 +452,7 @@ pub struct Model {
     pub max_output: Option<u32>,
     pub temperature: Option<f64>,
     pub top_p: Option<f64>,
-    /// Whether it watches videos (Gemini's): max.video works only on such
+    /// Whether it watches videos (Gemini's): tools.video works only on such
     /// a model, through Chat.
     #[serde(default)]
     pub video: bool,

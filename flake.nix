@@ -68,7 +68,14 @@
               || pkgs.lib.hasSuffix ".sse" path
               || pkgs.lib.hasInfix "/.sqlx/" path
               || (
-                pkgs.lib.hasInfix "/nix/" path && (pkgs.lib.hasSuffix ".js" path || pkgs.lib.hasSuffix ".py" path)
+                pkgs.lib.hasInfix "/nix/" path
+                && (
+                  pkgs.lib.hasSuffix ".js" path
+                  || pkgs.lib.hasSuffix ".py" path
+                  # The guest's own tools, which the system prompt
+                  # declares too.
+                  || pkgs.lib.hasSuffix ".json" path
+                )
               );
           };
           commonArgs = {

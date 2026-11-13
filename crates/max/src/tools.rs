@@ -1,5 +1,5 @@
 //! What the model's tool calls do; see "Tools and codemode". Both run in the
-//! group's VM, each as a unit of the guest's own that `max-jobs` starts and
+//! group's VM, each as a unit of the guest's own that `maxx units` starts and
 //! sees end (nix/max-jobs.sh): `shell` a command, `run_code` a program in
 //! the guest's runner. A call waits for its unit to end, or for the unit's
 //! limit to end it; `shell` with `background` starts one and doesn't wait,
@@ -61,10 +61,10 @@ struct Told {
 /// it 15 seconds on (nix/max-jobs.sh), and one that says nothing by then
 /// has stopped answering.
 const GUEST_MARGIN: Duration = Duration::from_secs(30);
-/// How much of what `max-jobs` said is in an error, when it wasn't a
-/// call's line.
+/// How much of what `maxx` said is in an error, when it wasn't a call's
+/// line.
 const SAID_SHOWN: usize = 300;
-/// The most of what `max-jobs` writes that is kept: a call's line has
+/// The most of what `maxx units run` writes that is kept: a call's line has
 /// what is shown of two outputs, each character of which may be written
 /// as six.
 const LINE_KEPT: usize = 16 * SHOWN_BYTES;
@@ -165,7 +165,7 @@ async fn call(tool: Tool, vms: Option<&Vms>, context: &Context) -> ToolOutput {
     output
 }
 
-/// A call's unit, as `max-jobs run` is asked for it.
+/// A call's unit, as `maxx units run` is asked for it.
 struct Unit<'a> {
     /// What it is, for the guest's list.
     title: &'a str,
@@ -177,7 +177,7 @@ struct Unit<'a> {
     split: bool,
 }
 
-/// How a call's unit ended, as `max-jobs run` says in its one line: what
+/// How a call's unit ended, as `maxx units run` says in its one line: what
 /// systemd says of the unit, and what the unit wrote.
 #[derive(Debug, Deserialize)]
 struct Ended {
@@ -250,25 +250,47 @@ fn shown(piece: Option<&Piece>) -> String {
     piece.map(Piece::shown).unwrap_or_default()
 }
 
+/// What `maxx units run` is asked for: a call's unit (nix/max-jobs.sh).
+#[derive(Serialize)]
+struct Asked<'a> {
+    unit: &'a str,
+    /// In seconds.
+    limit: u64,
+    title: &'a str,
+    workdir: &'a str,
+    /// How many bytes of an output the line carries.
+    shown: usize,
+    split: bool,
+    /// How many bytes of the channel's input are the command's.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    input: Option<usize>,
+    command: &'a str,
+}
+
+/// `maxx` with `words` and `arguments` as JSON: the line that asks the
+/// guest for one of its own tools, as anything in the VM asks.
+pub(crate) fn maxx(words: &str, arguments: &impl Serialize) -> String {
+    let arguments = serde_json::to_string(arguments).expect("a tool's arguments are JSON");
+    format!("maxx {words} {}", quote(&arguments))
+}
+
 /// Runs `command` in the guest as a call's unit, with `input` if it reads
 /// any, and waits for it to end: how it did. Dropped while it waits, as
 /// when the turn is killed, the call's channel closes and the guest
 /// stops the unit; it does the same when max's connection goes.
 async fn wait(vm: &Vm, unit: Unit<'_>, command: &str, input: Option<&[u8]>) -> Result<Ended> {
     let name = Vm::unit();
-    let mut line = format!(
-        "exec max-jobs run --unit {name} --limit {} --title {} --workdir {} --shown {SHOWN_BYTES}",
-        unit.limit.as_secs(),
-        quote(unit.title),
-        quote(unit.workdir),
-    );
-    if unit.split {
-        line.push_str(" --split");
-    }
-    if let Some(input) = input {
-        line.push_str(&format!(" --input {}", input.len()));
-    }
-    line.push_str(&format!(" -- bash -lc {}", quote(command)));
+    let asked = Asked {
+        unit: &name,
+        limit: unit.limit.as_secs(),
+        title: unit.title,
+        workdir: unit.workdir,
+        shown: SHOWN_BYTES,
+        split: unit.split,
+        input: input.map(<[u8]>::len),
+        command,
+    };
+    let line = format!("exec {}", maxx("units run", &asked));
     let running = vm.command(&line, input.unwrap_or_default());
     let mut running = running.await.wrap_err("it didn't start")?;
     let mut said = Said::default();
@@ -277,10 +299,13 @@ async fn wait(vm: &Vm, unit: Unit<'_>, command: &str, input: Option<&[u8]>) -> R
         Waited::Exited(Some(0)) => {
             let line = last_line(&said.out);
             serde_json::from_slice(line)
-                .wrap_err_with(|| format!("max-jobs said {:?}", start_of(line)))
+                .wrap_err_with(|| format!("maxx units run said {:?}", start_of(line)))
         }
         Waited::Exited(Some(status)) => {
-            bail!("max-jobs ended with status {status}: {}", end_of(&said.err))
+            bail!(
+                "maxx units run ended with status {status}: {}",
+                end_of(&said.err)
+            )
         }
         // The connection went, as when the guest's sshd restarts under
         // it: the guest stops a call whose caller is gone.
@@ -295,14 +320,14 @@ async fn wait(vm: &Vm, unit: Unit<'_>, command: &str, input: Option<&[u8]>) -> R
     }
 }
 
-/// The line `max-jobs` printed: the last of what came, since the shell
-/// sshd runs it in writes first if the group's /work/.bashrc does.
-fn last_line(out: &[u8]) -> &[u8] {
+/// The line `maxx` printed: the last of what came, since the shell sshd
+/// runs it in writes first if the group's /work/.bashrc does.
+pub(crate) fn last_line(out: &[u8]) -> &[u8] {
     let out = out.trim_ascii_end();
     out.rsplit(|&byte| byte == b'\n').next().unwrap_or(out)
 }
 
-/// The start of what `max-jobs` said, for an error: a line that isn't a
+/// The start of what `maxx` said, for an error: a line that isn't a
 /// call's may be as long as what is kept of it.
 fn start_of(said: &[u8]) -> String {
     let said = String::from_utf8_lossy(said);
@@ -312,7 +337,7 @@ fn start_of(said: &[u8]) -> String {
     }
 }
 
-/// The end of what `max-jobs` wrote to stderr, where its own words are:
+/// The end of what `maxx` wrote to stderr, where its own words are:
 /// the group's .bashrc may have written before them.
 fn end_of(said: &[u8]) -> String {
     let said = String::from_utf8_lossy(said);
@@ -324,7 +349,7 @@ fn end_of(said: &[u8]) -> String {
     }
 }
 
-/// What `max-jobs` wrote: its line, and why it failed if it did.
+/// What `maxx` wrote: its line, and why it failed if it did.
 #[derive(Default)]
 struct Said {
     out: Vec<u8>,
@@ -364,16 +389,6 @@ pub fn headline(task: &str) -> String {
     title
 }
 
-/// A command's run time, or time left, as the model is told it.
-fn took(elapsed: Duration) -> String {
-    let seconds = elapsed.as_secs();
-    match seconds {
-        0..60 => format!("{seconds} seconds"),
-        60..3600 => format!("{} minutes {} seconds", seconds / 60, seconds % 60),
-        _ => format!("{} hours {} minutes", seconds / 3600, seconds % 3600 / 60),
-    }
-}
-
 fn with(head: String, shown: &str) -> String {
     if shown.is_empty() {
         format!("{head}; no output")
@@ -385,13 +400,6 @@ fn with(head: String, shown: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_run_time_is_in_seconds_minutes_or_hours() {
-        assert_eq!(took(Duration::from_millis(5400)), "5 seconds");
-        assert_eq!(took(Duration::from_secs(192)), "3 minutes 12 seconds");
-        assert_eq!(took(Duration::from_secs(21_585)), "5 hours 59 minutes");
-    }
 
     #[test]
     fn a_title_is_the_first_line_cut_short() {
@@ -435,13 +443,16 @@ mod tests {
     #[test]
     fn what_wasnt_a_calls_line_is_shown_in_part() {
         assert_eq!(start_of(b"oops"), "oops");
-        assert_eq!(end_of(b"  max-jobs: no\n"), "max-jobs: no");
+        assert_eq!(end_of(b"  maxx units: no\n"), "maxx units: no");
         let long = "长".repeat(SAID_SHOWN + 5);
         let start = start_of(long.as_bytes());
         assert_eq!(start, format!("{}…", "长".repeat(SAID_SHOWN)));
-        let noise = format!("{}max-jobs: --limit is in seconds", "x".repeat(SAID_SHOWN));
+        let noise = format!(
+            "{}maxx units: limit is a whole number",
+            "x".repeat(SAID_SHOWN)
+        );
         let end = end_of(noise.as_bytes());
-        assert!(end.starts_with('…') && end.ends_with("--limit is in seconds"));
+        assert!(end.starts_with('…') && end.ends_with("limit is a whole number"));
         assert_eq!(end.chars().count(), SAID_SHOWN + 1);
     }
 

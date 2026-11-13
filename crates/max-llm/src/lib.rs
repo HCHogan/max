@@ -155,9 +155,9 @@ fn schema(tool: &ToolSpec) -> &'static RawValue {
 
 /// What a tool result says where a picture was that the request doesn't
 /// carry: an old one, past the budget, or one gone from the store.
-const LEFT_OUT: &str = "[这张图省略了，要看再 max.image]";
+const LEFT_OUT: &str = "[这张图省略了，要看再 tools.show]";
 /// And where a video was.
-const VIDEO_LEFT_OUT: &str = "[这段视频省略了，要看再 max.video]";
+const VIDEO_LEFT_OUT: &str = "[这段视频省略了，要看再 tools.video]";
 
 /// A tool result's pieces: its text, and the pictures and videos it shows.
 fn tool_pieces<'a>(output: &'a ToolOutput, pictures: &'a Pictures) -> Vec<Piece<'a>> {

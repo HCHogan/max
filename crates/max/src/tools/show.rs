@@ -1,5 +1,5 @@
 //! What a call shows the model after its result: the pictures and videos
-//! its program left with `max.image` and `max.video`, or its command with
+//! its program left with `tools.show` and `tools.video`, or its command with
 //! `maxx show` and `maxx video`. The guest asks the host nothing for
 //! them: each is a path under /work in the list the call's line carries
 //! (nix/shown.js, nix/max-jobs.sh), and the host reads the files here, as

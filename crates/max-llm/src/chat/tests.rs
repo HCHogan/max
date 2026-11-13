@@ -618,7 +618,7 @@ fn programs_pictures_follow_their_results() {
     };
     let pictures = Pictures([("aa".to_owned(), png)].into());
     let messages = sent(&request, &Options::default(), &pictures)["messages"].clone();
-    let text = |n| format!("返回值：\n截好了\n[图 {n}，见下]\n[这张图省略了，要看再 max.image]");
+    let text = |n| format!("返回值：\n截好了\n[图 {n}，见下]\n[这张图省略了，要看再 tools.show]");
     assert_eq!(messages[1]["content"], text(1));
     assert_eq!(messages[2]["content"], text(2));
     assert_eq!(
@@ -700,7 +700,7 @@ fn programs_videos_follow_their_results() {
     let messages = sent(&request, &Options::default(), &pictures)["messages"].clone();
     assert_eq!(
         messages[1]["content"],
-        "返回值：\n看了\n[图 1，见下]\n[视频 2，见下]\n[这段视频省略了，要看再 max.video]"
+        "返回值：\n看了\n[图 1，见下]\n[视频 2，见下]\n[这段视频省略了，要看再 tools.video]"
     );
     assert_eq!(
         messages[2],

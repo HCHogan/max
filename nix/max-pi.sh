@@ -1,5 +1,5 @@
 # max-pi UNIT: pi in print mode, as one of Max's background agents: the
-# unit `max-agent start` made for it (max-agent.sh), with its task, its
+# unit `maxx agent start` made for it (max-agent.sh), with its task, its
 # directory and the model in /run/max/jobs/UNIT. max-agent.ts, pi's
 # plugin, keeps the agent's side: the steers in its inbox, the wrap-up,
 # the stop and the report. pi's model calls go to max at 127.0.0.1:7777,
@@ -15,7 +15,7 @@ dir=/run/max/jobs/$unit
 # The unit's, removed when it stops.
 conf=${RUNTIME_DIRECTORY:?max-pi runs with a RuntimeDirectory}
 workdir=$(cat "$dir/workdir")
-# What max-agent start chose of what max says of the models: its api
+# What maxx agent start chose of what max says of the models: its api
 # ("openai-completions" or "openai-responses"), the name max calls it by,
 # window, max_output and effort (or null).
 model=$(cat "$dir/model.json")

@@ -1,9 +1,9 @@
 # What Max runs in a group's VM, as units of the guest's systemd: the
 # slice they are in, the command that starts them and hears them end
-# (max-jobs.sh), and the unit that tells Max of a background command's
-# end. A module of its own, so that its test boots it without a VM's
-# shares and command line. See "Lifetimes move to systemd" in
-# docs/rust-rewrite.md.
+# (maxx, whose `units` and `agent` are max-jobs.sh and max-agent.sh), and
+# the unit that tells Max of a background command's end. A module of its
+# own, so that its test boots it without a VM's shares and command line.
+# See "Lifetimes move to systemd" in docs/rust-rewrite.md.
 {
   config,
   pkgs,
@@ -11,28 +11,15 @@
   ...
 }:
 let
-  runner = import ./runner.nix { inherit pkgs; };
-  jobs = import ./max-jobs.nix {
-    inherit pkgs runner;
+  maxx = import ./maxx.nix {
+    inherit pkgs pi;
     systemd = config.systemd.package;
-  };
-  # pi as one of Max's background agents, and the command that starts
-  # one, tells it more and lets it ask.
-  max-pi = import ./max-pi.nix { inherit pkgs pi; };
-  agent = import ./max-agent.nix {
-    inherit pkgs runner jobs;
-    systemd = config.systemd.package;
-    pi = max-pi;
   };
 in
 {
   # On the PATH: a unit's hook runs the system's, whichever image started
   # the unit.
-  environment.systemPackages = [
-    jobs
-    agent
-    max-pi
-  ];
+  environment.systemPackages = [ maxx ];
 
   # Calls, background commands and agents. No limits of its own: they are
   # the VM's work, which Max's own units (max-units.slice) yield to.
@@ -58,9 +45,9 @@ in
   };
   systemd.services.max-trim = {
     description = "Drop the caches of a guest with nothing of Max's to do";
-    path = [ jobs ];
+    path = [ maxx ];
     script = ''
-      max-jobs idle 600 || exit 0
+      maxx units idle 600 || exit 0
       sync
       echo 3 > /proc/sys/vm/drop_caches
       echo 1 > /proc/sys/vm/compact_memory
@@ -79,7 +66,7 @@ in
     unitConfig.StartLimitIntervalSec = 0;
     serviceConfig = {
       Type = "oneshot";
-      ExecStart = "${jobs}/bin/max-jobs notify %i";
+      ExecStart = "${maxx}/bin/maxx units notify %i";
       Restart = "on-failure";
       RestartSec = 2;
       RestartSteps = 5;

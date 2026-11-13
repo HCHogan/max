@@ -54,5 +54,26 @@ answer(args: { to: number; text: string }): Promise<{ to: string }>;
 
 /** Shows or sets a few of this chat's settings. Without arguments it only shows; one given is set, and 0 puts it back to the default. Returns each one's value now and its default. Whether to change one is yours to judge: when someone asks and the reason holds, or when you do need it; say so briefly afterwards. A group's admins can set them too, with /config, and the last to set one wins.
   idle_window_secs: how many seconds after you last spoke an idle turn ends (60–7200). Called again within the window, you still have what this turn found; called after it, a new turn starts and reads from the records again. The default follows the model. In force at once, for this turn too.
-  call_time_secs: how many seconds a program or a command waits at most for each call of a Max tool (10–600). Raise it when converting a long video or copying a big file runs out of time. In force from the next run_code or shell. */
+  call_time_secs: how many seconds a program or a command waits at most for each call of a Max tool (10–600). Raise it when copying a big file runs out of time. In force from the next run_code or shell. */
 config(args: { idle_window_secs?: number; call_time_secs?: number }): Promise<{ idle_window_secs: { value: number; default: number }; call_time_secs: { value: number; default: number } }>;
+
+/** Shows yourself a picture, after the result of this run_code or shell; the chat doesn't see it. path is a PNG, JPEG, GIF or WebP under /work. In run_code a picture's bytes do as well, in place of args: tools.show(await page.screenshot()). */
+show(args: { path: string }): Promise<{ path: string }>;
+
+/** Shows yourself a piece of video, picture and sound, after the result of this run_code or shell. path is a video file in the VM; start and end are seconds, or a time such as '1:30'. seconds is how long the piece is. */
+video(args: { path: string; start?: number | string; end?: number | string }): Promise<{ seconds?: number }>;
+
+/** Starts a background agent on task, a unit of the VM's that works on it for hours while you go on talking. title is a line for the list and its report; workdir is where it works, /work by default, and one that isn't absolute is under /work; model is one of agent_models', and effort how hard it thinks: off, minimal, low, medium, high, xhigh or max. Returns at once: name is the agent's, max-agent-N, and said what becomes of it. */
+agent_start(args: { task: string; title?: string; workdir?: string; model?: string; effort?: string }): Promise<{ name: string; said: string }>;
+
+/** Tells a running agent more: a change of direction, more to go on, or the answer to what it asked. name is the agent's, max-agent-N; it reads text at the end of the step it is in. */
+agent_steer(args: { name: string; text: string }): Promise<{ said: string }>;
+
+/** The models an agent can run on, each with its context window in tokens; default is the one an agent runs on when none is named. */
+agent_models(): Promise<{ models: { model: string; window: number; default: boolean; effort?: string }[] }>;
+
+/** What of yours runs in the VM. kind is job for a background command, agent for a background agent and call for a shell or run_code under way, each with its title and the seconds it has run; unit is one /work/.max/systemd keeps, with state as systemd has it. systemctl stop <name> stops one. */
+units_list(): Promise<{ units: { name: string; kind: string; title?: string; seconds?: number; state?: string }[] }>;
+
+/** Makes the unit files in /work/.max/systemd the ones the VM runs: new and changed ones are installed and started, and those gone are stopped and removed. Call it after changing the directory. units is each with its state as systemd has it, and the end of the log of one that failed; skipped is the files that weren't installed, and why; said is whether the VM stays on for them. */
+units_apply(): Promise<{ units: { name: string; state: string; log?: string }[]; skipped: { name: string; why: string }[]; removed: string[]; said?: string }>;

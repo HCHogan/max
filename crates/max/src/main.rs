@@ -4,7 +4,7 @@
 //! program that calls the MCP service, one that opens a tab in the browser
 //! and one that finds the tab as the first left it, calls the MCP service
 //! with maxx from a command, keeps a unit of its own in /work/.max/systemd
-//! and wakes Max with max-wake, and runs a background command, whose end
+//! and wakes Max with maxx wake, and runs a background command, whose end
 //! the guest tells it of.
 
 use std::collections::{BTreeSet, HashMap};
@@ -296,7 +296,8 @@ fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
         let waited = Duration::from_secs(3);
         let _ = tokio::time::timeout(waited, tools::run(long, Some(&vms), &context)).await;
         let left = command(
-            "for n in $(seq 30); do others=$(($(max-jobs list --count) - 1)); \
+            "for n in $(seq 30); do \
+             others=$(($(maxx units list | jq '[.units[] | select(.kind != \"unit\")] | length') - 1)); \
              [ $others = 0 ] && break; sleep 1; done; \
              echo \"放手的调用跑起来过 $(ls /work/.max/let-go | wc -l) 个，还剩 $others 个\"; \
              rm -f /work/.max/let-go",
@@ -309,7 +310,7 @@ fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
         let background = Tool::Shell {
             command: "echo 后台起了; sleep 1; \
                       grep -c 后台起了 \"$(ls -t /work/.max/out/max-job-*.txt | head -1)\"; \
-                      max-wake 'vm-check 叫醒了自己'"
+                      maxx wake 'vm-check 叫醒了自己' | jq -r .said"
                 .into(),
             workdir: None,
             timeout_ms: Some(60_000),
@@ -328,7 +329,7 @@ fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
         // A background agent: a unit of the guest's too, pi itself, whose
         // model calls come through max to vm-check's provider, and whose
         // report the guest wakes Max with.
-        let agent = command("max-agent start --title 检查 <<< '说一句话就行'");
+        let agent = command("maxx agent start --title 检查 --task - <<< '说一句话就行'");
         outs.push(tools::run(agent, Some(&vms), &context).await);
         outs.push(match told_of(&mut told, "[max-agent-", 180).await {
             Some(text) => {
@@ -443,9 +444,9 @@ const MAXX: &str = r#"maxx history --around 1; echo "maxx 退出码 $?"
 maxx | grep -c '^  history  '"#;
 
 /// A unit of vm-check's own in /work/.max/systemd, which notes each boot
-/// it starts in: max-units starts it now, or the boot already has. The
-/// nested test runs vm-check twice: the second boot starts it before
-/// max-units is run, and both boots are noted. The unit and the command
+/// it starts in: `maxx units apply` starts it now, or the boot already
+/// has. The nested test runs vm-check twice: the second boot starts it
+/// before that is run, and both boots are noted. The unit and the command
 /// both have /work for a home.
 const UNITS: &str = r#"before=$(systemctl is-active boot-note.service || true)
 mkdir -p /work/.max/systemd
@@ -457,7 +458,7 @@ ExecStart=/bin/sh -c 'cat /proc/sys/kernel/random/boot_id >> /work/.max/boot-not
 [Install]
 WantedBy=multi-user.target
 EOF
-max-units
+maxx units apply | jq -r '(.units[] | "\(.name)：\(.state)"), .said // empty'
 echo "开机时：$before"
 echo "记下了 $(sort -u /work/.max/boot-notes | wc -l) 次开机"
 echo "家：$HOME，unit 的家：$(cat /work/.max/unit-home)"
@@ -670,7 +671,7 @@ async fn serve(config: Config) -> Result<()> {
         (Some(_), None) => info!("no dreamer model: memory files aren't tidied"),
         (None, _) => {}
     }
-    // What the VMs have for the conversations, such as max-wake, and what
+    // What the VMs have for the conversations, such as a wake, and what
     // one conversation's actor has for another: a question for its Max.
     let (signals, signals_rx) = mpsc::unbounded_channel();
     let asking = signals.clone();
@@ -683,7 +684,7 @@ async fn serve(config: Config) -> Result<()> {
     let agents = match models.job().transpose()? {
         Some(upstreams) => Some(mcp::Models::start(upstreams, pool.clone(), &mut services)),
         None => {
-            info!("no model for background agents: max-agent starts none");
+            info!("no model for background agents: maxx agent start starts none");
             None
         }
     };

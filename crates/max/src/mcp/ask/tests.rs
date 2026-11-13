@@ -115,7 +115,7 @@ async fn a_long_or_empty_question_never_leaves(pool: PgPool) {
             "answer: to is at least 1",
         ),
         // A conversation is always named: an agent asks its Max with
-        // max-agent ask, not with this.
+        // maxx agent ask, not with this.
         (
             Ask::NAME,
             json!({ "question": "选火锅还是烧烤？" }),

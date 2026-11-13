@@ -22,7 +22,7 @@ const TASK = "@小明 帮我查一下\n第二行";
 // The agent's model, as max names one: `provider/model`, and the model's
 // own name may have a / as well.
 const MODEL = "cliproxy/team/model-1";
-// How hard Max told an agent to think: `max-agent start --effort`.
+// How hard Max told an agent to think: `maxx agent start --effort`.
 const EFFORT = { steers: "high", last: "xhigh" };
 // How the agent's own system text begins: nix/agent-system.md.
 const SYSTEM = "你是 Max 的后台 agent。";
@@ -130,7 +130,7 @@ async function agent(scenario) {
     fs.writeFileSync(path.join(cwd, ".pi/settings.json"), JSON.stringify({ defaultTools: ["read"] }));
     fs.writeFileSync(path.join(cwd, ".pi/extensions/untrusted.js"), 'throw new Error("untrusted extension loaded");');
   }
-  // What max-agent start leaves for the unit.
+  // What maxx agent start leaves for the unit.
   fs.writeFileSync(path.join(jobs, "task"), `${TASK}\n`);
   fs.writeFileSync(path.join(jobs, "workdir"), `${cwd}\n`);
   fs.writeFileSync(path.join(jobs, "title"), "试试\n");
@@ -141,7 +141,7 @@ async function agent(scenario) {
   fs.writeFileSync(path.join(jobs, "model.json"), JSON.stringify({ api: "openai-completions", model: MODEL, window: 100000, max_output: null, effort: EFFORT[scenario] ?? null }));
   (STEERS[scenario] ?? []).forEach((steer, n) => fs.writeFileSync(path.join(jobs, "inbox", `${n}`), `${steer}\n`));
   if (scenario === "steers") fs.writeFileSync(path.join(dir, "projects", notesName(cwd)), `${NOTES}\n`);
-  // As after `max-agent ask`: the agent waits for its answer.
+  // As after `maxx agent ask`: the agent waits for its answer.
   if (scenario === "settle" || scenario === "answered") fs.writeFileSync(path.join(jobs, "asked"), "");
   const wrapper = fs
     .readFileSync(path.join(repo, "nix/max-pi.sh"), "utf8")

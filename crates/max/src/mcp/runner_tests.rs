@@ -35,6 +35,7 @@ use crate::tools::show::{Left, Shown, shown};
 
 const RUNNER: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../nix/runner.js");
 const MAXX: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../nix/maxx.js");
+const TOOLS_JS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../nix/tools.js");
 
 struct Ran {
     status: i32,
@@ -76,7 +77,7 @@ fn sha256(part: &Part) -> &str {
     }
 }
 
-/// A call's directory, as max-jobs gives a call's unit one, in `dir`:
+/// A call's directory, as `maxx units run` gives a call's unit one, in `dir`:
 /// what MAX_CALL names.
 fn call_dir(dir: &Path) -> PathBuf {
     let call = dir.join("max-job-1-1");
@@ -84,7 +85,7 @@ fn call_dir(dir: &Path) -> PathBuf {
     call
 }
 
-/// What the call of `call` left to show so far, as max-jobs reads it for
+/// What the call of `call` left to show so far, as the guest reads it for
 /// the call's line.
 fn left(call: &Path) -> Vec<Left> {
     let list = std::fs::read_to_string(call.join("shown")).unwrap_or_default();
@@ -307,16 +308,17 @@ async fn programs_show_the_model_pictures() {
 
     // A file, the same file again, bytes, and a file that isn't a
     // picture, which the host finds out; no such file, and no path.
-    let code = "const a = await max.image('/work/shot.png'); await max.image('shot.png'); \
-         const b = await max.image(Buffer.from(args.pngs[0], 'base64')); \
-         await max.image('/work/notes.txt'); \
-         let failed; try { await max.image('nope.png') } catch (e) { failed = e.message } \
-         let wrong; try { await max.image(42) } catch (e) { wrong = e.name } \
-         return [a, b.path.startsWith('/work/.max/shown/max-job-1-1/'), failed, wrong]";
+    let code = "const a = await tools.show({path: '/work/shot.png'}); await tools.show({path: 'shot.png'}); \
+         const b = await tools.show(Buffer.from(args.pngs[0], 'base64')); \
+         await tools.show({path: '/work/notes.txt'}); \
+         let failed; try { await tools.show({path: 'nope.png'}) } catch (e) { failed = e.message } \
+         let wrong; try { await tools.show(42) } catch (e) { wrong = e.name } \
+         let none; try { await tools.show({}) } catch (e) { none = e.code } \
+         return [a, b.path.startsWith('/work/.max/shown/max-job-1-1/'), failed, wrong, none]";
     let ran = run_with(input(code, json!({ "pngs": pngs(&[2]) })), Some(&call)).await;
     assert_eq!(
         ran.stdout,
-        r#"[{"path":"/work/shot.png"},true,"max.image: nope.png doesn't exist (not_found)","TypeError"]"#,
+        r#"[{"path":"/work/shot.png"},true,"show: nope.png doesn't exist (not_found)","TypeError","bad_arguments"]"#,
         "{}",
         ran.stderr
     );
@@ -330,14 +332,14 @@ async fn programs_show_the_model_pictures() {
         seen_now.refused,
         ["/work/notes.txt wasn't shown: it isn't a PNG, JPEG, GIF or WebP that decodes"]
     );
-    // The bytes' file is the call's own, for max-jobs to clear away.
+    // The bytes' file is the call's own, for the guest to clear away.
     let kept: Vec<_> = std::fs::read_dir(work.join(".max/shown/max-job-1-1"))
         .unwrap()
         .collect();
     assert_eq!(kept.len(), 1, "{kept:?}");
 
     // More than a call shows.
-    let code = "for (const png of args.pngs) await max.image(Buffer.from(png, 'base64'))";
+    let code = "for (const png of args.pngs) await tools.show(Buffer.from(png, 'base64'))";
     let ran = run_with(
         input(code, json!({ "pngs": pngs(&[4, 5, 6]) })),
         Some(&call),
@@ -353,11 +355,15 @@ async fn programs_show_the_model_pictures() {
     );
 
     // Outside a call, nobody is there to see it.
-    let ran = run_with(input("await max.image('shot.png')", json!({})), None).await;
+    let ran = run_with(
+        input("await tools.show({path: 'shot.png'})", json!({})),
+        None,
+    )
+    .await;
     assert_eq!(ran.status, 1);
     assert!(
         ran.stdout
-            .starts_with("ToolError: max.image: nobody is there to see it"),
+            .starts_with("ToolError: show: nobody is there to see it"),
         "{}",
         ran.stdout
     );
@@ -405,13 +411,13 @@ async fn programs_show_the_model_videos() {
 
     // The whole clip, a second of it, the clip again; a file that isn't
     // one, ten minutes and a second, a time that isn't one, no path.
-    let code = "const a = await max.video('/work/clip.mkv'); \
-         const b = await max.video('clip.mkv', {start: 1, end: '0:02'}); \
-         await max.video('clip.mkv'); \
+    let code = "const a = await tools.video({path: '/work/clip.mkv'}); \
+         const b = await tools.video({path: 'clip.mkv', start: 1, end: '0:02'}); \
+         await tools.video({path: 'clip.mkv'}); \
          const failed = []; \
          for (const [path, options] of [['notes.bin'], ['long.mp4'], ['clip.mkv', {start: 'soon'}]]) { \
-           try { await max.video(path, options) } catch (e) { failed.push(e.message) } } \
-         let wrong; try { await max.video(42) } catch (e) { wrong = e.name } \
+           try { await tools.video({path, ...options}) } catch (e) { failed.push(e.message) } } \
+         let wrong; try { await tools.video(42) } catch (e) { wrong = e.name } \
          return [a, b, failed, wrong]";
     let ran = run_with(input(code), Some(&call)).await;
     let ran: Value = serde_json::from_str(&ran.stdout)
@@ -422,9 +428,9 @@ async fn programs_show_the_model_videos() {
             { "seconds": 3 },
             { "seconds": 1 },
             [
-                "max.video: can't read notes.bin: Invalid data found when processing input (not_a_video)",
-                "max.video: this is 601 seconds, and at most 10 minutes are shown at a time: cut a piece with start and end (too_long)",
-                "max.video: start and end take seconds, or a time such as \"1:30\" or \"1:02:03.5\" (bad_time)",
+                "video: can't read notes.bin: Invalid data found when processing input (not_a_video)",
+                "video: this is 601 seconds, and at most 10 minutes are shown at a time: cut a piece with start and end (too_long)",
+                "video: start and end take seconds, or a time such as \"1:30\" or \"1:02:03.5\" (bad_time)",
             ],
             "TypeError",
         ])
@@ -481,7 +487,7 @@ async fn programs_show_the_model_videos() {
         "{}",
         again.stderr
     );
-    let over = "return await max.video('half.mp4', {start: 1})";
+    let over = "return await tools.video({path: 'half.mp4', start: 1})";
     let ran = run_with(input(over), Some(&call)).await;
     assert_eq!(ran.stdout, r#"{"seconds":299}"#, "{}", ran.stderr);
     let seen_now = seen(&store, &work, &call, true).await;
@@ -677,6 +683,9 @@ async fn commands_call_max_tools_with_maxx(pool: PgPool) {
         "show",
         "video",
         "events",
+        "agent start",
+        "units list",
+        "units stop-all",
     ] {
         let line = format!("\n  {name}  ");
         assert!(listed.stdout.contains(&line), "{name}: {}", listed.stdout);
@@ -688,6 +697,24 @@ async fn commands_call_max_tools_with_maxx(pool: PgPool) {
         "{}",
         help.stdout
     );
+    // One of the guest's own goes by its words, and by nothing else.
+    let help = maxx(&mcp, &["agent", "start", "--help"], "").await;
+    assert!(
+        help.stdout.starts_with("agent start: ")
+            && help.stdout.contains("\n  --task (string, required): "),
+        "{}",
+        help.stdout
+    );
+    for joined in ["agent-start", "agent_start"] {
+        let ran = maxx(&mcp, &[joined, "--task", "x"], "").await;
+        assert_eq!(ran.status, 2, "{}", ran.stdout);
+        assert!(
+            ran.stderr
+                .starts_with(&format!("maxx: there is no tool named {joined}; ")),
+            "{}",
+            ran.stderr
+        );
+    }
 
     // By flags, as JSON, from stdin: the result as JSON.
     let around = id.to_string();
@@ -792,4 +819,108 @@ async fn commands_call_max_tools_with_maxx(pool: PgPool) {
 
     scope.close(Duration::from_secs(5)).await;
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Node with `args`, `input` on its stdin, and a stand-in for the guest's
+/// `maxx`.
+async fn node(args: &[&str], stub: &Path, input: &str) -> Ran {
+    let mut command = Command::new("node");
+    command
+        .args(args)
+        .env("MAXX_COMMAND", stub)
+        .env("MAXX_MCP", "http://127.0.0.1:1/mcp")
+        .env_remove("MAX_CALL")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    let mut node = command.spawn().expect("node runs");
+    let mut stdin = node.stdin.take().unwrap();
+    stdin.write_all(input.as_bytes()).await.unwrap();
+    drop(stdin);
+    let out = tokio::time::timeout(Duration::from_secs(20), node.wait_with_output())
+        .await
+        .unwrap()
+        .unwrap();
+    Ran {
+        status: out.status.code().unwrap(),
+        stdout: String::from_utf8(out.stdout).unwrap(),
+        stderr: String::from_utf8(out.stderr).unwrap(),
+    }
+}
+
+/// One of the guest's own tools is asked of `maxx` with its words and its
+/// arguments as JSON, whoever calls: the command line, once it has read
+/// the options; a run_code program; and a program of Max's own. A script
+/// stands in for bin/maxx, which runs the guest's scripts.
+#[tokio::test]
+async fn the_guests_own_tools_are_asked_of_maxx_as_json() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = std::env::temp_dir().join(format!("max-local-{:016x}", rand::random::<u64>()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let stub = dir.join("maxx");
+    // What it was asked, a line an argument; a login shell's noise before
+    // its answer; and a refusal.
+    let script = "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$(dirname \"$0\")/asked\"\n\
+                  case \"$3\" in *refuse*) echo 'no room' >&2; exit 1 ;; esac\n\
+                  echo noise\necho '{\"name\":\"max-agent-1\",\"said\":\"started\"}'\n";
+    std::fs::write(&stub, script).unwrap();
+    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let asked = || {
+        let asked = std::fs::read_to_string(dir.join("asked")).unwrap_or_default();
+        let _ = std::fs::remove_file(dir.join("asked"));
+        asked
+    };
+    let started = json!({ "name": "max-agent-1", "said": "started" });
+
+    // The command line: options, and a text from stdin without the
+    // newlines a heredoc ends it with.
+    let words = ["agent", "start", "--title", "试试", "--task", "-"];
+    let ran = node(&[&[MAXX], &words[..]].concat(), &stub, "第一行\n第二行\n\n").await;
+    assert_eq!(ran.status, 0, "{}", ran.stderr);
+    assert_eq!(serde_json::from_str::<Value>(&ran.stdout).unwrap(), started);
+    assert_eq!(
+        asked(),
+        "agent\nstart\n{\"title\":\"试试\",\"task\":\"第一行\\n第二行\"}\n"
+    );
+    // By position, and a failure: why, and status 1.
+    let words = ["agent", "steer", "max-agent-1", "refuse this"];
+    let ran = node(&[&[MAXX], &words[..]].concat(), &stub, "").await;
+    assert_eq!(ran.status, 1, "{}", ran.stdout);
+    assert_eq!(ran.stderr, "agent steer: no room (failed)\n");
+    assert_eq!(
+        asked(),
+        "agent\nsteer\n{\"name\":\"max-agent-1\",\"text\":\"refuse this\"}\n"
+    );
+
+    // A program of Max's own, which requires the tools: the same call,
+    // its value or a ToolError.
+    let program = format!(
+        "const {{ tools, ToolError }} = require({TOOLS_JS:?}); (async () => {{ \
+           const a = await tools.agent_start({{ task: '查一下' }}); \
+           let failed; try {{ await tools.agent_steer({{ name: 'max-agent-1', text: 'refuse' }}) }} \
+           catch (e) {{ failed = [e instanceof ToolError, e.message] }} \
+           console.log(JSON.stringify([a, failed])); }})()"
+    );
+    let ran = node(&["-e", &program], &stub, "").await;
+    assert_eq!(ran.status, 0, "{}", ran.stderr);
+    assert_eq!(
+        serde_json::from_str::<Value>(&ran.stdout).unwrap(),
+        json!([started, [true, "agent_steer: no room (failed)"]])
+    );
+    assert!(asked().starts_with("agent\nstart\n{\"task\":\"查一下\"}\n"));
+
+    // A run_code program: the same again, with the host's tools beside.
+    let input = json!({
+        "code": "return [await tools.agent_start({ task: 't' }), typeof tools.units_list, typeof tools.events, typeof max.image]",
+        "tools": ["history"],
+    });
+    let ran = node(&[RUNNER], &stub, &input.to_string()).await;
+    assert_eq!(ran.status, 0, "{}", ran.stderr);
+    assert_eq!(
+        serde_json::from_str::<Value>(&ran.stdout).unwrap(),
+        json!([started, "function", "function", "undefined"])
+    );
+    std::fs::remove_dir_all(dir).unwrap();
 }

@@ -1,35 +1,43 @@
-# max-jobs: what Max runs in the guest, each a unit of its own in
-# max-jobs.slice, which systemd starts, limits, stops and sees end. The
-# host asks for them with this, and so do the units' own hooks. See
-# "Lifetimes move to systemd" in docs/rust-rewrite.md.
+# What Max runs in the guest, each a unit of its own in max-jobs.slice,
+# which systemd starts, limits, stops and sees end: `maxx units`' run,
+# start, list and stop-all, which bin/maxx runs with their arguments as a
+# JSON object (maxx.nix, local.json), and the units' own hooks. The
+# host asks for them so, and so does anything in the VM. See "Lifetimes
+# move to systemd" in docs/rust-rewrite.md.
 #
-#   max-jobs run OPTIONS -- COMMAND...
-#       A call: runs COMMAND as a unit, waits for its end, and prints one
-#       line of JSON: how it ended, its output, and what it left for the
-#       model to see. Its caller holds this command's input open for as
-#       long as it waits: when that ends, the caller is gone, and the
+#   maxx units run JSON
+#       A call: runs .command as a unit, waits for its end, and prints
+#       one line of JSON: how it ended, its output, and what it left for
+#       the model to see. Its caller holds this command's input open for
+#       as long as it waits: when that ends, the caller is gone, and the
 #       unit is stopped.
-#   max-jobs start OPTIONS -- COMMAND...
-#       A background command: starts the unit and returns. Max is told of
-#       its end, unless it was stopped on request. With --agent it is a
-#       background agent, which max-agent starts (max-agent.sh): pi, which
-#       is stopped with SIGUSR2 and given a while to report.
-#   max-jobs ended UNIT      the unit's ExecStopPost=
-#   max-jobs notify UNIT     max-notify@UNIT.service's
-#   max-jobs list [--count]  the units that run, or how many
-#   max-jobs idle SECONDS    succeeds if none runs, and none has begun or
-#                            ended in that long
-#   max-jobs stop-all        stops them, and prints which
+#   maxx units start JSON
+#       A background command: starts the unit, says its name and what
+#       becomes of it, and returns. Max is told of its end, unless it was
+#       stopped on request.
+#   maxx units list JSON       the units that run, and those
+#                              /work/.max/systemd keeps
+#   maxx units stop-all JSON   stops the first of those, and prints which
+#   maxx units agent OPTIONS -- COMMAND...
+#                              a background agent's unit, which `maxx
+#                              agent start` asks for (max-agent.sh): pi,
+#                              which is stopped with SIGUSR2 and given a
+#                              while to report
+#   maxx units ended UNIT      the unit's ExecStopPost=
+#   maxx units notify UNIT     max-notify@UNIT.service's
+#   maxx units idle SECONDS    max-trim.service's: succeeds if none runs,
+#                              and none has begun or ended in that long
 #
-# OPTIONS: --unit NAME and --limit SECONDS, which a unit must have;
-# --title TEXT, what it is, for the list and the notice; --workdir DIR,
-# /work without it; and for a call, --split, which keeps stderr apart
-# from stdout, --input BYTES, which gives COMMAND that many bytes of this
-# command's own input, and --shown BYTES, how much of an output the line
-# carries.
+# The object: .command, what bash -lc runs; .limit, the seconds it may
+# run, 120 for a call and 6 hours for a background command without it;
+# .title, what it is, for the list and the notice; .workdir, /work
+# without it; .unit, its name, made here without it; and for a call,
+# .split, which keeps stderr apart from stdout, .input, which gives the
+# command that many bytes of this command's own input, and .shown, how
+# many bytes of an output the line carries.
 #
 # A call's unit has its directory in MAX_CALL. A picture or a video for
-# the model is a line of `shown` there, which max.image and maxx show
+# the model is a line of `shown` there, which tools.show and maxx show
 # write (shown.js): {"kind": "image", "path": "/work/…"}. The call's line
 # carries them, and the host reads the files. What isn't a call has no
 # MAX_CALL, and nobody to show anything to.
@@ -40,12 +48,15 @@
 
 jobs=/run/max/jobs
 out=/work/.max/out
-# The path a unit's hook runs: the system's, so that a job one image
-# started is ended by the image the guest has switched to since.
-self=/run/current-system/sw/bin/max-jobs
+# What /work/.max/systemd keeps, as `maxx units apply` installed it
+# (max-units.sh).
+installed=/run/max/units
+# What a unit's hook runs: the system's, so that a job one image started
+# is ended by the image the guest has switched to since.
+self="/run/current-system/sw/bin/maxx units"
 
 usage() {
-  echo "max-jobs: $1" >&2
+  echo "maxx units: $1" >&2
   exit 2
 }
 
@@ -81,6 +92,52 @@ took() {
   else
     echo "$((seconds / 3600)) hours $((seconds % 3600 / 60)) minutes"
   fi
+}
+
+# A call or a background command, as the JSON object asks for it:
+# launch's options, and for a background command what is said of it.
+asked() {
+  local kind=$1 parsed
+  local unit="" title="" workdir="" command="" limit=0 input=0 shown=0 split=""
+  if ! parsed=$(jq -r '
+      def text(name): .[name] // "" | if type == "string" then . else error("\(name) is text") end;
+      def count(name): .[name] // 0
+        | if type == "number" and . == floor and . >= 0 then . else error("\(name) is a whole number") end;
+      if type == "object" then . else error("the arguments are a JSON object") end
+      | @sh "unit=\(text("unit")) title=\(text("title")) workdir=\(text("workdir")) command=\(text("command")) limit=\(count("limit")) input=\(count("input")) shown=\(count("shown")) split=\(if .split == true then "1" else "" end)"
+    ' <<< "$2" 2>&1); then
+    usage "${parsed#jq: error (at <stdin>:*): }"
+  fi
+  eval "$parsed"
+  [ -n "${command//[[:space:]]/}" ] || usage "there is no command to run"
+  # Its output's file in /work is named after it, and outlives it.
+  [ -n "$unit" ] || unit=max-job-$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')
+  if [ "$limit" = 0 ]; then
+    limit=120
+    [ "$kind" = call ] || limit=21600
+  fi
+  [ "$limit" -le 86400 ] || usage "limit is a day at most, 86400 seconds"
+  [ "$shown" != 0 ] || shown=16384
+  # Its first line, as shell titles a command.
+  if [ -z "$title" ]; then
+    title=$(sed -n '/[^[:space:]]/{s/^[[:space:]]*//;p;q}' <<< "$command")
+    [ "${#title}" -le 60 ] || title=${title:0:60}…
+    title="\$ $title"
+  fi
+  case "$workdir" in
+    "") workdir=/work ;;
+    /*) ;;
+    *) workdir=/work/$workdir ;;
+  esac
+  local options=(--unit "$unit" --limit "$limit" --title "$title" --workdir "$workdir" --shown "$shown")
+  [ -z "$split" ] || options+=(--split)
+  [ "$input" = 0 ] || options+=(--input "$input")
+  launch "$kind" "${options[@]}" -- bash -lc "$command"
+  [ "$kind" = job ] || return 0
+  jq -nc --arg unit "$unit" --argjson limit "$limit" --arg most "$(took "$limit")" '{
+    unit: $unit, limit: $limit,
+    said: "It runs in the background as \($unit), for at most \($most). When it ends, its exit status and output come back to you as [\($unit) 完成]: don\u0027t sleep waiting for it, and don\u0027t keep checking. Its output is written to /work/.max/out/\($unit).txt as it runs: to see how far it is, read the end of that; if it isn\u0027t wanted any more, stop it with systemctl stop \($unit)."
+  }'
 }
 
 launch() {
@@ -183,8 +240,15 @@ launch() {
   # The caller says nothing more on this command's input, and holds it
   # open for as long as it waits: its end is the caller gone, as when the
   # turn is killed or max goes away. (Named, since a command in the
-  # background has /dev/null for its input otherwise.)
-  { while read -r -N 4096 _; do :; done; } <&0 > /dev/null 2>&1 9>&- &
+  # background has /dev/null for its input otherwise.) Only a pipe or a
+  # socket is somebody's to hold, as max's channel is and a program's
+  # child's input: a command given /dev/null for its input, as one in a
+  # unit is, has nobody who could go.
+  if [ -p /dev/stdin ] || [ -S /dev/stdin ]; then
+    { while read -r -N 4096 _; do :; done; } <&0 > /dev/null 2>&1 9>&- &
+  else
+    sleep infinity > /dev/null 2>&1 9>&- &
+  fi
   local caller=$! first=""
   wait -n -p first "$waiter" "$caller" || true
   if [ "$first" = "$caller" ]; then
@@ -362,23 +426,31 @@ running() {
     'max-job-*.service' 'max-agent-*.service' | awk '{print $1}'
 }
 
+# What runs, each with what it is and how long it has run, and after
+# them what /work/.max/systemd keeps, each as systemd has it.
 list() {
-  local units unit name dir now
+  local units unit name dir now file
   mapfile -t units < <(running)
-  if [ "${1:-}" = --count ]; then
-    echo "${#units[@]}"
-    return
-  fi
   now=$(date +%s)
-  for unit in "${units[@]}"; do
-    name=${unit%.service}
-    dir=$jobs/$name
-    if [ -f "$dir/started" ]; then
-      echo "$name · $(took $((now - $(cat "$dir/started")))) · $(cat "$dir/kind") · $(cat "$dir/title")"
-    else
-      echo "$name"
-    fi
-  done
+  {
+    for unit in "${units[@]}"; do
+      name=${unit%.service}
+      dir=$jobs/$name
+      if [ -f "$dir/started" ]; then
+        jq -nc --arg name "$name" --arg kind "$(cat "$dir/kind")" --arg title "$(cat "$dir/title")" \
+          --argjson seconds "$((now - $(cat "$dir/started")))" \
+          '{name: $name, kind: $kind, title: $title, seconds: $seconds}'
+      else
+        jq -nc --arg name "$name" '{name: $name, kind: "job"}'
+      fi
+    done
+    for file in "$installed"/*; do
+      [ -f "$file" ] || continue
+      name=${file##*/}
+      jq -nc --arg name "$name" --arg state "$(systemctl is-active "$name" || true)" \
+        '{name: $name, kind: "unit", state: $state}'
+    done
+  } | jq -sc '{units: .}'
 }
 
 # Whether the guest has had nothing of Max's to do for so long. A unit's
@@ -387,25 +459,27 @@ list() {
 idle() {
   local seconds=$1
   [[ $seconds =~ ^[0-9]+$ ]] || usage "idle takes seconds, not '$seconds'"
-  [ "$(list --count)" = 0 ] || return 1
+  [ -z "$(running)" ] || return 1
   [ -z "$(find "$jobs" -maxdepth 1 -newermt "@$(($(date +%s) - seconds))" 2> /dev/null)" ]
 }
 
 stop_all() {
   local units
   mapfile -t units < <(running)
-  [ "${#units[@]}" -gt 0 ] || return 0
-  systemctl stop "${units[@]}" || true
-  printf '%s\n' "${units[@]%.service}"
+  if [ "${#units[@]}" -gt 0 ]; then
+    systemctl stop "${units[@]}" || true
+  fi
+  jq -nc '{stopped: $ARGS.positional}' --args "${units[@]%.service}"
 }
 
 case "${1:-}" in
-  run) shift && launch call "$@" ;;
-  start) shift && launch job "$@" ;;
-  ended) ended "${2:?max-jobs ended needs a unit}" ;;
-  notify) notify "${2:?max-jobs notify needs a unit}" ;;
-  list) list "${2:-}" ;;
-  idle) idle "${2:?max-jobs idle needs seconds}" ;;
+  run) asked call "${2:-}" ;;
+  start) asked job "${2:-}" ;;
+  list) list ;;
   stop-all) stop_all ;;
-  *) usage "run, start, ended, notify, list, idle or stop-all, not '${1:-}'" ;;
+  agent) shift && launch job --agent "$@" ;;
+  ended) ended "${2:?maxx units ended needs a unit}" ;;
+  notify) notify "${2:?maxx units notify needs a unit}" ;;
+  idle) idle "${2:?maxx units idle needs seconds}" ;;
+  *) usage "run, start, list or stop-all, not '${1:-}'" ;;
 esac

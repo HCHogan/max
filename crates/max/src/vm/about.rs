@@ -31,7 +31,7 @@ pub struct About {
 pub struct Unit {
     pub name: String,
     /// What systemd made of its file: loaded; not-found of a file
-    /// max-units hasn't installed; bad-setting or error of one it
+    /// `maxx units apply` hasn't installed; bad-setting or error of one it
     /// couldn't read.
     pub load: String,
     /// Its substate: running, exited, waiting, listening, dead, failed,

@@ -4,7 +4,7 @@
 # extension API has no version: run this after moving the llm-agents pin,
 # or after changing max-agent.ts, max-pi.sh or agent-system.md.
 # Runs in the dev shell, which has Node and jq; PI=path/to/pi runs another
-# pi. It checks pi and the plugin, not max-agent or max-jobs: those have
+# pi. It checks pi and the plugin, not maxx agent or maxx units: those have
 # the NixOS test, checks.<system>.jobs.
 set -euo pipefail
 cd "$(dirname "$0")/.."

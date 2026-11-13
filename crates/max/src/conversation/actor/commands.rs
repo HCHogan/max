@@ -148,9 +148,15 @@ impl Conversation {
             let Some(vm) = vms.running(conversation).await else {
                 return;
             };
-            match vm.ask("max-jobs stop-all").await {
-                Ok(stopped) => {
-                    let stopped: Vec<&str> = stopped.split_whitespace().collect();
+            match vm.ask("maxx units stop-all '{}'").await {
+                Ok(said) => {
+                    // The last line: the group's .bashrc may write first.
+                    let stopped = said
+                        .lines()
+                        .last()
+                        .and_then(|line| serde_json::from_str::<vm::Stopped>(line).ok())
+                        .map(|stopped| stopped.stopped)
+                        .unwrap_or_default();
                     if !stopped.is_empty() {
                         info!(%conversation, ?stopped, "the guest's jobs are stopped");
                     }
@@ -551,7 +557,7 @@ fn span(duration: Duration) -> String {
 /// 182M · 2 restarts`, with how long it has been so, the memory its
 /// processes hold and how often systemd started it again;
 /// `scrape.service · failed (exit-code) 5m 12s`; and `new.service · not
-/// installed` for a file max-units hasn't made a unit of.
+/// installed` for a file `maxx units apply` hasn't made a unit of.
 fn unit(unit: &vm::Unit) -> String {
     let mut shown = unit.name.clone();
     match unit.load.as_str() {

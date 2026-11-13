@@ -6,7 +6,7 @@
 //! group needs `/bind`: until then its messages are dropped, all but the
 //! `@Max /bind <码>` that binds it.
 //!
-//! What the VM service has for a conversation, such as a `max-wake` from
+//! What the VM service has for a conversation, such as a `maxx wake` from
 //! a program in its VM, goes to its actor too, started if it isn't
 //! running; and so does what Max in another conversation asks its Max.
 

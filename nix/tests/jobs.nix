@@ -1,14 +1,20 @@
-# What Max runs in a guest, as units (nix/jobs.nix, nix/max-jobs.sh): a
-# call's line, a background command's notice, and what becomes of each
-# when it is stopped, when max is away, and when its caller is; a call
-# of maxx's made while max restarts, which is made again; and a
-# background agent (nix/max-agent.sh), pi itself against a model that
-# says what the test has it say. The machine has the guest's jobs without
-# a VM's shares; a fake max at 127.0.0.1:7777 keeps what wakes it and
-# answers for the agents' model.
+# What Max runs in a guest, as units (nix/jobs.nix, nix/max-jobs.sh),
+# asked for with maxx as max asks, its words and a JSON object, and as
+# Max does, with options: a call's line, a background command's notice,
+# and what becomes of each when it is stopped, when max is away, and when
+# its caller is; a call of maxx's made while max restarts, which is made
+# again; a background agent (nix/max-agent.sh), pi itself against a
+# model that says what the test has it say; and a unit that
+# /work/.max/systemd keeps (nix/max-units.sh). The machine has the
+# guest's jobs without a VM's shares; a fake max at 127.0.0.1:7777 keeps
+# what wakes it and answers for the agents' model.
 { pkgs, pi }:
 let
-  runner = import ../runner.nix { inherit pkgs; };
+  # The machine's own, by the same name: a program requires its tools.
+  maxx = import ../maxx.nix {
+    inherit pkgs pi;
+    inherit (pkgs) systemd;
+  };
   host = pkgs.writeText "fake-max.js" ''
     const http = require("node:http");
     const fs = require("node:fs");
@@ -17,7 +23,7 @@ let
     // tool call, or its last words.
     const said = (task, n) => {
       if (task.includes("口味")) {
-        return [{ tool: "max-agent ask 要哪种口味" }, { content: "等 Max 回答选哪家" }, { content: "订了火锅" }][n] ?? { content: "多说了" };
+        return [{ tool: "maxx agent ask 要哪种口味" }, { content: "等 Max 回答选哪家" }, { content: "订了火锅" }][n] ?? { content: "多说了" };
       }
       if (task.includes("很久")) return { content: "开始查", tool: "sleep 300" };
       return [{ tool: "sleep 3; echo 查过了" }, { content: "报告：做完了" }][n] ?? { content: "多说了" };
@@ -88,8 +94,8 @@ pkgs.testers.runNixOSTest {
       systemd.tmpfiles.rules = [ "d /work 0755 root root -" ];
       environment.systemPackages = [
         pkgs.jq
-        # maxx.
-        runner
+        # A program of Max's own.
+        pkgs.nodejs
       ];
       systemd.services.fake-max = {
         wantedBy = [ "multi-user.target" ];
@@ -99,21 +105,32 @@ pkgs.testers.runNixOSTest {
 
   testScript = ''
     import json
+    import shlex
 
     machine.wait_for_unit("multi-user.target")
     machine.wait_for_open_port(7777)
     machine.succeed("touch /run/wakes")
 
-    def call(unit, command, options="", given=""):
+    def maxx(words, **arguments):
+        # As max asks: the words, and the arguments as a JSON object.
+        return f"maxx {words} {shlex.quote(json.dumps(arguments, ensure_ascii=False))}"
+
+    def call(unit, command, given="", **options):
         # Its caller gives the command its input, says nothing more, and
         # holds on for as long as it waits.
         if given:
-            options += f" --input {len(given.encode())}"
+            options["input"] = len(given.encode())
         line = machine.succeed(
-            f"max-jobs run --unit max-job-{unit} {options} -- bash -lc '{command}' "
-            f"< <(printf %s '{given}'; exec sleep 300 2> /dev/null)"
+            maxx("units run", unit=f"max-job-{unit}", command=command, **options)
+            + f" < <(printf %s {shlex.quote(given)}; exec sleep 300 2> /dev/null)"
         )
         return json.loads(line)
+
+    def start(unit, command, **options):
+        return json.loads(machine.succeed(maxx("units start", unit=f"max-job-{unit}", command=command, **options)))
+
+    def running():
+        return json.loads(machine.succeed(maxx("units list")))["units"]
 
     def wakes():
         return [json.loads(line) for line in machine.succeed("cat /run/wakes").splitlines()]
@@ -124,19 +141,19 @@ pkgs.testers.runNixOSTest {
         ).split()
 
     with subtest("a call prints how it ended and what it wrote, and wakes nobody"):
-        said = call("ok", "echo hi; (exit 3)", "--limit 30")
+        said = call("ok", "echo hi; (exit 3)", limit=30)
         assert (said["result"], said["code"], said["status"]) == ("exit-code", "exited", "3"), said
         assert said["out"] == {"bytes": 3, "head": "hi\n", "tail": "", "file": None}, said
         assert said["err"] is None and said["failed"] is None and said["shown"] == [], said
         assert left("ok") == [], left("ok")
 
     with subtest("a call at its limit is stopped, and says so"):
-        said = call("late", "echo start; sleep 60", "--limit 2")
+        said = call("late", "echo start; sleep 60", limit=2)
         assert (said["result"], said["code"], said["status"]) == ("timeout", "killed", "TERM"), said
         assert said["out"]["head"] == "start\n", said
 
     with subtest("an output too long to show keeps its ends, and its file"):
-        said = call("long", "seq 1 200", "--limit 30 --shown 100")
+        said = call("long", "seq 1 200", limit=30, shown=100)
         file = "/work/.max/out/max-job-long.txt"
         assert said["out"]["file"] == file and said["out"]["bytes"] == 692, said
         assert said["out"]["head"].startswith("1\n2\n") and said["out"]["tail"].endswith("199\n200\n"), said
@@ -147,11 +164,13 @@ pkgs.testers.runNixOSTest {
         machine.succeed("mkdir -p /work/project")
         said = call(
             "input", "cat; echo $MAX_CALL >&2; pwd >&2",
-            "--limit 30 --split --workdir /work/project",
-            given="given",
+            given="given", limit=30, split=True, workdir="/work/project",
         )
         assert said["out"]["head"] == "given", said
         assert said["err"]["head"] == "/run/max/jobs/max-job-input\n/work/project\n", said
+        # A directory that isn't absolute is under /work.
+        said = call("under", "pwd", limit=30, workdir="project")
+        assert said["out"]["head"] == "/work/project\n", said
 
     with subtest("what a call leaves for the model to see comes back on its line"):
         machine.succeed("printf x > /work/a.png; mkdir -p /work/.max/shown/max-job-old && touch -d '2 hours ago' /work/.max/shown/max-job-old")
@@ -161,7 +180,7 @@ pkgs.testers.runNixOSTest {
             "show",
             "maxx show a.png; maxx show nope.png; "
             "echo \"{\\\"kind\\\":\\\"video\\\",\\\"path\\\":\\\"/work/b.mp4\\\"}\" >> $MAX_CALL/shown; echo junk >> $MAX_CALL/shown",
-            "--limit 30",
+            limit=30,
         )
         assert said["shown"] == [
             {"kind": "image", "path": "/work/a.png"},
@@ -175,31 +194,52 @@ pkgs.testers.runNixOSTest {
         said = call(
             "many",
             "for n in $(seq 40); do echo \"{\\\"kind\\\":\\\"image\\\",\\\"path\\\":\\\"/work/$n.png\\\"}\"; done >> $MAX_CALL/shown",
-            "--limit 30",
+            limit=30,
         )
         assert len(said["shown"]) == 32 and said["shown"][31]["path"] == "/work/32.png", said
 
     with subtest("a call that can't start says why"):
-        said = call("nowhere", "true", "--limit 30 --workdir /no/such/directory")
+        said = call("nowhere", "true", limit=30, workdir="/no/such/directory")
         assert said["failed"] == "there is no directory /no/such/directory" and said["out"] is None, said
-        machine.fail("max-jobs start --unit max-job-nowhere --limit 30 --workdir /no/such/directory -- true")
+        machine.fail(maxx("units start", unit="max-job-nowhere", limit=30, workdir="/no/such/directory", command="true"))
         assert left("nowhere") == [], left("nowhere")
+        # What isn't what it takes is a wrong command line, and says what.
+        for arguments, why in [
+            ({"command": "true", "limit": "soon"}, "limit is a whole number"),
+            ({"command": ["true"]}, "command is text"),
+            ({"limit": 30}, "there is no command to run"),
+            ({"command": "true", "limit": 90000}, "limit is a day at most, 86400 seconds"),
+            ({"command": "true", "unit": "mine"}, "--unit is max-job-… or max-agent-…, not 'mine'"),
+        ]:
+            status, refused = machine.execute(maxx("units run", **arguments) + " 2>&1")
+            assert status == 2 and refused.strip() == f"maxx units: {why}", (status, refused)
 
     with subtest("a call's command reaches bash as it was written"):
         # systemd would fill in ''${…} and $$ itself, in a quoted heredoc too.
         said = call(
             "written",
-            "f=1; for g in a b; do echo \"[''${f}''${g}]\"; done; test $$ -gt 1 && echo pid; cat <<\\EOT\n[reply#''${id}]\nEOT",
-            "--limit 30",
+            "f=1; for g in a b; do echo \"[''${f}''${g}]\"; done; test $$ -gt 1 && echo pid; cat <<\\EOT\n[reply#''${id}] it's\nEOT",
+            limit=30,
         )
-        assert said["out"]["head"] == "[1a]\n[1b]\npid\n[reply#''${id}]\n", said
+        assert said["out"]["head"] == "[1a]\n[1b]\npid\n[reply#''${id}] it's\n", said
 
     with subtest("a call that removes its own directory still says how it ended"):
         machine.succeed("mkdir -p /work/tmp/gone")
-        said = call("gone", "echo done; cd / && rm -rf /work/tmp/gone", "--limit 30 --workdir /work/tmp/gone")
+        said = call("gone", "echo done; cd / && rm -rf /work/tmp/gone", limit=30, workdir="/work/tmp/gone")
         assert (said["result"], said["status"], said["failed"]) == ("success", "0", None), said
         assert said["out"]["head"] == "done\n", said
         assert left("gone") == [], left("gone")
+
+    with subtest("a call names itself and has two minutes when nothing says otherwise, as one of Max's own does"):
+        # With options, which Node reads, and holds the call's input.
+        said = json.loads(machine.succeed("maxx units run --command 'echo $MAX_CALL; systemctl show -P RuntimeMaxUSec $(basename $MAX_CALL)'"))
+        name, limit = said["out"]["head"].split()[0], said["out"]["head"].split("\n")[1]
+        assert name.startswith("/run/max/jobs/max-job-") and len(name) == len("/run/max/jobs/max-job-") + 16, said
+        assert limit == "2min" and said["result"] == "success", said
+        # Nobody holds the input of a command in a unit: it isn't one who
+        # could go.
+        said = json.loads(machine.succeed(maxx("units run", command="echo here") + " < /dev/null"))
+        assert (said["result"], said["out"]["head"]) == ("success", "here\n"), said
 
     with subtest("the caches are dropped once nothing has run for ten minutes, and not before"):
         def dropped():
@@ -216,7 +256,7 @@ pkgs.testers.runNixOSTest {
         # A call has just ended: the next one may read what it wrote.
         assert trimmed() == 0
         # Long since, but a background command runs.
-        machine.succeed("max-jobs start --unit max-job-busy --limit 60 -- sleep 60")
+        start("busy", "sleep 60", limit=60)
         assert trimmed(ago=11) == 0
         machine.succeed("systemctl stop max-job-busy")
         machine.wait_until_fails("test -e /run/max/jobs/max-job-busy")
@@ -224,18 +264,24 @@ pkgs.testers.runNixOSTest {
         assert trimmed() == 0
         assert trimmed(ago=9) == 0
         assert trimmed(ago=11) == 1
-        machine.fail("max-jobs idle soon")
+        machine.fail("maxx units idle soon")
 
     assert wakes() == [], wakes()
 
     with subtest("a background command returns at once, and its end wakes Max once"):
-        machine.succeed(
-            "timeout 2 max-jobs start --unit max-job-made --limit 60 --title '$ make' "
-            "-- bash -lc 'echo building; sleep 3; echo built; (exit 1)'"
-        )
-        assert machine.succeed("max-jobs list --count").strip() == "1"
-        listed = machine.succeed("max-jobs list")
-        assert listed.startswith("max-job-made · ") and listed.strip().endswith("· job · $ make"), listed
+        started = json.loads(machine.succeed(
+            "timeout 2 "
+            + maxx("units start", unit="max-job-made", limit=60, title="$ make", command="echo building; sleep 3; echo built; (exit 1)")
+        ))
+        assert (started["unit"], started["limit"]) == ("max-job-made", 60), started
+        assert started["said"].startswith(
+            "It runs in the background as max-job-made, for at most 1 minutes. "
+            "When it ends, its exit status and output come back to you as [max-job-made 完成]: don't sleep waiting"
+        ), started
+        assert started["said"].endswith("stop it with systemctl stop max-job-made."), started
+        listed = running()
+        assert len(listed) == 1 and listed[0]["seconds"] >= 0, listed
+        assert (listed[0]["name"], listed[0]["kind"], listed[0]["title"]) == ("max-job-made", "job", "$ make"), listed
         machine.wait_until_succeeds("test $(wc -l < /run/wakes) -eq 1", timeout=30)
         notice = wakes()[0]
         print(notice)
@@ -243,34 +289,32 @@ pkgs.testers.runNixOSTest {
         assert notice.splitlines()[1].startswith("exit status 1, ran for "), notice
         assert "building\nbuilt\n(the whole output: /work/.max/out/max-job-made.txt)" in notice, notice
         machine.wait_until_fails("test -e /run/max/jobs/max-job-made")
-        assert machine.succeed("max-jobs list --count").strip() == "0"
+        assert running() == [], running()
         assert machine.succeed("cat /work/.max/out/max-job-made.txt") == "building\nbuilt\n"
 
     with subtest("a background command at its limit is told as stopped"):
-        machine.succeed("max-jobs start --unit max-job-slow --limit 2 --title '$ sleep 60' -- bash -lc 'sleep 60'")
+        start("slow", "sleep 60", limit=2, title="$ sleep 60")
         machine.wait_until_succeeds("test $(wc -l < /run/wakes) -eq 2", timeout=30)
         notice = wakes()[1]
         assert notice.splitlines()[0] == "[max-job-slow 到点了，下面是做到一半的] $ sleep 60", notice
         assert "not done in 2 seconds; it was stopped\n(no output)" in notice, notice
 
     with subtest("a stopped one wakes nobody, however it takes the signal"):
-        machine.succeed("max-jobs start --unit max-job-unwanted --limit 60 -- bash -lc 'sleep 60'")
+        start("unwanted", "sleep 60", limit=60)
         # A server's way: it ends by itself when asked to, with a status.
-        machine.succeed(
-            "max-jobs start --unit max-job-server --limit 60 "
-            "-- bash -lc 'trap \"exit 3\" TERM; echo up; sleep 60 & wait'"
-        )
+        start("server", "trap \"exit 3\" TERM; echo up; sleep 60 & wait", limit=60)
         machine.wait_until_succeeds("grep -q up /work/.max/out/max-job-server.txt")
-        assert sorted(machine.succeed("max-jobs stop-all").split()) == ["max-job-server", "max-job-unwanted"]
+        stopped = json.loads(machine.succeed(maxx("units stop-all")))
+        assert sorted(stopped["stopped"]) == ["max-job-server", "max-job-unwanted"], stopped
         machine.wait_until_fails("test -e /run/max/jobs/max-job-unwanted")
         machine.wait_until_fails("test -e /run/max/jobs/max-job-server")
         machine.succeed("sleep 3")
         assert len(wakes()) == 2, wakes()
-        assert machine.succeed("max-jobs stop-all") == ""
+        assert json.loads(machine.succeed("maxx units stop-all")) == {"stopped": []}
 
     with subtest("while max is away the notice waits, and arrives once it is back"):
         machine.succeed("systemctl stop fake-max.service")
-        machine.succeed("max-jobs start --unit max-job-meanwhile --limit 60 --title '$ true' -- bash -lc 'echo ran'")
+        start("meanwhile", "echo ran", limit=60, title="$ true")
         machine.wait_until_succeeds(
             "systemctl show -P NRestarts max-notify@max-job-meanwhile.service | grep -qx '[2-9]'", timeout=60
         )
@@ -285,23 +329,25 @@ pkgs.testers.runNixOSTest {
     with subtest("a call whose caller went away is stopped, and nobody is told"):
         # The caller holds on for two seconds of the call's sixty.
         machine.succeed(
-            "timeout 30 max-jobs run --unit max-job-left --limit 60 "
-            "-- bash -lc 'echo x; sleep 60' < <(sleep 2) > /run/left.out"
+            "timeout 30 "
+            + maxx("units run", unit="max-job-left", limit=60, command="echo x; sleep 60")
+            + " < <(sleep 2) > /run/left.out"
         )
         machine.fail("systemctl is-active max-job-left.service")
         assert machine.succeed("cat /run/left.out") == ""
         assert left("left") == [], left("left")
         # Gone before the unit was there to stop.
         machine.succeed(
-            "timeout 30 max-jobs run --unit max-job-early --limit 60 -- bash -lc 'sleep 60' < /dev/null"
+            "timeout 30 " + maxx("units run", unit="max-job-early", limit=60, command="sleep 60") + " < <(true)"
         )
         machine.fail("systemctl is-active max-job-early.service")
         assert left("early") == [], left("early")
 
     with subtest("a call whose own command was killed ends at its limit, and nobody is told"):
         machine.fail(
-            "timeout 1 max-jobs run --unit max-job-orphan --limit 4 -- bash -lc 'echo x; sleep 60' "
-            "< <(exec sleep 300 2> /dev/null)"
+            "timeout 1 "
+            + maxx("units run", unit="max-job-orphan", limit=4, command="echo x; sleep 60")
+            + " < <(exec sleep 300 2> /dev/null)"
         )
         machine.succeed("systemctl is-active max-job-orphan.service")
         machine.wait_until_fails("systemctl is-active max-job-orphan.service", timeout=30)
@@ -326,12 +372,16 @@ pkgs.testers.runNixOSTest {
         return wakes()[count - 1]
 
     with subtest("an agent works on its task, is told more, and its report wakes Max"):
-        said = machine.succeed("max-agent start --title 试试 --workdir proj <<< '查一下明天的天气'")
-        assert said.startswith("max-agent-1 started in /work/proj on test/m, for at most 6 hours."), said
-        listed = machine.succeed("max-jobs list")
-        assert listed.startswith("max-agent-1 · ") and listed.strip().endswith("· agent · 试试"), listed
+        # As Max starts one: with options, and the task on standard input.
+        said = json.loads(machine.succeed("maxx agent start --title 试试 --workdir proj --task - <<< '查一下明天的天气'"))
+        assert said["name"] == "max-agent-1", said
+        assert said["said"].startswith("max-agent-1 started in /work/proj on test/m, for at most 6 hours."), said
+        assert "maxx agent steer max-agent-1" in said["said"], said
+        listed = running()
+        assert [(unit["name"], unit["kind"], unit["title"]) for unit in listed] == [("max-agent-1", "agent", "试试")], listed
         machine.wait_until_succeeds("test -s /run/llm-heard", timeout=120)
-        machine.succeed("max-agent steer max-agent-1 <<< '顺便看后天'")
+        told = json.loads(machine.succeed("maxx agent steer max-agent-1 --text - <<< '顺便看后天'"))
+        assert told == {"said": "max-agent-1 will read it at the end of the step it is in."}, told
         notice = woken(5)
         print(notice)
         assert notice == "[max-agent-1 完成] 试试\n报告：做完了\n（全文在 /work/.max/jobs/max-agent-1.md）", notice
@@ -345,63 +395,105 @@ pkgs.testers.runNixOSTest {
         assert machine.succeed("ls /work/.max/projects /work/proj") == "/work/.max/projects:\n\n/work/proj:\n"
 
     with subtest("an agent that asks its Max waits for the answer"):
-        machine.succeed("max-agent start <<< '订个餐，问问口味'")
+        machine.succeed(maxx("agent start", task="订个餐，问问口味"))
         asked = woken(6)
-        assert asked.startswith("[max-agent-2 问] 订个餐，问问口味\n要哪种口味\n（回答它用 max-agent steer max-agent-2"), asked
-        machine.succeed("max-agent steer max-agent-2 <<< 火锅")
+        assert asked.startswith("[max-agent-2 问] 订个餐，问问口味\n要哪种口味\n（回答它用 maxx agent steer max-agent-2 '回答'"), asked
+        # By position, as that says.
+        machine.succeed("maxx agent steer max-agent-2 火锅")
         notice = woken(7)
         assert notice.startswith("[max-agent-2 完成] 订个餐，问问口味\n订了火锅\n"), notice
         assert "火锅" in machine.succeed("tail -n 1 /run/llm-heard")
+        # Nobody but an agent asks.
+        refused = machine.fail("maxx agent ask 在吗 2>&1")
+        assert "ask is for an agent to ask its Max" in refused, refused
 
     with subtest("a stopped agent tells nobody, and is gone"):
-        machine.succeed("max-agent start --title 久 <<< '这个要查很久'")
+        machine.succeed("maxx agent start --title 久 --task 这个要查很久")
         machine.wait_until_succeeds("grep -q 很久 /run/llm-heard", timeout=120)
         machine.succeed("sleep 2; systemctl stop max-agent-3.service")
         machine.wait_until_fails("test -e /run/max/jobs/max-agent-3", timeout=60)
-        refused = machine.fail("max-agent steer max-agent-3 <<< 算了 2>&1")
-        assert "max-agent-3 isn't running" in refused, refused
+        refused = machine.fail("maxx agent steer max-agent-3 算了 2>&1")
+        assert refused.strip() == "agent steer: max-agent-3 isn't running: it ended, was stopped, or never was (failed)", refused
         # What it had written is kept, though nobody is woken for it.
         assert "开始查" in machine.succeed("cat /work/.max/jobs/max-agent-3.md")
         machine.succeed("sleep 3")
         assert len(wakes()) == 7, wakes()
 
     with subtest("an agent runs on the model Max names, and thinks as hard as told"):
-        listed = machine.succeed("max-agent models")
-        assert listed == "test/m  100000 tokens  (the default)\ntest/team/wide  200000 tokens\n", listed
-        said = machine.succeed("max-agent start --model test/team/wide --effort xhigh --title 换个模型 <<< '查一下后天的天气'")
-        assert said.startswith("max-agent-4 started in /work on test/team/wide, for at most 6 hours."), said
+        listed = json.loads(machine.succeed("maxx agent models"))
+        assert listed == {"models": [
+            {"model": "test/m", "window": 100000, "default": True},
+            {"model": "test/team/wide", "window": 200000, "default": False},
+        ]}, listed
+        said = json.loads(machine.succeed("maxx agent start --model test/team/wide --effort xhigh --title 换个模型 --task - <<< '查一下后天的天气'"))
+        assert said["said"].startswith("max-agent-4 started in /work on test/team/wide, for at most 6 hours."), said
         notice = woken(8)
         assert notice.startswith("[max-agent-4 完成] 换个模型\n报告：做完了\n"), notice
         assert machine.succeed("tail -n 1 /run/llm-asked") == '["test/team/wide","xhigh"]\n'
         # One max doesn't have starts nothing, and takes no number.
-        refused = machine.fail("max-agent start --model test/nope <<< '查一下' 2>&1")
-        assert "there is no model test/nope: max-agent models lists them" in refused, refused
-        refused = machine.fail("max-agent start --effort hard <<< '查一下' 2>&1")
-        assert "--effort is one of off, minimal, low, medium, high, xhigh and max, not hard" in refused, refused
+        refused = machine.fail("maxx agent start --model test/nope --task 查一下 2>&1")
+        assert "there is no model test/nope: maxx agent models lists them" in refused, refused
+        refused = machine.fail("maxx agent start --effort hard --task 查一下 2>&1")
+        assert "effort is one of off, minimal, low, medium, high, xhigh and max, not hard" in refused, refused
         assert machine.succeed("cat /work/.max/jobs/.count").strip() == "4"
 
     with subtest("without a model for them there are no agents"):
         machine.succeed("touch /run/no-model")
-        refused = machine.fail("max-agent start <<< '查一下' 2>&1")
+        refused = machine.fail("maxx agent start --task 查一下 2>&1")
         assert "no model is configured for background agents" in refused, refused
         machine.succeed("rm /run/no-model")
-        assert "the task comes on standard input" in machine.fail("max-agent start < /dev/null 2>&1")
+        assert "there is no task" in machine.fail("maxx agent start < /dev/null 2>&1")
+        # What isn't text is a wrong command line.
+        status, refused = machine.execute(maxx("agent start", task=5) + " 2>&1")
+        assert status == 2 and refused.strip() == "task is text", (status, refused)
 
     with subtest("a background command that removes its own directory is still told of"):
         machine.succeed("mkdir -p /work/tmp/gone")
-        machine.succeed(
-            "max-jobs start --unit max-job-gone --limit 60 --title '$ rm' --workdir /work/tmp/gone "
-            "-- bash -lc 'echo going; cd / && rm -rf /work/tmp/gone'"
-        )
+        start("gone", "echo going; cd / && rm -rf /work/tmp/gone", limit=60, title="$ rm", workdir="/work/tmp/gone")
         notice = woken(9)
         assert notice.startswith("[max-job-gone 完成] $ rm\nexit status 0, ran for "), notice
         machine.wait_until_fails("test -e /run/max/jobs/max-job-gone")
 
     with subtest("a background command that ends itself with SIGTERM is told of, as nobody asked"):
-        machine.succeed(
-            "max-jobs start --unit max-job-self --limit 60 --title '$ kill' -- bash -lc 'echo bye; kill -TERM $$'"
-        )
+        start("self", "echo bye; kill -TERM $$", limit=60, title="$ kill")
         notice = woken(10)
         assert notice.startswith("[max-job-self 完成] $ kill\nended by SIGTERM, after "), notice
+
+    with subtest("a background command of Max's own starting is named and titled here"):
+        started = json.loads(machine.succeed("maxx units start 'sleep 600\necho second line'"))
+        assert started["unit"].startswith("max-job-") and started["limit"] == 21600, started
+        assert "for at most 6 hours 0 minutes" in started["said"], started
+        listed = running()
+        assert [(unit["name"], unit["kind"], unit["title"]) for unit in listed] == [(started["unit"], "job", "$ sleep 600")], listed
+
+    with subtest("what /work/.max/systemd keeps is listed with what runs, and isn't stopped with it"):
+        machine.succeed("mkdir -p /work/.max/systemd")
+        machine.succeed("printf '[Service]\nExecStart=/run/current-system/sw/bin/sleep infinity\n[Install]\nWantedBy=multi-user.target\n' > /work/.max/systemd/keep.service")
+        machine.succeed("printf '[Service]\nExecStart=/run/current-system/sw/bin/false\n[Install]\nWantedBy=multi-user.target\n' > /work/.max/systemd/broken.service")
+        machine.succeed("ln -s keep.service /work/.max/systemd/link.service")
+        applied = json.loads(machine.succeed("maxx units apply"))
+        states = {unit["name"]: unit["state"] for unit in applied["units"]}
+        assert states == {"broken.service": "failed", "keep.service": "active"}, applied
+        assert all(("log" in unit) == (unit["state"] == "failed") for unit in applied["units"]), applied
+        assert applied["skipped"] == [{"name": "link.service", "why": "a link, not installed; put the file itself here"}], applied
+        assert applied["removed"] == [], applied
+        kinds = sorted((unit["kind"], unit["name"], unit.get("state")) for unit in running())
+        assert kinds == [
+            ("job", started["unit"], None),
+            ("unit", "broken.service", "failed"),
+            ("unit", "keep.service", "active"),
+        ], kinds
+        # A program has the same tools, by their names: the list, and all
+        # that was started stopped.
+        program = "const { tools } = require('${maxx}/lib/max-runner/tools.js'); (async () => { const { units } = await tools.units_list(); console.log(JSON.stringify([units.length, await tools.units_stop_all()])); })()"
+        assert json.loads(machine.succeed(f"node -e {shlex.quote(program)}")) == [3, {"stopped": [started["unit"]]}]
+        machine.succeed("systemctl is-active keep.service")
+        # Gone from the directory, it is stopped and removed.
+        machine.succeed("rm /work/.max/systemd/keep.service /work/.max/systemd/link.service")
+        applied = json.loads(machine.succeed(maxx("units apply")))
+        assert applied["removed"] == ["keep.service"] and applied["skipped"] == [], applied
+        machine.fail("systemctl is-active keep.service")
+        machine.succeed("sleep 2")
+        assert len(wakes()) == 10, wakes()
   '';
 }

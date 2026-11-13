@@ -1,23 +1,24 @@
-# max-agent: Max's background agents, each a unit of the guest's that runs
-# pi on a task (max-pi.sh) for hours, while Max goes on in the chat. Max
-# runs this with shell; max, the host, keeps nothing of an agent. See
-# "Background agents" in docs/rust-rewrite.md.
+# Max's background agents, each a unit of the guest's that runs pi on a
+# task (max-pi.sh) for hours, while Max goes on in the chat: `maxx agent`'s
+# start, models, steer and ask, which bin/maxx runs with their arguments
+# as a JSON object (maxx.nix, local.json). max, the host, keeps nothing
+# of an agent. See "Background agents" in docs/rust-rewrite.md.
 #
-#   max-agent start [--title TEXT] [--workdir DIR] [--model NAME] [--effort LEVEL]
-#       The task on standard input: starts an agent on it and says its
-#       name, max-agent-N. Its report comes back to Max when it ends.
-#       It runs on the agents' own model, or on the one named, and
-#       thinks as hard as LEVEL says, one of pi's --thinking: the
-#       provider is asked for just that, and may refuse it.
-#   max-agent models
+#   maxx agent start {task, title, workdir, model, effort}
+#       Starts an agent on the task and says its name, max-agent-N. Its
+#       report comes back to Max when it ends. It runs on the agents' own
+#       model, or on the one named, and thinks as hard as effort says,
+#       one of pi's --thinking: the provider is asked for just that, and
+#       may refuse it.
+#   maxx agent models {}
 #       The models an agent can run on, each with its window.
-#   max-agent steer NAME
-#       What to tell a running agent, on standard input: a change of
-#       direction, more to go on, or the answer to what it asked.
-#   max-agent ask [TEXT]
-#       For an agent itself: asks its Max, TEXT or standard input.
+#   maxx agent steer {name, text}
+#       What to tell a running agent: a change of direction, more to go
+#       on, or the answer to what it asked.
+#   maxx agent ask {text}
+#       For an agent itself: asks its Max.
 #
-# max-jobs list shows the agents with the background commands, and
+# maxx units list shows the agents with the background commands, and
 # systemctl stop NAME stops one: nothing comes back from it then.
 
 export LC_ALL=C.UTF-8
@@ -32,8 +33,25 @@ most=3
 limit=21600
 
 fail() {
-  echo "max-agent: $1" >&2
+  echo "$1" >&2
   exit 1
+}
+
+# The texts of a JSON object's fields, as assignments for eval. What
+# isn't such an object is a wrong command line.
+fields() {
+  local json=$1 parsed
+  shift
+  if ! parsed=$(jq -r '
+      if type == "object" then . else error("the arguments are a JSON object") end
+      | . as $given | $ARGS.positional[]
+      | . as $name | ($given[$name] // "")
+      | if type == "string" then "\($name)=\(@sh)" else error("\($name) is text") end
+    ' --args "$@" <<< "$json" 2>&1); then
+    echo "${parsed#jq: error (at <stdin>:*): }" >&2
+    exit 2
+  fi
+  echo "$parsed"
 }
 
 # What max says of the models, in a file: the agents' own, and under
@@ -53,35 +71,27 @@ models() {
   local about
   about=$(told)
   # The agents' own first.
-  jq -r '.model as $own | .effort as $effort
-    | [(.models // [.])[] | select(.model == $own)] + [(.models // [])[] | select(.model != $own)]
-    | .[]
-    | "\(.model)  \(.window) tokens"
-      + (if .model == $own then "  (the default" + (if $effort then ", effort \($effort)" else "" end) + ")" else "" end)' "$about"
+  jq -c '.model as $own | .effort as $effort
+    | {models: ([(.models // [.])[] | select(.model == $own)] + [(.models // [])[] | select(.model != $own)]
+        | map({model, window, default: (.model == $own)}
+            + (if .model == $own and $effort then {effort: $effort} else {} end)))}' "$about"
   rm -f "$about"
 }
 
 start() {
-  local title="" workdir=/work model="" effort=""
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --title) title=$2 && shift 2 ;;
-      --workdir) workdir=$2 && shift 2 ;;
-      --model) model=$2 && shift 2 ;;
-      --effort) effort=$2 && shift 2 ;;
-      *) fail "start takes --title, --workdir, --model and --effort, not $1; the task comes on standard input" ;;
-    esac
-  done
+  local task="" title="" workdir="" model="" effort=""
+  local given
+  given=$(fields "$1" task title workdir model effort) || exit $?
+  eval "$given"
   # pi's levels: it takes any other word for medium, and says so where
   # nobody reads it.
   case "$effort" in
     "" | off | minimal | low | medium | high | xhigh | max) ;;
-    *) fail "--effort is one of off, minimal, low, medium, high, xhigh and max, not $effort" ;;
+    *) fail "effort is one of off, minimal, low, medium, high, xhigh and max, not $effort" ;;
   esac
-  local task
-  task=$(cat)
-  [ -n "${task//[[:space:]]/}" ] || fail "the task comes on standard input: max-agent start --title … <<'EOF' … EOF"
+  [ -n "${task//[[:space:]]/}" ] || fail "there is no task: maxx agent start --title … --task - <<'EOF' … EOF"
   case "$workdir" in
+    "") workdir=/work ;;
     /*) ;;
     *) workdir=/work/$workdir ;;
   esac
@@ -104,7 +114,7 @@ start() {
      else (.models // [])[] | select(.model == $model) end)
     | if $effort == "" then . else .effort = $effort end' "$about")
   rm -f "$about"
-  [ -n "$chosen" ] || fail "there is no model $model: max-agent models lists them"
+  [ -n "$chosen" ] || fail "there is no model $model: maxx agent models lists them"
   model=$(jq -r .model <<< "$chosen")
 
   mkdir -p "$workdir" "$kept" /work/.max/projects
@@ -122,48 +132,54 @@ start() {
     title=$(sed -n '/[^[:space:]]/{s/^[[:space:]]*//;p;q}' <<< "$task")
     [ "${#title}" -le 30 ] || title=${title:0:30}…
   fi
-  max-jobs start --unit "$unit" --agent --limit "$limit" --title "$title" --workdir "$workdir" -- max-pi "$unit"
+  maxx units agent --unit "$unit" --limit "$limit" --title "$title" --workdir "$workdir" -- "$(command -v max-pi)" "$unit"
   exec 9>&-
-  echo "$unit started in $workdir on $model, for at most $((limit / 3600)) hours. When it ends, its report comes back to you as [$unit 完成]: don't wait for it. To tell it more, max-agent steer $unit with the words on standard input; to stop it, systemctl stop $unit."
+  jq -nc --arg name "$unit" --arg said "$unit started in $workdir on $model, for at most $((limit / 3600)) hours. When it ends, its report comes back to you as [$unit 完成]: don't wait for it. To tell it more, maxx agent steer $unit with the words after it; to stop it, systemctl stop $unit." \
+    '{name: $name, said: $said}'
 }
 
 steer() {
-  local unit=${1:-} dir=$jobs/${1:-}
-  [[ $unit =~ ^max-agent-[0-9]+$ ]] || fail "steer takes an agent's name, max-agent-N, and the words on standard input"
+  local name="" text=""
+  local given
+  given=$(fields "$1" name text) || exit $?
+  eval "$given"
+  local unit=$name dir=$jobs/$name
+  [[ $unit =~ ^max-agent-[0-9]+$ ]] || fail "steer takes an agent's name, max-agent-N, and what to tell it"
   if [ ! -d "$dir/inbox" ] || ! systemctl is-active --quiet "$unit.service"; then
     fail "$unit isn't running: it ended, was stopped, or never was"
   fi
-  local text new
-  text=$(cat)
-  [ -n "${text//[[:space:]]/}" ] || fail "what to tell $unit comes on standard input"
+  [ -n "${text//[[:space:]]/}" ] || fail "there is nothing to tell $unit: maxx agent steer $unit <text>, or --text - for standard input"
   # Whole before the agent sees it: a name with a dot is still written.
+  local new
   new=$(mktemp "$dir/inbox/.new.XXXXXX")
   printf '%s\n' "$text" > "$new"
   mv "$new" "$dir/inbox/$(date +%s%N)"
-  echo "$unit will read it at the end of the step it is in."
+  jq -nc --arg said "$unit will read it at the end of the step it is in." '{said: $said}'
 }
 
 ask() {
   local unit=${MAX_AGENT:-}
-  [ -n "$unit" ] || fail "ask is for an agent to ask its Max; Max tells an agent something with max-agent steer"
-  local text=${1:-}
-  [ -n "$text" ] || text=$(cat)
-  [ -n "${text//[[:space:]]/}" ] || fail "the question comes as an argument or on standard input"
+  [ -n "$unit" ] || fail "ask is for an agent to ask its Max; Max tells an agent something with maxx agent steer"
+  local text=""
+  local given
+  given=$(fields "$1" text) || exit $?
+  eval "$given"
+  [ -n "${text//[[:space:]]/}" ] || fail "there is no question: maxx agent ask <text>, or --text - for standard input"
   local title
   title=$(cat "$jobs/$unit/title" 2> /dev/null || true)
   jq -n --arg text "[$unit 问] $title
 $text
-（回答它用 max-agent steer $unit，内容从标准输入给；它没别的可做时最多再等 10 分钟。这一问一答都不进群。）" '{text: $text}' \
+（回答它用 maxx agent steer $unit '回答'，长的写 --text - 从标准输入给；它没别的可做时最多再等 10 分钟。这一问一答都不进群。）" '{text: $text}' \
     | maxx wake - > /dev/null
   # The agent waits for the answer once it has nothing else to do.
   touch "$jobs/$unit/asked"
-  echo "Max has the question; its answer will appear in the conversation. Go on with whatever else there is to do."
+  jq -nc --arg said "Max has the question; its answer will appear in the conversation. Go on with whatever else there is to do." '{said: $said}'
 }
 
 case "${1:-}" in
-  start) shift && start "$@" ;;
+  start) start "${2:-}" ;;
   models) models ;;
-  steer) shift && steer "$@" ;;
-  ask) shift && ask "$@" ;;
+  steer) steer "${2:-}" ;;
+  ask) ask "${2:-}" ;;
   *) fail "start, models, steer or ask, not '${1:-}'" ;;
 esac

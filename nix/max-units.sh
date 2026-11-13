@@ -1,7 +1,7 @@
-# max-units: makes the units in /work/.max/systemd the ones the guest
-# runs, so that what Max keeps running outlives the VM. max-units.service
-# runs it at every boot, and Max runs it after changing the directory. See
-# "Resident programs" in docs/rust-rewrite.md.
+# `maxx units apply`: makes the units in /work/.max/systemd the ones the
+# guest runs, so that what Max keeps running outlives the VM.
+# max-units.service runs it at every boot, and Max runs it after changing
+# the directory. See "Resident programs" in docs/rust-rewrite.md.
 #
 # New and changed files are copied to /run/systemd/system, services with a
 # drop-in that puts them in max-units.slice; those with an [Install]
@@ -12,6 +12,10 @@
 # counts only files, since on the host a link could point anywhere. Last,
 # the VM service hears how many there are: it keeps the VM on while there
 # are any, if it can, and says whether it does.
+#
+# It prints one JSON object: units, each with its state as systemd has it
+# and the end of the log of one that failed; skipped, the files that
+# weren't installed and why; removed; and said, what the VM service says.
 
 dir=/work/.max/systemd
 run=/run/systemd/system
@@ -21,6 +25,13 @@ installed=/run/max/units
 mkdir -p "$dir" "$installed"
 exec 9> /run/max/units.lock
 flock 9
+# What is said of it, a JSON line each, until the end puts them together.
+said=$(mktemp -d)
+trap 'rm -rf "$said"' EXIT
+touch "$said/units" "$said/skipped" "$said/removed"
+skip() {
+  jq -nc --arg name "$1" --arg why "$2" '{name: $name, why: $why}' >> "$said/skipped"
+}
 
 wanted=()
 declare -A keep=()
@@ -31,12 +42,12 @@ for file in "$dir"/*; do
     *) continue ;;
   esac
   if [ -L "$file" ]; then
-    echo "$name: a link, not installed; put the file itself here"
+    skip "$name" "a link, not installed; put the file itself here"
     continue
   fi
   [ -f "$file" ] || continue
   if [ -e "/etc/systemd/system/$name" ]; then
-    echo "$name: named like one of the system's units, not installed; give it another name"
+    skip "$name" "named like one of the system's units, not installed; give it another name"
     continue
   fi
   wanted+=("$name")
@@ -49,7 +60,7 @@ for file in "$installed"/*; do
   [ -n "${keep[$name]:-}" ] && continue
   systemctl disable --runtime --now --no-block --quiet "$name" 2> /dev/null || true
   rm -rf "${run:?}/$name" "${run:?}/$name.d" "${installed:?}/$name"
-  echo "$name: stopped and removed"
+  jq -nc --arg name "$name" '$name' >> "$said/removed"
 done
 
 changed=()
@@ -72,10 +83,9 @@ systemctl daemon-reload
 for name in "${changed[@]}"; do
   systemctl try-restart --no-block "$name" 2> /dev/null || true
 done
-failed=0
 for name in "${wanted[@]}"; do
   if grep -q '^\[Install\]' "$dir/$name"; then
-    systemctl enable --runtime --now --no-block --quiet "$name" || failed=1
+    systemctl enable --runtime --now --no-block --quiet "$name" 2> /dev/null || true
   fi
 done
 
@@ -92,19 +102,20 @@ for _ in $(seq 50); do
   sleep 0.1
 done
 
-if [ ${#wanted[@]} -eq 0 ]; then
-  echo "there are no units in $dir"
-fi
 for name in "${wanted[@]}"; do
   state=$(systemctl is-active "$name" || true)
-  echo "$name：$state"
   if [ "$state" = failed ]; then
-    failed=1
-    journalctl -u "$name" -n 10 --no-pager -o cat || true
+    { journalctl -u "$name" -n 10 --no-pager -o cat || true; } \
+      | jq -Rsc --arg name "$name" --arg state "$state" '{name: $name, state: $state, log: .}' >> "$said/units"
+  else
+    jq -nc --arg name "$name" --arg state "$state" '{name: $name, state: $state}' >> "$said/units"
   fi
 done
 report=$(jq -cn --argjson units "${#wanted[@]}" '{units: $units}')
+kept=""
 if answer=$(curl -sf --max-time 15 -H 'content-type: application/json' -d "$report" http://127.0.0.1:7777/units 2> /dev/null); then
-  jq -r '.said // empty' <<< "$answer"
+  kept=$(jq -r '.said // empty' <<< "$answer")
 fi
-exit "$failed"
+jq -nc --slurpfile units "$said/units" --slurpfile skipped "$said/skipped" --slurpfile removed "$said/removed" \
+  --arg said "$kept" \
+  '{units: $units, skipped: $skipped, removed: $removed} + (if $said == "" then {} else {said: $said} end)'
