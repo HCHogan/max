@@ -220,17 +220,14 @@ async fn a_group_is_served_once_bound(pool: PgPool) {
     s.send(owner_in_group(3, &format!("/bind {code}")));
     let bound = (
         "group:GROUP1".to_owned(),
-        command::answer("bind", "bound: the history starts here"),
+        command::answer("bound: the history starts here"),
     );
     assert_eq!(s.said().await, bound);
     // Only an owner may run /bind: the account here is the owner's now.
     s.send(owner_in_group(4, &format!("/bind {code}")));
     assert_eq!(
         s.said().await.1,
-        command::answer(
-            "bind",
-            "error: this group is bound already, and can't be bound again"
-        )
+        command::answer("error: this group is bound already, and can't be bound again")
     );
     let mut conn = s.pool.acquire().await.unwrap();
     let member = platform::account(&mut conn, Platform::Qq, "OWNERMEMBER", "hank")
@@ -281,14 +278,14 @@ async fn a_group_goes_on_from_an_old_one(pool: PgPool) {
     s.send(private(1, "/bind 30002"));
     assert_eq!(
         s.said().await.1,
-        command::answer("bind", "error: no history of old group 30002")
+        command::answer("error: no history of old group 30002")
     );
     let code = s.code(2, "/bind 30001").await;
     let again = s.code(3, "/bind 30001").await;
     s.send(owner_in_group(4, &format!("/bind {code}")));
     assert_eq!(
         s.said().await.1,
-        command::answer("bind", "bound: the old group's history goes on here")
+        command::answer("bound: the old group's history goes on here")
     );
     let mut conn = s.pool.acquire().await.unwrap();
     let bound = platform::endpoint_on(&mut conn, old.conversation, Platform::Qq)
@@ -306,10 +303,7 @@ async fn a_group_goes_on_from_an_old_one(pool: PgPool) {
     s.send(private(5, "/bind 30001"));
     assert_eq!(
         s.said().await.1,
-        command::answer(
-            "bind",
-            "error: old group 30001's history goes on in another group already"
-        )
+        command::answer("error: old group 30001's history goes on in another group already")
     );
     let mut elsewhere = owner_in_group(6, &format!("/bind {again}"));
     elsewhere.chat.native_id = "group:GROUP2".into();
@@ -329,7 +323,7 @@ async fn an_owner_links_two_conversations_one_way(pool: PgPool) {
     s.said().await;
     let chat = s.conversation("c2c:OWNER").await;
     let group = s.conversation("group:GROUP1").await;
-    let answer = |body: &str| command::answer("link", body);
+    let answer = |body: &str| command::answer(body);
 
     // Not for the group's own people, its owner and admins among them.
     let me = InNode::MentionMe {
@@ -383,7 +377,7 @@ async fn an_owner_links_two_conversations_one_way(pool: PgPool) {
     assert!(!status.contains("may ask"), "{status}");
 
     // Either side cuts it.
-    let answer = |body: &str| command::answer("unlink", body);
+    let answer = |body: &str| command::answer(body);
     s.send(owner_in_group(11, "/unlink"));
     let which = "error: say which conversation, as @maxx /unlink c#N; @maxx /status lists them";
     assert_eq!(s.said().await.1, answer(which));

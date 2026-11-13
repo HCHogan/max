@@ -247,10 +247,7 @@ async fn one_max_asks_another_and_no_chat_hears_of_it(pool: PgPool) {
     let mut heard = vec![p.said().await, p.said().await];
     heard.sort();
     let stopped = "stopped: messages are still recorded, but Max won't reply until @maxx /start";
-    let mut expected = [
-        (r, command::answer("stop", stopped)),
-        (c, "好吧".to_owned()),
-    ];
+    let mut expected = [(r, command::answer(stopped)), (c, "好吧".to_owned())];
     expected.sort();
     assert_eq!(heard, expected);
     let why = format!("c#{r}：Max is stopped there (/stop)");

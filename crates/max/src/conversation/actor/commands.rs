@@ -1,7 +1,7 @@
 //! Running commands. The answer is said in the same conversation, as a row
 //! of Max's outside any turn: QQ gives no way from a group member's id to a
 //! private chat with them. It doesn't quote the command, which is right
-//! above it, and reads like a log: terse, in English, `/name → result`,
+//! above it, and reads like a log: terse, in English, the result alone,
 //! in a code block (see `command::answer`). Like the command, it is in the
 //! next core's context, as the host's words.
 
@@ -81,19 +81,18 @@ impl Conversation {
             Command::Model(_) | Command::Effort(_) | Command::Proactive(_) => Rank::ChatOwner,
             Command::Bind(_) | Command::Link(_) | Command::Unlink(_) => Rank::Owner,
         };
-        let name = command.name();
         if rank < needs {
             let who = if needs >= Rank::ChatOwner {
                 "Max's owners"
             } else {
                 "the group owner and admins"
             };
-            return self.answer(name, &format!("refused: {who} only")).await;
+            return self.answer(&format!("refused: {who} only")).await;
         }
         let answer = match command {
             Command::Status => self.status().await?,
             // Not answered: whoever ran it sees Max stop.
-            Command::Kill => return self.kill(committed, name).await,
+            Command::Kill => return self.kill(committed, "kill").await,
             Command::Stop => self.stop_replying(committed).await?,
             Command::Start => self.start_replying().await?,
             Command::Model(argument) => self.model(argument.as_deref()).await?,
@@ -119,7 +118,7 @@ impl Conversation {
             Command::Link(code) => self.link(code.as_deref()).await?,
             Command::Unlink(handle) => self.unlink(handle.as_deref()).await?,
         };
-        self.answer(name, &answer).await
+        self.answer(&answer).await
     }
 
     /// Ends the running core quietly, for `/kill` and `/stop`, the command
@@ -205,11 +204,11 @@ impl Conversation {
         Ok("uncleared: the messages before the clear are back in the context".to_owned())
     }
 
-    async fn answer(&mut self, name: &str, body: &str) -> Result<()> {
+    async fn answer(&mut self, body: &str) -> Result<()> {
         let draft = Draft {
             reply_to: None,
             nodes: vec![DraftNode::Text {
-                text: command::answer(name, body),
+                text: command::answer(body),
             }],
         };
         self.say(draft, None, None, By::Host, None).await?;
@@ -481,7 +480,7 @@ impl Conversation {
         } else {
             "bound: the history starts here"
         };
-        self.answer("bind", text).await
+        self.answer(text).await
     }
 
     /// In a private chat, a code to bind a QQ group with; in a group, the

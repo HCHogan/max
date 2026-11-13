@@ -481,7 +481,7 @@ async fn status_shows_what_work_takes_and_its_units(pool: PgPool) {
     let status = h.said().await.1;
     let shown = status.split_once("\nmodel     ").unwrap().0;
     let (work, units) = shown.split_once("\nunits     ").unwrap();
-    let taken = work.strip_prefix("```text\n/status → maxx dev\n/work     ");
+    let taken = work.strip_prefix("```text\nmaxx dev\n/work     ");
     assert!(
         taken.is_some_and(|taken| taken.ends_with(['B', 'K'])),
         "{status}"
@@ -578,7 +578,7 @@ async fn commands_answer_and_never_wake(pool: PgPool) {
     // No VMs here, and so nothing of one.
     assert!(
         status.starts_with(
-            "```text\n/status → maxx dev\nmodel     test/big · high\nproactive on\ncore      idle\n24h       none\n7d        none\nuptime    "
+            "```text\nmaxx dev\nmodel     test/big · high\nproactive on\ncore      idle\n24h       none\n7d        none\nuptime    "
         ),
         "{status}"
     );
@@ -616,19 +616,18 @@ async fn commands_answer_and_never_wake(pool: PgPool) {
     h.send(from_xiaoming(1, vec![me(), text("/model test/small")]));
     assert_eq!(
         h.said().await.1,
-        command::answer("model", "refused: Max's owners only")
+        command::answer("refused: Max's owners only")
     );
     h.send(from_xiaoming(2, vec![me(), text("/clear --all")]));
     assert_eq!(
         h.said().await.1,
-        command::answer("clear", "refused: the group owner and admins only")
+        command::answer("refused: the group owner and admins only")
     );
     // 小红 is an admin.
     h.send(from_xiaohong(3, vec![me(), text("/clear --all")]));
     assert_eq!(
         h.said().await.1,
         command::answer(
-            "clear",
             "cleared: earlier messages are out of the context; @maxx /unclear brings them back"
         )
     );
@@ -640,21 +639,15 @@ async fn commands_answer_and_never_wake(pool: PgPool) {
     h.send(from_xiaoming(4, vec![me(), text("/unclear")]));
     assert_eq!(
         h.said().await.1,
-        command::answer("unclear", "refused: the group owner and admins only")
+        command::answer("refused: the group owner and admins only")
     );
     h.send(from_xiaohong(5, vec![me(), text("/unclear")]));
     assert_eq!(
         h.said().await.1,
-        command::answer(
-            "unclear",
-            "uncleared: the messages before the clear are back in the context"
-        )
+        command::answer("uncleared: the messages before the clear are back in the context")
     );
     h.send(from_xiaohong(6, vec![me(), text("/unclear")]));
-    assert_eq!(
-        h.said().await.1,
-        command::answer("unclear", "skipped: never cleared")
-    );
+    assert_eq!(h.said().await.1, command::answer("skipped: never cleared"));
     h.stop().await;
     assert_eq!(h.script.calls(), 0);
     assert!(h.turns().await.is_empty());
@@ -669,22 +662,16 @@ async fn an_owner_changes_settings(pool: PgPool) {
     let mut h = Harness::with_owner(pool, 300, true).await;
     h.send(from_xiaoming(0, vec![me(), text("/model test/nope")]));
     let answer = h.said().await.1;
-    assert!(answer.contains("/model → error: no such model"), "{answer}");
+    assert!(answer.contains("\nerror: no such model"), "{answer}");
     h.send(from_xiaoming(1, vec![me(), text("/model test/wide")]));
     assert_eq!(
         h.said().await.1,
-        command::answer(
-            "model",
-            "switched to test/wide; takes effect from the next reply"
-        )
+        command::answer("switched to test/wide; takes effect from the next reply")
     );
     h.send(from_xiaoming(2, vec![me(), text("/proactive off")]));
     assert_eq!(
         h.said().await.1,
-        command::answer(
-            "proactive",
-            "proactive off: Max replies only when @-ed or replied to"
-        )
+        command::answer("proactive off: Max replies only when @-ed or replied to")
     );
     h.script.push(Answer::says("嗯"));
     // From 小红: 小明's burst of commands would hold his @ as unfinished.
@@ -698,7 +685,6 @@ async fn an_owner_changes_settings(pool: PgPool) {
     assert_eq!(
         h.said().await.1,
         command::answer(
-            "effort",
             "effort set to high; takes effect when the running turn ends, after 5 minutes idle"
         )
     );
@@ -727,19 +713,16 @@ async fn a_private_chat_is_its_persons_to_command(pool: PgPool) {
     h.send(privately(from_xiaoming(0, vec![text("/model test/wide")])));
     assert_eq!(
         h.said().await.1,
-        command::answer(
-            "model",
-            "switched to test/wide; takes effect from the next reply"
-        )
+        command::answer("switched to test/wide; takes effect from the next reply")
     );
     h.send(privately(from_xiaoming(1, vec![text("/clear --all")])));
     let cleared = h.said().await.1;
-    assert!(cleared.contains("/clear → cleared: "), "{cleared}");
+    assert!(cleared.contains("\ncleared: "), "{cleared}");
     // Binding a group is the owners' alone.
     h.send(privately(from_xiaoming(2, vec![text("/bind")])));
     assert_eq!(
         h.said().await.1,
-        command::answer("bind", "refused: Max's owners only")
+        command::answer("refused: Max's owners only")
     );
     h.stop().await;
     assert_eq!(h.script.calls(), 0);
@@ -1052,7 +1035,6 @@ async fn stop_ends_the_turn_and_nothing_starts_until_start(pool: PgPool) {
     assert_eq!(
         h.said().await.1,
         command::answer(
-            "stop",
             "stopped: messages are still recorded, but Max won't reply until @maxx /start"
         )
     );
@@ -1063,7 +1045,7 @@ async fn stop_ends_the_turn_and_nothing_starts_until_start(pool: PgPool) {
     h.send(from_xiaohong(3, vec![me(), text("/stop")]));
     assert_eq!(
         h.said().await.1,
-        command::answer("stop", "skipped: already stopped")
+        command::answer("skipped: already stopped")
     );
     h.send(from_xiaohong(4, vec![me(), text("/status")]));
     let status = h.said().await.1;
@@ -1105,13 +1087,10 @@ async fn stop_ends_the_turn_and_nothing_starts_until_start(pool: PgPool) {
     h.send(from_xiaoming(5, vec![me(), text("/start")]));
     assert_eq!(
         h.said().await.1,
-        command::answer("start", "started: Max replies again")
+        command::answer("started: Max replies again")
     );
     h.send(from_xiaoming(6, vec![me(), text("/start")]));
-    assert_eq!(
-        h.said().await.1,
-        command::answer("start", "skipped: not stopped")
-    );
+    assert_eq!(h.said().await.1, command::answer("skipped: not stopped"));
     h.script.push(Answer::says("在"));
     h.send(from_xiaohong(7, vec![me(), text(" 在吗")]));
     assert_eq!(h.said().await.1, "在");
@@ -1138,7 +1117,7 @@ async fn a_stop_outlasts_a_restart(pool: PgPool) {
     h.send(from_xiaohong(3, vec![me(), text("/start")]));
     assert_eq!(
         h.said().await.1,
-        command::answer("start", "started: Max replies again")
+        command::answer("started: Max replies again")
     );
     h.send(from_xiaohong(4, vec![text("明天呢")]));
     calls_reach(&h, 1).await;
@@ -1165,7 +1144,7 @@ async fn who_stops_max(pool: PgPool) {
     h.send(from_xiaoming(0, vec![me(), text("/stop")]));
     assert_eq!(
         h.said().await.1,
-        command::answer("stop", "refused: the group owner and admins only")
+        command::answer("refused: the group owner and admins only")
     );
     h.stop().await;
     let mut h = Harness::private(pool).await;
@@ -1220,7 +1199,6 @@ async fn admins_config_the_limits_and_everyone_sees_them(pool: PgPool) {
     assert_eq!(
         h.said().await.1,
         command::answer(
-            "config",
             "this conversation's limits\n\
              idle_window_secs  300\n\
              call_time_secs    60"
@@ -1232,7 +1210,7 @@ async fn admins_config_the_limits_and_everyone_sees_them(pool: PgPool) {
     ));
     assert_eq!(
         h.said().await.1,
-        command::answer("config", "refused: the group owner and admins only")
+        command::answer("refused: the group owner and admins only")
     );
     // 小红 is an admin.
     let mut n = 2;
@@ -1267,11 +1245,7 @@ async fn admins_config_the_limits_and_everyone_sees_them(pool: PgPool) {
         ("call_time_secs", "call_time_secs    120 (default 60)"),
     ] {
         config(&h, argument);
-        assert_eq!(
-            h.said().await.1,
-            command::answer("config", answer),
-            "{argument}"
-        );
+        assert_eq!(h.said().await.1, command::answer(answer), "{argument}");
     }
     h.send(from_xiaoming(9, vec![me(), text("/status")]));
     let status = h.said().await.1;
@@ -1282,10 +1256,7 @@ async fn admins_config_the_limits_and_everyone_sees_them(pool: PgPool) {
     config(&h, "idle_window_secs default");
     assert_eq!(
         h.said().await.1,
-        command::answer(
-            "config",
-            "idle_window_secs back to the default, 300; takes effect now"
-        )
+        command::answer("idle_window_secs back to the default, 300; takes effect now")
     );
     h.stop().await;
     assert_eq!(h.script.calls(), 0);

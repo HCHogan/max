@@ -46,33 +46,11 @@ pub enum Command {
     Unlink(Option<String>),
 }
 
-impl Command {
-    /// The word it is run by.
-    pub fn name(&self) -> &'static str {
-        match self {
-            Command::Status => "status",
-            Command::Kill => "kill",
-            Command::Stop => "stop",
-            Command::Start => "start",
-            Command::Model(_) => "model",
-            Command::Effort(_) => "effort",
-            Command::Proactive(_) => "proactive",
-            Command::Persona(_) => "persona",
-            Command::Clear { .. } => "clear",
-            Command::Unclear => "unclear",
-            Command::Config { .. } => "config",
-            Command::Bind(_) => "bind",
-            Command::Link(_) => "link",
-            Command::Unlink(_) => "unlink",
-        }
-    }
-}
-
-/// A command's answer as it is said: `/name → result`, any more lines
-/// under it, in a text code block, set apart from what Max says in a
-/// turn.
-pub fn answer(name: &str, body: &str) -> String {
-    fenced("text", &format!("/{name} → {body}"))
+/// A command's answer as it is said: the result, any more lines under
+/// it, in a text code block, set apart from what Max says in a turn. It
+/// doesn't name the command, which is the message right above it.
+pub fn answer(body: &str) -> String {
+    fenced("text", body)
 }
 
 /// `body` in a code block of `language`. The fence outgrows any run of
@@ -257,11 +235,8 @@ mod tests {
 
     #[test]
     fn answers_are_code_blocks() {
-        assert_eq!(answer("clear", "cleared"), "```text\n/clear → cleared\n```");
+        assert_eq!(answer("cleared"), "```text\ncleared\n```");
         let persona = "persona:\n用 ```python 写代码";
-        assert_eq!(
-            answer("persona", persona),
-            format!("````text\n/persona → {persona}\n````")
-        );
+        assert_eq!(answer(persona), format!("````text\n{persona}\n````"));
     }
 }
