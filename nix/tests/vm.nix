@@ -192,6 +192,18 @@ pkgs.testers.runNixOSTest {
     assert "stale=false" in machine.succeed(
         "journalctl -u maxx.service -o cat | grep \"a VM's guest is switched\""
     )
+    # A VM that ends by itself under max is found so at the next sweep,
+    # without a wait on its socket, and boots again, being kept.
+    machine.succeed("systemctl kill --signal=KILL maxx-vm@7.service")
+    machine.wait_until_succeeds(
+        "journalctl -u maxx.service -o cat | grep -q 'a VM that ran has ended by itself'", timeout=120
+    )
+    machine.wait_until_succeeds(
+        f"test \"$({last} | cut -d' ' -f1)\" != {boot} && {last} | grep -q ' 200 newer$'", timeout=300
+    )
+    assert "couldn't attach to a VM" not in machine.succeed("journalctl -u maxx.service -o cat")
+    pid = machine.succeed("systemctl show -P MainPID maxx-vm@7.service").strip()
+    boot = machine.succeed(f"{last} | cut -d' ' -f1").strip()
     # A VM whose guest keeps another contract is restarted at once.
     machine.succeed(
         "systemctl stop maxx.service",
