@@ -232,6 +232,53 @@ let
     '';
   };
 
+  # A running VM is a machine of the host's: `machinectl list` shows it as
+  # ${name}-7, tied to its unit, and `machinectl status` and `terminate`
+  # take it. Run as root after the unit's main process is there, which
+  # execs cloud-hypervisor: the machine's leader. A name left by a boot
+  # that just ended is dropped first. machined forgets the machine when
+  # its leader ends. `machinectl login` and `shell` take no VM: machined
+  # opens those in containers only, and `ssh machine/…` wants a vsock
+  # the host's kernel reaches, which cloud-hypervisor's isn't. The way
+  # in is ${name}-ssh, below.
+  vmRegister = pkgs.writeShellScript "${name}-vm-register" ''
+    machine=${name}-$1
+    machined() {
+      ${config.systemd.package}/bin/busctl --timeout=5 --quiet call \
+        org.freedesktop.machine1 /org/freedesktop/machine1 \
+        org.freedesktop.machine1.Manager "$@"
+    }
+    machined UnregisterMachine s "$machine" 2> /dev/null
+    # No id, no root directory.
+    machined RegisterMachine sayssus "$machine" 0 ${name} vm "$MAINPID" ""
+  '';
+
+  # A shell in a conversation's VM, or a command there, as root in the
+  # guest: for debugging, by whoever reads max's files on the host, which
+  # is root. It goes in as max does, with the key max made for the boot,
+  # to the guest's sshd on the VM's vsock socket.
+  vmSsh = pkgs.writeShellApplication {
+    name = "${name}-ssh";
+    runtimeInputs = [ pkgs.openssh ];
+    text = ''
+      if [ $# -eq 0 ]; then
+        echo "usage: ${name}-ssh CONVERSATION [COMMAND...]" >&2
+        exit 2
+      fi
+      dir=${vmDir}/$1
+      shift
+      if ! [ -S "$dir/notify.vsock" ]; then
+        echo "${name}-ssh: no VM's socket at $dir/notify.vsock: it isn't running, or this isn't root" >&2
+        exit 1
+      fi
+      exec ssh -i "$dir/ssh.key" -o IdentitiesOnly=yes -o User=root \
+        -o ProxyCommand="${config.systemd.package}/lib/systemd/systemd-ssh-proxy vsock-mux$dir/notify.vsock %p" \
+        -o ProxyUseFdpass=yes -o CheckHostIP=no -o StrictHostKeyChecking=no \
+        -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+        ${name}-vm "$@"
+    '';
+  };
+
   # A configuration max won't take fails the system build rather than the
   # service's start. check-config reads none of the secrets it names.
   configFile =
@@ -463,9 +510,12 @@ in
       serviceConfig = sandbox true // {
         EnvironmentFile = "${vmDir}/%I/boot.env";
         ExecStart = "${vmStart}/bin/${name}-vm ${vmDir}/%I";
+        # Not what the VM needs to run: a failure is only logged.
+        ExecStartPost = "-+${vmRegister} %i";
         TimeoutStopSec = 10;
       };
     };
+    environment.systemPackages = lib.mkIf vm [ vmSsh ];
 
     # max's user starts and stops the VMs' units, and no other.
     security.polkit.enable = lib.mkIf vm true;

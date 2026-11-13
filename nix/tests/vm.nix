@@ -162,6 +162,12 @@ pkgs.testers.runNixOSTest {
     last = f"tail -n 1 {work}/probe.log"
     pid = machine.succeed("systemctl show -P MainPID maxx-vm@7.service").strip()
     boot = machine.succeed(f"{last} | cut -d' ' -f1").strip()
+    # The VM is a machine of the host's, by its unit, and root gets into
+    # it as max does.
+    assert machine.succeed("machinectl list --no-legend").split()[:3] == ["maxx-7", "vm", "maxx"]
+    machined = machine.succeed("machinectl show maxx-7 -p Unit -p Leader").split()
+    assert sorted(machined) == [f"Leader={pid}", "Unit=maxx-vm@7.service"], machined
+    assert machine.succeed("maxx-ssh 7 'hostname; id -un; pwd' < /dev/null").split() == ["max", "root", "/work"]
     # What the VM booted is rooted for as long as it runs.
     machine.succeed("readlink /nix/var/nix/gcroots/per-user/maxx/7 | grep -q max-guest.json")
     # While max is away the guest is told so, and the VM runs on.
@@ -207,6 +213,8 @@ pkgs.testers.runNixOSTest {
     assert "couldn't attach to a VM" not in machine.succeed("journalctl -u maxx.service -o cat")
     pid = machine.succeed("systemctl show -P MainPID maxx-vm@7.service").strip()
     boot = machine.succeed(f"{last} | cut -d' ' -f1").strip()
+    # The machine is the boot that runs now.
+    assert machine.succeed("machinectl show maxx-7 -p Leader --value").strip() == pid
     # A VM whose guest keeps another contract is restarted at once.
     machine.succeed(
         "systemctl stop maxx.service",
@@ -229,6 +237,9 @@ pkgs.testers.runNixOSTest {
     )
     machine.wait_for_unit("maxx.service")
     machine.wait_until_fails("ls /nix/var/nix/gcroots/per-user/maxx/ | grep -q '^7'", timeout=60)
+    # Nor is it a machine any more, or to be got into.
+    machine.wait_until_fails("machinectl show maxx-7", timeout=30)
+    machine.fail("maxx-ssh 7 true < /dev/null")
     # The screenshot, among the test's outputs.
     machine.succeed("head -c 8 /var/lib/maxx/vm/check/0/work/.max/browser-check.png | grep -q PNG")
     machine.copy_from_vm("/var/lib/maxx/vm/check/0/work/.max/browser-check.png")
