@@ -859,7 +859,7 @@ async fn a_post_takes_back_a_message(pool: PgPool) {
     assert!(h.outbound.try_recv().is_err());
 }
 
-/// A program's call ends once nobody waits for its result, as when the MCP
+/// A program's call ends once nobody waits for its result, as when the
 /// service has given up on it; but a `say` goes out whole, as Max's own
 /// reply does. Here the first message's receipt never comes.
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
@@ -1077,7 +1077,7 @@ async fn stop_ends_the_turn_and_nothing_starts_until_start(pool: PgPool) {
         reply,
     };
     h.mailbox.send(call).unwrap();
-    let refused = mcp::Failure::new("refused", stopped.clone());
+    let refused = service::Failure::new("refused", stopped.clone());
     assert_eq!(muted.await.unwrap().unwrap_err(), refused);
     let asked = h.poster().ask(ConversationId(9), "在吗".into()).await;
     assert_eq!(asked.unwrap_err(), stopped);

@@ -281,10 +281,10 @@ in
     };
   };
 
-  # run_code's programs and maxx reach Max's MCP service at
-  # 127.0.0.1:7777. It is on the host, at the hybrid vsock's port 7777: one
+  # Everything in the guest reaches max at 127.0.0.1:7777: its tools,
+  # the models and APIs it forwards to, and the chat's rows. It is on the host, at the hybrid vsock's port 7777: one
   # socat per connection.
-  systemd.sockets.max-mcp = {
+  systemd.sockets.max-host = {
     wantedBy = [ "sockets.target" ];
     listenStreams = [ "127.0.0.1:7777" ];
     socketConfig.Accept = true;
@@ -294,12 +294,12 @@ in
   # didn't answer. So the port is tried first, and when max is away the
   # caller is told so, 503 with `max-away`: nothing of its request was
   # read, and it may ask again (client.js does).
-  systemd.services."max-mcp@" = {
+  systemd.services."max-host@" = {
     # A switch to a new image leaves the calls in flight.
     restartIfChanged = false;
     unitConfig.DefaultDependencies = false;
     serviceConfig = {
-      ExecStart = pkgs.writeShellScript "max-mcp" ''
+      ExecStart = pkgs.writeShellScript "max-host" ''
         if ${pkgs.socat}/bin/socat -u OPEN:/dev/null VSOCK-CONNECT:2:7777 2> /dev/null; then
           exec ${pkgs.socat}/bin/socat STDIO VSOCK-CONNECT:2:7777
         fi
@@ -370,10 +370,10 @@ in
   # "Resident programs" in docs/rust-rewrite.md.
   systemd.services.max-units = {
     wantedBy = [ "multi-user.target" ];
-    # It tells Max's service how many there are, through max-mcp.
+    # It tells max how many there are, through max-host.
     after = [
       "max-guest.service"
-      "max-mcp.socket"
+      "max-host.socket"
       "network.target"
       "nix-daemon.socket"
     ];

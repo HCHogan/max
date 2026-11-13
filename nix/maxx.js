@@ -23,7 +23,7 @@
 "use strict";
 
 const { once } = require("node:events");
-const { MCP } = require("./client.js");
+const { MAX } = require("./client.js");
 const { LOCAL, open } = require("./tools.js");
 
 // Where /work is: tests have their own.
@@ -35,7 +35,7 @@ class Usage extends Error {}
 const named = tool => (tool.words ? tool.words.join(" ") : tool.name);
 
 async function main(argv) {
-  const tools = open({ url: process.env.MAXX_MCP ?? MCP, work: WORK });
+  const tools = open({ url: process.env.MAXX_URL ?? MAX, work: WORK });
   const [first, second] = argv;
   if (first === undefined || first === "help" || first === "--help" || first === "-h") {
     return [listing(await listed(tools)), 0];

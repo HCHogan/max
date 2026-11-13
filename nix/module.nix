@@ -532,7 +532,7 @@ in
     systemd.tmpfiles.rules = lib.mkIf vm [ "d ${roots} 0755 ${name} ${name} -" ];
 
     # `systemctl start ${name}-vm-check` boots a VM on the last slot, runs
-    # `uname -a` in it, a program that calls the MCP service and one that
+    # `uname -a` in it, a program that calls max's service and one that
     # opens a page in the browser, keeps a unit in /work/.max/systemd and
     # runs a background command, and logs what the model would be shown.
     systemd.services."${name}-vm-check" = lib.mkIf vm {

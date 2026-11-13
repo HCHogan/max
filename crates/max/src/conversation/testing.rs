@@ -18,7 +18,7 @@ use crate::config::Limits;
 use crate::inbound::{Chat, InNode, Inbound, Person};
 use crate::llm::testing::{Script, config};
 use crate::llm::{Caller, Models};
-use crate::mcp::Services;
+use crate::service::Services;
 use crate::worker::Rows;
 
 pub fn offset() -> FixedOffset {

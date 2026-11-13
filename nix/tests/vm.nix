@@ -1,10 +1,10 @@
 # The groups' VMs on one machine, nested: the module makes the taps, the
 # firewall's rules and the service's sandbox, and vm-check boots the
 # flake's guest the way max does, runs a command in it, runs a program
-# whose history reaches the database through the MCP service, one that
+# whose history reaches the database through max's service, one that
 # opens a page in the browser and saves a screenshot to /work, loads an
 # extension into the browser by Max's flags, shows the model a video
-# ffmpeg made, calls the MCP service with maxx from a command, and keeps a
+# ffmpeg made, calls max's service with maxx from a command, and keeps a
 # unit in
 # /work/.max/systemd, which the next boot starts again, and wakes Max with
 # maxx wake. Then a VM on the operations network reaches a stand-in for the
@@ -96,7 +96,7 @@ pkgs.testers.runNixOSTest {
     machine.succeed("systemctl start maxx-vm-check.service")
     shown = machine.succeed("journalctl -u maxx-vm-check.service -o cat")
     assert "exit status 0" in shown and "Linux max" in shown, shown
-    assert '"mcp":"not_found"' in shown, shown
+    assert '"history":"not_found"' in shown, shown
     # The page's accessibility tree, with refs.
     assert '"tree":"检查\\n' in shown and 'button \\"搜索\\" [ref=e4]' in shown, shown
     # The next program finds its tab as it left it.
@@ -109,7 +109,7 @@ pkgs.testers.runNixOSTest {
     assert '{"seconds":3}' in shown and '{"path":"/work/.max/check.png"}' in shown, shown
     assert "给模型看的视频：3 秒" in shown and "给模型看的图片" in shown, shown
     assert "/work/.max/check.txt wasn't shown: it isn't a PNG, JPEG, GIF or WebP that decodes" in shown, shown
-    # maxx calls the MCP service from a command, as the program did, and
+    # maxx calls max's service from a command, as the program did, and
     # lists the tools.
     assert " (not_found)\nmaxx 退出码 1\n1\n" in shown, shown
     # What /status asks of a guest: its NixOS and its memory, and how its
@@ -160,6 +160,19 @@ pkgs.testers.runNixOSTest {
     machine.wait_until_succeeds("systemctl is-active maxx-vm@7.service", timeout=120)
     machine.wait_until_succeeds(f"grep -q ' 200 first$' {work}/probe.log", timeout=180)
     last = f"tail -n 1 {work}/probe.log"
+
+    def back(condition, timeout):
+        # When the unit doesn't come up, what the guest's boot made of it:
+        # this failed twice on 2026-11-14 and not again, with nothing to
+        # go by.
+        try:
+            machine.wait_until_succeeds(condition, timeout=timeout)
+        except Exception:
+            print(machine.execute(f"tail -n 3 {work}/probe.log")[1])
+            said = "systemctl status max-units.service probe.service --no-pager -l; journalctl -b -u max-units.service --no-pager; ls -la /work/.max/systemd /run/max/units"
+            print(machine.execute(f"timeout 60 maxx-ssh 7 '{said}' < /dev/null 2>&1")[1])
+            raise
+
     pid = machine.succeed("systemctl show -P MainPID maxx-vm@7.service").strip()
     boot = machine.succeed(f"{last} | cut -d' ' -f1").strip()
     # The VM is a machine of the host's, by its unit, and root gets into
@@ -207,9 +220,7 @@ pkgs.testers.runNixOSTest {
     machine.wait_until_succeeds(
         "journalctl -u maxx.service -o cat | grep -q 'a VM that ran has ended by itself'", timeout=120
     )
-    machine.wait_until_succeeds(
-        f"test \"$({last} | cut -d' ' -f1)\" != {boot} && {last} | grep -q ' 200 newer$'", timeout=300
-    )
+    back(f"test \"$({last} | cut -d' ' -f1)\" != {boot} && {last} | grep -q ' 200 newer$'", 300)
     assert "couldn't attach to a VM" not in machine.succeed("journalctl -u maxx.service -o cat")
     pid = machine.succeed("systemctl show -P MainPID maxx-vm@7.service").strip()
     boot = machine.succeed(f"{last} | cut -d' ' -f1").strip()
@@ -224,9 +235,7 @@ pkgs.testers.runNixOSTest {
     machine.wait_until_succeeds(
         "journalctl -u maxx.service -o cat | grep -q \"can't be attached to\"", timeout=120
     )
-    machine.wait_until_succeeds(
-        f"test \"$({last} | cut -d' ' -f1)\" != {boot} && {last} | grep -q ' 200 newer$'", timeout=240
-    )
+    back(f"test \"$({last} | cut -d' ' -f1)\" != {boot} && {last} | grep -q ' 200 newer$'", 240)
     assert machine.succeed("systemctl show -P MainPID maxx-vm@7.service").strip() != pid
     # Without its unit the VM isn't kept, and a stopped one's root goes.
     machine.succeed(

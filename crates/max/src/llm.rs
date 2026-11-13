@@ -64,7 +64,7 @@ pub struct Chosen {
     pub caller: Arc<dyn Caller>,
 }
 
-/// Where a model call from a VM goes. The MCP service forwards it there
+/// Where a model call from a VM goes. The service to its VM forwards it there
 /// with the provider's key, which never enters the VM.
 #[derive(Clone, Debug)]
 pub struct Upstream {

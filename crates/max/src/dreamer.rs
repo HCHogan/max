@@ -20,7 +20,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::llm::Chosen;
-use crate::mcp::work;
+use crate::service::work;
 use crate::vm;
 use max_core::limits::{MEMORY_FILE_BYTES, MEMORY_TOKENS};
 

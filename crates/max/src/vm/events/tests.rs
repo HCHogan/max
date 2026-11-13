@@ -15,8 +15,8 @@ use tokio::sync::mpsc::{self, UnboundedReceiver};
 use super::*;
 use crate::conversation::Place;
 use crate::conversation::testing::{from_xiaoming, group, offset, text};
-use crate::mcp::Services;
 use crate::scope::Scope;
+use crate::service::Services;
 
 const PATIENCE: Duration = Duration::from_secs(5);
 const MAXX: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../nix/maxx.js");
@@ -277,7 +277,7 @@ async fn maxx_prints_the_rows_and_opens_the_stream_again(pool: PgPool) {
     let mut maxx = Command::new("node")
         .arg(MAXX)
         .args(["events", "--after", &format!("#{}", first.id)])
-        .env("MAXX_MCP", url.replace("/events", "/mcp"))
+        .env("MAXX_URL", url.replace("/events", ""))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true)

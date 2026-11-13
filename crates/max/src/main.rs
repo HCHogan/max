@@ -1,8 +1,8 @@
 //! `max run` serves; `max check-config` checks a configuration file's
 //! structure without reading its secrets, which the NixOS module does when
 //! it builds the file; `max vm-check` boots a VM, runs a command in it, a
-//! program that calls the MCP service, one that opens a tab in the browser
-//! and one that finds the tab as the first left it, calls the MCP service
+//! program that calls max's service, one that opens a tab in the browser
+//! and one that finds the tab as the first left it, calls max's service
 //! with maxx from a command, keeps a unit of its own in /work/.max/systemd
 //! and wakes Max with maxx wake, and runs a background command, whose end
 //! the guest tells it of.
@@ -32,7 +32,6 @@ use max::conversation::{Heard, Place, Shared, Signal};
 use max::dreamer::Dreamer;
 use max::embedding::Embedder;
 use max::llm::{Models, Upstream, Upstreams};
-use max::mcp;
 use max::media::caption::Captioner;
 use max::media::download::Download;
 use max::media::fetch;
@@ -44,6 +43,7 @@ use max::qq::{listen, send};
 use max::recall::Vectors;
 use max::scope::Scope;
 use max::search::{self, Search};
+use max::service;
 use max::table::{self, Me, Table};
 use max::tools;
 use max::vm::Vms;
@@ -169,7 +169,7 @@ fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
             max_output: None,
             idle: Duration::from_secs(60),
         };
-        let (agents, mut used) = mcp::Models::heard(Upstreams::only(only, None));
+        let (agents, mut used) = service::Models::heard(Upstreams::only(only, None));
         let vms = Vms::start(vm, &mut services, signals, Arc::default(), Some(agents))?;
         // A store of vm-check's own, for what calls show the model.
         let stored = std::env::temp_dir().join(format!("maxx-vm-check-{}", std::process::id()));
@@ -178,8 +178,8 @@ fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
         // actor would run it, with nobody to say anything for. No
         // conversation has id 0, so its history finds nothing, from the
         // database.
-        let called = mcp::Context {
-            services: Arc::new(mcp::Services {
+        let called = service::Context {
+            services: Arc::new(service::Services {
                 pool: PgPool::connect_lazy(&config.database.url)?,
                 offset: config.utc_offset,
                 search: None,
@@ -222,7 +222,7 @@ fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
                     Signal::Call {
                         tool, args, reply, ..
                     } => {
-                        let _ = reply.send(mcp::call(&tool, &called, args).await);
+                        let _ = reply.send(service::call(&tool, &called, args).await);
                         continue;
                     }
                     Signal::Heard {
@@ -257,7 +257,7 @@ fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
         };
         let program = Tool::RunCode {
             code: "const read = await max.raw('history', {around: 1});\n\
-                   return {node: process.version, mcp: read.ok ? 'ok' : read.error.code}"
+                   return {node: process.version, history: read.ok ? 'ok' : read.error.code}"
                 .into(),
             args: None,
             timeout_ms: None,
@@ -446,8 +446,9 @@ maxx | grep -c '^  history  '"#;
 /// A unit of vm-check's own in /work/.max/systemd, which notes each boot
 /// it starts in: `maxx units apply` starts it now, or the boot already
 /// has. The nested test runs vm-check twice: the second boot starts it
-/// before that is run, and both boots are noted. The unit and the command
-/// both have /work for a home.
+/// before that is run, and both boots are noted, with what the boot's own
+/// `maxx units apply` said. The unit and the command both have /work for
+/// a home.
 const UNITS: &str = r#"before=$(systemctl is-active boot-note.service || true)
 mkdir -p /work/.max/systemd
 cat > /work/.max/systemd/boot-note.service <<'EOF'
@@ -460,6 +461,7 @@ WantedBy=multi-user.target
 EOF
 maxx units apply | jq -r '(.units[] | "\(.name)：\(.state)"), .said // empty'
 echo "开机时：$before"
+echo "开机时装的：$(journalctl -b -u max-units.service -t maxx -o cat --no-pager | tail -n 1)"
 echo "记下了 $(sort -u /work/.max/boot-notes | wc -l) 次开机"
 echo "家：$HOME，unit 的家：$(cat /work/.max/unit-home)"
 case ":$PATH:" in *:/work/.nix-profile/bin:*) echo "PATH 里有家里的 profile" ;; esac"#;
@@ -676,13 +678,17 @@ async fn serve(config: Config) -> Result<()> {
     let (signals, signals_rx) = mpsc::unbounded_channel();
     let asking = signals.clone();
     // Their secrets are read now, so a missing one stops max here.
-    let apis = Arc::new(mcp::api::Apis::load(&config.api)?);
+    let apis = Arc::new(service::api::Apis::load(&config.api)?);
     // The models the VMs call, whose keys are read now as well: the
     // background agents' own, and any other an agent is started on. The
     // agents are units in the VMs: max forwards their model calls, and
     // counts what they use.
     let agents = match models.job().transpose()? {
-        Some(upstreams) => Some(mcp::Models::start(upstreams, pool.clone(), &mut services)),
+        Some(upstreams) => Some(service::Models::start(
+            upstreams,
+            pool.clone(),
+            &mut services,
+        )),
         None => {
             info!("no model for background agents: maxx agent start starts none");
             None
@@ -699,7 +705,7 @@ async fn serve(config: Config) -> Result<()> {
     let store = pictures
         .as_ref()
         .map(|pictures| Arc::clone(&pictures.store));
-    let tools = Arc::new(mcp::Services {
+    let tools = Arc::new(service::Services {
         pool: pool.clone(),
         offset: config.utc_offset,
         search,

@@ -15,7 +15,7 @@
 
 const { format, inspect } = require("node:util");
 const { browser, page, snapshot } = require("./browser.js");
-const { MCP, ToolError } = require("./client.js");
+const { MAX, ToolError } = require("./client.js");
 const { LOCAL, open } = require("./tools.js");
 
 const result = process.stdout.write.bind(process.stdout);
@@ -30,11 +30,11 @@ async function main() {
   for await (const chunk of process.stdin) chunks.push(chunk);
   const input = JSON.parse(Buffer.concat(chunks).toString("utf8"));
   // Tests point the runner at their own server, and their own /work.
-  const url = input.mcp ?? MCP;
+  const url = input.url ?? MAX;
   const work = input.work ?? "/work";
 
   // Programs' own child processes, such as maxx, call where it does.
-  process.env.MAXX_MCP = url;
+  process.env.MAXX_URL = url;
   const { request, follow } = open({ url, work });
 
   // A call's promise, and what cancels it. Using one without await reads

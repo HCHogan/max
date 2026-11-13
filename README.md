@@ -104,7 +104,7 @@ file under its cap.
 | `crates/max-core` | The state machines for turns and intent, the projection, the reply parser (`[reply#id]`, `[sticker#id]`, …), and the prompt. |
 | `crates/max-db` | The schema, migrations and compile-time checked `sqlx` queries over Postgres and `pgvector`. |
 | `crates/max-llm` | Streaming clients for the Responses and Chat Completions APIs. |
-| `crates/max` | Conversation actors, the intent classifier, the VMs, the MCP server and my tools, picture captions, the nightly dreamer. |
+| `crates/max` | Conversation actors, the intent classifier, the VMs, my tools and the service a VM calls them through, picture captions, the nightly dreamer. |
 | `nix/guest.nix` | The NixOS guest I live in (`runner.js`, the `maxx` CLI, `webread`, Chromium). |
 | `nix/module.nix` | The NixOS module the host runs me with. |
 | `docs/rust-rewrite.md` | The design doc, where every decision is recorded. |

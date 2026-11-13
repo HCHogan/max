@@ -1,6 +1,6 @@
 //! Calls from the group's VM: Max's tools, run beside the core. Every
 //! call comes this way, a turn's program's and a unit's of Max's own
-//! alike. See "The MCP channel" in docs/rust-rewrite.md.
+//! alike. See "The guest's calls" in docs/rust-rewrite.md.
 
 use serde_json::Value;
 use tokio::sync::oneshot;
@@ -15,11 +15,11 @@ impl Conversation {
         &mut self,
         tool: String,
         args: Value,
-        mut reply: oneshot::Sender<Result<Value, mcp::Failure>>,
+        mut reply: oneshot::Sender<Result<Value, service::Failure>>,
     ) {
         // What it would say or do in the chat is refused as it comes.
         if let Some(refused) = self.refuses(Does::RUNS) {
-            let _ = reply.send(Err(mcp::Failure::new("refused", refused.why())));
+            let _ = reply.send(Err(service::Failure::new("refused", refused.why())));
             return;
         }
         let work = self
@@ -27,7 +27,7 @@ impl Conversation {
             .vm_dir
             .as_deref()
             .map(|dir| vm::work(dir, self.place.conversation));
-        let context = mcp::Context {
+        let context = service::Context {
             services: Arc::clone(&self.shared.services),
             place: Arc::clone(&self.place),
             page_tokens: self.single(),
@@ -37,7 +37,7 @@ impl Conversation {
         };
         self.side.spawn(move |_| async move {
             let outcome = tokio::select! {
-                outcome = mcp::call(&tool, &context, args) => outcome,
+                outcome = service::call(&tool, &context, args) => outcome,
                 () = reply.closed() => return,
             };
             let _ = reply.send(outcome);

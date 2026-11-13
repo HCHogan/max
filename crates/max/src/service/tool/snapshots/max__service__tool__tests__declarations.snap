@@ -1,0 +1,79 @@
+---
+source: crates/max/src/service/tool/tests.rs
+expression: DECLARATIONS.as_str()
+---
+/** Looks through this conversation's chat records, with the descriptions of pictures and stickers. For things from before the context, who said what, or what was talked about on a day, look before answering. The filters go together:
+  who is a few characters of the speaker's name (the group card at the time); from and to are YYYY-MM-DD (a whole day, the day itself included both ways), YYYY-MM-DD HH:MM, or #number (from includes that message, to doesn't).
+  With query it searches, and returns results: query is keywords separated by spaces, at most 8, each looked for as written, whatever its case; keep a Chinese keyword short, two or three characters. The whole query is also matched by meaning. Messages with more of the keywords, and nearer in meaning, come first, and of equals the newer; limit is 10 by default and at most 30. text is a passage around the match; read, passed back as it is, reads that message with 10 on each side. Recalled messages aren't searched.
+  Without query it reads the messages themselves, a line each in order of time, as in the context, the long ones only their beginning: with from, forward from there; without, the newest (up to to); limit is 50 by default and at most 100. When there is more, next holds the arguments to go on with, passed back as they are: forward from a read with from, backward from a read of the newest. Give at least one of who, from and to.
+  around reads that message with before and after messages on each side (10 by default, at most 50), and goes with no other filter; with before and after both 0 it reads that one message alone, whole however long.
+  A read comes in pages, none longer than one message may be in the context: pages is how many there are, and page picks one. What /clear --all cleared is only out of the context, and is found all the same. */
+history(args: { query?: string; who?: string; from?: string; to?: string; around?: number; before?: number; after?: number; limit?: number; page?: number }): Promise<{ results: { ref: string; time: string; text: string; read: { around: number } }[] } | { text: string; page: number; pages: number; next?: object }>;
+
+/** Searches the web: the first results' titles, links, summaries and publication dates, where known. For facts, prices, news, plots and whatever else you aren't sure of or may be out of date, search before answering, and don't go by memory. What you know ends with your training, often months or years before [现在]: versions, releases, prices, schedules, who holds which post and recent events may have changed since, so search first even when you feel sure, and go by the results dated nearest [现在].
+  limit is 1 to 10, 5 by default. For several searches use Promise.all. To read a page in full, run webread <url> with shell. */
+web_search(args: { query: string; limit?: number }): Promise<{ results: { title: string; url: string; snippet: string; published?: string }[] }>;
+
+/** Copies a file of this chat's records into /work/chat/ and returns { path, name, size }. handle is as the records show it, file#123.0; what the people sent as a picture, a sticker, a video or a voice message has one too (image#123.0). Only what was downloaded is there: at most 64 MiB each. Read the copy from there with shell: pdftotext for a PDF, max.video for a video. */
+file(args: { handle: string }): Promise<{ path: string; name: string | null; size: number }>;
+
+/** Sends a picture under /work to this chat: a chart you drew, a screenshot, a downloaded picture. PNG, JPEG, GIF or WebP, at most 10 MiB; no symlink on the path.
+  caption is a line under the picture, in the same message. It returns once the picture is sent, and handle is the handle of that picture in its message.
+  A picture or sticker the records already have needs none of this: write its handle in your reply. */
+send_image(args: { path: string; caption?: string }): Promise<{ handle: string }>;
+
+/** Sends a file under /work to this chat, where it shows as a file that opens to download: documents, spreadsheets, PDFs, archives, code. At most 200 MiB, and not empty; no symlink on the path.
+  name is the file name shown in the chat, the path's by default. It returns once the file is stored and queued, and handle is the file's handle; the upload goes on after that, a big file takes a minute or two to reach the chat, and what you say afterwards waits behind it. If it doesn't go out, its row in the records is marked （没发出去）.
+  A picture for everyone to see goes with send_image, not as a file. To send again a file the records already have, copy it to /work with file first. */
+send_file(args: { path: string; name?: string }): Promise<{ handle: string }>;
+
+/** Recalls a message of this chat; id is the number in the #number at the start of its line. Whether to is yours to judge: for flooding, ads or what breaks the rules, or when someone asks and the reason is sound; say so briefly afterwards.
+  QQ lets only messages sent within 2 minutes be recalled: what you said yourself (a segment is a message, so a reply sent in several is recalled one at a time), and, when you are an admin of the group, an ordinary member's; the owner's and the admins' can't be. In a private chat only your own.
+  It returns once QQ has recalled it; if QQ doesn't, the call fails and says why. The records gain a row of yours, [unsend#id], marked （没发出去） if QQ didn't recall it. */
+recall_message(args: { id: number }): Promise<{ recalled: number }>;
+
+/** Mutes someone in this group, or lifts a mute. member is the number in [mention#number]; seconds is how long from now, 0 lifts it, at most 2592000 (30 days). Whether to mute, and for how long, is yours to judge: for flooding, ads or abuse, or when someone asks and the reason is sound; say so briefly in the chat afterwards.
+  QQ lets only a group's admins mute, and only ordinary members: the owner, the admins and yourself can't be muted, there is no muting in a private chat, and nobody who hasn't spoken in this group can be muted. Muting someone already muted moves the end to seconds from now.
+  It returns once QQ has done it: until is when the mute ends, null when lifted; if QQ doesn't, the call fails and says why. No row is added to the records. */
+mute_member(args: { member: number; seconds: number }): Promise<{ member: number; until: string | null }>;
+
+/** Finds stickers in the library by meaning: the library holds the stickers seen in every chat, ranked by how near each description is to what query means, nearest first.
+  It finds and doesn't send: pick one that fits and copy its handle into your reply as [sticker#…], and it goes out; if none fits, send none. limit is 1 to 10, 5 by default. */
+find_stickers(args: { query: string; limit?: number }): Promise<{ stickers: { handle: string; description: string }[] }>;
+
+/** Asks Max in another conversation (another group, or a private chat) a question. Only those listed under [能问的会话] can be asked; to is the number, 9 for c#9. With no such block in the context, nobody can be asked from here.
+  Max there answers by its own rules, with its own records, memory and tools; whether to answer and how much is its to decide. It doesn't see this conversation, nor you its, so question has to carry the background and what is asked in full, in at most 2000 characters; a [mention#…], a message number or a picture's handle from here means nothing there: say it with names and words.
+  Neither the question nor the answer is sent to either chat; only the two Maxes see them. The people here don't know you asked: whether to say so, and how to pass the answer on, is yours to decide.
+  Returns { asked: "c#9 <name>" } at once, and you go on talking. When Max there answers, the answer appears among your new messages as [回答] c#9 <name>, with what you asked; it may ask its own people first, so that can take a while. If no answer comes, you hear that too, as [没答成] and why: it can't be asked just now (it is stopped there, or Max is restarting), or its turn ended without an answer, as when its people didn't say in time. Whether to ask again then is for you and the people here to judge; nothing asks again by itself. A background agent of yours asks through the same tool, as anything in the VM does, and the answer comes to you: tell it what was answered with max-agent steer. */
+ask(args: { to: number; question: string }): Promise<{ asked: string }>;
+
+/** Answers a question Max in another conversation asked of you, when your new messages have [ask#5 问] c#7 <name> and the question. to is that number, 5 for ask#5, and text is the answer, at most 2000 characters. What a background agent of yours asks you, [max-agent-3 问], is not answered with this but with max-agent steer.
+  Another conversation's Max is not anyone here: it doesn't see this conversation, only your text. What may be said, and how much, is yours to judge by the rules and memory of this conversation; you may ask the people here first and answer once you know. If you'd rather not say, answer that.
+  Answer in this turn: a question still unanswered when the turn ends can't be answered any more, and the asker hears that it wasn't, and may ask again. Neither the question nor your answer is sent to this chat, so the people here don't know anyone asked: whether to tell them is yours to decide. A question is answered once: for one answered already, or asked in an earlier turn, the call fails and nothing is sent. Returns whom it went to: { to: "c#7 <name>" }. */
+answer(args: { to: number; text: string }): Promise<{ to: string }>;
+
+/** Shows or sets a few of this chat's settings. Without arguments it only shows; one given is set, and 0 puts it back to the default. Returns each one's value now and its default. Whether to change one is yours to judge: when someone asks and the reason holds, or when you do need it; say so briefly afterwards. A group's admins can set them too, with /config, and the last to set one wins.
+  idle_window_secs: how many seconds after you last spoke an idle turn ends (60–7200). Called again within the window, you still have what this turn found; called after it, a new turn starts and reads from the records again. The default follows the model. In force at once, for this turn too.
+  call_time_secs: how many seconds a program or a command waits at most for each call of a Max tool (10–600). Raise it when copying a big file runs out of time. In force from the next call. */
+config(args: { idle_window_secs?: number; call_time_secs?: number }): Promise<{ idle_window_secs: { value: number; default: number }; call_time_secs: { value: number; default: number } }>;
+
+/** Shows yourself a picture, after the result of this run_code or shell; the chat doesn't see it. path is a PNG, JPEG, GIF or WebP under /work. In run_code a picture's bytes do as well, in place of args: tools.show(await page.screenshot()). */
+show(args: { path: string }): Promise<{ path: string }>;
+
+/** Shows yourself a piece of video, picture and sound, after the result of this run_code or shell. path is a video file in the VM; start and end are seconds, or a time such as '1:30'. seconds is how long the piece is. */
+video(args: { path: string; start?: number | string; end?: number | string }): Promise<{ seconds?: number }>;
+
+/** Starts a background agent on task, a unit of the VM's that works on it for hours while you go on talking. title is a line for the list and its report; workdir is where it works, /work by default, and one that isn't absolute is under /work; model is one of agent_models', and effort how hard it thinks: off, minimal, low, medium, high, xhigh or max. Returns at once: name is the agent's, max-agent-N, and said what becomes of it. */
+agent_start(args: { task: string; title?: string; workdir?: string; model?: string; effort?: string }): Promise<{ name: string; said: string }>;
+
+/** Tells a running agent more: a change of direction, more to go on, or the answer to what it asked. name is the agent's, max-agent-N; it reads text at the end of the step it is in. */
+agent_steer(args: { name: string; text: string }): Promise<{ said: string }>;
+
+/** The models an agent can run on, each with its context window in tokens; default is the one an agent runs on when none is named. */
+agent_models(): Promise<{ models: { model: string; window: number; default: boolean; effort?: string }[] }>;
+
+/** What of yours runs in the VM. kind is job for a background command, agent for a background agent and call for a shell or run_code under way, each with its title and the seconds it has run; unit is one /work/.max/systemd keeps, with state as systemd has it. systemctl stop <name> stops one. */
+units_list(): Promise<{ units: { name: string; kind: string; title?: string; seconds?: number; state?: string }[] }>;
+
+/** Makes the unit files in /work/.max/systemd the ones the VM runs: new and changed ones are installed and started, and those gone are stopped and removed. Call it after changing the directory. units is each with its state as systemd has it, and the end of the log of one that failed; skipped is the files that weren't installed, and why; said is whether the VM stays on for them. */
+units_apply(): Promise<{ units: { name: string; state: string; log?: string }[]; skipped: { name: string; why: string }[]; removed: string[]; said?: string }>;

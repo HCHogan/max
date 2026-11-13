@@ -19,11 +19,11 @@ use tokio::task::spawn_blocking;
 use tracing::warn;
 
 use super::Context;
-use crate::mcp::Failure;
-use crate::mcp::work::{beneath_work, read};
 use crate::media::mp4;
 use crate::media::prepare::prepare;
 use crate::media::store::Store;
+use crate::service::Failure;
+use crate::service::work::{beneath_work, read};
 use max_core::limits::{PICTURE_BYTES, PICTURES_PER_RUN, VIDEO_BYTES, VIDEO_SECONDS};
 
 /// The most of a call's list that is looked at: what a call may show is a

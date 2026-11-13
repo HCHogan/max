@@ -6,7 +6,7 @@
 //! and the guest tells Max when it ends. A unit is one or the other from
 //! its start. See "Lifetimes move to systemd" in docs/rust-rewrite.md.
 //!
-//! Both call Max's tools through the MCP service, as anything in the VM
+//! Both call Max's tools through max's service, as anything in the VM
 //! does: the runner's SDK, and `maxx` from a command. And both can show
 //! the model pictures and videos after their result, which the call's
 //! line lists and the host reads from /work; see [`show`].
@@ -23,8 +23,8 @@ use serde::{Deserialize, Serialize};
 use tokio::time::{Instant, sleep};
 use tracing::info;
 
-use crate::mcp;
 use crate::media::store::Store;
+use crate::service;
 use crate::tokens;
 use crate::vm::ssh::{Sink, Stream, Waited, quote};
 use crate::vm::{Vm, Vms};

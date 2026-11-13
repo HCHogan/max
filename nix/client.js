@@ -1,11 +1,14 @@
-// The client of Max's MCP service that run_code's runner and the maxx
-// command share: a call is one POST, the outcome {ok: true, value} or
-// {ok: false, error: {code, message}}. A call is the VM's: nothing says
-// which program made it. See "The MCP channel" in docs/rust-rewrite.md.
+// The client of max's service that run_code's runner and the maxx command
+// share (tools.js): the host's tools, over HTTP. A call is one POST to
+// /tools/<name> with its arguments as a JSON object, and its outcome is
+// what comes back: {ok: true, value} or {ok: false, error: {code,
+// message}}; GET /tools lists them, with their schemas. A call is the
+// VM's: nothing says which program made it. See "The guest's calls" in
+// docs/rust-rewrite.md.
 "use strict";
 
-const MCP = "http://127.0.0.1:7777/mcp";
-const VERSION = "2026-07-28";
+// Where max is, for everything in the guest (guest.nix's max-host).
+const MAX = "http://127.0.0.1:7777";
 // A stream of the timeline with nothing on it this long, not even the
 // heartbeat the host sends every 30 seconds, is opened again.
 const QUIET = 90_000;
@@ -13,7 +16,7 @@ const QUIET = 90_000;
 const RETRY = 1_000;
 const MOST_RETRY = 30_000;
 // While max restarts, the guest's forwarder answers for it: 503 with
-// max-away, and nothing of the request read (guest.nix's max-mcp@). A
+// max-away, and nothing of the request read (guest.nix's max-host@). A
 // call is made again, with those waits, until max is back or this long
 // has passed. The VM, and what runs in it, outlives max.
 const AWAY = 180_000;
@@ -45,19 +48,20 @@ class ToolError extends Error {
   }
 }
 
-// A client of the service at url.
-function connect({ url = MCP } = {}) {
-  let nextId = 1;
-
-  async function post(method, params, signal) {
+// A client of max at url.
+function connect({ url = MAX } = {}) {
+  // What max answers a request with, as {ok: true, value}; asked again
+  // while max is away, and a failure when it can't be reached or what
+  // comes back isn't JSON.
+  async function ask(method, path, body, signal) {
     const cancelled = { ok: false, error: { code: "cancelled", message: "the call was cancelled; what acts in the chat may have taken effect: look at the records before trying again" } };
     const asked = Date.now();
     let wait = RETRY;
     for (;;) {
-      const outcome = await once(method, params, signal);
+      const outcome = await once(method, path, body, signal);
       if (outcome !== away) return outcome === aborted ? cancelled : outcome;
       if (Date.now() - asked + wait > AWAY) {
-        return { ok: false, error: { code: "unreachable", message: `can't reach Max's MCP service: max has been away for ${Math.round((Date.now() - asked) / 1000)} seconds` } };
+        return { ok: false, error: { code: "unreachable", message: `can't reach max: it has been away for ${Math.round((Date.now() - asked) / 1000)} seconds` } };
       }
       await sleep(wait, signal);
       if (signal?.aborted) return cancelled;
@@ -65,57 +69,44 @@ function connect({ url = MCP } = {}) {
     }
   }
 
-  // One try: the outcome, or `away` when max isn't there to take it.
-  async function once(method, params, signal) {
-    let reply;
+  // One try: the answer, or `away` when max isn't there to take it.
+  async function once(method, path, body, signal) {
     try {
-      const response = await fetch(url, {
-        method: "POST",
+      const response = await fetch(new URL(path, url), {
+        method,
         signal,
-        headers: {
-          "content-type": "application/json",
-          accept: "application/json, text/event-stream",
-          "mcp-protocol-version": VERSION,
-          "mcp-method": method,
-          ...(params.name ? { "mcp-name": params.name } : {}),
-        },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: nextId++,
-          method,
-          params: {
-            ...params,
-            _meta: {
-              "io.modelcontextprotocol/protocolVersion": VERSION,
-              "io.modelcontextprotocol/clientCapabilities": {},
-            },
-          },
-        }),
+        ...(body === undefined ? {} : { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }),
       });
       if (response.status === 503 && response.headers.get("max-away")) return away;
-      reply = JSON.parse(await response.text());
+      const text = await response.text();
+      try {
+        return { ok: true, value: JSON.parse(text) };
+      } catch {
+        return { ok: false, error: { code: "refused", message: `max answered ${response.status}: ${text.slice(0, 200)}` } };
+      }
     } catch (error) {
       // As the host says when it cancels a call.
       if (error.name === "AbortError") return aborted;
-      return { ok: false, error: { code: "unreachable", message: `can't reach Max's MCP service: ${error.message}` } };
+      return { ok: false, error: { code: "unreachable", message: `can't reach max: ${error.message}` } };
     }
-    if (reply.error) return { ok: false, error: { code: "refused", message: reply.error.message } };
-    return { ok: true, value: reply.result };
   }
 
-  // One call of a tool.
+  // One call of a tool: its outcome is max's answer.
   async function request(tool, args, signal) {
-    const outcome = await post("tools/call", { name: tool, arguments: args }, signal);
-    if (!outcome.ok) return outcome;
-    const { isError, structuredContent } = outcome.value;
-    if (isError) return { ok: false, error: structuredContent };
-    return { ok: true, value: structuredContent };
+    const answer = await ask("POST", `/tools/${encodeURIComponent(tool)}`, args, signal);
+    if (!answer.ok) return answer;
+    const outcome = answer.value;
+    if (outcome?.ok === true) return { ok: true, value: outcome.value };
+    if (outcome?.ok === false && outcome.error) return { ok: false, error: outcome.error };
+    return { ok: false, error: { code: "refused", message: `max answered ${JSON.stringify(outcome).slice(0, 200)}` } };
   }
 
-  // Max's tools, with their schemas.
+  // The host's tools, with their schemas.
   async function list() {
-    const outcome = await post("tools/list", {});
-    return outcome.ok ? { ok: true, value: outcome.value.tools } : outcome;
+    const answer = await ask("GET", "/tools");
+    if (!answer.ok) return answer;
+    if (Array.isArray(answer.value?.tools)) return { ok: true, value: answer.value.tools };
+    return { ok: false, error: { code: "refused", message: `max answered ${JSON.stringify(answer.value).slice(0, 200)}` } };
   }
 
   return { request, list };
@@ -126,7 +117,7 @@ function connect({ url = MCP } = {}) {
 // broke and when it opens again. A stream that ends or goes quiet is
 // opened again after the last row, so this never ends. See "Resident
 // programs" in docs/rust-rewrite.md.
-async function* events({ url = new URL("/events", MCP).href, after, told = () => {} } = {}) {
+async function* events({ url = new URL("/events", MAX).href, after, told = () => {} } = {}) {
   let last = after;
   let wait = RETRY;
   for (;;) {
@@ -183,4 +174,4 @@ async function refused(response) {
   }
 }
 
-module.exports = { MCP, ToolError, connect, events };
+module.exports = { MAX, ToolError, connect, events };

@@ -1,4 +1,4 @@
-//! `/events` on each group's MCP service: the group's timeline as it is
+//! `/events` on max's service to each group's VM: the group's timeline as it is
 //! committed, a JSON line a row, for the programs Max keeps in the VM,
 //! which read it with `maxx events`. `?after=<id>` first sends the rows
 //! after that one, the latest [`EVENTS_CAUGHT_UP`] of them, from the database. A

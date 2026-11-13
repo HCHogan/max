@@ -33,9 +33,9 @@ use self::machine::{BOOT, Boot, Booted, Guest, Machine};
 use self::ssh::{Closes, Command, Connection};
 use crate::config;
 use crate::conversation::{Heard, Signal};
-use crate::mcp;
-use crate::mcp::api::{self, Apis};
 use crate::scope::Scope;
+use crate::service;
+use crate::service::api::{self, Apis};
 
 /// How often idle and dead VMs are looked for, and kept ones that are
 /// down are started.
@@ -139,7 +139,7 @@ impl Vms {
         scope: &mut Scope,
         signals: UnboundedSender<Signal>,
         apis: Arc<Apis>,
-        agents: Option<mcp::Models>,
+        agents: Option<service::Models>,
     ) -> Result<Self> {
         let guest = Guest::load(&config.guest)?;
         std::fs::create_dir_all(&config.dir)?;
@@ -310,7 +310,7 @@ struct Running {
     connection: Arc<Connection>,
     closes: Closes,
     /// The closer, which closes the channels of calls dropped early, the
-    /// task that asks the guest what runs, and the VM's MCP service with
+    /// task that asks the guest what runs, and max's service to the VM with
     /// its port to the VM service: they end when max lets go of the VM.
     _tasks: Scope,
     work: Arc<PathBuf>,
@@ -369,7 +369,7 @@ struct Service {
     config: Arc<config::Vm>,
     guest: Arc<Guest>,
     apis: Arc<Apis>,
-    agents: Option<mcp::Models>,
+    agents: Option<service::Models>,
     signals: UnboundedSender<Signal>,
     idle: Duration,
     vms: HashMap<ConversationId, State>,
@@ -390,7 +390,7 @@ async fn run(
     config: config::Vm,
     guest: Guest,
     apis: Arc<Apis>,
-    agents: Option<mcp::Models>,
+    agents: Option<service::Models>,
     signals: UnboundedSender<Signal>,
     mut requests: UnboundedReceiver<Request>,
 ) {
@@ -626,7 +626,7 @@ impl Service {
         };
         warn!(%conversation, "the connection to a VM is gone; attaching to it again");
         let (slot, units, stale) = (running.slot, running.units, running.stale);
-        // Its tasks end, and the MCP socket is free to bind again.
+        // Its tasks end, and the service's socket is free to bind again.
         drop(running);
         // Whatever it was switched to stands: only the connection is new.
         let attached = Attached {
@@ -696,7 +696,7 @@ impl Service {
         let Booted {
             machine,
             connection,
-            mcp,
+            listener,
         } = match result {
             Ok(booted) => booted,
             Err(unusable) => {
@@ -788,13 +788,13 @@ impl Service {
         }
         let host = host::router(conversation, self.internal.clone())
             .merge(api::router(conversation, Arc::clone(&self.apis)))
-            .merge(mcp::agents(conversation, self.agents.clone()));
+            .merge(service::agents(conversation, self.agents.clone()));
         let signals = self.signals.clone();
         tasks.spawn(move |stop| {
             // The timeline's streams end with the service, which waits for them.
             let calls = signals.clone();
             let host = host.merge(events::router(conversation, signals, stop.clone()));
-            mcp::serve(mcp, conversation, calls, host, stop)
+            service::serve(listener, conversation, calls, host, stop)
         });
         let mut running = Running {
             slot,

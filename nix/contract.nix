@@ -5,7 +5,7 @@
 #
 # Raise it with any change to: the arguments of what max runs with maxx,
 # or the line a call prints; the layout of /run/max/jobs; the runner's input; the routes a
-# guest calls (/mcp, /llm, /api, /events, /units). See "Lifetimes move to
+# guest calls (/tools, /llm, /api, /events, /units). See "Lifetimes move to
 # systemd" in docs/rust-rewrite.md.
 #
 # 2 (2026-11-12): a background agent is a unit of the guest's. /job is
@@ -26,5 +26,8 @@
 # max runs `maxx units run`, `start`, `list` and `stop-all`, each with
 # its arguments as a JSON object and its answer as one. A program has
 # them as tools.<name>, with tools.show and tools.video where max.image
-# and max.video were.
+# and max.video were. The host's tools are plain HTTP, GET /tools and
+# POST /tools/<name> with the arguments as JSON, where /mcp spoke MCP;
+# the runner's input names max by `url`, and the guest's forwarder is
+# max-host.
 5

@@ -9,7 +9,7 @@
 "use strict";
 
 const { spawn } = require("node:child_process");
-const { MCP, ToolError, connect, events } = require("./client.js");
+const { MAX, ToolError, connect, events } = require("./client.js");
 const { failed, image } = require("./shown.js");
 const { watch } = require("./video.js");
 // The guest's own, as the command line and the system prompt read them
@@ -83,7 +83,7 @@ function command(tool, args, signal) {
 // true, value} or {ok: false, error: {code, message}}; list() is all of
 // them with their schemas, the host's first; follow(args) is the chat's
 // rows as they come.
-function open({ url = MCP, work = "/work" } = {}) {
+function open({ url = MAX, work = "/work" } = {}) {
   const client = connect({ url });
 
   async function request(name, args, signal) {
@@ -111,7 +111,7 @@ function open({ url = MCP, work = "/work" } = {}) {
 let ready;
 function program() {
   if (ready) return ready;
-  const { request, follow } = open({ url: process.env.MAXX_MCP, work: process.env.MAXX_WORK });
+  const { request, follow } = open({ url: process.env.MAXX_URL, work: process.env.MAXX_WORK });
   ready = new Proxy(Object.create(null), {
     get(_, name) {
       // No promise itself, whatever awaits it.

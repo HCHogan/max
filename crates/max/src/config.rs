@@ -368,7 +368,7 @@ pub struct Llm {
     pub caption: Option<Selection>,
     /// The model background agents run on, unless Max starts one on
     /// another of the configured models: pi, in the group's VM, which
-    /// reaches them through the VM's MCP service. Without it, there are
+    /// reaches them through max's service to the VM. Without it, there are
     /// no background agents, and nothing in a VM calls a model.
     pub job: Option<Selection>,
     /// The model that tidies Max's memory files at night. Without it,

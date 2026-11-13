@@ -26,9 +26,9 @@ use tracing::warn;
 use super::ssh::{self, Connection};
 use crate::config::{self, Slot};
 
-/// The hybrid vsock port the guest reaches the MCP service on, and the
+/// The hybrid vsock port the guest reaches max's service on, and the
 /// VM service's own routes; see `host`.
-const MCP_PORT: u32 = 7777;
+const PORT: u32 = 7777;
 
 /// How long the guest has to boot and let max in.
 pub const BOOT: Duration = Duration::from_secs(60);
@@ -302,11 +302,11 @@ fn conversation(name: &str, prefix: &str) -> Option<ConversationId> {
 }
 
 /// A VM max can use: its unit, the SSH connection, and where its programs
-/// call the MCP service.
+/// call max's service.
 pub struct Booted {
     pub machine: Machine,
     pub connection: Connection,
-    pub mcp: UnixListener,
+    pub listener: UnixListener,
 }
 
 /// Boots `conversation`'s VM on `slot`, the slot `index`; without the
@@ -325,7 +325,7 @@ pub async fn boot(
     disk(config, &dir.join("nix.img")).await?;
     // cloud-hypervisor connects here when the guest connects to the host's
     // port, so it listens before the guest boots.
-    let mcp = listen(dir).await?;
+    let listener = listen(dir).await?;
 
     let key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519)?;
     let public = key.public_key().to_openssh()?;
@@ -391,7 +391,7 @@ pub async fn boot(
                 return Ok(Booted {
                     machine,
                     connection,
-                    mcp,
+                    listener,
                 });
             }
             Err(error) => error,
@@ -410,7 +410,7 @@ pub async fn boot(
 }
 
 /// Attaches to `conversation`'s VM, which runs: binds the socket its
-/// programs reach the MCP service on again, and logs in with the key its
+/// programs reach max's service on again, and logs in with the key its
 /// boot left. None if its unit has ended: there is nothing to attach to,
 /// and its socket, which stays, would only be waited on.
 pub async fn attach(config: &config::Vm, conversation: ConversationId) -> Result<Option<Booted>> {
@@ -421,7 +421,7 @@ pub async fn attach(config: &config::Vm, conversation: ConversationId) -> Result
     let dir = &machine.dir;
     let key = fs::read(dir.join(KEY)).await.wrap_err("reading its key")?;
     let key = Arc::new(PrivateKey::from_openssh(key)?);
-    let mcp = listen(dir).await?;
+    let listener = listen(dir).await?;
     let connection = match let_in(&dir.join("notify.vsock"), &key, ATTACH).await {
         Ok(connection) => connection,
         // It ended while max tried.
@@ -431,7 +431,7 @@ pub async fn attach(config: &config::Vm, conversation: ConversationId) -> Result
     Ok(Some(Booted {
         machine,
         connection,
-        mcp,
+        listener,
     }))
 }
 
@@ -491,11 +491,11 @@ async fn link(image: &Path, root: &Path) {
 }
 
 /// Listens where cloud-hypervisor connects when the guest connects to the
-/// host's MCP port: `notify.vsock_7777` in the VM's directory. Only that
+/// host's port: `notify.vsock_7777` in the VM's directory. Only that
 /// socket is replaced: the VM's own, which it made, are its to keep while
 /// it runs (on 2026-11-03 a second start replaced a running VM's).
 async fn listen(dir: &Path) -> Result<UnixListener> {
-    let socket = dir.join(format!("notify.vsock_{MCP_PORT}"));
+    let socket = dir.join(format!("notify.vsock_{PORT}"));
     let _ = fs::remove_file(&socket).await;
     UnixListener::bind(&socket).wrap_err_with(|| format!("listening at {}", socket.display()))
 }

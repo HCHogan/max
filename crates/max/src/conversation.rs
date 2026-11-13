@@ -29,7 +29,7 @@ use tokio::sync::{broadcast, oneshot};
 pub use actor::{Conversation, Outgoing, Shared};
 
 use crate::inbound::Inbound;
-use crate::mcp;
+use crate::service;
 
 /// What arrives in an actor's mailbox: everything that happens to a
 /// conversation, in the order the actor handles it.
@@ -69,7 +69,7 @@ pub enum Event {
     Call {
         tool: String,
         args: serde_json::Value,
-        reply: oneshot::Sender<Result<serde_json::Value, mcp::Failure>>,
+        reply: oneshot::Sender<Result<serde_json::Value, service::Failure>>,
     },
     /// A program in the group's VM follows the timeline: `maxx events`.
     Subscribe(oneshot::Sender<Subscription>),
@@ -89,7 +89,7 @@ pub enum Signal {
         conversation: ConversationId,
         tool: String,
         args: serde_json::Value,
-        reply: oneshot::Sender<Result<serde_json::Value, mcp::Failure>>,
+        reply: oneshot::Sender<Result<serde_json::Value, service::Failure>>,
     },
     /// Something from outside the chat that Max there is to hear.
     Heard {
@@ -124,7 +124,7 @@ pub struct Subscription {
     pub place: Arc<Place>,
     pub head: MessageId,
     pub rows: broadcast::Receiver<Arc<Message>>,
-    pub services: Arc<mcp::Services>,
+    pub services: Arc<service::Services>,
 }
 
 impl fmt::Debug for Subscription {

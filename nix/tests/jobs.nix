@@ -67,15 +67,17 @@ let
           return res.end(JSON.stringify({ ...own, effort: null, models: [own, wide] }));
         }
         if (req.url === "/llm/chat/completions") return model(body, res);
-        const { id, method, params } = JSON.parse(body);
-        let result = {};
-        if (method === "tools/list") result = { tools: [wake] };
-        if (method === "tools/call") {
-          fs.appendFileSync("/run/wakes", JSON.stringify(params.arguments.text) + "\n");
-          result = { isError: false, structuredContent: { said: "woke Max" } };
+        // The host's tools: the list, and a wake, which is kept.
+        let answer = { ok: false, error: { code: "unknown_tool", message: "there is no such tool" } };
+        if (req.method === "GET" && req.url === "/tools") answer = { tools: [wake] };
+        if (req.method === "POST" && req.url === "/tools/wake") {
+          fs.appendFileSync("/run/wakes", JSON.stringify(JSON.parse(body).text) + "\n");
+          answer = { ok: true, value: { said: "woke Max" } };
         }
+        // What max-units says of the units it found.
+        if (req.url === "/units") answer = {};
         res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ jsonrpc: "2.0", id, result }));
+        res.end(JSON.stringify(answer));
       });
     }).listen(7777, "127.0.0.1");
   '';

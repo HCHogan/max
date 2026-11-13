@@ -16,8 +16,8 @@ use crate::conversation::testing::{self, from_xiaoming, offset, shared, text};
 use crate::conversation::{Heard, Outgoing, Question, ingest};
 use crate::inbound::{Chat, InNode, Person};
 use crate::llm::testing::{Answer, Script};
-use crate::mcp::Services;
 use crate::qq::groups::Groups;
+use crate::service::Services;
 
 const PATIENCE: Duration = Duration::from_secs(5);
 

@@ -31,8 +31,8 @@ use tracing::{debug, error, info, warn};
 use crate::command::{self, Command};
 use crate::conversation::{Conversation, Event, Heard, Place, Shared, Signal};
 use crate::inbound::Inbound;
-use crate::mcp;
 use crate::scope::Scope;
+use crate::service;
 
 /// Max's account on a platform.
 #[derive(Clone, Debug)]
@@ -274,7 +274,7 @@ impl Table {
                     .send(question.answered(Err(why.to_owned())));
             }
             Event::Call { reply, .. } => {
-                let _ = reply.send(Err(mcp::Failure::new("internal", why)));
+                let _ = reply.send(Err(service::Failure::new("internal", why)));
             }
             _ => {}
         }
@@ -333,7 +333,7 @@ impl Table {
 /// and the rest is dropped, as it is once max is gone.
 fn away(signal: Signal) {
     if let Signal::Call { reply, .. } = signal {
-        let _ = reply.send(Err(mcp::Failure::away()));
+        let _ = reply.send(Err(service::Failure::away()));
     }
 }
 

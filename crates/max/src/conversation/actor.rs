@@ -38,9 +38,9 @@ use crate::command;
 use crate::config::Limits;
 use crate::inbound::Inbound;
 use crate::llm::{self, Chosen, Models};
-use crate::mcp;
 use crate::media::pictures::Pictures;
 use crate::scope::Scope;
+use crate::service;
 use crate::tokens;
 use crate::vm::{self, Vms};
 use crate::worker::Rows;
@@ -102,7 +102,7 @@ impl Refusal {
 /// What every conversation's actor shares.
 pub struct Shared {
     /// The database, and what the tools reach.
-    pub services: Arc<mcp::Services>,
+    pub services: Arc<service::Services>,
     pub models: Arc<Models>,
     pub outbound: UnboundedSender<Outgoing>,
     /// How long a core may go on when Max stops, before it is interrupted.
@@ -583,8 +583,9 @@ impl Conversation {
             .strip_prefix("/work")
             .unwrap_or(Path::new(MEMORY_FILE))
             .to_path_buf();
-        let read =
-            tokio::task::spawn_blocking(move || mcp::work::read(&work, &file, MEMORY_FILE_BYTES));
+        let read = tokio::task::spawn_blocking(move || {
+            service::work::read(&work, &file, MEMORY_FILE_BYTES)
+        });
         match read.await {
             Ok(Ok(bytes)) => {
                 max_core::project::memory(&String::from_utf8_lossy(&bytes), tokens::count)
@@ -622,7 +623,7 @@ impl Conversation {
             place: &self.place,
             system: prompt::system(
                 persona,
-                &mcp::tool::DECLARATIONS,
+                &service::tool::DECLARATIONS,
                 apis,
                 vms.map(Vms::idle),
                 vms.is_some_and(|vms| vms.operates(self.place.conversation)),

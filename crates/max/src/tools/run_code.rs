@@ -14,7 +14,7 @@ struct RunnerInput<'a> {
 /// The tools a program may call: all of them, as its `maxx` may, those
 /// the prompt doesn't declare too.
 static TOOL_NAMES: LazyLock<Vec<&'static str>> =
-    LazyLock::new(|| mcp::tool::TOOLS.iter().map(|tool| tool.name).collect());
+    LazyLock::new(|| service::tool::TOOLS.iter().map(|tool| tool.name).collect());
 
 /// What the model is told of the program. The result and the console are
 /// cut as `shell`'s output is.
