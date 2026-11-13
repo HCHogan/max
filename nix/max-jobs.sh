@@ -15,6 +15,8 @@
 #   max-jobs ended UNIT      the unit's ExecStopPost=
 #   max-jobs notify UNIT     max-notify@UNIT.service's
 #   max-jobs list [--count]  the units that run, or how many
+#   max-jobs idle SECONDS    succeeds if none runs, and none has begun or
+#                            ended in that long
 #   max-jobs stop-all        stops them, and prints which
 #
 # OPTIONS: --unit NAME and --limit SECONDS, which a unit must have;
@@ -329,6 +331,16 @@ list() {
   done
 }
 
+# Whether the guest has had nothing of Max's to do for so long. A unit's
+# start makes its directory in $jobs, its end writes there, and the
+# directory goes once the end is told: the newest of them is when.
+idle() {
+  local seconds=$1
+  [[ $seconds =~ ^[0-9]+$ ]] || usage "idle takes seconds, not '$seconds'"
+  [ "$(list --count)" = 0 ] || return 1
+  [ -z "$(find "$jobs" -maxdepth 1 -newermt "@$(($(date +%s) - seconds))" 2> /dev/null)" ]
+}
+
 stop_all() {
   local units
   mapfile -t units < <(running)
@@ -343,6 +355,7 @@ case "${1:-}" in
   ended) ended "${2:?max-jobs ended needs a unit}" ;;
   notify) notify "${2:?max-jobs notify needs a unit}" ;;
   list) list "${2:-}" ;;
+  idle) idle "${2:?max-jobs idle needs seconds}" ;;
   stop-all) stop_all ;;
-  *) usage "run, start, ended, notify, list or stop-all, not '${1:-}'" ;;
+  *) usage "run, start, ended, notify, list, idle or stop-all, not '${1:-}'" ;;
 esac

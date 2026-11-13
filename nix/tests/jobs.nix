@@ -189,6 +189,31 @@ pkgs.testers.runNixOSTest {
         assert said["out"]["head"] == "done\n", said
         assert left("gone") == [], left("gone")
 
+    with subtest("the caches are dropped once nothing has run for ten minutes, and not before"):
+        def dropped():
+            return int(machine.succeed("grep -w drop_pagecache /proc/vmstat | cut -d' ' -f2"))
+
+        def trimmed(ago=None):
+            # As if the last of what ran were that long ago.
+            if ago:
+                machine.succeed(f"find /run/max/jobs -maxdepth 1 -exec touch -d '{ago} minutes ago' {{}} +")
+            machine.succeed("systemctl start max-trim.service")
+            return dropped() - before
+
+        before = dropped()
+        # A call has just ended: the next one may read what it wrote.
+        assert trimmed() == 0
+        # Long since, but a background command runs.
+        machine.succeed("max-jobs start --unit max-job-busy --limit 60 -- sleep 60")
+        assert trimmed(ago=11) == 0
+        machine.succeed("systemctl stop max-job-busy")
+        machine.wait_until_fails("test -e /run/max/jobs/max-job-busy")
+        # It has just ended, and nine minutes on isn't ten.
+        assert trimmed() == 0
+        assert trimmed(ago=9) == 0
+        assert trimmed(ago=11) == 1
+        machine.fail("max-jobs idle soon")
+
     assert wakes() == [], wakes()
 
     with subtest("a background command returns at once, and its end wakes Max once"):
