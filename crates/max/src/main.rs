@@ -288,6 +288,7 @@ fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
         for tool in steps {
             outs.push(tools::run(tool, Some(&vms), &context).await);
         }
+        outs.push(about(&vms).await);
         // A call max lets go of before its end, as a killed turn's: its
         // channel closes, and the guest stops its unit. The call after
         // it counts what runs besides itself.
@@ -380,6 +381,35 @@ fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// What `/status` asks of a guest: its NixOS, the memory in use there,
+/// and how its systemd has Max's units, which here is the one the step
+/// before installed.
+async fn about(vms: &Vms) -> ToolOutput {
+    let Some(vm) = vms.running(ConversationId(0)).await else {
+        return ToolOutput::text("客户机没在跑".to_owned(), true, 0);
+    };
+    match vm.about(&max::vm::units(vm.work())).await {
+        Ok(about) => {
+            let shown =
+                |unit: &max::vm::Unit| format!("{} {} {}", unit.name, unit.load, unit.state);
+            let units: Vec<String> = about.units.iter().map(shown).collect();
+            let text = format!(
+                "客户机：NixOS {}，内存 {} MiB 里用了 {} MiB\nunit：{}",
+                about.version,
+                about.memory >> 20,
+                about.used >> 20,
+                units.join("、")
+            );
+            // Since when it has been so, too.
+            let whole = units == ["boot-note.service loaded exited"]
+                && about.units[0].since.is_some()
+                && (1..about.memory).contains(&about.used);
+            ToolOutput::text(text, !whole, 0)
+        }
+        Err(error) => ToolOutput::text(format!("客户机没说自己怎样：{error:#}"), true, 0),
+    }
 }
 
 /// The next thing the guest wakes Max with that begins with `prefix`, if

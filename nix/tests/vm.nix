@@ -112,6 +112,9 @@ pkgs.testers.runNixOSTest {
     # maxx calls the MCP service from a command, as the program did, and
     # lists the tools.
     assert " (not_found)\nmaxx 退出码 1\n1\n" in shown, shown
+    # What /status asks of a guest: its NixOS and its memory, and how its
+    # systemd has the unit of Max's.
+    assert "客户机：NixOS 2" in shown and "unit：boot-note.service loaded exited" in shown, shown
     # A call max lets go of, as a killed turn's, closes its channel, and
     # the guest stops its unit: nothing of it runs for the call after.
     assert "放手的调用跑起来过 1 个，还剩 0 个" in shown, shown

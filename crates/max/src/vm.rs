@@ -4,6 +4,7 @@
 //! borrows a VM's SSH connection. See "VM processes" and "Resident programs" in
 //! docs/rust-rewrite.md.
 
+mod about;
 mod events;
 mod host;
 mod machine;
@@ -26,6 +27,7 @@ use tokio::sync::oneshot;
 use tokio::time::{Instant, MissedTickBehavior, interval, timeout};
 use tracing::{info, warn};
 
+pub use self::about::{About, Unit, taken};
 use self::machine::{BOOT, Boot, Booted, Guest, Machine};
 use self::ssh::{Closes, Command, Connection};
 use crate::config;
@@ -204,6 +206,12 @@ impl Vm {
     /// it: what it wrote to stdout.
     pub async fn ask(&self, line: &str) -> Result<String> {
         ssh::ask(&self.connection, line).await
+    }
+
+    /// What the guest says of itself, and of those of `units` its systemd
+    /// knows: for `/status`.
+    pub async fn about(&self, units: &[String]) -> Result<About> {
+        about::read(&self.ask(&about::line(units)).await?)
     }
 
     /// A name for a command's unit, one `max-jobs` takes. A VM outlives

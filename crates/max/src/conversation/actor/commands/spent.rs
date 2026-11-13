@@ -69,22 +69,8 @@ impl fmt::Display for Spent {
 
 /// A count of tokens, to three figures: 950, 1.23k, 12.3k, 437M.
 fn tokens(count: i64) -> String {
-    let (mut value, mut unit) = (count as f64, "");
-    for next in ["k", "M", "B"] {
-        if value < 999.5 {
-            break;
-        }
-        (value, unit) = (value / 1000.0, next);
-    }
-    if unit.is_empty() {
-        return count.to_string();
-    }
-    let decimals = match value {
-        _ if value < 9.995 => 2,
-        _ if value < 99.95 => 1,
-        _ => 0,
-    };
-    format!("{value:.decimals$}{unit}")
+    let count = u64::try_from(count).unwrap_or(0);
+    super::figures(count, 1000.0, &["k", "M", "B"])
 }
 
 #[cfg(test)]

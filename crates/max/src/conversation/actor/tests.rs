@@ -462,6 +462,35 @@ async fn a_failed_call_says_so(pool: PgPool) {
     ));
 }
 
+/// Without a VM service, `/status` shows what the host's side of /work
+/// says: how much it takes, and Max's units by name.
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn status_shows_what_work_takes_and_its_units(pool: PgPool) {
+    let dir = std::env::temp_dir().join(format!("max-status-{:016x}", rand::random::<u64>()));
+    let mut h = Harness::with_vm_dir(pool, dir.clone()).await;
+    let conversation: i64 = sqlx::query_scalar("select max(id) from conversations")
+        .fetch_one(&h.pool)
+        .await
+        .unwrap();
+    let units = vm::work(&dir, ConversationId(conversation)).join(".max/systemd");
+    std::fs::create_dir_all(&units).unwrap();
+    for unit in ["web.service", "poll.timer", "notes.txt"] {
+        std::fs::write(units.join(unit), "[Unit]\n").unwrap();
+    }
+    h.send(from_xiaoming(0, vec![me(), text("/status")]));
+    let status = h.said().await.1;
+    let shown = status.split_once("\nmodel     ").unwrap().0;
+    let (work, units) = shown.split_once("\nunits     ").unwrap();
+    let taken = work.strip_prefix("```text\n/status → maxx dev\n/work     ");
+    assert!(
+        taken.is_some_and(|taken| taken.ends_with(['B', 'K'])),
+        "{status}"
+    );
+    assert_eq!(units, "poll.timer\n          web.service", "{status}");
+    h.stop().await;
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
 async fn a_core_is_shown_the_memory_file(pool: PgPool) {
     let dir = std::env::temp_dir().join(format!("max-memory-{:016x}", rand::random::<u64>()));
@@ -546,13 +575,10 @@ async fn commands_answer_and_never_wake(pool: PgPool) {
     let mut h = Harness::new(pool, 300).await;
     h.send(from_xiaoming(0, vec![me(), text("/status")]));
     let (answer, status) = h.said().await;
+    // No VMs here, and so nothing of one.
     assert!(
-        status.starts_with("```text\n/status → maxx dev\nos        "),
-        "{status}"
-    );
-    assert!(
-        status.contains(
-            "\nmodel     test/big · high\nproactive on\ncore      idle\n24h       none\n7d        none\nuptime    "
+        status.starts_with(
+            "```text\n/status → maxx dev\nmodel     test/big · high\nproactive on\ncore      idle\n24h       none\n7d        none\nuptime    "
         ),
         "{status}"
     );

@@ -68,14 +68,15 @@ impl Conversation {
     }
 
     /// Whom Max here may ask, and who may ask it, as `/status` shows
-    /// them: None for nobody.
+    /// them, which is by number alone: None for nobody.
     pub(super) async fn linked(&self) -> Result<[Option<String>; 2]> {
         let here = self.place.conversation;
         let mut conn = self.shared.services.pool.acquire().await?;
         let asked = links::asked(&mut conn, here).await?;
         let askers = links::askers(&mut conn, here).await?;
         Ok([asked, askers].map(|peers| {
-            let peers: Vec<String> = peers.iter().map(Peer::to_string).collect();
+            let number = |peer: &Peer| format!("c#{}", peer.conversation);
+            let peers: Vec<String> = peers.iter().map(number).collect();
             (!peers.is_empty()).then(|| peers.join(" · "))
         }))
     }

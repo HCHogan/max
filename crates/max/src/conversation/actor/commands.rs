@@ -12,6 +12,7 @@ use chrono::TimeDelta;
 
 use max_core::message::{Platform, Role};
 use max_db::platform::ConversationKind;
+use tokio::time::timeout;
 
 use super::*;
 use crate::bind::Pending;
@@ -21,6 +22,21 @@ use crate::conversation::ingest::Committed;
 mod spent;
 
 use self::spent::Spent;
+
+/// How long `/status` waits for the guest to say how it is, and for
+/// /work to be counted: the actor does nothing else meanwhile.
+const VM_WAIT: Duration = Duration::from_secs(2);
+/// The units `/status` gives a line each; of more, it says how many.
+const UNITS_SHOWN: usize = 12;
+
+/// What the conversation's VM said when `/status` asked how it is.
+enum Guest {
+    Up(vm::About),
+    /// It isn't running, and wasn't started for the asking.
+    Off,
+    /// It runs, or is booting, and didn't say in time.
+    Silent,
+}
 
 /// Who may run what. Commands that change one conversation are also its
 /// group's owner's and admins'; those that cost money are also the other
@@ -122,8 +138,8 @@ impl Conversation {
     }
 
     /// Has the guest stop every background command, if the VM runs: one
-    /// stopped on request tells nobody. In a task of its own, as the actor
-    /// waits only on the database.
+    /// stopped on request tells nobody. In a task of its own: the actor
+    /// waits on a guest only for `/status`, and not for long.
     fn stop_commands(&mut self) {
         let Some(vms) = self.shared.vms.clone() else {
             return;
@@ -213,14 +229,17 @@ impl Conversation {
     }
 
     /// A card like the Haskell version's `!version`, in English: maxx and
-    /// its commit, then a key and its value a line. `/model` and
-    /// `/persona` show those.
+    /// its commit, then a key and its value a line, a line under a key's
+    /// first one going without the key. `/model` and `/persona` show
+    /// those.
     async fn status(&self) -> Result<String> {
         let [may_ask, asked_by] = self.linked().await?;
         let settings = &self.settings;
         let mut lines = vec![format!("maxx {}", crate::COMMIT)];
         let mut line = |key: &str, value: String| lines.push(format!("{key:<10}{value}"));
-        line("os", format!("{} · {}", os(), std::env::consts::ARCH));
+        for (key, value) in self.machine().await {
+            line(key, value);
+        }
         // What the next reply uses; a running core keeps the one it began with.
         let next = self
             .shared
@@ -267,12 +286,6 @@ impl Conversation {
                 None => "idle".to_owned(),
             },
         );
-        if let Some(dir) = &self.shared.vm_dir {
-            let units = vm::units(&vm::work(dir, self.place.conversation));
-            if !units.is_empty() {
-                line("units", units.join(", "));
-            }
-        }
         if let Some(woken) = self.woken.summary(Instant::now()) {
             line("woken", woken);
         }
@@ -288,6 +301,78 @@ impl Conversation {
         }
         line("uptime", up);
         Ok(lines.join("\n"))
+    }
+
+    /// The lines of `/status` about the conversation's VM: the NixOS its
+    /// guest runs and the memory in use there, as the guest says them
+    /// when it runs; how much of the disk /work takes, which the host
+    /// counts on its own side; and Max's units, the files in /work, each
+    /// as the guest's systemd has it, or by name alone when nothing says.
+    /// The guest is asked while /work is counted, and neither is waited
+    /// for longer than `VM_WAIT`.
+    async fn machine(&self) -> Vec<(&'static str, String)> {
+        let conversation = self.place.conversation;
+        let work = self.shared.vm_dir.as_deref();
+        let work = work.map(|dir| vm::work(dir, conversation));
+        let names = work.as_deref().map(vm::units).unwrap_or_default();
+        let guest = async {
+            let vms = self.shared.vms.as_ref()?;
+            let asked = async {
+                let Some(vm) = vms.running(conversation).await else {
+                    return Guest::Off;
+                };
+                match vm.about(&names).await {
+                    Ok(about) => Guest::Up(about),
+                    Err(error) => {
+                        warn!(%conversation, error = format!("{error:#}"), "the guest didn't say how it is");
+                        Guest::Silent
+                    }
+                }
+            };
+            Some(timeout(VM_WAIT, asked).await.unwrap_or(Guest::Silent))
+        };
+        let taken = async {
+            let work = work.clone()?;
+            let until = std::time::Instant::now() + VM_WAIT;
+            let counted = tokio::task::spawn_blocking(move || vm::taken(&work, until));
+            counted.await.ok().flatten()
+        };
+        let (guest, taken) = tokio::join!(guest, taken);
+
+        let mut lines = Vec::new();
+        let mut units = Vec::new();
+        match guest {
+            Some(Guest::Up(about)) => {
+                let arch = std::env::consts::ARCH;
+                lines.push(("vm", format!("NixOS {} · {arch}", about.version)));
+                let memory = format!("{} of {}", size(about.used), size(about.memory));
+                lines.push(("memory", memory));
+                units = about.units;
+            }
+            Some(Guest::Off) => lines.push(("vm", "off".to_owned())),
+            Some(Guest::Silent) => lines.push(("vm", "no answer".to_owned())),
+            None => {}
+        }
+        match taken {
+            Some((bytes, true)) => lines.push(("/work", size(bytes))),
+            // Not all of it was counted in time.
+            Some((bytes, false)) => lines.push(("/work", format!("over {}", size(bytes)))),
+            None => {}
+        }
+        let mut key = "units";
+        for name in names.iter().take(UNITS_SHOWN) {
+            let said = units.iter().find(|unit| unit.name == *name);
+            lines.push((key, said.map_or_else(|| name.clone(), unit)));
+            key = "";
+        }
+        if let Some(more) = names
+            .len()
+            .checked_sub(UNITS_SHOWN)
+            .filter(|more| *more > 0)
+        {
+            lines.push(("", format!("and {more} more")));
+        }
+        lines
     }
 
     /// What this conversation's model calls used in the last day and
@@ -463,17 +548,67 @@ fn span(duration: Duration) -> String {
     }
 }
 
-/// The distribution's name from /etc/os-release, else the OS's.
-fn os() -> String {
-    std::fs::read_to_string("/etc/os-release")
-        .ok()
-        .and_then(|release| {
-            release.lines().find_map(|line| {
-                let name = line.strip_prefix("PRETTY_NAME=")?;
-                Some(name.trim_matches('"').to_owned())
-            })
-        })
-        .unwrap_or_else(|| std::env::consts::OS.to_owned())
+/// A unit as the guest's systemd has it: `web.service · running 3d 4h ·
+/// 182M · 2 restarts`, with how long it has been so, the memory its
+/// processes hold and how often systemd started it again;
+/// `scrape.service · failed (exit-code) 5m 12s`; and `new.service · not
+/// installed` for a file max-units hasn't made a unit of.
+fn unit(unit: &vm::Unit) -> String {
+    let mut shown = unit.name.clone();
+    match unit.load.as_str() {
+        "loaded" => {}
+        "not-found" => return shown + " · not installed",
+        // A file systemd couldn't make a unit of: bad-setting, error.
+        load => return format!("{shown} · {load}"),
+    }
+    let _ = write!(shown, " · {}", unit.state);
+    if let Some(failure) = &unit.failure {
+        let _ = write!(shown, " ({failure})");
+    }
+    if let Some(since) = unit.since {
+        let _ = write!(shown, " {}", span(since));
+    }
+    if let Some(memory) = unit.memory {
+        let _ = write!(shown, " · {}", size(memory));
+    }
+    match unit.restarts {
+        0 => {}
+        1 => shown.push_str(" · 1 restart"),
+        restarts => {
+            let _ = write!(shown, " · {restarts} restarts");
+        }
+    }
+    shown
+}
+
+/// A size in bytes, to three figures in units of 1024: 812B, 264M, 1.21G.
+fn size(bytes: u64) -> String {
+    if bytes < 1000 {
+        return format!("{bytes}B");
+    }
+    figures(bytes, 1024.0, &["K", "M", "G", "T"])
+}
+
+/// `count` to three figures, in the largest of `units` that leaves it
+/// one or more, each `base` times the one before: 950, 1.23k, 12.3k,
+/// 437M.
+fn figures(count: u64, base: f64, units: &[&str]) -> String {
+    let (mut value, mut unit) = (count as f64, "");
+    for next in units {
+        if value < 999.5 {
+            break;
+        }
+        (value, unit) = (value / base, next);
+    }
+    if unit.is_empty() {
+        return count.to_string();
+    }
+    let decimals = match value {
+        _ if value < 9.995 => 2,
+        _ if value < 99.95 => 1,
+        _ => 0,
+    };
+    format!("{value:.decimals$}{unit}")
 }
 
 /// How long the host has been up, from /proc/uptime on Linux.
@@ -481,4 +616,70 @@ fn host_uptime() -> Option<Duration> {
     let uptime = std::fs::read_to_string("/proc/uptime").ok()?;
     let seconds: f64 = uptime.split_whitespace().next()?.parse().ok()?;
     Some(Duration::from_secs_f64(seconds))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sizes_read_to_three_figures() {
+        let read = [0, 812, 1000, 276 << 20, 1300 << 20, 16263 << 20, 3 << 40].map(size);
+        assert_eq!(
+            read,
+            ["0B", "812B", "0.98K", "276M", "1.27G", "15.9G", "3.00T"]
+        );
+    }
+
+    #[test]
+    fn a_unit_shows_as_systemd_has_it() {
+        let unit = |name: &str, state: &str, seconds| vm::Unit {
+            name: name.to_owned(),
+            load: "loaded".to_owned(),
+            state: state.to_owned(),
+            failure: None,
+            since: Some(Duration::from_secs(seconds)),
+            memory: None,
+            restarts: 0,
+        };
+        let shown = [
+            vm::Unit {
+                memory: Some(182 << 20),
+                restarts: 2,
+                ..unit("web.service", "running", 273_600)
+            },
+            unit("poll.timer", "waiting", 41),
+            vm::Unit {
+                failure: Some("exit-code".to_owned()),
+                memory: None,
+                restarts: 1,
+                ..unit("scrape.service", "failed", 312)
+            },
+            vm::Unit {
+                since: None,
+                ..unit("never.service", "dead", 0)
+            },
+            vm::Unit {
+                load: "not-found".to_owned(),
+                since: None,
+                ..unit("new.service", "dead", 0)
+            },
+            vm::Unit {
+                load: "bad-setting".to_owned(),
+                ..unit("wrong.service", "dead", 5)
+            },
+        ]
+        .map(|unit| super::unit(&unit));
+        assert_eq!(
+            shown,
+            [
+                "web.service · running 3d 4h · 182M · 2 restarts",
+                "poll.timer · waiting 41s",
+                "scrape.service · failed (exit-code) 5m 12s · 1 restart",
+                "never.service · dead",
+                "new.service · not installed",
+                "wrong.service · bad-setting",
+            ]
+        );
+    }
 }

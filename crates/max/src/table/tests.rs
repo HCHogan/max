@@ -372,12 +372,13 @@ async fn an_owner_links_two_conversations_one_way(pool: PgPool) {
     }
     s.send(private(9, "/status"));
     let status = s.said().await.1;
-    let may_ask = format!("\nmay ask   c#{group} 示波器同好会\n");
+    // `/status` names them by number alone.
+    let may_ask = format!("\nmay ask   c#{group}\n");
     assert!(status.contains(&may_ask), "{status}");
     assert!(!status.contains("asked by"), "{status}");
     s.send(owner_in_group(10, "/status"));
     let status = s.said().await.1;
-    let asked_by = format!("\nasked by  c#{chat} hank\n");
+    let asked_by = format!("\nasked by  c#{chat}\n");
     assert!(status.contains(&asked_by), "{status}");
     assert!(!status.contains("may ask"), "{status}");
 
