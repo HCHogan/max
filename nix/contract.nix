@@ -16,4 +16,8 @@
 # takes no --setenv, the runner's input has none, and /mcp runs every
 # call for the VM. A call's unit has MAX_CALL, and the line it prints
 # lists what it left for the model to see.
-3
+#
+# 4 (2026-11-13): a call ends with its caller. max-jobs run takes
+# --input BYTES, and the rest of its input is the caller's to hold open:
+# when that ends, the guest stops the unit. max stops none by name.
+4

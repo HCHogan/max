@@ -112,6 +112,9 @@ pkgs.testers.runNixOSTest {
     # maxx calls the MCP service from a command, as the program did, and
     # lists the tools.
     assert " (not_found)\nmaxx 退出码 1\n1\n" in shown, shown
+    # A call max lets go of, as a killed turn's, closes its channel, and
+    # the guest stops its unit: nothing of it runs for the call after.
+    assert "放手的调用跑起来过 1 个，还剩 0 个" in shown, shown
     # A background command is a unit of the guest's: the call comes back
     # with its name at once, its output is in its file while it runs, and
     # the guest tells of its end.
@@ -184,7 +187,7 @@ pkgs.testers.runNixOSTest {
     assert machine.succeed(f"{last} | cut -d' ' -f1").strip() == boot
     # Both images are rooted: the one it booted, whose kernel it runs,
     # and the one it is on.
-    roots = machine.succeed("readlink /nix/var/nix/gcroots/per-user/maxx/7 /nix/var/nix/gcroots/per-user/maxx/7.now").split()
+    roots = machine.succeed("readlink /nix/var/nix/gcroots/per-user/maxx/7 /nix/var/nix/gcroots/per-user/maxx/7.*").split()
     assert len(set(roots)) == 2 and all("max-guest.json" in root for root in roots), roots
     assert "stale=false" in machine.succeed(
         "journalctl -u maxx.service -o cat | grep \"a VM's guest is switched\""
@@ -210,6 +213,7 @@ pkgs.testers.runNixOSTest {
         "systemctl start maxx.service",
     )
     machine.wait_for_unit("maxx.service")
+    machine.wait_until_fails("ls /nix/var/nix/gcroots/per-user/maxx/ | grep -q '^7'", timeout=60)
     # The screenshot, among the test's outputs.
     machine.succeed("head -c 8 /var/lib/maxx/vm/check/0/work/.max/browser-check.png | grep -q PNG")
     machine.copy_from_vm("/var/lib/maxx/vm/check/0/work/.max/browser-check.png")

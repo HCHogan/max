@@ -288,6 +288,19 @@ fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
         for tool in steps {
             outs.push(tools::run(tool, Some(&vms), &context).await);
         }
+        // A call max lets go of before its end, as a killed turn's: its
+        // channel closes, and the guest stops its unit. The call after
+        // it counts what runs besides itself.
+        let long = command("touch /work/.max/let-go; sleep 300");
+        let waited = Duration::from_secs(3);
+        let _ = tokio::time::timeout(waited, tools::run(long, Some(&vms), &context)).await;
+        let left = command(
+            "for n in $(seq 30); do others=$(($(max-jobs list --count) - 1)); \
+             [ $others = 0 ] && break; sleep 1; done; \
+             echo \"放手的调用跑起来过 $(ls /work/.max/let-go | wc -l) 个，还剩 $others 个\"; \
+             rm -f /work/.max/let-go",
+        );
+        outs.push(tools::run(left, Some(&vms), &context).await);
         // A background command: a unit of the guest's, which max doesn't
         // wait for. Its output is in its file before it ends; its maxx
         // calls as a call's does; and the guest tells of its end with a

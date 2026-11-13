@@ -198,9 +198,18 @@ async fn call(State(forward): State<Forward>, Path(path): Path<String>, body: By
     }
     let effort = effort(upstream.protocol, &fields);
     let id = serde_json::value::to_raw_value(&upstream.model).expect("a string is JSON");
-    match fields.iter_mut().find(|(name, _)| name == "model") {
-        Some(field) => field.1 = &id,
-        None => fields.push(("model".to_owned(), &id)),
+    // One `model`, where the first was: of two, the provider might take
+    // the one max didn't read, and the call be recorded as another's.
+    let mut named = false;
+    fields.retain_mut(|(name, value)| {
+        if name != "model" {
+            return true;
+        }
+        *value = &id;
+        !std::mem::replace(&mut named, true)
+    });
+    if !named {
+        fields.push(("model".to_owned(), &id));
     }
     let url = format!("{}/{endpoint}", upstream.base_url.trim_end_matches('/'));
     let mut sending = forward.client.post(url).json(&Fields(fields));

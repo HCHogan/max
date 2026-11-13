@@ -18,6 +18,8 @@ use std::sync::{Arc, LazyLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use color_eyre::eyre::Result;
+use futures_util::FutureExt;
+use futures_util::future::BoxFuture;
 use max_core::ids::ConversationId;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot;
@@ -25,7 +27,7 @@ use tokio::time::{Instant, MissedTickBehavior, interval, timeout};
 use tracing::{info, warn};
 
 use self::machine::{BOOT, Boot, Booted, Guest, Machine};
-use self::ssh::{Command, Connection};
+use self::ssh::{Closes, Command, Connection};
 use crate::config;
 use crate::conversation::{Heard, Signal};
 use crate::mcp;
@@ -100,7 +102,7 @@ enum Request {
 #[derive(Clone)]
 pub struct Vm {
     connection: Arc<Connection>,
-    stops: UnboundedSender<String>,
+    closes: Closes,
     work: Arc<PathBuf>,
     _lent: Arc<()>,
 }
@@ -191,10 +193,11 @@ impl Vms {
 }
 
 impl Vm {
-    /// Starts `line` in the guest's shell with `input`; `line` must start
-    /// the unit `unit`, from `Vm::unit`.
-    pub async fn command(&self, unit: String, line: &str, input: &[u8]) -> Result<Command> {
-        Command::start(&self.connection, unit, line, input, self.stops.clone()).await
+    /// Starts `line`, a call (`max-jobs run`), in the guest's shell, and
+    /// gives it `input`. The guest stops the call when what this returns
+    /// is dropped, or max's connection goes.
+    pub async fn command(&self, line: &str, input: &[u8]) -> Result<Command> {
+        Command::start(&self.connection, line, input, self.closes.clone()).await
     }
 
     /// Runs `line`, a command of max's own that is no unit, and waits for
@@ -203,12 +206,12 @@ impl Vm {
         ssh::ask(&self.connection, line).await
     }
 
-    /// A name for a command's unit, one `max-jobs` takes. A VM doesn't
-    /// outlive max, but the command's output files in /work are named
-    /// after the unit, and they do; so the name says which start of max
-    /// it is from, and a file of an earlier one isn't in the way. A count
-    /// alone began again at every restart, and a long output then failed:
-    /// its file was already there.
+    /// A name for a command's unit, one `max-jobs` takes. A VM outlives
+    /// max, and so do the command's output files in /work, which are
+    /// named after the unit; so the name says which start of max it is
+    /// from, and neither a unit nor a file of an earlier one is in the
+    /// way. A count alone began again at every restart, and a long
+    /// output then failed: its file was already there.
     pub fn unit() -> String {
         static NEXT: AtomicU64 = AtomicU64::new(1);
         static STARTED: LazyLock<u64> = LazyLock::new(|| {
@@ -277,8 +280,8 @@ struct Running {
     slot: usize,
     machine: Machine,
     connection: Arc<Connection>,
-    stops: UnboundedSender<String>,
-    /// The stopper, which stops the units of commands dropped early, the
+    closes: Closes,
+    /// The closer, which closes the channels of calls dropped early, the
     /// task that asks the guest what runs, and the VM's MCP service with
     /// its port to the VM service: they end when max lets go of the VM.
     _tasks: Scope,
@@ -301,7 +304,7 @@ impl Running {
         self.idle_since = Instant::now();
         Vm {
             connection: Arc::clone(&self.connection),
-            stops: self.stops.clone(),
+            closes: self.closes.clone(),
             work: Arc::clone(&self.work),
             _lent: Arc::clone(&self.lent),
         }
@@ -326,6 +329,14 @@ impl Running {
 
 type Waiting = Vec<oneshot::Sender<Result<Vm, String>>>;
 
+/// Why a boot or an attach left no VM to use.
+enum Unusable {
+    /// It didn't boot, or the guest didn't let max in: why.
+    Failed(String),
+    /// The VM max was to attach to again has ended by itself.
+    Gone,
+}
+
 struct Service {
     config: Arc<config::Vm>,
     guest: Arc<Guest>,
@@ -336,7 +347,10 @@ struct Service {
     vms: HashMap<ConversationId, State>,
     free: Free,
     boots: Scope,
-    booted: UnboundedSender<(ConversationId, Result<Booted, String>)>,
+    booted: UnboundedSender<(ConversationId, Result<Booted, Unusable>)>,
+    /// The VMs max had systemd stop a moment ago, each done once systemd
+    /// has the request: a boot of the same VM waits for that.
+    stopping: HashMap<ConversationId, BoxFuture<'static, ()>>,
     internal: UnboundedSender<Internal>,
     /// The groups whose VMs stay on, for the units Max keeps in them.
     kept: BTreeSet<ConversationId>,
@@ -366,14 +380,25 @@ async fn run(
         vms: HashMap::new(),
         boots: Scope::new(),
         booted,
+        stopping: HashMap::new(),
         internal,
         kept: BTreeSet::new(),
         failed: HashMap::new(),
     };
     // The VMs a max before this one booted run on, with what runs in
-    // them: this one attaches to those it can use.
-    for conversation in machine::running(&service.config).await {
-        service.attach(conversation).await;
+    // them: this one attaches to those it can use. What the rest were
+    // rooted for is the collector's.
+    match machine::running(&service.config).await {
+        Ok(running) => {
+            machine::unroot_ended(&service.config, &running);
+            for conversation in running {
+                service.attach(conversation).await;
+            }
+        }
+        Err(error) => warn!(
+            error = format!("{error:#}"),
+            "couldn't list the VMs that run"
+        ),
     }
     // The groups that had units when max stopped are back on, if their
     // VMs aren't up already.
@@ -464,7 +489,7 @@ impl Service {
         let operates = self.config.operates(conversation.0);
         let pool = self.config.operations_slots();
         let Some(slot) = self.free.take(operates).or_else(|| {
-            evict(&mut self.vms, &self.kept, |slot| {
+            evict(&mut self.vms, &self.kept, &mut self.stopping, |slot| {
                 pool.contains(&slot) == operates
             })
         }) else {
@@ -494,7 +519,13 @@ impl Service {
             Arc::clone(&self.guest),
             self.booted.clone(),
         );
+        let stopping = self.stopping.remove(&conversation);
         self.boots.spawn(move |_| async move {
+            // Stopped a moment ago, as for a new image: started once
+            // systemd has that, or the stop would end this boot.
+            if let Some(stopping) = stopping {
+                stopping.await;
+            }
             let started = Instant::now();
             let operations = if operates {
                 config.operations.as_ref()
@@ -513,7 +544,7 @@ impl Service {
                 }
                 Err(error) => warn!(%conversation, %error, "a VM didn't boot"),
             }
-            let _ = booted.send((conversation, result));
+            let _ = booted.send((conversation, result.map_err(Unusable::Failed)));
         });
     }
 
@@ -558,8 +589,9 @@ impl Service {
 
     /// max's connection to `conversation`'s VM is gone. The VM may run
     /// on, as when its sshd restarted under a switch: max attaches to it
-    /// again, with `waiting` for it, and one it can't reach any more is
-    /// stopped as one that failed.
+    /// again, with `waiting` for it. One it can't reach any more is
+    /// stopped as one that failed, and one that has ended by itself
+    /// failed too, and boots again for whoever waits.
     fn reattach(&mut self, conversation: ConversationId, waiting: Waiting) {
         let Some(State::Running(running)) = self.vms.remove(&conversation) else {
             return;
@@ -589,14 +621,22 @@ impl Service {
     fn attaching(&mut self, conversation: ConversationId, attached: Attached) {
         let (config, booted) = (Arc::clone(&self.config), self.booted.clone());
         self.boots.spawn(move |_| async move {
-            let result = machine::attach(&config, conversation).await;
-            match &result {
-                Ok(_) => info!(%conversation, ?attached, "attached to a VM that runs"),
-                Err(error) => {
-                    warn!(%conversation, error = format!("{error:#}"), "couldn't attach to a VM");
+            let result = match machine::attach(&config, conversation).await {
+                Ok(Some(booted)) => {
+                    info!(%conversation, ?attached, "attached to a VM that runs");
+                    Ok(booted)
                 }
-            }
-            let _ = booted.send((conversation, result.map_err(|error| format!("{error:#}"))));
+                Ok(None) => {
+                    warn!(%conversation, "a VM that ran has ended by itself");
+                    Err(Unusable::Gone)
+                }
+                Err(error) => {
+                    let error = format!("{error:#}");
+                    warn!(%conversation, error, "couldn't attach to a VM");
+                    Err(Unusable::Failed(error))
+                }
+            };
+            let _ = booted.send((conversation, result));
         });
     }
 
@@ -615,7 +655,7 @@ impl Service {
         }
     }
 
-    fn booted(&mut self, conversation: ConversationId, result: Result<Booted, String>) {
+    fn booted(&mut self, conversation: ConversationId, result: Result<Booted, Unusable>) {
         let Some(State::Booting {
             slot,
             waiting,
@@ -631,9 +671,8 @@ impl Service {
             mcp,
         } = match result {
             Ok(booted) => booted,
-            Err(error) => {
-                // Whatever is left of it: one max couldn't attach to runs.
-                Machine::of(&self.config, conversation).stop();
+            Err(unusable) => {
+                let machine = Machine::of(&self.config, conversation);
                 self.free.release(slot);
                 self.fail(conversation);
                 if !units {
@@ -641,17 +680,32 @@ impl Service {
                     // it, instead of booting again every sweep.
                     self.kept.remove(&conversation);
                 }
-                for reply in waiting {
-                    let _ = reply.send(Err(format!("the VM didn't start: {error}")));
+                match unusable {
+                    Unusable::Failed(error) => {
+                        // Whatever is left of it: one max couldn't attach
+                        // to runs.
+                        self.stopping.insert(conversation, machine.stop().boxed());
+                        for reply in waiting {
+                            let _ = reply.send(Err(format!("the VM didn't start: {error}")));
+                        }
+                    }
+                    Unusable::Gone => {
+                        // Nothing runs to stop. A call that found it so
+                        // has it boot again, as it would one that was
+                        // never up; a kept one comes back at the sweep.
+                        machine.unroot();
+                        if !waiting.is_empty() {
+                            self.start(conversation, waiting);
+                        }
+                    }
                 }
                 return;
             }
         };
         let connection = Arc::new(connection);
-        let (stops, stopped) = mpsc::unbounded_channel();
+        let (closes, closed) = mpsc::unbounded_channel();
         let mut tasks = Scope::new();
-        let held = Arc::clone(&connection);
-        tasks.spawn(move |_| ssh::stopper(held, stopped));
+        tasks.spawn(move |_| ssh::closer(closed));
         // A background command is the guest's, and no call of max's holds
         // the VM for it: the guest is asked whether any runs.
         let (asked, internal) = (Arc::clone(&connection), self.internal.clone());
@@ -709,7 +763,7 @@ impl Service {
             slot,
             machine,
             connection,
-            stops,
+            closes,
             _tasks: tasks,
             work: Arc::new(work(&self.config.dir, conversation)),
             lent: Arc::new(()),
@@ -744,6 +798,9 @@ impl Service {
     /// them.
     fn sweep(&mut self) {
         let now = Instant::now();
+        // Those systemd has by now are done with.
+        self.stopping
+            .retain(|_, stopping| stopping.as_mut().now_or_never().is_none());
         let mut lost = Vec::new();
         self.vms.retain(|conversation, state| {
             let State::Running(running) = state else {
@@ -766,7 +823,8 @@ impl Service {
                 true
             };
             if !keep {
-                running.machine.stop();
+                self.stopping
+                    .insert(*conversation, running.machine.stop().boxed());
                 self.free.release(running.slot);
             }
             keep
@@ -948,6 +1006,7 @@ impl Free {
 fn evict(
     vms: &mut HashMap<ConversationId, State>,
     kept: &BTreeSet<ConversationId>,
+    stopping: &mut HashMap<ConversationId, BoxFuture<'static, ()>>,
     fits: impl Fn(usize) -> bool,
 ) -> Option<usize> {
     let (&conversation, _) = vms
@@ -964,7 +1023,7 @@ fn evict(
         return None;
     };
     info!(%conversation, "stopped a VM to make room");
-    running.machine.stop();
+    stopping.insert(conversation, running.machine.stop().boxed());
     Some(running.slot)
 }
 

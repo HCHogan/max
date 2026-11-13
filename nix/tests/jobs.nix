@@ -104,9 +104,14 @@ pkgs.testers.runNixOSTest {
     machine.wait_for_open_port(7777)
     machine.succeed("touch /run/wakes")
 
-    def call(unit, command, options="", before=""):
+    def call(unit, command, options="", given=""):
+        # Its caller gives the command its input, says nothing more, and
+        # holds on for as long as it waits.
+        if given:
+            options += f" --input {len(given.encode())}"
         line = machine.succeed(
-            f"{before}max-jobs run --unit max-job-{unit} {options} -- bash -lc '{command}'"
+            f"max-jobs run --unit max-job-{unit} {options} -- bash -lc '{command}' "
+            f"< <(printf %s '{given}'; exec sleep 300 2> /dev/null)"
         )
         return json.loads(line)
 
@@ -142,10 +147,10 @@ pkgs.testers.runNixOSTest {
         machine.succeed("mkdir -p /work/project")
         said = call(
             "input", "cat; echo $MAX_CALL >&2; pwd >&2",
-            "--limit 30 --split --input --workdir /work/project",
-            before="echo given | ",
+            "--limit 30 --split --workdir /work/project",
+            given="given",
         )
-        assert said["out"]["head"] == "given\n", said
+        assert said["out"]["head"] == "given", said
         assert said["err"]["head"] == "/run/max/jobs/max-job-input\n/work/project\n", said
 
     with subtest("what a call leaves for the model to see comes back on its line"):
@@ -166,6 +171,13 @@ pkgs.testers.runNixOSTest {
         assert left("show") == [], left("show")
         # What an earlier call left in /work for the host is cleared away.
         machine.fail("test -e /work/.max/shown/max-job-old")
+        # More than max would show: the line keeps the first of them.
+        said = call(
+            "many",
+            "for n in $(seq 40); do echo \"{\\\"kind\\\":\\\"image\\\",\\\"path\\\":\\\"/work/$n.png\\\"}\"; done >> $MAX_CALL/shown",
+            "--limit 30",
+        )
+        assert len(said["shown"]) == 32 and said["shown"][31]["path"] == "/work/32.png", said
 
     with subtest("a call that can't start says why"):
         said = call("nowhere", "true", "--limit 30 --workdir /no/such/directory")
@@ -241,10 +253,17 @@ pkgs.testers.runNixOSTest {
         assert notice.splitlines()[0] == "[max-job-slow 到点了，下面是做到一半的] $ sleep 60", notice
         assert "not done in 2 seconds; it was stopped\n(no output)" in notice, notice
 
-    with subtest("a stopped one wakes nobody"):
+    with subtest("a stopped one wakes nobody, however it takes the signal"):
         machine.succeed("max-jobs start --unit max-job-unwanted --limit 60 -- bash -lc 'sleep 60'")
-        assert machine.succeed("max-jobs stop-all").split() == ["max-job-unwanted"]
+        # A server's way: it ends by itself when asked to, with a status.
+        machine.succeed(
+            "max-jobs start --unit max-job-server --limit 60 "
+            "-- bash -lc 'trap \"exit 3\" TERM; echo up; sleep 60 & wait'"
+        )
+        machine.wait_until_succeeds("grep -q up /work/.max/out/max-job-server.txt")
+        assert sorted(machine.succeed("max-jobs stop-all").split()) == ["max-job-server", "max-job-unwanted"]
         machine.wait_until_fails("test -e /run/max/jobs/max-job-unwanted")
+        machine.wait_until_fails("test -e /run/max/jobs/max-job-server")
         machine.succeed("sleep 3")
         assert len(wakes()) == 2, wakes()
         assert machine.succeed("max-jobs stop-all") == ""
@@ -263,8 +282,27 @@ pkgs.testers.runNixOSTest {
         assert wakes()[2].startswith("[max-job-meanwhile 完成] $ true\nexit status 0, ran for "), wakes()[2]
         machine.wait_until_fails("test -e /run/max/jobs/max-job-meanwhile")
 
-    with subtest("a call whose caller went away ends by itself, and nobody is told"):
-        machine.fail("timeout 1 max-jobs run --unit max-job-orphan --limit 4 -- bash -lc 'echo x; sleep 60'")
+    with subtest("a call whose caller went away is stopped, and nobody is told"):
+        # The caller holds on for two seconds of the call's sixty.
+        machine.succeed(
+            "timeout 30 max-jobs run --unit max-job-left --limit 60 "
+            "-- bash -lc 'echo x; sleep 60' < <(sleep 2) > /run/left.out"
+        )
+        machine.fail("systemctl is-active max-job-left.service")
+        assert machine.succeed("cat /run/left.out") == ""
+        assert left("left") == [], left("left")
+        # Gone before the unit was there to stop.
+        machine.succeed(
+            "timeout 30 max-jobs run --unit max-job-early --limit 60 -- bash -lc 'sleep 60' < /dev/null"
+        )
+        machine.fail("systemctl is-active max-job-early.service")
+        assert left("early") == [], left("early")
+
+    with subtest("a call whose own command was killed ends at its limit, and nobody is told"):
+        machine.fail(
+            "timeout 1 max-jobs run --unit max-job-orphan --limit 4 -- bash -lc 'echo x; sleep 60' "
+            "< <(exec sleep 300 2> /dev/null)"
+        )
         machine.succeed("systemctl is-active max-job-orphan.service")
         machine.wait_until_fails("systemctl is-active max-job-orphan.service", timeout=30)
         machine.wait_until_fails("test -e /run/max/jobs/max-job-orphan")
@@ -358,5 +396,12 @@ pkgs.testers.runNixOSTest {
         notice = woken(9)
         assert notice.startswith("[max-job-gone 完成] $ rm\nexit status 0, ran for "), notice
         machine.wait_until_fails("test -e /run/max/jobs/max-job-gone")
+
+    with subtest("a background command that ends itself with SIGTERM is told of, as nobody asked"):
+        machine.succeed(
+            "max-jobs start --unit max-job-self --limit 60 --title '$ kill' -- bash -lc 'echo bye; kill -TERM $$'"
+        )
+        notice = woken(10)
+        assert notice.startswith("[max-job-self 完成] $ kill\nended by SIGTERM, after "), notice
   '';
 }

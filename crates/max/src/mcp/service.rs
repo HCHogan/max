@@ -143,6 +143,16 @@ enum Answer {
     Called(ToolResult),
 }
 
+/// How a request is answered.
+enum Answered {
+    Result(Answer),
+    Error(Refusal),
+    /// With nothing done, Max stopping: as the guest answers once max is
+    /// gone, 503 with `max-away`, so that the caller asks again when Max
+    /// is back (nix/client.js).
+    Away,
+}
+
 async fn rpc(State(handler): State<Handler>, body: Bytes) -> Response {
     let Ok(request) = serde_json::from_slice::<Request>(&body) else {
         let error = Refusal::new(PARSE_ERROR, "not a JSON-RPC request");
@@ -159,8 +169,11 @@ async fn rpc(State(handler): State<Handler>, body: Bytes) -> Response {
         return StatusCode::ACCEPTED.into_response();
     };
     let outcome = match handler.answer(&request.method, request.params).await {
-        Ok(result) => Outcome::Result(result),
-        Err(refusal) => Outcome::Error(refusal),
+        Answered::Result(result) => Outcome::Result(result),
+        Answered::Error(refusal) => Outcome::Error(refusal),
+        Answered::Away => {
+            return (StatusCode::SERVICE_UNAVAILABLE, [("max-away", "1")]).into_response();
+        }
     };
     let answer = Envelope {
         jsonrpc: "2.0",
@@ -177,25 +190,28 @@ fn reply(status: StatusCode, body: &Envelope) -> Response {
 }
 
 impl Handler {
-    async fn answer(&self, method: &str, params: Value) -> Result<Answer, Refusal> {
+    async fn answer(&self, method: &str, params: Value) -> Answered {
         match method {
-            "ping" => Ok(Answer::Value(json!({}))),
+            "ping" => Answered::Result(Answer::Value(json!({}))),
             "tools/list" => {
                 let tools = tool::TOOLS.iter().map(listed).collect();
-                Ok(Answer::Tools { tools })
+                Answered::Result(Answer::Tools { tools })
             }
             "tools/call" => {
-                let Called { name, arguments } =
-                    serde_json::from_value(params).map_err(|error| {
-                        Refusal::new(
-                            INVALID_PARAMS,
-                            format!("tools/call's parameters are wrong: {error}"),
-                        )
-                    })?;
+                let Called { name, arguments } = match serde_json::from_value(params) {
+                    Ok(called) => called,
+                    Err(error) => {
+                        let wrong = format!("tools/call's parameters are wrong: {error}");
+                        return Answered::Error(Refusal::new(INVALID_PARAMS, wrong));
+                    }
+                };
                 let args = Value::Object(arguments.unwrap_or_default());
-                Ok(Answer::Called(called(self.call(&name, args).await)))
+                match self.call(&name, args).await {
+                    Err(failure) if failure.is_away() => Answered::Away,
+                    outcome => Answered::Result(Answer::Called(called(outcome))),
+                }
             }
-            _ => Err(Refusal::new(
+            _ => Answered::Error(Refusal::new(
                 METHOD_NOT_FOUND,
                 format!("there is no method {method}"),
             )),
@@ -204,7 +220,8 @@ impl Handler {
 
     /// Has the conversation's actor run the call: its result. The actor
     /// stops it when this stops waiting, as when the caller closes its
-    /// connection.
+    /// connection. One that comes as Max stops isn't begun, and is away;
+    /// one Max stopped in the middle of isn't, since it may have acted.
     async fn call(&self, tool: &str, args: Value) -> Result<Value, Failure> {
         let call = async {
             let _slot = self.slots.acquire().await;
@@ -215,9 +232,7 @@ impl Handler {
                 args,
                 reply,
             };
-            self.calls
-                .send(call)
-                .map_err(|_| Failure::new("closed", "Max is stopping"))?;
+            self.calls.send(call).map_err(|_| Failure::away())?;
             result
                 .await
                 .unwrap_or_else(|_| Err(Failure::new("closed", "Max stopped before it was done")))
@@ -326,6 +341,12 @@ mod tests {
     /// Sends `body` to /mcp at `socket` with `method` and `headers`, each a
     /// line ending in CRLF: the reply's status line, and its body.
     async fn exchange(socket: &Path, method: &str, headers: &str, body: &str) -> (String, String) {
+        let (head, body) = exchanged(socket, method, headers, body).await;
+        (head.lines().next().unwrap().to_owned(), body)
+    }
+
+    /// As [`exchange`], with the reply's whole head.
+    async fn exchanged(socket: &Path, method: &str, headers: &str, body: &str) -> (String, String) {
         let request = format!(
             "{method} /mcp HTTP/1.1\r\nHost: 127.0.0.1:7777\r\nContent-Type: application/json\r\n\
              Accept: application/json, text/event-stream\r\n{headers}\
@@ -337,7 +358,7 @@ mod tests {
         let mut reply = String::new();
         stream.read_to_string(&mut reply).await.unwrap();
         let (head, body) = reply.split_once("\r\n\r\n").unwrap();
-        (head.lines().next().unwrap().to_owned(), body.to_owned())
+        (head.to_owned(), body.to_owned())
     }
 
     /// A JSON-RPC request as the runner sends it: the reply's `result` or
@@ -422,6 +443,65 @@ mod tests {
                 "{name}"
             );
         }
+
+        scope.close(Duration::from_secs(5)).await;
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A call that comes as Max stops isn't begun, and is answered as the
+    /// guest answers once max is gone, for its caller to make again; one
+    /// Max stopped in the middle of may have acted, and is a failure.
+    #[tokio::test]
+    async fn a_call_max_doesnt_begin_is_away() {
+        let dir = sockets("away");
+        let socket = dir.join("mine.sock");
+        let _ = std::fs::remove_file(&socket);
+        let listener = UnixListener::bind(&socket).unwrap();
+        let (calls, mut called) = tokio::sync::mpsc::unbounded_channel();
+        let mut scope = Scope::new();
+        let conversation = ConversationId(1);
+        scope.spawn(move |stop| serve(listener, conversation, calls, axum::Router::new(), stop));
+        let call = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": { "name": "say", "arguments": { "text": "在吗" } },
+        })
+        .to_string();
+        let asked = || exchanged(&socket, "POST", "", &call);
+        let away = |head: &str| {
+            head.starts_with("HTTP/1.1 503 Service Unavailable\r\n") && head.contains("max-away: 1")
+        };
+
+        // The table, stopping, takes it and says so.
+        let table = async {
+            let Some(Signal::Call { reply, .. }) = called.recv().await else {
+                panic!("no call came");
+            };
+            let _ = reply.send(Err(Failure::away()));
+        };
+        let ((head, body), ()) = tokio::join!(asked(), table);
+        assert!(away(&head) && body.is_empty(), "{head}\n{body}");
+
+        // An actor that ended under it.
+        let actor = async {
+            let Some(Signal::Call { reply, .. }) = called.recv().await else {
+                panic!("no call came");
+            };
+            drop(reply);
+        };
+        let ((head, body), ()) = tokio::join!(asked(), actor);
+        assert!(head.starts_with("HTTP/1.1 200 OK"), "{head}");
+        let result: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            result["result"]["structuredContent"]["code"], "closed",
+            "{body}"
+        );
+
+        // The table gone.
+        drop(called);
+        let (head, body) = asked().await;
+        assert!(away(&head) && body.is_empty(), "{head}\n{body}");
 
         scope.close(Duration::from_secs(5)).await;
         let _ = std::fs::remove_dir_all(dir);

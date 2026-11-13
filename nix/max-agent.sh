@@ -85,6 +85,11 @@ start() {
     /*) ;;
     *) workdir=/work/$workdir ;;
   esac
+  # One start at a time, from the count to the unit: two at once would
+  # each find room for the last.
+  mkdir -p "$kept"
+  exec 9> "$kept/.lock"
+  flock 9
   local running
   running=$(systemctl list-units --no-legend --plain --state=active,activating 'max-agent-*.service' | wc -l)
   [ "$running" -lt "$most" ] || fail "$most background agents run already: wait for one to end, or stop one with systemctl stop"
@@ -104,11 +109,8 @@ start() {
 
   mkdir -p "$workdir" "$kept" /work/.max/projects
   local number unit dir
-  exec 9> "$kept/.lock"
-  flock 9
   number=$(($(cat "$kept/.count" 2> /dev/null || echo 0) + 1))
   echo "$number" > "$kept/.count"
-  exec 9>&-
   unit=max-agent-$number
   dir=$jobs/$unit
   mkdir -p "$dir/inbox"
@@ -121,6 +123,7 @@ start() {
     [ "${#title}" -le 30 ] || title=${title:0:30}…
   fi
   max-jobs start --unit "$unit" --agent --limit "$limit" --title "$title" --workdir "$workdir" -- max-pi "$unit"
+  exec 9>&-
   echo "$unit started in $workdir on $model, for at most $((limit / 3600)) hours. When it ends, its report comes back to you as [$unit 完成]: don't wait for it. To tell it more, max-agent steer $unit with the words on standard input; to stop it, systemctl stop $unit."
 }
 

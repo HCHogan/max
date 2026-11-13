@@ -1,30 +1,22 @@
 //! SSH to a guest over cloud-hypervisor's hybrid vsock: max connects to the
 //! VM's socket, asks for the guest's port 22 with `CONNECT 22`, and what
 //! follows the `OK` line is sshd. One connection per VM, one channel per
-//! command; each command is a transient unit in the guest, so that it can
-//! be stopped by name.
+//! command. A call is a transient unit in the guest, which the guest
+//! stops when the call's channel closes: with max's connection, or when
+//! max lets go of the call.
 
 use std::path::Path;
 use std::pin::pin;
 use std::sync::Arc;
-use std::time::Duration;
 
 use color_eyre::eyre::{Result, bail, ensure};
-use futures_util::StreamExt;
-use futures_util::stream::FuturesUnordered;
 use russh::client::{self, Handle, Msg};
 use russh::keys::{PrivateKey, PrivateKeyWithHashAlg, PublicKeyOrCertificate};
 use russh::{Channel, ChannelMsg};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use tokio::time::timeout;
-use tracing::warn;
 
-/// How long the guest has to stop a unit the stopper asks it to: past the
-/// 90 seconds systemd gives a unit from SIGTERM to SIGKILL, so a guest
-/// that answers has ended it by then.
-const STOP_WAIT: Duration = Duration::from_secs(120);
 /// The most of a control command's stderr its error keeps.
 const STDERR_KEPT: usize = 1024;
 /// The most of a control command's answer kept.
@@ -75,38 +67,42 @@ pub async fn connect(socket: &Path, key: Arc<PrivateKey>) -> Result<Connection> 
     Ok(connection)
 }
 
-/// A command running in the guest as the unit `unit`. The guest doesn't
-/// stop it when the channel closes, so a command dropped before it ends
-/// has the VM's stopper stop its unit.
+/// The channels of calls max let go of before they ended, for the VM's
+/// [`closer`].
+pub type Closes = UnboundedSender<Channel<Msg>>;
+
+/// A call running in the guest: `max-jobs run`, which stops the call's
+/// unit when its input ends. The input stays open for as long as this is
+/// held; dropped before the call has ended, as when the turn is killed,
+/// its channel goes to the VM's closer, since closing one has to wait.
 pub struct Command {
-    channel: Channel<Msg>,
-    unit: Option<String>,
-    stops: UnboundedSender<String>,
+    /// None once the call is over.
+    channel: Option<Channel<Msg>>,
+    closes: Closes,
     status: Option<u32>,
 }
 
 impl Command {
-    /// Runs `line` in a shell as root, with `input` as its whole input;
-    /// `line` starts the unit `unit`.
+    /// Runs `line` in a shell as root and gives it `input`, with no end
+    /// to it: the guest reads as much as `line` says.
     pub async fn start(
         connection: &Connection,
-        unit: String,
         line: &str,
         input: &[u8],
-        stops: UnboundedSender<String>,
+        closes: Closes,
     ) -> Result<Self> {
         let channel = connection.channel_open_session().await?;
         let command = Self {
-            channel,
-            unit: Some(unit),
-            stops,
+            channel: Some(channel),
+            closes,
             status: None,
         };
-        command.channel.exec(true, line).await?;
-        if !input.is_empty() {
-            command.channel.data(input).await?;
+        if let Some(channel) = &command.channel {
+            channel.exec(true, line).await?;
+            if !input.is_empty() {
+                channel.data(input).await?;
+            }
         }
-        command.channel.eof().await?;
         Ok(command)
     }
 
@@ -119,10 +115,13 @@ impl Command {
         sink: &mut impl Sink,
         until: impl Future<Output = T>,
     ) -> Result<Waited<T>> {
-        let waited = relay(&mut self.channel, &mut self.status, sink, until).await?;
+        let Some(channel) = &mut self.channel else {
+            return Ok(Waited::Exited(self.status));
+        };
+        let waited = relay(channel, &mut self.status, sink, until).await?;
         if let Waited::Exited(_) = waited {
-            // The command is over, however it ended.
-            self.unit = None;
+            // The call is over, however it ended.
+            self.channel = None;
         }
         Ok(waited)
     }
@@ -130,8 +129,8 @@ impl Command {
 
 impl Drop for Command {
     fn drop(&mut self) {
-        if let Some(unit) = self.unit.take() {
-            let _ = self.stops.send(unit);
+        if let Some(channel) = self.channel.take() {
+            let _ = self.closes.send(channel);
         }
     }
 }
@@ -198,71 +197,21 @@ pub enum Stream {
     Err,
 }
 
-/// Stops each unit sent to it, until every sender is gone and every stop
-/// is over: all at once, each for at most `STOP_WAIT`, so that one the
-/// guest doesn't answer holds up no other.
-pub async fn stopper(connection: Arc<Connection>, units: UnboundedReceiver<String>) {
-    stop_each(units, |unit| {
-        let connection = Arc::clone(&connection);
-        async move { stop(&connection, &unit).await }
-    })
-    .await;
-}
-
-/// [`stopper`]'s work, each unit stopped with `stop`.
-async fn stop_each<F>(mut units: UnboundedReceiver<String>, stop: impl Fn(String) -> F)
-where
-    F: Future<Output = Result<()>>,
-{
-    let in_time = |unit: String| {
-        let stopped = timeout(STOP_WAIT, stop(unit.clone()));
-        async move {
-            let error = match stopped.await {
-                Ok(Ok(())) => return,
-                Ok(Err(error)) => format!("{error:#}"),
-                Err(_) => format!("no answer in {} seconds", STOP_WAIT.as_secs()),
-            };
-            warn!(%unit, %error, "couldn't stop a command in a VM");
-        }
-    };
-    let mut stopping = FuturesUnordered::new();
-    let mut open = true;
-    while open || !stopping.is_empty() {
-        tokio::select! {
-            unit = units.recv(), if open => match unit {
-                Some(unit) => stopping.push(in_time(unit)),
-                None => open = false,
-            },
-            Some(()) = stopping.next(), if !stopping.is_empty() => {}
-        }
+/// Closes each channel sent to it, until every sender is gone: the guest
+/// then stops the call whose channel it was. One after another: a close
+/// waits for nothing of the guest's, and fails only when the connection
+/// is gone, and every call's caller with it.
+pub async fn closer(mut channels: UnboundedReceiver<Channel<Msg>>) {
+    while let Some(channel) = channels.recv().await {
+        let _ = channel.close().await;
     }
-}
-
-async fn stop(connection: &Connection, unit: &str) -> Result<()> {
-    // 5: no such unit, as when it has just ended: --collect unloads it.
-    exec(
-        connection,
-        &format!("systemctl stop {}", quote(unit)),
-        &[0, 5],
-    )
-    .await
-}
-
-/// Runs `line` as root and waits for it to end. Fails unless it exits
-/// with a status in `fine`, saying how it did end and what it wrote to
-/// stderr, the start of it.
-async fn exec(connection: &Connection, line: &str, fine: &[u32]) -> Result<()> {
-    answered(connection, line, fine).await.map(drop)
 }
 
 /// Runs `line` as root and waits for it to end: what it wrote to stdout,
 /// the start of it, for a command of max's own that answers in a line or
-/// a few. Fails unless it exits with 0, as [`exec`] does.
+/// a few. Fails unless it exits with 0, saying how it did end and what it
+/// wrote to stderr, the start of it.
 pub async fn ask(connection: &Connection, line: &str) -> Result<String> {
-    answered(connection, line, &[0]).await
-}
-
-async fn answered(connection: &Connection, line: &str, fine: &[u32]) -> Result<String> {
     let mut channel = connection.channel_open_session().await?;
     channel.exec(true, line).await?;
     channel.eof().await?;
@@ -283,7 +232,7 @@ async fn answered(connection: &Connection, line: &str, fine: &[u32]) -> Result<S
     let said = String::from_utf8_lossy(&stderr);
     let said = said.trim();
     match status {
-        Some(status) if fine.contains(&status) => Ok(String::from_utf8_lossy(&stdout).into_owned()),
+        Some(0) => Ok(String::from_utf8_lossy(&stdout).into_owned()),
         Some(status) => bail!("`{line}` exited with {status}: {said}"),
         None => bail!("`{line}` ended with no exit status: {said}"),
     }
@@ -296,6 +245,8 @@ pub fn quote(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use tokio::sync::mpsc::unbounded_channel;
     use tokio::time::{Instant, sleep, sleep_until};
 
@@ -317,38 +268,6 @@ mod tests {
             self.0.push((stream, data.to_vec()));
             Ok(())
         }
-    }
-
-    /// A stop the guest doesn't answer holds up no other, and ends at
-    /// `STOP_WAIT`.
-    #[tokio::test(start_paused = true)]
-    async fn the_stopper_waits_on_no_one_unit() {
-        let (units, received) = unbounded_channel();
-        for unit in ["hung", "next"] {
-            units.send(unit.to_owned()).unwrap();
-        }
-        drop(units);
-        let begun = Instant::now();
-        let asked = std::sync::Mutex::new(Vec::new());
-        stop_each(received, |unit| {
-            asked.lock().unwrap().push((unit.clone(), begun.elapsed()));
-            async move {
-                if unit == "hung" {
-                    std::future::pending::<()>().await;
-                }
-                Ok(())
-            }
-        })
-        .await;
-        assert_eq!(begun.elapsed(), STOP_WAIT);
-        let asked = asked.into_inner().unwrap();
-        assert_eq!(
-            asked,
-            [
-                ("hung".to_owned(), Duration::ZERO),
-                ("next".to_owned(), Duration::ZERO)
-            ]
-        );
     }
 
     /// What stops a wait does so between pieces of output, never in the

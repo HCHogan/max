@@ -120,6 +120,17 @@ impl Failure {
             message: message.into(),
         }
     }
+
+    /// Max is stopping, and the call wasn't begun. Its caller isn't
+    /// shown this: the MCP service answers as the guest does once max is
+    /// gone, and the caller makes the call again when Max is back.
+    pub fn away() -> Self {
+        Self::new("away", "Max is restarting")
+    }
+
+    pub fn is_away(&self) -> bool {
+        self.code == "away"
+    }
 }
 
 impl From<sqlx::Error> for Failure {

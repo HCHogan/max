@@ -6,7 +6,9 @@
 #   max-jobs run OPTIONS -- COMMAND...
 #       A call: runs COMMAND as a unit, waits for its end, and prints one
 #       line of JSON: how it ended, its output, and what it left for the
-#       model to see.
+#       model to see. Its caller holds this command's input open for as
+#       long as it waits: when that ends, the caller is gone, and the
+#       unit is stopped.
 #   max-jobs start OPTIONS -- COMMAND...
 #       A background command: starts the unit and returns. Max is told of
 #       its end, unless it was stopped on request. With --agent it is a
@@ -22,8 +24,9 @@
 # OPTIONS: --unit NAME and --limit SECONDS, which a unit must have;
 # --title TEXT, what it is, for the list and the notice; --workdir DIR,
 # /work without it; and for a call, --split, which keeps stderr apart
-# from stdout, --input, which gives COMMAND this command's own input, and
-# --shown BYTES, how much of an output the line carries.
+# from stdout, --input BYTES, which gives COMMAND that many bytes of this
+# command's own input, and --shown BYTES, how much of an output the line
+# carries.
 #
 # A call's unit has its directory in MAX_CALL. A picture or a video for
 # the model is a line of `shown` there, which max.image and maxx show
@@ -32,8 +35,8 @@
 # MAX_CALL, and nobody to show anything to.
 #
 # A unit is a call, a background command or an agent from its start to
-# its end; none becomes another. A call whose caller went away ends by itself
-# within its limit, and nobody is told.
+# its end; none becomes another. A call whose caller went away, as when
+# the turn is killed or max restarts, is stopped, and nobody is told.
 
 jobs=/run/max/jobs
 out=/work/.max/out
@@ -93,13 +96,14 @@ launch() {
       --shown) shown=$2 && shift 2 ;;
       --split) split=1 && shift ;;
       --agent) kind=agent && shift ;;
-      --input) input=1 && shift ;;
+      --input) input=$2 && shift 2 ;;
       --) shift && break ;;
       *) usage "$kind takes no $1" ;;
     esac
   done
   [[ $unit =~ ^max-(job|agent)-[a-z0-9-]+$ ]] || usage "--unit is max-job-… or max-agent-…, not '$unit'"
   [[ $limit =~ ^[0-9]+$ ]] || usage "--limit is in seconds, not '$limit'"
+  [[ $input =~ ^[0-9]*$ ]] || usage "--input is in bytes, not '$input'"
   [ $# -gt 0 ] || usage "$kind needs a command after --"
   [ -n "$title" ] || title=$1
   # systemd would fail the unit's hook with its command, and the unit
@@ -147,7 +151,8 @@ launch() {
     args+=(--property=StandardError="append:$out/$unit.log")
   fi
   if [ -n "$input" ]; then
-    cat > "$dir/input"
+    # So many bytes and no more: what follows is the caller's, below.
+    head -c "$input" > "$dir/input"
     args+=(--property=StandardInput="file:$dir/input")
   fi
 
@@ -162,7 +167,10 @@ launch() {
   # What earlier calls left in /work for the model to see, which the host
   # has read long since: a call is over within minutes.
   find /work/.max/shown -mindepth 1 -maxdepth 1 -mmin +60 -exec rm -rf {} + 2> /dev/null || true
-  args+=(--setenv=MAX_CALL="$dir")
+  # A call is waited for: at its limit, or stopped, what won't end is
+  # killed sooner than systemd's 90 seconds, within the time max waits
+  # for the line.
+  args+=(--setenv=MAX_CALL="$dir" --property=TimeoutStopSec=15)
   # Held for as long as the call waits: without it, the unit's end is
   # nobody's, and its hook clears up.
   exec 9> "$dir/waiting"
@@ -170,7 +178,33 @@ launch() {
   # It returns once the unit has ended and its hook has run. The unit's
   # own status is in what the hook wrote. The lock stays this shell's
   # alone: it must go when the caller does.
-  systemd-run --wait "${args[@]}" -- "$@" > /dev/null 2> "$dir/failed" 9>&- || true
+  systemd-run --wait "${args[@]}" -- "$@" < /dev/null > /dev/null 2> "$dir/failed" 9>&- &
+  local waiter=$!
+  # The caller says nothing more on this command's input, and holds it
+  # open for as long as it waits: its end is the caller gone, as when the
+  # turn is killed or max goes away. (Named, since a command in the
+  # background has /dev/null for its input otherwise.)
+  { while read -r -N 4096 _; do :; done; } <&0 > /dev/null 2>&1 9>&- &
+  local caller=$! first=""
+  wait -n -p first "$waiter" "$caller" || true
+  if [ "$first" = "$caller" ]; then
+    # The call ends with its caller, and leaves nothing. Stopped again
+    # until it has ended: it may not have started yet.
+    (while :; do
+      systemctl stop "$unit.service" 2> /dev/null || true
+      sleep 0.5
+    done) > /dev/null 2>&1 9>&- &
+    local stopper=$!
+    wait "$waiter" || true
+    kill "$stopper" 2> /dev/null || true
+    rm -rf "$dir" "$out/$unit.txt" "$out/$unit.log"
+    return
+  fi
+  kill "$caller" 2> /dev/null || true
+  # The directory is this command's to remove from here, whatever becomes
+  # of it: a caller that goes now leaves the line with nowhere to go.
+  # shellcheck disable=SC2064
+  trap "rm -rf '$dir'" EXIT
   local result="" code="" status="" seconds
   if [ -f "$dir/result" ]; then
     read -r result code status < "$dir/result"
@@ -185,7 +219,8 @@ launch() {
     echo null > "$dir/err.json"
   fi
   # What it left to show, a line each; one that isn't such a line is
-  # nothing to show.
+  # nothing to show. The first 32: max shows half as many, and the line
+  # has to stay one it reads whole.
   touch "$dir/shown"
   jq -nc --arg result "$result" --arg code "$code" --arg status "$status" \
     --argjson seconds "$seconds" --rawfile failed "$dir/failed" \
@@ -193,11 +228,22 @@ launch() {
     --rawfile left "$dir/shown" \
     '{result: $result, code: $code, status: $status, seconds: $seconds,
       out: $out[0], err: $err[0],
-      shown: [$left | split("\n")[] | fromjson?
+      shown: ([$left | split("\n")[] | fromjson?
         | select(type == "object" and (.kind | type) == "string" and (.path | type) == "string")
-        | {kind, path}],
+        | select(.path | length <= 1024)
+        | {kind, path}] | .[:32]),
       failed: ($failed | if . == "" then null else . end)}'
   rm -rf "$dir"
+}
+
+# Whether systemd is stopping the unit because it was asked to, said in
+# the unit's hook: the request is a job of systemd's until the hook has
+# run. A unit that ends by itself, or at its limit, has none. How its
+# main process ended doesn't say: a server asked to stop exits with 0 or
+# 143, and a script may end itself with SIGTERM.
+stopping() {
+  systemctl list-jobs --no-legend "$1.service" 2> /dev/null \
+    | awk '$3 == "stop" { found = 1 } END { exit !found }'
 }
 
 ended() {
@@ -216,7 +262,7 @@ ended() {
     if flock -n 8; then
       rm -rf "$dir" "$out/$unit.txt" "$out/$unit.log"
     fi
-  elif [ "$kind" = job ] && [ "$how" = "success killed TERM" ]; then
+  elif [ "$kind" = job ] && stopping "$unit"; then
     # Stopped on request: whoever asked knows.
     rm -rf "$dir"
   elif [ "$kind" = agent ] && [ -e "$dir/stopped" ] && [ "${SERVICE_RESULT:-}" != timeout ]; then
@@ -244,7 +290,11 @@ notify() {
   ran=$(took $(($(cat "$dir/ended") - $(cat "$dir/started"))))
   head="[$unit 完成] $title"
   case "$result" in
-    success | exit-code) line="exit status $status, ran for $ran" ;;
+    success | exit-code)
+      line="exit status $status, ran for $ran"
+      # A signal systemd takes for a clean end, as SIGTERM is.
+      [ "$code" != killed ] || line="ended by SIG$status, after $ran"
+      ;;
     timeout)
       head="[$unit 到点了，下面是做到一半的] $title"
       line="not done in $(took "$limit"); it was stopped"

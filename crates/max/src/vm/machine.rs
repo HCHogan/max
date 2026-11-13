@@ -115,8 +115,9 @@ pub struct Machine {
     unit: String,
     /// The VM's files.
     pub dir: PathBuf,
-    /// The link that keeps what it booted from the garbage collector; one
-    /// beside it, `.now`, keeps the image it was switched to since.
+    /// The link that keeps what it booted from the garbage collector;
+    /// those beside it, named after it with a dot and an image's name,
+    /// keep each image it was switched to since.
     root: Option<PathBuf>,
 }
 
@@ -131,42 +132,74 @@ impl Machine {
         }
     }
 
-    /// Has systemd stop it, without waiting for that: the VM ends, and
-    /// what it booted is the collector's again.
-    pub fn stop(&self) {
+    /// Has systemd stop it, without waiting for it to end: the VM ends,
+    /// and what it ran is the collector's again. The request is on its
+    /// way when this returns, and systemd has it when what this returns
+    /// is done: a boot of the same VM waits for that, since a start that
+    /// reached systemd first would be the one stopped.
+    pub fn stop(&self) -> impl Future<Output = ()> + Send + use<> {
         let stopping = self
             .systemctl(&["stop", "--no-block"])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .spawn();
-        if let Err(error) = stopping {
-            warn!(unit = %self.unit, %error, "couldn't ask systemd to stop a VM");
+            .status();
+        self.unroot();
+        let unit = self.unit.clone();
+        async move {
+            if let Err(error) = stopping.await {
+                warn!(%unit, %error, "couldn't ask systemd to stop a VM");
+            }
         }
+    }
+
+    /// What it ran is the collector's again: a VM that has ended.
+    pub fn unroot(&self) {
         for root in self.roots() {
             let _ = std::fs::remove_file(root);
         }
     }
 
-    /// Its links among the collector's roots: what it booted, and what it
-    /// runs now.
+    /// Its links among the collector's roots: what it booted, and each
+    /// image it was switched to since.
     fn roots(&self) -> Vec<PathBuf> {
         let Some(root) = &self.root else {
             return Vec::new();
         };
-        let mut now = root.clone().into_os_string();
-        now.push(".now");
-        vec![root.clone(), PathBuf::from(now)]
+        let mut roots = vec![root.clone()];
+        let name = root.file_name().and_then(|name| name.to_str());
+        if let (Some(dir), Some(name)) = (root.parent(), name)
+            && let Ok(entries) = std::fs::read_dir(dir)
+        {
+            let switched = format!("{name}.");
+            roots.extend(
+                entries
+                    .filter_map(|entry| Some(entry.ok()?.path()))
+                    .filter(|path| {
+                        let name = path.file_name().and_then(|name| name.to_str());
+                        name.is_some_and(|name| name.starts_with(&switched))
+                    }),
+            );
+        }
+        roots
     }
 
-    /// Roots `image` at the link `which` of [`Self::roots`].
-    async fn keep(&self, which: usize, image: &Path) {
-        let Some(root) = self.roots().into_iter().nth(which) else {
-            return;
-        };
-        let _ = fs::remove_file(&root).await;
-        if let Err(error) = fs::symlink(image, &root).await {
-            warn!(root = %root.display(), %error, "couldn't root a VM's image");
+    /// Roots `image`, which the VM boots.
+    async fn keep(&self, image: &Path) {
+        if let Some(root) = &self.root {
+            link(image, root).await;
+        }
+    }
+
+    /// Roots `image`, which its guest is switched to, beside what it
+    /// booted and what it was switched to before: what started under
+    /// each of those may run on from it.
+    async fn keep_too(&self, image: &Path) {
+        let name = image.file_name().and_then(|name| name.to_str());
+        if let (Some(root), Some(name)) = (&self.root, name) {
+            let mut beside = root.clone().into_os_string();
+            beside.push(format!(".{name}"));
+            link(image, Path::new(&beside)).await;
         }
     }
 
@@ -175,9 +208,7 @@ impl Machine {
         if let Err(error) = self.run(&["stop"]).await {
             warn!(unit = %self.unit, error = format!("{error:#}"), "couldn't stop a VM");
         }
-        for root in self.roots() {
-            let _ = fs::remove_file(root).await;
-        }
+        self.unroot();
     }
 
     /// Whether its unit runs.
@@ -213,31 +244,53 @@ impl Machine {
 
 /// The conversations whose VMs run, by the units systemd has active: the
 /// ones a max before this one booted.
-pub async fn running(config: &config::Vm) -> Vec<ConversationId> {
+pub async fn running(config: &config::Vm) -> Result<Vec<ConversationId>> {
     let pattern = format!("{}{}*", config.unit, config.instances);
     let listed = Command::new(&config.systemctl)
         .args(["list-units", "--type=service", "--state=active"])
         .args(["--no-legend", "--plain", &pattern])
         .stdin(Stdio::null())
         .output()
-        .await;
-    let listed = match listed {
-        Ok(listed) if listed.status.success() => listed.stdout,
-        Ok(listed) => {
-            let said = String::from_utf8_lossy(&listed.stderr);
-            warn!(error = said.trim(), "couldn't list the VMs that run");
-            return Vec::new();
-        }
-        Err(error) => {
-            warn!(%error, "couldn't list the VMs that run");
-            return Vec::new();
-        }
-    };
+        .await
+        .wrap_err("running systemctl")?;
+    if !listed.status.success() {
+        bail!("{}", String::from_utf8_lossy(&listed.stderr).trim());
+    }
     let prefix = format!("{}{}", config.unit, config.instances);
-    String::from_utf8_lossy(&listed)
+    Ok(String::from_utf8_lossy(&listed.stdout)
         .lines()
         .filter_map(|line| conversation(line.split_whitespace().next()?, &prefix))
-        .collect()
+        .collect())
+}
+
+/// Lets the collector have what the VMs that no longer run were rooted
+/// for: all but those of `running`. A VM that ended without max, as when
+/// the host restarted, left its links, which max removes only as it
+/// stops one.
+pub fn unroot_ended(config: &config::Vm, running: &[ConversationId]) {
+    if let Some(roots) = &config.roots {
+        unroot_but(roots, &config.instances, running);
+    }
+}
+
+/// [`unroot_ended`]'s work, among the links in `roots` of the VMs whose
+/// instances' names begin with `instances`: another's, such as
+/// vm-check's beside max's, are left.
+fn unroot_but(roots: &Path, instances: &str, running: &[ConversationId]) {
+    let Ok(entries) = std::fs::read_dir(roots) else {
+        return;
+    };
+    for entry in entries.filter_map(Result::ok) {
+        let name = entry.file_name();
+        // `7`, or `7.` and an image's name.
+        let id = name
+            .to_str()
+            .and_then(|name| name.strip_prefix(instances))
+            .and_then(|rest| rest.split('.').next()?.parse().ok());
+        if id.is_some_and(|id| !running.contains(&ConversationId(id))) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
 
 /// The conversation whose VM the unit `name` is, if it is one of those
@@ -325,10 +378,8 @@ pub async fn boot(
     };
     record.write(dir).await?;
     // What the guest reads from the host's store, for as long as it runs.
-    for root in machine.roots() {
-        let _ = fs::remove_file(root).await;
-    }
-    machine.keep(0, &config.guest).await;
+    machine.unroot();
+    machine.keep(&config.guest).await;
     machine.run(&["start"]).await?;
 
     let key = Arc::new(key);
@@ -360,19 +411,28 @@ pub async fn boot(
 
 /// Attaches to `conversation`'s VM, which runs: binds the socket its
 /// programs reach the MCP service on again, and logs in with the key its
-/// boot left.
-pub async fn attach(config: &config::Vm, conversation: ConversationId) -> Result<Booted> {
+/// boot left. None if its unit has ended: there is nothing to attach to,
+/// and its socket, which stays, would only be waited on.
+pub async fn attach(config: &config::Vm, conversation: ConversationId) -> Result<Option<Booted>> {
     let machine = Machine::of(config, conversation);
+    if !machine.active().await {
+        return Ok(None);
+    }
     let dir = &machine.dir;
     let key = fs::read(dir.join(KEY)).await.wrap_err("reading its key")?;
     let key = Arc::new(PrivateKey::from_openssh(key)?);
     let mcp = listen(dir).await?;
-    let connection = let_in(&dir.join("notify.vsock"), &key, ATTACH).await?;
-    Ok(Booted {
+    let connection = match let_in(&dir.join("notify.vsock"), &key, ATTACH).await {
+        Ok(connection) => connection,
+        // It ended while max tried.
+        Err(_) if !machine.active().await => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    Ok(Some(Booted {
         machine,
         connection,
         mcp,
-    })
+    }))
 }
 
 /// Logs in at `socket`, again while the guest refuses, for at most
@@ -415,11 +475,19 @@ pub async fn switch(
         ssh::quote(&guest.registration.display().to_string()),
     );
     // Rooted before the guest runs it.
-    machine.keep(1, &config.guest).await;
+    machine.keep_too(&config.guest).await;
     ssh::ask(connection, &line).await?;
     boot.guest.clone_from(&config.guest);
     boot.write(&machine.dir).await?;
     Ok(boot.reboots_for(guest))
+}
+
+/// Makes `root` a link to `image`, in place of what it was.
+async fn link(image: &Path, root: &Path) {
+    let _ = fs::remove_file(root).await;
+    if let Err(error) = fs::symlink(image, root).await {
+        warn!(root = %root.display(), %error, "couldn't root a VM's image");
+    }
 }
 
 /// Listens where cloud-hypervisor connects when the guest connects to the
@@ -538,6 +606,75 @@ mod tests {
                 && !error.contains("said nothing"),
             "{error}"
         );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A VM's roots are what it booted and each image it was switched
+    /// to, and go together; another VM's stay, and one whose number only
+    /// begins as this one's does.
+    #[tokio::test]
+    async fn a_vm_roots_each_image_it_runs() {
+        let dir = std::env::temp_dir().join(format!("max-roots-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let machine = |instance: &str| Machine {
+            systemctl: "systemctl".into(),
+            unit: format!("maxx-vm@{instance}.service"),
+            dir: dir.clone(),
+            root: Some(dir.join(instance)),
+        };
+        let links = || {
+            let mut names: Vec<String> = std::fs::read_dir(&dir)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+                .collect();
+            names.sort();
+            names
+        };
+        let seven = machine("7");
+        seven.keep(Path::new("/nix/store/a-max-guest.json")).await;
+        seven
+            .keep_too(Path::new("/nix/store/b-max-guest.json"))
+            .await;
+        seven
+            .keep_too(Path::new("/nix/store/c-max-guest.json"))
+            .await;
+        // Switched to the same one again: the same link.
+        seven
+            .keep_too(Path::new("/nix/store/c-max-guest.json"))
+            .await;
+        machine("70")
+            .keep(Path::new("/nix/store/a-max-guest.json"))
+            .await;
+        machine("check-0")
+            .keep(Path::new("/nix/store/a-max-guest.json"))
+            .await;
+        assert_eq!(
+            links(),
+            [
+                "7",
+                "7.b-max-guest.json",
+                "7.c-max-guest.json",
+                "70",
+                "check-0"
+            ]
+        );
+        assert_eq!(
+            std::fs::read_link(dir.join("7.c-max-guest.json")).unwrap(),
+            Path::new("/nix/store/c-max-guest.json")
+        );
+
+        // The ones that ended without max: not vm-check's, which are not
+        // max's to say of.
+        unroot_but(&dir, "", &[ConversationId(7)]);
+        assert_eq!(
+            links(),
+            ["7", "7.b-max-guest.json", "7.c-max-guest.json", "check-0"]
+        );
+        seven.unroot();
+        assert_eq!(links(), ["check-0"]);
+        unroot_but(&dir, "check-", &[]);
+        assert!(links().is_empty());
         let _ = std::fs::remove_dir_all(dir);
     }
 

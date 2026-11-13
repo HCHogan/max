@@ -57,9 +57,13 @@ struct Told {
 }
 
 /// How long past a call's limit max waits for the guest to say how the
-/// unit ended: the guest ends it at the limit, and one that says nothing
-/// by then has stopped answering.
+/// unit ended: the guest ends it at the limit and kills what is left of
+/// it 15 seconds on (nix/max-jobs.sh), and one that says nothing by then
+/// has stopped answering.
 const GUEST_MARGIN: Duration = Duration::from_secs(30);
+/// How much of what `max-jobs` said is in an error, when it wasn't a
+/// call's line.
+const SAID_SHOWN: usize = 300;
 /// The most of what `max-jobs` writes that is kept: a call's line has
 /// what is shown of two outputs, each character of which may be written
 /// as six.
@@ -248,7 +252,8 @@ fn shown(piece: Option<&Piece>) -> String {
 
 /// Runs `command` in the guest as a call's unit, with `input` if it reads
 /// any, and waits for it to end: how it did. Dropped while it waits, as
-/// when the turn is killed, the unit goes to the VM's stopper.
+/// when the turn is killed, the call's channel closes and the guest
+/// stops the unit; it does the same when max's connection goes.
 async fn wait(vm: &Vm, unit: Unit<'_>, command: &str, input: Option<&[u8]>) -> Result<Ended> {
     let name = Vm::unit();
     let mut line = format!(
@@ -260,26 +265,28 @@ async fn wait(vm: &Vm, unit: Unit<'_>, command: &str, input: Option<&[u8]>) -> R
     if unit.split {
         line.push_str(" --split");
     }
-    if input.is_some() {
-        line.push_str(" --input");
+    if let Some(input) = input {
+        line.push_str(&format!(" --input {}", input.len()));
     }
     line.push_str(&format!(" -- bash -lc {}", quote(command)));
-    let running = vm.command(name, &line, input.unwrap_or_default());
+    let running = vm.command(&line, input.unwrap_or_default());
     let mut running = running.await.wrap_err("it didn't start")?;
     let mut said = Said::default();
     let waited = running.wait_or(&mut said, sleep(unit.limit + GUEST_MARGIN));
     match waited.await? {
-        Waited::Exited(Some(0)) => serde_json::from_slice(last_line(&said.out))
-            .wrap_err_with(|| format!("max-jobs said {:?}", String::from_utf8_lossy(&said.out))),
-        Waited::Exited(Some(status)) => bail!(
-            "max-jobs ended with status {status}: {}",
-            String::from_utf8_lossy(&said.err).trim()
-        ),
+        Waited::Exited(Some(0)) => {
+            let line = last_line(&said.out);
+            serde_json::from_slice(line)
+                .wrap_err_with(|| format!("max-jobs said {:?}", start_of(line)))
+        }
+        Waited::Exited(Some(status)) => {
+            bail!("max-jobs ended with status {status}: {}", end_of(&said.err))
+        }
         // The connection went, as when the guest's sshd restarts under
-        // it. The unit is the guest's, and has its limit.
+        // it: the guest stops a call whose caller is gone.
         Waited::Exited(None) => bail!(
-            "the connection to the VM closed before the command ended: it may have run, and may \
-             still be running"
+            "the connection to the VM closed before the command ended, which stopped it: it may \
+             have done part of its work"
         ),
         Waited::Interrupted(()) => bail!(
             "the VM didn't say how it ended, {} seconds past its limit: it may still run",
@@ -293,6 +300,28 @@ async fn wait(vm: &Vm, unit: Unit<'_>, command: &str, input: Option<&[u8]>) -> R
 fn last_line(out: &[u8]) -> &[u8] {
     let out = out.trim_ascii_end();
     out.rsplit(|&byte| byte == b'\n').next().unwrap_or(out)
+}
+
+/// The start of what `max-jobs` said, for an error: a line that isn't a
+/// call's may be as long as what is kept of it.
+fn start_of(said: &[u8]) -> String {
+    let said = String::from_utf8_lossy(said);
+    match said.char_indices().nth(SAID_SHOWN) {
+        Some((cut, _)) => format!("{}…", &said[..cut]),
+        None => said.into_owned(),
+    }
+}
+
+/// The end of what `max-jobs` wrote to stderr, where its own words are:
+/// the group's .bashrc may have written before them.
+fn end_of(said: &[u8]) -> String {
+    let said = String::from_utf8_lossy(said);
+    let said = said.trim();
+    let count = said.chars().count();
+    match said.char_indices().nth(count.saturating_sub(SAID_SHOWN)) {
+        Some((cut, _)) if cut > 0 => format!("…{}", &said[cut..]),
+        _ => said.to_owned(),
+    }
 }
 
 /// What `max-jobs` wrote: its line, and why it failed if it did.
@@ -401,6 +430,19 @@ mod tests {
             line
         );
         assert_eq!(last_line(b""), b"");
+    }
+
+    #[test]
+    fn what_wasnt_a_calls_line_is_shown_in_part() {
+        assert_eq!(start_of(b"oops"), "oops");
+        assert_eq!(end_of(b"  max-jobs: no\n"), "max-jobs: no");
+        let long = "长".repeat(SAID_SHOWN + 5);
+        let start = start_of(long.as_bytes());
+        assert_eq!(start, format!("{}…", "长".repeat(SAID_SHOWN)));
+        let noise = format!("{}max-jobs: --limit is in seconds", "x".repeat(SAID_SHOWN));
+        let end = end_of(noise.as_bytes());
+        assert!(end.starts_with('…') && end.ends_with("--limit is in seconds"));
+        assert_eq!(end.chars().count(), SAID_SHOWN + 1);
     }
 
     #[test]

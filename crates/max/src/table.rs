@@ -11,6 +11,7 @@
 //! running; and so does what Max in another conversation asks its Max.
 
 use std::collections::HashMap;
+use std::pin::pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -30,6 +31,7 @@ use tracing::{debug, error, info, warn};
 use crate::command::{self, Command};
 use crate::conversation::{Conversation, Event, Heard, Place, Shared, Signal};
 use crate::inbound::Inbound;
+use crate::mcp;
 use crate::scope::Scope;
 
 /// Max's account on a platform.
@@ -87,7 +89,20 @@ impl Table {
         for actor in self.actors.values() {
             let _ = actor.send(Event::Stop);
         }
-        self.scope.close(grace).await;
+        // Nothing new starts from here. A call that comes from a VM is
+        // answered as the guest answers once max is gone: Max is away,
+        // and its caller makes it again when the next max is up.
+        let mut stopped = pin!(self.scope.close(grace));
+        loop {
+            tokio::select! {
+                () = &mut stopped => break,
+                Some(signal) = signals.recv() => away(signal),
+            }
+        }
+        signals.close();
+        while let Ok(signal) = signals.try_recv() {
+            away(signal);
+        }
         info!("every conversation has stopped");
     }
 
@@ -201,6 +216,31 @@ impl Table {
             let _ = actor.send(event);
             return Ok(());
         }
+        // Whoever waits for what it asks hears why nothing comes of it,
+        // as it would from the conversation's actor.
+        match self.started(conversation).await {
+            Ok(Some(mailbox)) => {
+                let _ = mailbox.send(event);
+                Ok(())
+            }
+            Ok(None) => {
+                warn!(%conversation, "something for a conversation Max isn't in");
+                self.unanswered(event, "Max serves no chat of that conversation");
+                Ok(())
+            }
+            Err(error) => {
+                self.unanswered(event, "Max couldn't start on that conversation");
+                Err(error)
+            }
+        }
+    }
+
+    /// Starts `conversation`'s actor for what came for it: its mailbox,
+    /// or None if Max is in no chat of the conversation.
+    async fn started(
+        &mut self,
+        conversation: ConversationId,
+    ) -> Result<Option<UnboundedSender<Event>>> {
         let mut conn = self.shared.services.pool.acquire().await?;
         let mut found = None;
         for (&platform, me) in &self.me {
@@ -216,19 +256,28 @@ impl Table {
         }
         drop(conn);
         let Some((key, endpoint, me)) = found else {
-            warn!(%conversation, "something for a conversation Max isn't in");
-            // Whoever asked hears why no answer comes, as it would from
-            // the conversation's actor: back through here.
-            if let Event::Heard(Heard::Asked(question)) = event {
-                let why = "Max serves no chat of that conversation".to_owned();
-                let _ = self.shared.signals.send(question.answered(Err(why)));
-            }
-            return Ok(());
+            return Ok(None);
         };
         info!(%conversation, "starting a conversation for what came for it");
-        let mailbox = self.start(key, endpoint, me).await?;
-        let _ = mailbox.send(event);
-        Ok(())
+        Ok(Some(self.start(key, endpoint, me).await?))
+    }
+
+    /// `event` reaches no actor: the question in it is answered with
+    /// `why`, back through here to its asker, and the call in it fails
+    /// with it. The rest waits for nothing.
+    fn unanswered(&self, event: Event, why: &str) {
+        match event {
+            Event::Heard(Heard::Asked(question)) => {
+                let _ = self
+                    .shared
+                    .signals
+                    .send(question.answered(Err(why.to_owned())));
+            }
+            Event::Call { reply, .. } => {
+                let _ = reply.send(Err(mcp::Failure::new("internal", why)));
+            }
+            _ => {}
+        }
     }
 
     /// `/bind <码>` in a group nobody bound: attaches the group to the
@@ -277,6 +326,14 @@ impl Table {
         tx.commit().await?;
         info!(chat, conversation = %endpoint.conversation, "bound a group");
         Ok(Some(endpoint))
+    }
+}
+
+/// What came for a conversation as Max stops: a call is told Max is away,
+/// and the rest is dropped, as it is once max is gone.
+fn away(signal: Signal) {
+    if let Signal::Call { reply, .. } = signal {
+        let _ = reply.send(Err(mcp::Failure::away()));
     }
 }
 

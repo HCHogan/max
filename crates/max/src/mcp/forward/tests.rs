@@ -288,6 +288,16 @@ async fn a_call_goes_to_the_model_it_names() {
     }
     assert_eq!(asked.lock().unwrap().len(), 3);
 
+    // Named twice, it goes on with the one name max read.
+    let twice = r#"{"model":"cliproxy/gemini-3.8-flash-high","messages":[],"model":"another"}"#;
+    let (status, body) = send(&socket, "/llm/chat/completions", Some(twice)).await;
+    assert_eq!(status, "HTTP/1.1 200 OK", "{body}");
+    used.recv().await.unwrap();
+    assert_eq!(
+        asked.lock().unwrap()[3].1,
+        r#"{"model":"gemini-3.8-flash-high","messages":[]}"#
+    );
+
     scope.close(Duration::from_secs(5)).await;
     let _ = std::fs::remove_dir_all(dir);
 }
