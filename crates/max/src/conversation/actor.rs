@@ -618,7 +618,7 @@ impl Conversation {
         let now = Utc::now();
         let persona = settings.persona.as_deref().unwrap_or(prompt::PERSONA);
         let vms = self.shared.vms.as_ref();
-        let apis = vms.map_or("", |vms| vms.apis().prompt());
+        let apis = vms.map_or("", |vms| vms.apis());
         let projection = Projection {
             place: &self.place,
             system: prompt::system(

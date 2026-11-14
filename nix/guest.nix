@@ -281,19 +281,24 @@ in
     };
   };
 
-  # Everything in the guest reaches max at 127.0.0.1:7777: its tools,
-  # the models and APIs it forwards to, and the chat's rows. It is on the host, at the hybrid vsock's port 7777: one
-  # socat per connection.
+  # Everything in the guest reaches the host at 127.0.0.1:7777: max's
+  # tools, the chat's rows, and the models and APIs the host keeps the
+  # keys of. It is the hybrid vsock's port 7777, where the VM's
+  # forwarder listens on the host and passes on what is max's
+  # (module.nix): one socat per connection.
   systemd.sockets.max-host = {
     wantedBy = [ "sockets.target" ];
     listenStreams = [ "127.0.0.1:7777" ];
     socketConfig.Accept = true;
   };
-  # While max restarts nothing listens at its end, and the connection
-  # would only close: a caller couldn't tell that from a call max took and
-  # didn't answer. So the port is tried first, and when max is away the
+  # With nothing listening at the host's end the connection would only
+  # close: a caller couldn't tell that from a call max took and didn't
+  # answer. So the port is tried first, and when nothing is there the
   # caller is told so, 503 with `max-away`: nothing of its request was
-  # read, and it may ask again (client.js does).
+  # read, and it may ask again (client.js does). The VM's forwarder
+  # listens for as long as the VM runs, and says the same itself while
+  # max restarts; before 2026-11-14 max listened there, and this was
+  # what a guest heard at every deploy.
   systemd.services."max-host@" = {
     # A switch to a new image leaves the calls in flight.
     restartIfChanged = false;

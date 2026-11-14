@@ -5,17 +5,19 @@
 //! and one that finds the tab as the first left it, calls max's service
 //! with maxx from a command, keeps a unit of its own in /work/.max/systemd
 //! and wakes Max with maxx wake, and runs a background command, whose end
-//! the guest tells it of.
+//! the guest tells it of; `max forward` is a VM's forwarder, which its
+//! unit runs for as long as the VM does (max::forwarder).
 
 use std::collections::{BTreeSet, HashMap};
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use color_eyre::config::{HookBuilder, Theme};
-use color_eyre::eyre::{Result, WrapErr, bail};
+use color_eyre::eyre::{Result, WrapErr, bail, eyre};
 use max_core::ids::{ConversationId, EndpointId, IdentityId, PrincipalId};
 use max_core::item::{Part, ToolOutput};
 use max_core::message::Platform;
@@ -31,7 +33,8 @@ use max::config::{self, Config};
 use max::conversation::{Heard, Place, Shared, Signal};
 use max::dreamer::Dreamer;
 use max::embedding::Embedder;
-use max::llm::{Models, Upstream, Upstreams};
+use max::forwarder;
+use max::llm::Models;
 use max::media::caption::Captioner;
 use max::media::download::Download;
 use max::media::fetch;
@@ -88,6 +91,14 @@ enum Command {
         #[arg(long)]
         operations: bool,
     },
+    /// Carry what a VM's guest asks of the host, for as long as the VM
+    /// runs: its models' calls and the keyed APIs', and the rest on to
+    /// max. The VM's unit starts it.
+    Forward {
+        /// The VM's directory, where max named it a configuration.
+        #[arg(long)]
+        dir: PathBuf,
+    },
 }
 
 #[derive(clap::Args)]
@@ -113,14 +124,71 @@ fn main() -> Result<()> {
             command,
             operations,
         } => vm_check(&args.config, command, operations),
+        Command::Forward { dir } => forward(&dir),
     }
+}
+
+/// A VM's forwarder, until it is told to stop.
+fn forward(dir: &Path) -> Result<()> {
+    let (named, config) = forwarder::configured(dir)?;
+    logging(config.log.level);
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    let served = runtime.block_on(async {
+        let stop = CancellationToken::new();
+        let served = forwarder::run(dir, named, config, stop.clone());
+        tokio::pin!(served);
+        let mut terminate = signal(SignalKind::terminate())?;
+        tokio::select! {
+            served = &mut served => return served,
+            _ = terminate.recv() => {}
+            interrupted = tokio::signal::ctrl_c() => interrupted?,
+        }
+        stop.cancel();
+        served.await
+    });
+    runtime.shutdown_timeout(SHUTDOWN);
+    served
+}
+
+/// The configuration at `path` with a provider at `base_url` for the
+/// background agents, written beside vm-check's VMs in `dir`: what its
+/// VM's forwarder reads, so that an agent's model call comes to
+/// vm-check's own provider.
+fn with_provider(path: &Path, dir: &Path, base_url: &str) -> Result<PathBuf> {
+    let text = std::fs::read_to_string(path)?;
+    let mut config: toml::Table = toml::from_str(&text)?;
+    let llm = config
+        .get_mut("llm")
+        .and_then(toml::Value::as_table_mut)
+        .ok_or_else(|| eyre!("the configuration has no [llm]"))?;
+    let provider = toml::toml! {
+        base_url = base_url
+        protocol = "chat"
+        [models.vm-check]
+        context_window = 100_000
+    };
+    let providers = llm
+        .entry("providers")
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+    let providers = providers
+        .as_table_mut()
+        .ok_or_else(|| eyre!("llm.providers isn't a table"))?;
+    providers.insert("vm-check".into(), toml::Value::Table(provider));
+    let job = toml::toml! { model = "vm-check/vm-check" };
+    llm.insert("job".into(), toml::Value::Table(job));
+    std::fs::create_dir_all(dir)?;
+    let written = dir.join("forward.toml");
+    std::fs::write(&written, toml::to_string(&config)?)?;
+    Ok(written)
 }
 
 /// On the last slot, which a running service takes last; or the
 /// operations network's last.
 fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
     let mut config = Config::load(path)?;
-    logging(&config);
+    logging(config.log.level);
     let Some(mut vm) = config.vm.take() else {
         bail!("the configuration has no [vm]");
     };
@@ -149,28 +217,25 @@ fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
         let mut services = Scope::new();
         let (signals, mut heard) = mpsc::unbounded_channel();
         // The background agents' model: a provider of vm-check's own,
-        // which says one thing to whatever it is asked.
+        // which says one thing to whatever it is asked, and counts how
+        // often. The VM's forwarder calls it: the configuration vm-check
+        // names to it is the one it was given, with this provider for
+        // the agents.
         let provider = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let base_url = format!("http://{}/v1", provider.local_addr()?);
+        let asked = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&asked);
         services.spawn(move |stop| async move {
-            let says = || async { ([("content-type", "text/event-stream")], AGENT_SAYS) };
+            let says = move || {
+                counted.fetch_add(1, Ordering::Relaxed);
+                async { ([("content-type", "text/event-stream")], AGENT_SAYS) }
+            };
             let app = axum::Router::new().route("/v1/chat/completions", axum::routing::post(says));
             let served = axum::serve(provider, app);
             let _ = served.with_graceful_shutdown(stop.cancelled_owned()).await;
         });
-        let only = Upstream {
-            provider: "vm-check".into(),
-            protocol: max_core::item::Protocol::Chat,
-            base_url,
-            api_key: None,
-            headers: Vec::new(),
-            model: "vm-check".into(),
-            window: 100_000,
-            max_output: None,
-            idle: Duration::from_secs(60),
-        };
-        let (agents, mut used) = service::Models::heard(Upstreams::only(only, None));
-        let vms = Vms::start(vm, &mut services, signals, Arc::default(), Some(agents))?;
+        vm.configuration = with_provider(path, &vm.dir, &base_url)?;
+        let vms = Vms::start(vm, &mut services, signals, Arc::from(""))?;
         // A store of vm-check's own, for what calls show the model.
         let stored = std::env::temp_dir().join(format!("maxx-vm-check-{}", std::process::id()));
         let store = Arc::new(Store::open(&stored).await?);
@@ -338,14 +403,9 @@ fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
             }
             None => ToolOutput::text("后台 agent 结束了没人说".to_owned(), true, 0),
         });
-        let mut calls = 0;
-        let mut output = 0;
-        while let Ok((_, called)) = used.try_recv() {
-            calls += 1;
-            output += called.usage.output;
-        }
+        let calls = asked.load(Ordering::Relaxed);
         outs.push(ToolOutput::text(
-            format!("后台 agent 的模型调用：{calls} 次，写了 {output} tokens"),
+            format!("后台 agent 的模型调用：{calls} 次"),
             calls == 0,
             0,
         ));
@@ -525,7 +585,7 @@ return { kept, peak_mib: Math.round(peak / 2 ** 20) };"#;
 
 fn run(path: &Path) -> Result<()> {
     let config = Config::load(path)?;
-    logging(&config);
+    logging(config.log.level);
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
@@ -536,10 +596,10 @@ fn run(path: &Path) -> Result<()> {
     served
 }
 
-fn logging(config: &Config) {
+fn logging(level: config::Level) {
     let journal = std::env::var_os("JOURNAL_STREAM").is_some();
     let logs = tracing_subscriber::fmt()
-        .with_max_level(config.log.level)
+        .with_max_level(level)
         .with_ansi(std::io::stdout().is_terminal());
     // journald stamps each line itself.
     if journal {
@@ -677,25 +737,18 @@ async fn serve(config: Config) -> Result<()> {
     // one conversation's actor has for another: a question for its Max.
     let (signals, signals_rx) = mpsc::unbounded_channel();
     let asking = signals.clone();
-    // Their secrets are read now, so a missing one stops max here.
-    let apis = Arc::new(service::api::Apis::load(&config.api)?);
-    // The models the VMs call, whose keys are read now as well: the
-    // background agents' own, and any other an agent is started on. The
-    // agents are units in the VMs: max forwards their model calls, and
-    // counts what they use.
-    let agents = match models.job().transpose()? {
-        Some(upstreams) => Some(service::Models::start(
-            upstreams,
-            pool.clone(),
-            &mut services,
-        )),
-        None => {
-            info!("no model for background agents: maxx agent start starts none");
-            None
-        }
-    };
+    // What the VMs call besides max, each through its own forwarder
+    // (max::forwarder): the APIs the host keeps the keys of, and the
+    // models, the background agents' own and any other an agent is
+    // started on. The secrets and the keys are read here too, and let
+    // go: a missing one stops max now, not a forwarder when a VM boots.
+    service::api::Apis::load(&config.api)?;
+    if models.job().transpose()?.is_none() {
+        info!("no model for background agents: maxx agent start starts none");
+    }
+    let apis: Arc<str> = service::api::prompt(&config.api).into();
     let vms = match config.vm {
-        Some(vm) => Some(Vms::start(vm, &mut services, signals, apis, agents)?),
+        Some(vm) => Some(Vms::start(vm, &mut services, signals, apis)?),
         None => {
             info!("no VMs: the tools can't run");
             None

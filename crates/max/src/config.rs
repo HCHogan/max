@@ -536,6 +536,11 @@ pub struct Vm {
     /// `[github]`.
     #[serde(skip)]
     pub author: Option<Author>,
+    /// The file this was read from, which max names to each VM's
+    /// forwarder: it reads the models, the APIs and their keys there
+    /// itself (`crate::forwarder`).
+    #[serde(skip)]
+    pub configuration: PathBuf,
     /// What comes before a conversation's number in its VM's instance:
     /// nothing for max, and `check-` for vm-check, whose VMs are in a
     /// directory of their own under `dir`.
@@ -591,12 +596,50 @@ pub struct Slot {
     pub gateway: String,
 }
 
+/// What a VM's forwarder reads of the file (`crate::forwarder`): where a
+/// model call's usage is recorded, the models, and the APIs. A forwarder
+/// outlives max, so the file may be a newer max's: what it has besides
+/// these, in words this build doesn't know, is left unread, and only a
+/// change to these is one an older forwarder can't follow.
+#[derive(Debug, Deserialize)]
+pub struct Forwarded {
+    #[serde(default)]
+    pub log: Log,
+    pub database: Database,
+    pub llm: Llm,
+    #[serde(default)]
+    pub api: BTreeMap<String, Api>,
+}
+
+impl Forwarded {
+    /// Reads and checks those of the file, without reading the secrets
+    /// they name.
+    pub fn load(path: &Path) -> Result<Self> {
+        let text = fs::read_to_string(path)
+            .wrap_err_with(|| format!("reading the configuration {}", path.display()))?;
+        let read = || -> Result<Self> {
+            let forwarded: Self = toml::from_str(&text)?;
+            forwarded.llm.check()?;
+            for (name, api) in &forwarded.api {
+                api.check().wrap_err_with(|| format!("in api.{name}"))?;
+            }
+            Ok(forwarded)
+        };
+        read().wrap_err_with(|| format!("in the configuration {}", path.display()))
+    }
+}
+
 impl Config {
     /// Reads and checks the file, without reading the secrets it names.
     pub fn load(path: &Path) -> Result<Self> {
         let text = fs::read_to_string(path)
             .wrap_err_with(|| format!("reading the configuration {}", path.display()))?;
-        Self::parse(&text).wrap_err_with(|| format!("in the configuration {}", path.display()))
+        let mut config = Self::parse(&text)
+            .wrap_err_with(|| format!("in the configuration {}", path.display()))?;
+        if let Some(vm) = &mut config.vm {
+            vm.configuration = std::path::absolute(path)?;
+        }
+        Ok(config)
     }
 
     fn parse(text: &str) -> Result<Self> {

@@ -30,4 +30,10 @@
 # POST /tools/<name> with the arguments as JSON, where /mcp spoke MCP;
 # the runner's input names max by `url`, and the guest's forwarder is
 # max-host.
-5
+#
+# 6 (2026-11-14): a VM has a forwarder on the host, a unit that runs for
+# as long as it does (max forward). The guest says nothing new: its port
+# is the forwarder's now, which answers /llm and /api itself and passes
+# the rest on to max. A VM an older max booted has none, and nothing
+# listens where its guest calls: it boots again.
+6

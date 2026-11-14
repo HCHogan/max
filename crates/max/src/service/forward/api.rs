@@ -2,11 +2,16 @@
 //! `/api/<name>/…` with no key, and it goes on to the API's base URL with
 //! the key the host keeps, which never enters the VM. Only the calls the
 //! configuration allows go, at most so many an hour; the answer comes back
-//! as it is, a redirect too. See "Host-keyed APIs" in docs/rust-rewrite.md.
+//! as it is, a redirect too. Each VM has a forwarder of its own (see
+//! `crate::forwarder`), and an API's hour is all the chats' together: the
+//! forwarders count its calls in one file. See "Host-keyed APIs" in
+//! docs/rust-rewrite.md.
 
 use std::collections::{BTreeMap, VecDeque};
+use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::Router;
 use axum::body::{Body, Bytes};
@@ -19,8 +24,9 @@ use color_eyre::eyre::{Result, WrapErr};
 use max_core::ids::ConversationId;
 use reqwest::Url;
 use reqwest::redirect::Policy;
+use rustix::fs::{FlockOperation, flock};
 use tokio::time::timeout;
-use tracing::info;
+use tracing::{info, warn};
 
 use super::{CONNECT, LARGEST, chunks, refuse};
 use crate::config::{self, Rule};
@@ -58,7 +64,9 @@ const UNANSWERED: [HeaderName; 4] = [
 #[derive(Default)]
 pub struct Apis {
     table: BTreeMap<String, Api>,
-    prompt: String,
+    /// Where each API's calls are counted with those of every other
+    /// process that counts there, a file an API; without it, here alone.
+    counted: Option<PathBuf>,
 }
 
 struct Api {
@@ -75,32 +83,97 @@ impl Apis {
     /// The APIs `configured`, their secrets read.
     pub fn load(configured: &BTreeMap<String, config::Api>) -> Result<Self> {
         let mut table = BTreeMap::new();
-        let mut lines = Vec::new();
         for (name, api) in configured {
             let loaded = Api::load(api).wrap_err_with(|| format!("in api.{name}"))?;
             table.insert(name.clone(), loaded);
-            let mut line = format!("- {name} ({}): {}", api.base_url, api.about.trim());
-            if let Some(allow) = &api.allow {
-                let allow: Vec<String> = allow.iter().map(Rule::to_string).collect();
-                line.push_str(&format!(" Only {} allowed.", allow.join(", ")));
-            }
-            if let Some(per_hour) = api.per_hour {
-                line.push_str(&format!(
-                    " At most {per_hour} calls an hour, all chats together."
-                ));
-            }
-            lines.push(line);
         }
         Ok(Self {
             table,
-            prompt: lines.join("\n"),
+            counted: None,
         })
     }
 
-    /// Their lines in the system prompt; empty without any.
-    pub fn prompt(&self) -> &str {
-        &self.prompt
+    /// The same, their calls counted in `dir` with every other VM's
+    /// forwarder's.
+    #[must_use]
+    pub fn counted_in(mut self, dir: PathBuf) -> Self {
+        self.counted = Some(dir);
+        self
     }
+
+    /// Counts one more call of `api`, named `name`, if its hour has room.
+    fn take(&self, name: &str, api: &Api) -> bool {
+        let Some(per_hour) = api.per_hour else {
+            return true;
+        };
+        if let Some(dir) = &self.counted {
+            match counted(&dir.join(name), per_hour, SystemTime::now()) {
+                Ok(room) => return room,
+                // Counted here alone, then: an API isn't lost for a file.
+                Err(error) => {
+                    warn!(api = name, %error, "an API's calls can't be counted with the other VMs'");
+                }
+            }
+        }
+        api.take(Instant::now())
+    }
+}
+
+/// The APIs' lines in the system prompt, which take no secret to write;
+/// empty without any.
+pub fn prompt(configured: &BTreeMap<String, config::Api>) -> String {
+    let mut lines = Vec::new();
+    for (name, api) in configured {
+        let mut line = format!("- {name} ({}): {}", api.base_url, api.about.trim());
+        if let Some(allow) = &api.allow {
+            let allow: Vec<String> = allow.iter().map(Rule::to_string).collect();
+            line.push_str(&format!(" Only {} allowed.", allow.join(", ")));
+        }
+        if let Some(per_hour) = api.per_hour {
+            line.push_str(&format!(
+                " At most {per_hour} calls an hour, all chats together."
+            ));
+        }
+        lines.push(line);
+    }
+    lines.join("\n")
+}
+
+/// Counts one more call at `now` in `file`, if the hour has room: a line
+/// a call of the last hour, the second it went. The file is locked while
+/// it is read and written, so that the forwarders count as one; a few
+/// file operations, done where they are asked for.
+fn counted(file: &Path, per_hour: u32, now: SystemTime) -> io::Result<bool> {
+    if let Some(dir) = file.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(file)?;
+    // Until the file is closed.
+    flock(&file, FlockOperation::LockExclusive)?;
+    let mut written = String::new();
+    file.read_to_string(&mut written)?;
+    let now = now
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |now| now.as_secs());
+    let mut sent: Vec<u64> = written
+        .lines()
+        .filter_map(|at| at.parse().ok())
+        .filter(|&at| now.saturating_sub(at) < HOUR.as_secs())
+        .collect();
+    let room = sent.len() < per_hour as usize;
+    if room {
+        sent.push(now);
+    }
+    let written: String = sent.iter().map(|at| format!("{at}\n")).collect();
+    file.set_len(0)?;
+    file.seek(SeekFrom::Start(0))?;
+    file.write_all(written.as_bytes())?;
+    Ok(room)
 }
 
 impl Api {
@@ -256,7 +329,7 @@ async fn call(
             &format!("{name} doesn't allow {method} {below}"),
         );
     }
-    if !api.take(Instant::now()) {
+    if !forward.apis.take(name, api) {
         info!(%conversation, api = name, %method, path = %below, "an API's calls ran out for the hour");
         let per_hour = api.per_hour.unwrap_or_default();
         return refuse(

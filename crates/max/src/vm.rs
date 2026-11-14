@@ -35,7 +35,6 @@ use crate::config;
 use crate::conversation::{Heard, Signal};
 use crate::scope::Scope;
 use crate::service;
-use crate::service::api::{self, Apis};
 
 /// How often idle and dead VMs are looked for, and kept ones that are
 /// down are started.
@@ -102,7 +101,7 @@ fn idle(config: &config::Vm) -> Duration {
 #[derive(Clone)]
 pub struct Vms {
     requests: UnboundedSender<Request>,
-    apis: Arc<Apis>,
+    apis: Arc<str>,
     idle: Duration,
     /// The groups on the operations network.
     operating: Arc<BTreeSet<ConversationId>>,
@@ -131,15 +130,14 @@ pub struct Vm {
 
 impl Vms {
     /// Starts the service in `scope`; what programs in the VMs say to Max
-    /// goes to `signals`, the `apis` are theirs to call, and `agents` are
-    /// the models they may call, if the background agents that run in
-    /// them have one.
+    /// goes to `signals`, and `apis` is what the system prompt says of
+    /// the APIs they may call. Those, and the models' calls, are each
+    /// VM's forwarder's to carry (`crate::forwarder`), not max's.
     pub fn start(
         config: config::Vm,
         scope: &mut Scope,
         signals: UnboundedSender<Signal>,
-        apis: Arc<Apis>,
-        agents: Option<service::Models>,
+        apis: Arc<str>,
     ) -> Result<Self> {
         let guest = Guest::load(&config.guest)?;
         std::fs::create_dir_all(&config.dir)?;
@@ -153,8 +151,7 @@ impl Vms {
                 .collect(),
         );
         let (requests, rx) = mpsc::unbounded_channel();
-        let called = Arc::clone(&apis);
-        scope.spawn(move |_| run(config, guest, called, agents, signals, rx));
+        scope.spawn(move |_| run(config, guest, signals, rx));
         Ok(Self {
             requests,
             apis,
@@ -174,8 +171,9 @@ impl Vms {
         self.idle
     }
 
-    /// The HTTP APIs the VMs call through the host.
-    pub fn apis(&self) -> &Apis {
+    /// The HTTP APIs the VMs call through the host, as the system prompt
+    /// lists them.
+    pub fn apis(&self) -> &str {
         &self.apis
     }
 
@@ -368,8 +366,6 @@ enum Unusable {
 struct Service {
     config: Arc<config::Vm>,
     guest: Arc<Guest>,
-    apis: Arc<Apis>,
-    agents: Option<service::Models>,
     signals: UnboundedSender<Signal>,
     idle: Duration,
     vms: HashMap<ConversationId, State>,
@@ -389,8 +385,6 @@ struct Service {
 async fn run(
     config: config::Vm,
     guest: Guest,
-    apis: Arc<Apis>,
-    agents: Option<service::Models>,
     signals: UnboundedSender<Signal>,
     mut requests: UnboundedReceiver<Request>,
 ) {
@@ -402,8 +396,6 @@ async fn run(
         free: Free::new(&config),
         config: Arc::new(config),
         guest: Arc::new(guest),
-        apis,
-        agents,
         signals,
         vms: HashMap::new(),
         boots: Scope::new(),
@@ -786,9 +778,7 @@ impl Service {
                 }
             });
         }
-        let host = host::router(conversation, self.internal.clone())
-            .merge(api::router(conversation, Arc::clone(&self.apis)))
-            .merge(service::agents(conversation, self.agents.clone()));
+        let host = host::router(conversation, self.internal.clone());
         let signals = self.signals.clone();
         tasks.spawn(move |stop| {
             // The timeline's streams end with the service, which waits for them.

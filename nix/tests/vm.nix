@@ -7,9 +7,11 @@
 # ffmpeg made, calls max's service with maxx from a command, and keeps a
 # unit in
 # /work/.max/systemd, which the next boot starts again, and wakes Max with
-# maxx wake. Then a VM on the operations network reaches a stand-in for the
-# tailnet through its namespace, where an ordinary VM can't, its ip rule
-# having outlived networkd.
+# maxx wake. A VM outlives max, and so does its forwarder: a model's
+# answer that streams while max restarts comes whole. Then a VM on the
+# operations network reaches a stand-in for the tailnet through its
+# namespace, where an ordinary VM can't, its ip rule having outlived
+# networkd.
 {
   pkgs,
   module,
@@ -27,6 +29,32 @@ let
       echo "$(cat /proc/sys/kernel/random/boot_id) $code $(cat /etc/max-image 2> /dev/null || echo first)" >> /work/probe.log
       sleep 1
     done
+  '';
+  # A model for the background agents that takes its time: eight pieces,
+  # a second apart.
+  slow = pkgs.writeText "slow.py" ''
+    import http.server, time
+
+    class Model(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("content-length", 0)))
+            self.send_response(200)
+            self.send_header("content-type", "text/event-stream")
+            self.end_headers()
+            for n in range(8):
+                piece = '{"choices":[{"index":0,"delta":{"content":"piece %d"}}]}' % n
+                self.wfile.write(b"data: " + piece.encode() + b"\n\n")
+                self.wfile.flush()
+                time.sleep(1)
+            self.wfile.write(b"data: [DONE]\n\n")
+
+    http.server.ThreadingHTTPServer(("127.0.0.1", 9100), Model).serve_forever()
+  '';
+  # A program in a VM that asks it for an answer, and keeps what comes.
+  asks = pkgs.writeText "asks.sh" ''
+    curl -sN -m 60 -H 'content-type: application/json' \
+      -d '{"model": "slow/slow", "stream": true, "messages": []}' \
+      http://127.0.0.1:7777/llm/chat/completions > /work/answer.txt 2>&1
   '';
   probeUnit = pkgs.writeText "probe.service" ''
     [Service]
@@ -63,19 +91,30 @@ pkgs.testers.runNixOSTest {
           memory_mib = 1024;
           disk_gib = 2;
         };
-        # Never called: nothing here triggers a turn.
+        # Never called: nothing here triggers a turn. The agents' model
+        # is, by a program in a VM: the slow one above.
         llm = {
           default.model = "local/small";
           intent.model = "local/small";
+          job.model = "slow/slow";
           providers.local = {
             base_url = "http://127.0.0.1:9/v1";
             protocol = "chat";
             models.small.context_window = 32768;
           };
+          providers.slow = {
+            base_url = "http://127.0.0.1:9100/v1";
+            protocol = "chat";
+            models.slow.context_window = 32768;
+          };
         };
       };
     };
     services.postgresql.package = pkgs.postgresql_16;
+    systemd.services.slow-model = {
+      wantedBy = [ "multi-user.target" ];
+      serviceConfig.ExecStart = "${pkgs.python3}/bin/python3 ${slow}";
+    };
     # A deploy that brings a new image for the VMs.
     specialisation.newer.configuration.services.maxx.vm.guest = newer;
     boot.kernel.sysctl."net.ipv4.ip_forward" = 1;
@@ -127,7 +166,7 @@ pkgs.testers.runNixOSTest {
     # through max, and its report from the guest.
     assert "max-agent-1 started in /work on vm-check/vm-check, for at most 6 hours." in shown, shown
     assert "后台 agent 的报告：[max-agent-1 完成] 检查\nvm-check 的 agent 说完了" in shown, shown
-    assert "后台 agent 的模型调用：1 次，写了 7 tokens" in shown, shown
+    assert "后台 agent 的模型调用：1 次\n" in shown, shown
     # A unit in /work/.max/systemd, started by maxx units apply, with the
     # system's commands on its PATH.
     assert "boot-note.service：active" in shown, shown
@@ -144,8 +183,10 @@ pkgs.testers.runNixOSTest {
     machine.succeed("systemctl start maxx-vm-check.service")
     again = machine.succeed("journalctl -u maxx-vm-check.service -o cat")
     assert "开机时：active" in again and "记下了 2 次开机" in again, again
-    # vm-check's VM was a unit of its own, and vm-check stopped it.
+    # vm-check's VM was a unit of its own, and vm-check stopped it; its
+    # forwarder went with it.
     machine.fail("systemctl is-active maxx-vm@check-0.service")
+    machine.fail("systemctl is-active maxx-forward@check-0.service")
 
     # A VM outlives max. Conversation 7 has a unit, so max keeps its VM
     # on: the unit asks the VM service how it is every second, and notes
@@ -155,6 +196,7 @@ pkgs.testers.runNixOSTest {
         f"install -d -o maxx -g maxx -m 700 /var/lib/maxx/vm/7 {work} {work}/.max {work}/.max/systemd",
         f"install -o maxx -g maxx -m 644 ${probeUnit} {work}/.max/systemd/probe.service",
         f"install -o maxx -g maxx -m 755 ${probe} {work}/probe.sh",
+        f"install -o maxx -g maxx -m 755 ${asks} {work}/asks.sh",
         "systemctl restart maxx.service",
     )
     machine.wait_until_succeeds("systemctl is-active maxx-vm@7.service", timeout=120)
@@ -183,10 +225,23 @@ pkgs.testers.runNixOSTest {
     assert machine.succeed("maxx-ssh 7 'hostname; id -un; pwd' < /dev/null").split() == ["max", "root", "/work"]
     # What the VM booted is rooted for as long as it runs.
     machine.succeed("readlink /nix/var/nix/gcroots/per-user/maxx/7 | grep -q max-guest.json")
+    # Its forwarder is a unit beside it, where the guest reaches the
+    # host: what is max's it passes on, and the models' calls it carries
+    # itself. A program in the VM asks the agents' model for an answer
+    # that takes eight seconds to come.
+    machine.succeed("systemctl is-active maxx-forward@7.service")
+    machine.succeed("maxx-ssh 7 'systemd-run --collect --unit=asks /bin/sh /work/asks.sh' < /dev/null")
+    machine.wait_until_succeeds(f"grep -q 'piece 0' {work}/answer.txt", timeout=30)
     # While max is away the guest is told so, and the VM runs on.
     machine.succeed("systemctl stop maxx.service")
     machine.wait_until_succeeds(f"{last} | grep -q ' 503 first$'", timeout=60)
     machine.succeed("systemctl is-active maxx-vm@7.service")
+    # The forwarder runs on too: it says what the models are with max
+    # gone, and the answer that was on its way comes whole.
+    assert machine.succeed("maxx-ssh 7 'curl -s -m 10 http://127.0.0.1:7777/llm | jq -r .model' < /dev/null").strip() == "slow/slow"
+    machine.wait_until_succeeds(f"grep -q 'DONE' {work}/answer.txt", timeout=60)
+    answer = machine.succeed(f"cat {work}/answer.txt")
+    assert answer.count("piece ") == 8, answer
     # The max that comes back attaches to it: the guest reaches it at the
     # socket bound again, in the same boot of the same VM.
     machine.succeed("systemctl start maxx.service")
@@ -207,6 +262,13 @@ pkgs.testers.runNixOSTest {
     machine.wait_until_succeeds(f"{last} | grep -q ' 200 newer$'", timeout=120)
     assert machine.succeed("systemctl show -P MainPID maxx-vm@7.service").strip() == pid
     assert machine.succeed(f"{last} | cut -d' ' -f1").strip() == boot
+    # The forwarder was left too, and reads the configuration the new
+    # max named it.
+    machine.wait_until_succeeds(
+        "journalctl -u maxx-forward@7.service -o cat | grep -q \"a VM's forwarder reads the configuration max named it anew\"",
+        timeout=30,
+    )
+    assert machine.succeed("systemctl show -P NRestarts maxx-forward@7.service").strip() == "0"
     # Both images are rooted: the one it booted, whose kernel it runs,
     # and the one it is on.
     roots = machine.succeed("readlink /nix/var/nix/gcroots/per-user/maxx/7 /nix/var/nix/gcroots/per-user/maxx/7.*").split()

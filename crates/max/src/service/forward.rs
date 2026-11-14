@@ -13,6 +13,10 @@
 //! it wants (nix/max-agent.sh). A call that names none, or one that isn't
 //! configured, goes to the agents' own, `llm.job`.
 //!
+//! Each VM's forwarder serves this, a process that outlives max as the
+//! VM does (`crate::forwarder`): a call isn't cut when max is deployed.
+//! Until 2026-11-14 max served it itself.
+//!
 //! Any call on a VM's socket is taken: the socket says which conversation
 //! pays, and nothing in the VM holds a key or a token. An agent is a unit
 //! of the guest's, which max keeps nothing of; `GET /llm` tells it what

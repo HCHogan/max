@@ -16,6 +16,7 @@ pub mod config;
 pub mod conversation;
 pub mod dreamer;
 pub mod embedding;
+pub mod forwarder;
 pub mod inbound;
 pub mod llm;
 pub mod media;
