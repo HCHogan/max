@@ -1,240 +1,374 @@
 # The conversation actor
 
-## The conversation actor
+The conversation actor (`crates/max/src/conversation/actor.rs`) is a
+conversation's only thread of control: the only writer of its timeline
+(see [The timeline](ledger.md#the-timeline)) and the driver of its core.
+There is at most one core per conversation at a time, and no request
+queue.
 
-The conversation actor is a conversation's only thread of control: it is both the only writer of the timeline (see [The timeline](ledger.md#the-timeline)) and the driver of the core. On 2026-10-26 it was decided to be ordinary async code with no persisted state; on 2026-10-27 it changed to a single core instance, with at most one core per conversation at any moment and no request queue; on 2026-10-28 it changed so that the actor drives the core directly.
+The core is a field of the actor. Model calls, tool calls, intent
+classification and the calls of programs in the group's VM are spawned
+as tasks (see [I/O tasks and protocol adapters](core.md#io-tasks-and-protocol-adapters)),
+and their results return to the same mailbox as events. The actor itself
+awaits only the database, never a model, a tool or the network, so a
+`/kill` is always handled at once, and there are never two copies of a
+conversation's state to keep in agreement.
 
-The core is a field of the actor. Model calls, tool calls and intent classification are all spawned as I/O tasks (see [I/O tasks and protocol adapters](core.md#io-tasks-and-protocol-adapters)), and their results return to the same mailbox as events. The actor itself awaits only the database and never waits on models, tools or the network, so a `/kill` can always be handled immediately. A conversation has only this one thread of control, so there are never two copies of state to keep in agreement.
+## State and events
+
+Abridged from the code:
 
 ```rust
-struct Conversation {
-    head: MessageId,           // see "The timeline"
-    seen: MessageId,
+pub struct Conversation {
+    place: Arc<Place>,          // the conversation and its chat
+    settings: Settings,         // what the conversation set with /config; see config.md
+    head: MessageId,            // the last row entered; see "The timeline"
+    seen: MessageId,            // everything up to here has been in a model request
     core: Option<Active>,
-    intent: Intent,            // a pure state machine, see "Intent": hold, accumulated messages, the classification in flight, counters
-    side: Scope,               // intent classification
-    stopping: Option<Instant>, // when the stop grace period expires
-    // shared handles: database, sender, conversation table, models; the sending end of its own mailbox, handed to I/O tasks
+    intent: Intent,             // a pure state machine; see intent.md
+    side: Scope,                // the classifier, and the calls of programs in the VM
+    stopping: Option<Instant>,  // when the stop grace runs out
+    addressed: HashMap<IdentityId, Instant>, // who addressed Max lately; see "Starting a model call over"
+    asked: asking::Asked,       // questions from other conversations, kept for their answers
+    woken: woken::Woken,        // the VM's wakes in the last hour, shown to Max with each wake
+    subscribers: broadcast::Sender<Arc<Message>>, // every row entered, for `maxx events`
+    // plus shared handles and the sending end of its own mailbox, handed to tasks
 }
 
 struct Active {
     turn: TurnId,
-    run: Run,                  // the core; for its interface see "The core"
-    from: MessageId,           // snapshot position
-    io: Scope,                 // model calls and tool calls in flight
-    live: HashSet<TaskId>,     // numbers of the tasks in flight; events from tasks not listed here are stale
-    said: String,              // text from this model call already entered in the ledger; on interruption, this is the partial_output
-    idle_since: Instant,       // when the last model output ended; the idle window is counted from here
-    started: Instant,          // for /status
+    run: Run,                   // the core; see core.md
+    chosen: Chosen,             // the model the turn uses
+    io: Scope,                  // the model call and tool calls in flight
+    live: HashSet<TaskId>,      // tasks in flight; events from any other are stale
+    voice: Voice,               // what its model calls have said, and the call in flight
+    from: MessageId,            // the snapshot position
+    idle_since: Instant,        // when the last model output ended; the idle window counts from here
+    started: Instant,           // for /status
+    // plus the turn's ordinal and the time of the last row the core saw, for date lines
 }
 
-enum Event {
-    Inbound(Inbound),                                  // from a platform connection, via the conversation table
-    Bound(Inbound),                                    // the `/bind <code>` that has just bound this group, see "The official QQ bot"
-    Said { task: TaskId, segment: Segment },           // a segment cut out by the segmenter in the model-call task
-    ModelDone { task: TaskId, out: Result<ModelOutput, String> },
-    ToolDone { task: TaskId, call: CallId, out: ToolOutput },
-    Verdict(Option<Verdict>),                          // the verdict for the batch in flight; None on failure
-    Stop,                                              // a normal restart
-    // Later: Post (another conversation, an MCP tool or the scheduler sending here, carrying the originating turn), JobDone, Fire
-}
-
-impl Conversation {
-    async fn run(mut self, mut mailbox: UnboundedReceiver<Event>) -> Result<()> {
-        loop {
-            let deadline = self.deadline(); // the earliest of the idle window, the debounce and the stop grace period
-            tokio::select! {
-                event = mailbox.recv() => match event {
-                    Some(event) => self.handle(event).await?, // awaits only the database
-                    None => self.stop(),
-                },
-                () = sleep_until(deadline.unwrap_or_else(Instant::now)), if deadline.is_some() => {
-                    self.timer().await?;
-                }
-            }
-            self.advance().await?;
-            if self.stopping.is_some() && self.core.is_none() {
-                return Ok(());
-            }
-        }
-    }
-
-    /// Called once after every event: when the core has no I/O in flight, decides the next step
-    async fn advance(&mut self) -> Result<()> {
-        let Some(a) = self.core.as_mut() else { return Ok(()) };
-        if a.run.busy() {
-            return Ok(()); // wait for events from the tasks in flight
-        }
-        if self.stopping.is_some() && a.run.idle() {
-            return self.end(End::Idle).await; // stopping: a core with nothing on hand ends at once, without waiting for the idle window
-        }
-        if a.run.at_limit() || (a.run.idle() && a.run.near_limit()) {
-            // at the limit, give up; nearly full with nothing to do, end; the next trigger projects afresh from the ledger and starts a new core
-            let how = if a.run.idle() { End::Idle } else { End::Failed(FailReason::ContextExhausted) };
-            return self.end(how).await;
-        }
-        match a.run.next_step() {
-            Step::CallModel(req) => {
-                self.seen = self.head; // the request includes all accumulated input, which is exactly ..=head
-                a.spawn_model(req);
-            }
-            Step::RunTools(calls) => {
-                for call in calls {
-                    a.spawn_tool(call);
-                }
-            }
-            Step::Idle => {} // deadline() computes the idle window from idle_since
-        }
-        Ok(())
-    }
+pub enum Event {
+    Inbound(Inbound),           // from the chat's connection, through the conversation table
+    Bound(Inbound),             // the `/bind <码>` that just bound this group; see qq.md
+    Post(Post),                 // something to say or do that isn't the model's text, such as a tool's picture
+    Said { task, segment },     // the segmenter cut a message out of the model's stream
+    ModelDone { task, out },
+    ToolDone { task, call, out },
+    Verdict(Option<Verdict>),   // the classifier's answer; None if it failed
+    Request(Request),           // a tool asks something of the conversation: configure, ask, answer, wake, may a mute go ahead
+    Heard(Heard),               // a wake from outside the chat: the VM service, or another conversation's question or answer
+    Call { tool, args, reply }, // something in the group's VM calls one of Max's tools
+    Subscribe(reply),           // a program in the VM follows the timeline: `maxx events`
+    Stop,                       // Max restarts
 }
 ```
 
-`handle` does two things in order, and the third is the `advance` above:
+The main loop waits on the mailbox and on one deadline, the earliest of
+the idle window, intent's debounce and the stop grace (a single
+`sleep_until`). After every event it calls `advance`:
 
-1. **Entering in the ledger**: messages and events from platforms, `Post`s, and segments that Max has said are first entered in a single transaction, `head` advances, and then an entry notification is sent to the derived-data workers (see [The three roles](../architecture.md#the-three-roles)). After a `Said` is entered, it is handed to the platform sender without waiting for a receipt; see [Outbound](ledger.md#outbound).
-2. **Routing**:
-   - Commands: always handled by the actor itself and never passed into the core (decided 2026-10-28). So `/model` does not become input to the model, and `/kill` need not queue behind a tool batch. The command message itself is still entered in the ledger and is visible in the next core's tail. Intent sees it too.
-   - If there is a core: the entry is fed to it, except for what the current turn itself has said and done, which is already in the transcript. Actions taken through tools are recognised by the `origin` of their `Post`; see [Outbound](ledger.md#outbound). The same applies to job results and automations. (Since 2026-11-12 a `Post` has no origin: what a tool says or does isn't fed to the running core whoever called it, as its row is Max's account's own.)
-   - [Intent](intent.md#intent-1): every entry is passed to `intent.observe`, verdicts are passed to `intent.verdict`, and `intent.tick` is called when a deadline is reached. A returned `Wake` is first checked against `seen`: if none of the messages it concerns lies beyond `seen`, it is dropped; otherwise, if there is a core, it is fed an `Input::Wake`, and if there is not, a core is started (step 3 of [Processing flow](#processing-flow)). `Classify` spawns the small model in `side`. When there is neither a core nor a `Wake`, nothing is done: the messages are on the timeline and will be in the next core's base context.
-   - `ModelDone` and `ToolDone` are fed to the core; those whose task number is not in `live` are dropped.
+1. If the core has I/O in flight, there is nothing to do.
+2. If Max is stopping and the core is idle, the core ends.
+3. If the core is at its limit, or idle and past nine tenths of it, the
+   core ends: normally if idle, otherwise with `ContextExhausted`.
+4. Otherwise it asks for `next_step`. `CallModel` sets `seen = head`
+   (the request holds every waiting input, which is exactly `..=head`)
+   and spawns the model call; `RunTools` spawns one task per call;
+   `Idle` does nothing, and the deadline counts the idle window from
+   `idle_since`.
 
-`Stop` only records when the stop grace period expires (20 seconds), and the core carries on as usual. When a deadline is reached: if it is the stop grace period that has expired, `end(End::Stopped)` follows, and if it is the idle window, `end(End::Idle)`; see [Cancellation](#cancellation). Expiry of a debounce is handled by `intent.tick`.
+Handling an event does two things, in this order:
 
-Two further points:
+1. **Entering it in the ledger.** Messages and events from the chat,
+   `Post`s and the segments Max said are entered in one transaction each,
+   `head` advances, and an entry notification goes to the derived-data
+   workers (see [The three roles](../architecture.md#the-three-roles)). A
+   `Said` is handed to the platform sender after it is entered, without
+   waiting for a receipt; see [Outbound](ledger.md#outbound).
+2. **Routing it.**
+   - Commands are handled by the actor itself and never reach the core,
+     so `/model` is no input to the model and `/kill` doesn't wait behind
+     a tool batch. The command's message is still entered, and the next
+     core and intent see it. See [Commands](context.md#commands).
+   - If there is a core, the entry is fed to it, except what Max's own
+     account said or did through a tool, which isn't fed back to the core
+     whoever called the tool.
+   - Every entry goes to `intent.observe`, verdicts to `intent.verdict`,
+     and `intent.tick` runs at its deadline. A returned `Wake` is dropped
+     if none of its messages is past `seen`; otherwise it is fed to the
+     core as `Input::Wake`, or starts a core if there is none (step 3 of
+     the [Processing flow](#processing-flow)). `Classify` spawns the small
+     model in `side`.
+   - `ModelDone` and `ToolDone` are fed to the core; those from a task
+     not in `live` are dropped.
 
-- The mailbox is unbounded. The writers to a mailbox include the shared platform connections and other actors: if they had to wait on a bounded mailbox, one stuck conversation would hold up every conversation, and two conversations sending `Post`s to each other could deadlock. The actor itself never awaits on a bounded channel either.
-- Ending a core needs no handover channel. Whatever is entered in the ledger after the end is handled directly by the actor; if there is a trigger, the actor starts the next core, using the same function as for "a trigger arrives when there is no core".
+The mailbox is unbounded: its writers include the shared chat connection
+and other actors, and if they had to wait on a bounded mailbox, one stuck
+conversation would hold up all the others, and two conversations asking
+each other could deadlock. The actor never awaits a bounded channel
+either.
 
-In this way, when several people @ Max at the same time, the model responds to all of them together within the same batch of input and does not answer twice; nor do problems arise of queue order, per-person limits, expiry, or "feedback or a new request". The correspondence with Claude Code: new messages in the group are steers, job results are background-task completion notifications, and automations are scheduled triggers. A restart loses the following:
+Ending a core needs no handover. What is entered after the end is handled
+by the actor; a trigger starts the next core by the same path as a
+trigger with no core.
 
-- The running core: on a normal restart it is given a grace period and is interrupted when that expires; on a crash it is simply lost. See [Restarts](#restarts).
-- The questions another conversation asked the running core: who asked them hears nothing more, and may ask again. What runs in the VM is not lost with max: a background command and a background agent are units of the guest's, and run on.
-- All of intent's state: the hourly counts are reset to zero, chatter awaiting classification is no longer classified, and direct triggers still being debounced are dropped and go unanswered (accepted 2026-10-28).
+So when several people @ Max at once, the model answers them together in
+one batch of input and never twice, and there is no queue order, no
+per-person limit and no expiry to get right. In Claude Code's terms, new
+messages in the group are steers and wakes from the VM are background
+completions.
 
 ## Processing flow
 
-Each step is the conversation actor handling one event.
+Each step is the actor handling one event.
 
-1. **A message comes in**: the platform connection normalises the message or event into an `Inbound` and hands it, via the conversation table, to the conversation actor; the actor converts it into a `Message` and enters it in the ledger in a single transaction. The platform connection does not touch the database.
-   - The group allowlist (decided 2026-10-28) is enforced at the conversation-table step: messages from a QQ group that has not been bound with `/bind` (see [The official QQ bot](qq.md#the-official-qq-bot-1)) are simply dropped: no conversation is created, no actor is started and nothing is entered; only a debug log line is written. Commands and the owner's messages are dropped in the same way, the only exception being `/bind <code>`. A `Post` from another conversation or a tool to an unbound group is also refused here, and if it carries a reply channel, an error is sent back. Private chats do not pass through this check; see step 2.
-2. **Classification** (changed 2026-10-28): every entry is passed to [Intent](intent.md#intent-1), which decides when to wake the core: an @ or a reply to Max wakes it immediately, though a message that looks unfinished waits a few seconds first; other messages are judged by the small model. Job results and automations do not go through intent; they are triggers in themselves. For trigger sources, see [The three roles](../architecture.md#the-three-roles). Commands are handled by the actor itself; see [The conversation actor](#the-conversation-actor-1).
-   - If a core is running: messages are still fed to it immediately, but only triggers make it call the model.
-   - If there is no core: a trigger proceeds to step 3; otherwise nothing is done.
-   - Private chats (decided 2026-10-28): every message in a private chat counts as a direct trigger, equivalent to an @ in a group. On QQ, the only people who can chat privately with Max are the trial users added in the management console, and that list is the private-chat allowlist; see [The official QQ bot](qq.md#the-official-qq-bot-1). If a platform connected later lets anyone chat privately, a separate allowlist will be added, and an empty allowlist will mean serving no one, the opposite of the Haskell version's "empty means serve everyone".
-3. **Starting a turn**: the snapshot position is set, `from = head`. The base context is projected from the ledger (reading only `id <= from`) plus memory and trimmed to the budget; see [Context projection](context.md#context-projection-1). The first batch of input is in the volatile block: the trigger that woke the core, with the `Wake` carrying the messages it concerns (several messages from the same person, when debounced). All other messages are in the tail. `TurnStarted` is written (with the trigger and `from`), and `Run::new(spec, base, first)` is called. If the first batch alone exceeds the core's limit (see "Round and token limits" in [The core](core.md#the-core-1)), the core hits the limit as soon as it starts: `Failed(ContextExhausted)` is recorded and a one-line reply quoting the trigger is sent (changed 2026-10-29; previously no core was started, and a separate `InputTooLarge` was recorded).
-4. **Advancing**: each time the actor has finished handling an event and the core has no I/O in flight, the actor asks for `next_step`. No turn records are written midway:
-   - `CallModel`: `seen = head`, and a model-call task is spawned. Each `Said` is entered in the ledger and handed to the sender; on `ModelDone`, `model_output` is called. Accumulated input is rendered as one `[新消息]` ("new messages") block appended to the end of the request; see [Follow-up input](context.md#follow-up-input).
-   - `RunTools`: one task is spawned for each tool call in the batch, and they run concurrently in the group VM; `tool_result` is called once for each `ToolDone`.
-   - `Idle`: nothing is done, and whatever is entered afterwards is still fed in; if it is only chatter, `next_step` remains `Idle` and the window is not reset. The run ends after a full window of idleness since the last model output ended (the provider's `idle_window_secs`, 300 seconds by default, decided 2026-10-27, unless the conversation set its own; see [Settings a conversation sets](config.md#settings-a-conversation-sets)). If a trigger arrives within the window, the model still holds the tool results from just before, so follow-up questions need no repeated lookups. When expiry and a trigger arrive at the same time, the actor always handles one of them first: if expiry comes first, the run ends and the trigger then starts a new core; if the trigger comes first, the run continues. Both outcomes are correct.
-   - **Hitting the limit**: when the core reports `at_limit`, the run ends at this boundary: if the core is idle, this counts as a normal end; otherwise `Failed(ContextExhausted)` is recorded, and the unhandled direct triggers get a one-line reply (changed 2026-10-29). Past 90%, the model is first reminded to wrap up, and an idle core past 90% also ends; see the nearly-full reminder in [The core](core.md#the-core-1) (2026-11-01). The next trigger projects afresh from the ledger and starts a new core as usual; this is our compaction: rather than compressing the transcript, we project again.
+1. **A message comes in.** The chat's connection normalises it into an
+   `Inbound` and hands it, through the conversation table, to the actor,
+   which converts it into a `Message` and enters it. The connection never
+   touches the database.
+   - The conversation table drops messages from a QQ group that hasn't
+     been bound with `/bind` (see [The official QQ bot](qq.md)): no
+     conversation is created, no actor started, nothing entered, only a
+     debug line logged. Commands and the owner's messages are dropped the
+     same way, except `/bind <码>` itself. What the VM service or another
+     conversation sends is addressed to a conversation, which a group has
+     only once it is bound; the table starts its actor if it isn't
+     running. Private chats don't pass this check: one gets a
+     conversation the first time someone writes.
+2. **Intent.** Every entry goes to [Intent](intent.md), which decides
+   when to wake the core: an @ or a reply to Max wakes it at once, after
+   a few seconds' wait if the message looks unfinished; other messages are
+   judged by the small model. Wakes from outside the chat (`maxx wake`,
+   the VM service, another conversation's question or answer) don't go
+   through intent; they are triggers themselves.
+   - With a core running, messages are fed to it at once, but only
+     triggers make it call the model.
+   - With no core, a trigger goes on to step 3; anything else is left on
+     the timeline for the next core's base context.
+   - Every message in a private chat is a direct trigger, like an @ in a
+     group. On QQ the only people who can chat privately with Max are the
+     trial users added in the management console, and that list is the
+     allowlist. A platform where anyone can chat privately would need an
+     allowlist of its own, empty meaning no one.
+3. **Starting a turn.** The snapshot position is set, `from = head`. The
+   base context is projected from the ledger (rows up to `from`) and the
+   memory file, within the budget; see [Context projection](context.md).
+   The first inputs are in its volatile block: the trigger, with the
+   `Wake` carrying the messages it concerns (several from one person when
+   debounced). `TurnStarted` is written with the trigger and `from`, and
+   `Run::new` is called. If the first inputs alone are over the limit, the
+   core is at its limit from the start: it fails with `ContextExhausted`,
+   and the trigger gets a one-line reply.
+4. **Advancing.** Each time the core has no I/O in flight, the actor asks
+   for the next step. No turn record is written midway.
+   - `CallModel`: each `Said` is entered and handed to the sender; on
+     `ModelDone`, `model_output`. Waiting inputs are shown as one
+     `[新消息]` block at the end of the request; see
+     [Follow-up input](context.md#follow-up-input).
+   - `RunTools`: one task per call, concurrently in the group's VM;
+     `tool_result` for each `ToolDone`.
+   - `Idle`: nothing. Whatever is entered later is still fed in; chatter
+     alone leaves the core idle and doesn't reset the window. The run ends
+     after a full idle window since its last model output (the provider's
+     `idle_window_secs`, 300 seconds by default, or the conversation's own;
+     see [Settings a conversation sets](config.md#settings-a-conversation-sets)).
+     A trigger within the window finds the model still holding its tool
+     results, so a follow-up question needs no repeated lookups. If the
+     window and a trigger arrive together, whichever the actor handles
+     first wins, and both outcomes are correct.
+   - **At the limit**: see "At the limit" in [The core](core.md#what-the-core-decides).
+   - **Failure**: `ModelDone` carries an error. What the call had said is
+     recorded as `partial_output`, `fail` is called, and the snapshot and
+     outcome are written.
+5. **`/kill`**: see [Cancellation](#cancellation). Waiting inputs are
+   dropped.
+6. **Restart and startup**: see [Restarts](#restarts).
 
-     Originally (decided 2026-10-27) the core was replaced at this point: the unhandled triggers were handed to a new core together with a one-line handover note listing the calls with side effects that the old core had made, so that they would not be made again; each trigger could be handed over at most once; and there was a 30-minute wall clock. Hitting the limit almost never happens, and the cost of giving up is only that someone has to ask again, so these mechanisms were not worth having (removed 2026-10-29).
-   - **Failure**: `ModelDone` carries an error. The text from this call already entered in the ledger is recorded as `partial_output`, `fail` is called, and the snapshot and outcome are written.
-5. **Cancellation (`/kill`)**: see [Cancellation](#cancellation). Accumulated input is discarded.
-6. **Normal restart and startup**: see [Restarts](#restarts).
+## Starting a model call over
+
+People often finish an @ in a second message, seconds after the first.
+When someone who addressed Max in the last minute (`FOLLOW_UP`) sends
+another message, and it is to Max or to nobody else (it mentions no one
+and quotes no one but its sender), the model call in flight is taken back
+and made again with the new row (`follow_up.rs`), if:
+
+- the call has said nothing yet,
+- the core hasn't spoken since that person addressed Max, and
+- the call hasn't started over three times (`MOST_RESTARTS`) since one
+  last finished.
+
+Nothing is lost: tools run only after the call, and the new request is
+the old one with a row added, which the provider has cached. Other wakes,
+a program's or the classifier's, wait for the next call: they don't
+change the answer someone is waiting for.
 
 ## What the group sees
 
-Changed 2026-10-28: no status is shown during processing. The Haskell version put a "托腮" (chin in hand) face on the triggering message and replaced it with "裂开" (cracking apart) on failure; the official QQ API has no reactions.
+No status is shown while Max works: the official QQ API has no reactions.
 
-- When a turn fails or is interrupted by a restart, a one-line error is sent, quoting the newest of the direct triggers that have not yet been handled (see "Definition of handled" in [The core](core.md#the-core-1)). There is no reaction to swap, and without a reply the person who @-mentioned Max would see nothing. Triggers woken by classification get no reply: Max is free not to join in anyway.
-- The error looks like a log line (changed by the owner 2026-11-06): it is placed in a `text` code block as `error: <what happened>: <cause>`, with the cause given as it is, newlines and runs of whitespace collapsed into a single space, and anything beyond 300 characters truncated with `…`, so that, as with command responses, it is obvious at a glance that the system sent it. Previously it was plain human language such as "出错了，这条没回上。" ("something went wrong, this one didn't get a reply") or "我要重启一下，这条没回上，等会儿再问一次吧。" ("I need to restart, this one didn't get a reply, please ask again in a while"), which gave no indication of what had actually gone wrong. The kinds of error:
-  - Provider error: `error: the model call failed: the provider answered 429: …`; the cause is the error from max-llm.
-  - `ContextExhausted`: `error: the context is full: 530000 tokens, limit 524288`; it can be resolved by rephrasing, pasting less and sending again.
-  - Restart: `error: interrupted: Max is shutting down, and the turn outlasted the 20s grace`.
-  - Conversation actor error: `error: the conversation failed: <error chain>`; see [Restarts](#restarts).
-- `/kill` gets no reply: someone stopped the turn deliberately. `/stop` (see [Commands](context.md#commands)) ends the turn the same way, and its reply says only that Max is stopped.
-- This line is entered in the ledger as usual and does not go into the core. It was not written by Max: its `raw` is `{"said_by": "host"}`, and when rendered, its header carries an extra `  系统发的 ` ("sent by the system") (`Mark::Host`): `[12:00 maxx #45 系统发的]: error: the model call failed: …`. Command responses and the line reporting a stopped job are treated the same way (added 2026-11-04). Previously these lines looked just like Max's own words, and the next core would take them as things it had said itself and carry on in the same tone. The prompt explains this mark. In `maxx events`, `by` is still `max`: the message was sent from Max's account, and programs simply should not reply to it.
+- When a turn fails or is interrupted by a restart, a one-line error
+  quotes the newest direct trigger not yet handled (see "Handled" in
+  [The core](core.md#what-the-core-decides)); without it, whoever @-ed Max
+  would see nothing. Wakes from the classifier get no such line: Max is
+  free not to join in anyway.
+- The line looks like a log line, so that it is plainly the system's: a
+  `text` code block holding `error: <what happened>: <cause>`, the cause
+  as it is, whitespace collapsed and cut at 300 characters with `…`:
+  - `error: the model call failed: the provider answered 429: …`
+  - `error: the context is full: 530000 tokens, limit 524288`; rephrasing
+    or pasting less and asking again helps.
+  - `error: interrupted: Max is shutting down, and the turn outlasted the 20s grace`
+  - `error: the conversation failed: <error chain>`; see [Restarts](#restarts).
+- `/kill` gets no reply: someone stopped the turn on purpose. `/stop` ends
+  the turn the same way, and its reply says only that Max is stopped.
+- The line is entered in the ledger and doesn't go into the core. Its
+  `raw` is `{"said_by": "host"}`, and its header renders with
+  `系统发的` (`Mark::Host`): `[12:00 maxx #45 系统发的]: error: …`, so the
+  next core doesn't take it for its own words and carry on in its tone.
+  Command responses are marked the same way, and the prompt explains the
+  mark. In `maxx events` its `by` is still `max`, since Max's account sent
+  it; programs simply shouldn't answer it.
 
 ## Cancellation
 
-`/kill` is simply an event that the actor handles; it needs no separate signal and no waiting inside `select!`: `seen = head`, and if there is a core, `end(End::Kill)`. The core's other ways of ending go through the same function and differ only in the middle step:
+`/kill` is an event like any other: `seen = head`, and if there is a core,
+`end(End::Kill)`. Every way a core ends goes through `end`:
 
 ```rust
 enum End {
-    Kill(String), // /kill
+    Kill(String),       // /kill
     Failed(FailReason),
-    Idle,         // idle: the window expired, or Max is stopping
-    Stopped,      // Max is stopping, and the core was still not idle when the grace period ran out
-}
-
-async fn end(&mut self, how: End) -> Result<()> {
-    let Some(mut a) = self.core.take() else { return Ok(()) };
-    drop(a.io); // aborts the model stream and tool calls in flight: initiated synchronously, without waiting
-    if !a.said.is_empty() {
-        a.run.partial_output(a.said.join("\n\n"), tokens); // text from the interrupted model call already entered in the ledger
-    }
-    match &how {
-        End::Kill(reason) => a.run.interrupt(reason.clone()), // fills in "已取消" ("cancelled") for tool calls that have not returned
-        End::Stopped => a.run.interrupt("Max 在重启".into()), // "Max is restarting"
-        End::Failed(reason) => a.run.fail(reason.clone()),
-        End::Idle => Ok(()),
-    };
-    turns::finish(&mut conn, a.turn, &a.run.record(), &a.run.outcome(), now).await?; // snapshot plus outcome, in one transaction
-    self.report_unanswered(&a.run, &how).await // unhandled direct triggers get a one-line reply, see "What the group sees"
+    Idle,               // the window ran out, or Max is stopping
+    Stopped,            // Max is stopping and the core wasn't done within the grace
 }
 ```
 
-- Events that tasks in `io` have already sent but that have not yet been processed are dropped when they arrive, since their task numbers are no longer in `live`. Whether something was "said" is determined by its entry in the ledger: a `Said` that is already in the mailbox but not yet entered is dropped and counts as not said; the sender never received it either.
-- Expiry of the idle window and hitting the limit both happen at boundaries, with no I/O in flight, so there `drop(a.io)` does nothing.
-- Writing the turn record awaits the database; events that arrive in the meantime queue in the mailbox and are processed once the write is complete.
+`end` drops `io` (aborting the model stream and tool calls: started at
+once, not waited for), refuses the questions the turn was asked, records
+what a cut-off model call had said as `partial_output`, interrupts or
+fails the run, writes the snapshot and outcome in one transaction
+(`turns::finish`), and for a failure or a stop sends the line above.
 
-Places where drop alone is not enough and an extra step is needed:
+- Events tasks in `io` already sent arrive after their numbers left
+  `live`, and are dropped. Whether something was said is decided by its
+  entry in the ledger: a `Said` still in the mailbox counts as unsaid, and
+  the sender never had it.
+- The idle window and the limit end a core at a boundary, with nothing in
+  flight, so there dropping `io` does nothing.
+- While the turn record is written, events queue in the mailbox.
 
-- **The outermost level of every task that owns a scope**: a single `run_until_cancelled` or `select!`. For the conversation actor, this is its main loop.
-- **Things with external side effects that drop does not stop automatically**: for example, commands in the VM and pi processes. Their lifetime is bound to a connection, and `Drop` only initiates the shutdown synchronously; see [How resources end](lifetimes.md#how-resources-end).
-- **Things that must not be done halfway**: sending a message enters it in the ledger first and then hands it to the platform sender; database writes use transactions, and an sqlx transaction that is dropped before it commits rolls back. For the rest, see [Cancellation safety](lifetimes.md#cancellation-safety).
-- **Long CPU computations without an `await` point**: these cannot be dropped. They go into the scope's `spawn_blocking`, paired with a cancellation flag.
+Where dropping isn't enough:
+
+- **The outermost level of every task that owns a scope** is a single
+  `run_until_cancelled` or `select!`; for the actor, its main loop.
+- **Side effects a drop doesn't stop**, such as a command in the VM, are
+  bound to a connection, and `Drop` only starts the stop; see
+  [How resources end](lifetimes.md#how-resources-end).
+- **What mustn't be done halfway**: a message is entered before it is
+  handed to the sender, and database writes are transactions, which roll
+  back when dropped. See [Cancellation safety](lifetimes.md#cancellation-safety).
+- **Long computations without an `await`** can't be dropped: they go into
+  the scope's `spawn_blocking`, with a cancellation flag.
 
 ## Restarts
 
-Decided 2026-10-29: on a normal restart, a running turn is given a grace period and is interrupted when it expires; it is no longer suspended and continued after the restart. The Haskell version also interrupts turns on restart.
+A restart loses the running turn and nothing in the VM: background
+commands, agents and resident programs are units of the guest's and run
+on (see [Jobs](jobs.md)). Turns are interrupted rather than suspended and
+resumed; why is in
+[decisions/2026-10-29-first-round-of-cuts.md](../decisions/2026-10-29-first-round-of-cuts.md).
 
-Originally (decided 2026-10-26, brought into v1 on 2026-10-28), the turn was suspended at the next boundary and a snapshot was stored; after the restart it was resumed (`resume`) within a window, with unfinished tools given the result "进程重启，结果未知" ("process restarted, result unknown") before continuing. This required attempts, several snapshots per turn, `TurnResumed`, `Expired`, and re-checking permissions on resumption. It is rare for a turn to be running at the moment of a deploy, and the person who was interrupted can simply ask again, so this was not worth it.
+- **A normal restart (a deploy, SIGTERM)**: the actor gets `Stop` and
+  notes when the grace runs out (20 seconds). An idle core ends at once.
+  A busy one goes on as usual, and ends normally if it becomes idle within
+  the grace; if not, it ends with `End::Stopped`: `io` is closed, what was
+  said is recorded as partial output, finished tools of the batch keep
+  their results and the rest get `已取消`, the outcome is `Interrupted`,
+  and the newest unhandled direct trigger gets `error: interrupted: …`,
+  which the sender delivers before it exits.
+- **A crash**: nothing is written.
+- **An actor error** (most likely the database's): the actor gives up on
+  the conversation. The core stops; the conversation's turns without an
+  outcome are recorded as `Lost`, as after a crash; unhandled direct
+  triggers get `error: the conversation failed: <error chain>` (joined as
+  `{:#}` does). Nothing in the VM is stopped. If the database can't be
+  reached, only a log line is written and the next startup records the
+  turns. The conversation table starts the actor again with the
+  conversation's next message; messages arriving at the very moment it
+  exits are lost with it. Errors aren't isolated per event, because after
+  one the in-memory `head` and `seen` may not match the database.
+- **Questions** another conversation asked the running core go
+  unanswered; who asked hears so and may ask again.
+- **Intent's state** is lost: hourly counts start at zero, chatter
+  awaiting classification isn't classified, and direct triggers still in
+  their debounce go unanswered.
 
-- **Normal restart (deploy, SIGTERM)**: the conversation actor receives a stop event and records when the grace period expires (20 seconds). If the core is idle, it ends immediately, without waiting for the idle window. If it is not, it keeps running: model calls, tool batches and subsequent model calls all proceed as usual, and if it becomes idle within the grace period, it ends normally. If it is still not idle when the period expires, it ends with `End::Stopped` (see [Cancellation](#cancellation)):
-  - `io` is closed, and the text already entered in the ledger is recorded as `PartialOutput`;
-  - tools in the same batch that have finished record their results as usual, and unfinished ones are given "已取消" ("cancelled");
-  - the outcome is `Interrupted`, and the snapshot and outcome are written together;
-  - a direct trigger that has not yet been handled gets a reply quoting it, `error: interrupted: …` (see [What the group sees](#what-the-group-sees)); this line is handed to the sender as usual, and at shutdown the sender exits only after its queue has drained.
-- **Crash**: nothing is written.
-- **Conversation actor error** (added 2026-10-30): if the actor hits an error while handling an event (most likely a database error), it gives up on that conversation. The core and the jobs are stopped; the conversation's turns that have no outcome are recorded as `Lost`, as with a crash, so that they do not appear to be still running; unhandled direct triggers get a one-line reply, `error: the conversation failed: <error chain>` (joined with ` :  ` as `{:#}` does; sqlx database errors already end with their source, and such duplicates are not appended again); until 2026-11-12 the jobs it stopped were reported too, with a line `stopped: agent#3, shell#4` below the same error; the actor keeps none now, and a failing actor stops nothing in the VM. If the database cannot be reached, only a log entry is written, and those turns are left for the next startup to record. Afterwards, the conversation table starts the actor again when it receives the next message for that conversation; messages that arrive at the very moment the actor exits are lost with it. Errors are not isolated per event with the actor left to continue, because after an error the in-memory `head` and `seen` may no longer match the database.
+At startup every turn without an outcome is recorded as `Lost`: a normal
+restart leaves none, so any left were running at a crash. What such a
+turn had said is in the ledger, findable by turn id. Each conversation's
+`seen` starts at its `head`, and intent starts empty.
 
-At startup, every turn without an outcome is recorded as `Lost`: a normal restart leaves no turn without an outcome, so any that remain can only be turns that were running at a crash. The messages such a turn had already sent are still in the ledger and can be found by turn id. Each conversation's `seen` starts from the `head` at that moment, and intent's state starts empty.
-
-The QQ gateway resumes (Resume) across restarts: what was said in groups during the restart is redelivered by the server, and is entered in the ledger and passed through intent as usual, so people who @ Max while it is down still get replies; see [The official QQ bot](qq.md#the-official-qq-bot-1). The only message that has to be asked again is the one being answered at the moment of shutdown.
-
-Whether to announce in the group a turn that was lost in a crash is **TBD**: a notice could be sent after startup on the basis of `Lost`.
+The QQ gateway resumes across restarts: what was said in the groups in
+the meantime is delivered again, entered and passed through intent as
+usual, so people who @ Max while it is down still get answers (see
+[The official QQ bot](qq.md)). Only a message being answered at the moment
+of shutdown has to be asked again.
 
 ## Size and retention
 
-- **Size**: reasoning blobs are a few KB to a few tens of KB each and do not compress well; a turn running dozens of rounds comes to roughly a few hundred KB to a few MB, capped by the core limit. In v1 everything is stored in the snapshot's JSONB and left to Postgres's TOAST. If size becomes a problem later, content above a threshold will be moved, uniformly, to a blob table addressed by sha256; the same applies to tool output and the base context.
-- **Retention**: N days after a turn ends, the `opaque` fields and the base context are cleared from its snapshot, and the readable text and token counts are kept. The turn can still be viewed afterwards, but its requests can no longer be resent exactly as they were. N is **TBD**.
+- **Size**: a reasoning blob is a few KB to a few tens of KB and doesn't
+  compress well; a turn of dozens of rounds is a few hundred KB to a few
+  MB, bounded by the core limit. Everything is stored in the snapshot's
+  JSONB and left to Postgres's TOAST. If size becomes a problem, content
+  past a threshold goes to a blob table addressed by sha256; the same for
+  tool output and the base context.
+- **Retention**: none yet. The plan is to clear the `opaque` fields and
+  the base context from a snapshot N days after its turn ends, keeping
+  the readable text and token counts: the turn can still be read, but no
+  longer resent exactly.
 
-## Testing the core and the actor
+## Testing
 
-- The core and intent are tested with synchronous unit tests that feed inputs from a script and check the outputs, needing neither tokio nor a fake provider; intent's time is passed in by the test. Intent tests cover at least: direct triggers waking at once, debouncing merging several messages from the same person, batching, the hourly cap and `/proactive`. Core tests cover at least: when input is delivered, no model call when there is only chatter, completing the results on interruption, malformed tool calls, the round and transcript limits, and which triggers count as unhandled on failure.
-- The conversation actor is tested with a real database (`#[sqlx::test]`), a scripted model and a sender that only records, covering cancellation, stopping and its grace period, the idle window, hitting the limit, stale events, and the filtering of `Wake`s by `seen`; for the exhaustive insertion of `/kill` between any two events, see [Cancellation safety](lifetimes.md#cancellation-safety). Changed 2026-10-29: actor tests use real time, not `start_paused`. While the actor is waiting on Postgres, a paused clock automatically jumps to the next deadline, so the idle window and the debounce would arrive early. The waits in the tests are therefore all short, and bounded; purely time-based logic (intent, the sender's quota) still uses `start_paused`.
-- The protocol adapter layer uses recorded Responses and Chat responses as fixtures, testing that reasoning entries and opaque fields make the round trip unchanged.
-- The snapshot holds the content of every request, so any model call made in production can be resent exactly, offline.
-- The segmenter's cutting (`segment/chunk.rs`) is written in the subset of Rust that Aeneas can translate (decided 2026-11-06): `verify/extract` uses Charon and Aeneas to translate it into Lean, the translated code is committed in `verify/MaxCore/`, and `verify/` proves properties on top of it. The Rust code remains the only implementation. Proved so far: pushing the text in in several pieces is the same computation as pushing it all at once; used as `segment.rs` uses it (with a fresh `out` for each push), it also cuts out the same segments; and every segment except the last closes its fences (as judged by `closes_fences`). The last property relies on a check in `cut` that emits only closed segments; that this check never holds back a segment outside a fence is checked by the tests in `chunk.rs`. However UTF-8 text is split into pushes, even when characters are split apart, every segment cut out is UTF-8 (added 2026-11-06), so the lossy fallback in `segment.rs`'s conversion to `String` is never used; for this, `trim` was changed to look only at `s[from..to]`, and the bounds check in `space_at` was rewritten in a form that cannot overflow. The segmenter always returns (added 2026-11-06): it never goes out of bounds, never overflows and never loops forever, and as long as the text is shorter than roughly half of `usize::MAX`, every `Vec` fits; what it holds and emits never exceeds twice the size of the text. For this, the counter in `is_break` was changed from an inferred `i32` to `usize`; otherwise a line with more than 2³¹ non-whitespace bytes would overflow it. Apart from `<think>` segments, whitespace, `[split]` and thematic breaks, nothing in the text is lost (added 2026-11-07): however the text is split into pushes, and not counting newlines, the segments cut out, concatenated, are the lines of the text outside `<think>` segments, cut at `[split]` and at image handles, with thematic breaks removed and some whitespace removed, in the original order. To keep the statement simple, what is proved is slightly broader than what actually happens: newlines are disregarded on both sides, a `[split]` inside code is also treated as droppable, and a `<think>`, wherever it appears, may or may not count as the start of a segment. When `chunk.rs` or `verify/` changes, CI's Verify workflow (`.github/workflows/verify.yml`) translates the code again, compares the result with the committed `verify/MaxCore/` and builds the proofs; it does not run otherwise, because Charon and Aeneas are not in any binary cache and require downloading a Rust toolchain of more than ten GB. The hand-written character-level model and `verify/diff/`, which cross-checked the code against it, were removed (decided 2026-11-06): the properties to be proved are all proved on the translated code, and the model was merely a second implementation that had to be changed whenever the Rust changed.
+- The core and intent have synchronous unit tests that feed inputs from a
+  script and check outputs, with no tokio and no fake provider; intent's
+  time is passed in. Intent's cover direct triggers waking at once,
+  debouncing, batching, the hourly cap and `/proactive`. The core's cover
+  when inputs take effect, no model call for chatter alone, the results
+  filled in on interruption, malformed calls, the limits, and which
+  triggers count as unhandled on failure.
+- The actor is tested with a real database (`#[sqlx::test]`), a scripted
+  model and a sender that only records: cancellation, stopping and its
+  grace, the idle window, the limit, stale events, and wakes filtered by
+  `seen`; for `/kill` inserted between every two events, see
+  [Cancellation safety](lifetimes.md#cancellation-safety). Actor tests use
+  real time, not `start_paused`: while the actor waits on Postgres a paused
+  clock jumps to the next deadline, so the idle window and the debounce
+  would come early. Their waits are short and bounded. Purely time-based
+  logic (intent, the sender's quota) uses `start_paused`.
+- The protocol adapters are tested against recorded Responses and Chat
+  responses: reasoning entries and opaque fields make the round trip
+  unchanged.
+- A snapshot holds every request it made, so any production model call
+  can be resent exactly, offline.
+- The segmenter's cutting (`segment/chunk.rs`) is written in the part of
+  Rust that Aeneas translates, and its properties are proved in Lean on
+  the translation; [verify/README.md](../../verify/README.md) lists the
+  theorems. The Rust is the only implementation: there is no second model
+  to keep in step with it. CI's Verify workflow translates the code again,
+  compares it with the committed `verify/MaxCore/` and builds the proofs,
+  only when `chunk.rs` or `verify/` changes, since Charon and Aeneas are in
+  no binary cache.
 
-## Other uses of the same pattern
+The same pattern, a pure state machine driven by a thin async shell, is
+used where there is protocol state, complex rules and a need for precise
+tests: the streaming segmenter, and the QQ gateway session (heartbeat,
+Resume, reconnection). The actor itself is ordinary async code: the rules
+live in the core and the segmenter, and the actor enters, routes and
+spawns as the core directs.
 
-The criteria are protocol state, complex rules and a need for precise testing. The following meet them:
+## Open
 
-- The streaming segmenter: fed increments of text, it emits paragraphs ready to be sent.
-- The QQ gateway session: heartbeat, Resume and reconnection.
-- Mirrored delivery (not in v1): reconciling receipts and echoes.
-
-The conversation actor is ordinary async code: the rules all live in the core and the segmenter, and the actor is responsible only for entering messages in the ledger, routing, and spawning tasks as the core directs.
-
-## Open questions
-
-- ~~How the base context is stored~~: decided (2026-10-27): the rendered result is stored; see [Context projection](context.md#context-projection-1).
-- The retention period N.
-- The margin in the core limit (proposed: 5% of C).
-- ~~Permissions for `/kill`~~: decided (2026-10-29): the group owner, administrators and the owners; see [Permissions](identity.md#permissions).
-- ~~Trimming rules~~: decided (2026-10-28): no trimming; see "Building requests" in [The core](core.md#the-core-1).
-- ~~How long the recovery window should be~~: there is no longer any recovery (2026-10-29); see [Restarts](#restarts). Whether turns and jobs lost in a crash should be announced in the group.
+- Retention: the period N, or whether to clear anything.
+- Whether to tell a group about a turn lost in a crash, from its `Lost`
+  record, after startup.
