@@ -171,6 +171,7 @@ pub(super) fn late(limit: Duration) -> Failure {
 struct Listed {
     name: &'static str,
     description: &'static str,
+    guide: &'static str,
     input_schema: &'static Map<String, Value>,
     output_schema: &'static Map<String, Value>,
 }
@@ -179,6 +180,7 @@ fn listed(spec: &'static Spec) -> Listed {
     Listed {
         name: spec.name,
         description: spec.description,
+        guide: &spec.guide,
         input_schema: &spec.input,
         output_schema: &spec.output,
     }

@@ -212,9 +212,28 @@ pkgs.testers.runNixOSTest {
             ({"limit": 30}, "there is no command to run"),
             ({"command": "true", "limit": 90000}, "limit is a day at most, 86400 seconds"),
             ({"command": "true", "unit": "mine"}, "--unit is max-job-… or max-agent-…, not 'mine'"),
+            (
+                {"command": "true", "timeout_ms": 5000},
+                "there is no argument timeout_ms; there are: command, title, workdir, limit, unit, split, shown, input",
+            ),
         ]:
             status, refused = machine.execute(maxx("units run", **arguments) + " 2>&1")
             assert status == 2 and refused.strip() == f"maxx units: {why}", (status, refused)
+        # So is a field a tool doesn't take, and an argument for one that
+        # takes none: neither is left out in silence.
+        for words, arguments, why in [
+            ("units start", {"command": "true", "shown": 5}, "maxx units: there is no argument shown; there are: command, title, workdir, limit, unit"),
+            ("units list", {"all": True}, "maxx units: list takes no arguments"),
+            ("units stop-all", {"force": True}, "maxx units: stop-all takes no arguments"),
+            ("units apply", {"dry": True}, "maxx units apply: it takes no arguments"),
+            ("agent models", {"all": True}, "it takes no arguments"),
+            ("agent steer", {"name": "max-agent-1", "text": "好", "now": True}, "there is no argument now; there are: name, text"),
+        ]:
+            status, refused = machine.execute(maxx(words, **arguments) + " 2>&1")
+            assert status == 2 and refused.strip() == why, (words, status, refused)
+        status, refused = machine.execute("maxx units start '{\"command\": ' 2>&1")
+        assert status == 2 and refused.startswith("maxx units: the arguments aren't JSON: "), (status, refused)
+        assert running() == [], running()
 
     with subtest("a call's command reaches bash as it was written"):
         # systemd would fill in ''${…} and $$ itself, in a quoted heredoc too.
@@ -460,6 +479,19 @@ pkgs.testers.runNixOSTest {
         start("self", "echo bye; kill -TERM $$", limit=60, title="$ kill")
         notice = woken(10)
         assert notice.startswith("[max-job-self 完成] $ kill\nended by SIGTERM, after "), notice
+
+    with subtest("one name is one unit's, and a text in braces is a command"):
+        start("twice", "sleep 600", limit=900, title="$ first")
+        status, refused = machine.execute(maxx("units start", unit="max-job-twice", command="true", title="$ second") + " 2>&1")
+        assert status == 2 and refused.strip() == "maxx units: there is a unit named max-job-twice already", (status, refused)
+        # The first is as it was: known here, and its end still its own.
+        assert [(unit["name"], unit["title"]) for unit in running()] == [("max-job-twice", "$ first")], running()
+        machine.succeed("systemctl stop max-job-twice")
+        machine.wait_until_fails("test -e /run/max/jobs/max-job-twice")
+        # A word that only begins with a brace isn't JSON: Node reads it
+        # with the rest, as the command it is.
+        said = json.loads(machine.succeed("maxx units run '{ echo in braces; } 2>&1'"))
+        assert said["out"]["head"] == "in braces\n" and said["result"] == "success", said
 
     with subtest("a background command of Max's own starting is named and titled here"):
         started = json.loads(machine.succeed("maxx units start 'sleep 600\necho second line'"))

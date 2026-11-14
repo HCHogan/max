@@ -104,9 +104,11 @@ pkgs.runCommand "maxx" { meta.mainProgram = "maxx"; } ''
       exec ${lib.getExe scripts.jobs} "\$@"
       ;;
   ${cases}esac
-  # One of the guest's own, its words and a JSON object: there are no
-  # options to read.
-  if [ -n "\$run" ] && [ \$# -eq 3 ] && [[ \$3 == \{* ]]; then
+  # One of the guest's own, its words and a JSON object as a program
+  # writes one, {} or {"…: there are no options to read. What only begins
+  # with a brace is a text, a command in braces or a face, and Node's to
+  # read with the rest.
+  if [ -n "\$run" ] && [ \$# -eq 3 ] && [[ \$3 == "{}" || \$3 == '{"'* ]]; then
     exec "\$run" "\$2" "\$3"
   fi
   exec ${pkgs.nodejs}/bin/node $out/lib/max-runner/maxx.js "\$@"

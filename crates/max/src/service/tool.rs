@@ -61,6 +61,9 @@ pub trait Tool: 'static {
 pub struct Spec {
     pub name: &'static str,
     pub description: &'static str,
+    /// How it is used, as its declaration says it: `maxx <name> --help`
+    /// shows it, which is all an agent is told of a tool.
+    pub guide: String,
     pub turn: bool,
     /// JSON Schemas.
     pub input: Map<String, Value>,
@@ -163,9 +166,9 @@ impl Spec {
 
 fn spec<T: Tool>() -> Spec {
     let (input, output) = (schema::<T::Args>(true), schema::<T::Output>(false));
+    let guide = T::guide();
     let declaration = format!(
-        "/** {} */\n{}(args: {}): Promise<{}>;",
-        T::guide(),
+        "/** {guide} */\n{}(args: {}): Promise<{}>;",
         T::NAME,
         typescript(&input),
         typescript(&output),
@@ -173,6 +176,7 @@ fn spec<T: Tool>() -> Spec {
     Spec {
         name: T::NAME,
         description: T::DESCRIPTION,
+        guide,
         turn: T::TURN,
         input,
         output,

@@ -11,6 +11,7 @@
 //   maxx history 示波器                     the same, by position
 //   maxx history '{"query": "示波器"}'      or as JSON; - reads it from stdin
 //   maxx agent start --task - <<'EOF'      a value of - is standard input
+//   maxx say -- '--help 是什么'            after --, every word is a text
 //   maxx units list                        one of the guest's own, by its words
 //   maxx events --after 123                the group's rows after #123 as
 //                                          they come, a JSON line each
@@ -51,15 +52,27 @@ async function main(argv) {
     if (group.length) {
       const lines = [`${first} takes one of:`, ...table(group)].join("\n");
       if (second === undefined || second === "--help" || second === "-h") return [lines, 0];
-      throw new Usage(`there is no ${first} ${second}\n${lines}`);
+      const meant = group.find(tool => plain(tool.words[1]) === plain(second));
+      throw new Usage(meant ? `there is no ${first} ${second}; it is written maxx ${named(meant)}` : `there is no ${first} ${second}\n${lines}`);
     }
+    // Its words run together, as a program has its name: the words
+    // themselves are the only way to write it, and it is told them.
+    const meant = LOCAL.find(tool => plain(named(tool)) === plain(first));
+    if (meant) throw new Usage(`there is no tool named ${first}; it is written maxx ${named(meant)}`);
     const name = first.replaceAll("-", "_");
-    const all = await listed(tools);
-    tool = all.find(tool => !tool.words && tool.name === name);
-    if (!tool) throw new Usage(`there is no tool named ${first}; there are: ${all.map(named).join(", ")}`);
+    if (rest.length === 1 && rest[0].startsWith("{") && braced(rest[0])) {
+      // Its arguments as one JSON object, which no schema is needed to
+      // read: the host isn't asked for its list first, and says itself
+      // whether it has such a tool.
+      tool = { name };
+    } else {
+      const all = await listed(tools);
+      tool = all.find(tool => !tool.words && tool.name === name);
+      if (!tool) throw new Usage(`there is no tool named ${first}; there are: ${all.map(named).join(", ")}`);
+    }
   }
-  if (tool.stream) return [await follow(tools, rest), 0];
-  if (rest.includes("--help") || rest.includes("-h")) return [help(tool), 0];
+  if (tool.stream) return [await follow(tools, rest, tool), 0];
+  if (asksHelp(rest)) return [help(tool), 0];
   const args = await parse(rest, tool.inputSchema);
   const outcome = await tools.request(tool.name, args);
   if (!outcome.ok) return [`${named(tool)}: ${outcome.error.message} (${outcome.error.code})`, 1];
@@ -74,6 +87,17 @@ async function listed(tools) {
 }
 
 class Failed extends Error {}
+
+// A name without what joins its words: agent-start, agent_start and
+// "agent start" are one.
+const plain = text => text.replace(/[-_ ]/g, "");
+
+// --help among the options, or -h in the first place: further on, -h is
+// a text's, and after -- so is --help.
+function asksHelp(words) {
+  const end = words.indexOf("--");
+  return words[0] === "-h" || (end < 0 ? words : words.slice(0, end)).includes("--help");
+}
 
 // A line for each tool: its name, and what it is.
 function table(tools) {
@@ -91,17 +115,13 @@ function listing(tools) {
   ].join("\n");
 }
 
-// maxx events: the rows, a JSON line each, until whoever reads them stops.
-async function follow(tools, words) {
-  if (words.includes("--help") || words.includes("-h")) return EVENTS_HELP;
-  let after;
-  for (let i = 0; i < words.length; i++) {
-    const [flag, inline] = words[i].startsWith("--") ? split(words[i].slice(2)) : [undefined];
-    if (flag !== "after") throw new Usage(`events takes only --after <number>, not ${words[i]}`);
-    const text = inline ?? words[++i];
-    if (text === undefined || !/^#?\d+$/.test(text)) throw new Usage("--after takes a message's number");
-    after = Number(text.replace("#", ""));
-  }
+// maxx events: the rows, a JSON line each, until whoever reads them
+// stops. Its arguments are read as a call's; a message's number may be
+// written as the records write it, #123.
+async function follow(tools, words, tool) {
+  if (asksHelp(words)) return EVENTS_HELP;
+  const numbered = words.map(word => word.replace(/^(--after=)?#(\d+)$/, "$1$2"));
+  const { after } = await parse(numbered, tool.inputSchema);
   // Whoever read the rows is gone.
   process.stdout.on("error", () => process.exit(0));
   const told = (why, wait) => process.stderr.write(`maxx events: ${why}; reconnecting in ${wait / 1000} seconds\n`);
@@ -131,7 +151,33 @@ function help(tool) {
     const about = schema?.description ? `: ${schema.description}` : "";
     return `  --${property} (${kind}${must})${about}`;
   };
-  return [`${named(tool)}: ${tool.description}`, ...(properties.length ? ["Arguments:", ...properties.map(flag)] : ["No arguments."])].join("\n");
+  const lines = [`${named(tool)}: ${tool.description}`];
+  // How it is used, as the system prompt says it of a turn's tools: all
+  // an agent, which is told of none, has to go on.
+  if (tool.guide && tool.guide !== tool.description) lines.push(tool.guide);
+  lines.push(...(properties.length ? ["Arguments:", ...properties.map(flag)] : ["No arguments."]));
+  const returns = shape(tool.outputSchema);
+  if (returns) lines.push(`Returns: ${returns}`);
+  return lines.join("\n");
+}
+
+// What a schema takes, written as a type: { name: string, said?: string }.
+function shape(schema) {
+  if (!schema || typeof schema !== "object") return "";
+  if (Array.isArray(schema.anyOf)) return [...new Set(schema.anyOf.map(shape).filter(Boolean))].join(" | ");
+  const kinds = Array.isArray(schema.type) ? schema.type : schema.type ? [schema.type] : [];
+  const one = kind => {
+    if (kind === "integer") return "number";
+    if (kind === "array") {
+      const item = shape(schema.items) || "unknown";
+      return item.includes(" | ") ? `(${item})[]` : `${item}[]`;
+    }
+    if (kind !== "object") return kind;
+    const required = new Set(schema.required ?? []);
+    const fields = Object.entries(schema.properties ?? {}).map(([name, field]) => `${name}${required.has(name) ? "" : "?"}: ${shape(field) || "unknown"}`);
+    return fields.length ? `{ ${fields.join(", ")} }` : "object";
+  };
+  return [...new Set(kinds.map(one))].join(" | ");
 }
 
 const KINDS = { boolean: "true/false" };
@@ -146,12 +192,14 @@ function types(schema) {
 
 // The call's arguments: --name value, --name=value, a bare --name for
 // true, --no-name for false, and - for a text's value to read it from
-// stdin; JSON, or - for JSON on stdin; and words by position, for the
-// required arguments first and then the rest in order.
+// stdin; a JSON object, or - for one on stdin; and words by position,
+// for the required arguments first and then the rest in order. After --
+// every word is by position, whatever it begins with.
 async function parse(words, schema) {
   const properties = schema?.properties ?? {};
   const args = {};
   const positional = [];
+  let options = true;
   const property = flag => {
     const name = flag.replaceAll("-", "_");
     if (!(name in properties)) {
@@ -162,8 +210,10 @@ async function parse(words, schema) {
   };
   for (let i = 0; i < words.length; i++) {
     const word = words[i];
-    if (word === "-") Object.assign(args, object(await stdin(), "standard input"));
-    else if (word.startsWith("{")) Object.assign(args, object(word, "the argument"));
+    if (!options) positional.push(word);
+    else if (word === "--") options = false;
+    else if (word === "-") Object.assign(args, object(await stdin(), "standard input", "; a text is read from it as an argument's value, --text -"));
+    else if (word.startsWith("{") && braced(word)) Object.assign(args, object(word, "the argument"));
     else if (word.startsWith("--") && word.length > 2) {
       const [flag, inline] = split(word.slice(2));
       if (inline === undefined && flag.startsWith("no-") && !(flag.replaceAll("-", "_") in properties)) {
@@ -229,12 +279,26 @@ function read(name, text, schema) {
   }
 }
 
-function object(text, where) {
+// Whether a word that begins with a brace is the arguments as JSON: it
+// is a JSON object, or begins as a program writes one, {" (bin/maxx
+// takes those for JSON too). Any other is a text: a command in braces,
+// { make; } 2>&1, or a face.
+function braced(word) {
+  if (word.startsWith('{"')) return true;
+  try {
+    const value = JSON.parse(word);
+    return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+  } catch {
+    return false;
+  }
+}
+
+function object(text, where, hint = "") {
   let value;
   try {
     value = JSON.parse(text);
   } catch (error) {
-    throw new Usage(`${where} isn't JSON: ${error.message}`);
+    throw new Usage(`${where} isn't JSON: ${error.message}${hint}`);
   }
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Usage(`${where} must be a JSON object`);
   return value;

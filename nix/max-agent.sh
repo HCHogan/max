@@ -38,17 +38,26 @@ fail() {
 }
 
 # The texts of a JSON object's fields, as assignments for eval. What
-# isn't such an object is a wrong command line.
+# isn't such an object is a wrong command line, and so is a field that
+# isn't one of them: it would be left out in silence.
 fields() {
   local json=$1 parsed
   shift
   if ! parsed=$(jq -r '
       if type == "object" then . else error("the arguments are a JSON object") end
+      | (keys - $ARGS.positional) as $odd
+      | if $odd == [] then .
+        elif $ARGS.positional == [] then error("it takes no arguments")
+        else error("there is no argument \($odd[0]); there are: \($ARGS.positional | join(", "))") end
       | . as $given | $ARGS.positional[]
       | . as $name | ($given[$name] // "")
       | if type == "string" then "\($name)=\(@sh)" else error("\($name) is text") end
     ' --args "$@" <<< "$json" 2>&1); then
-    echo "${parsed#jq: error (at <stdin>:*): }" >&2
+    parsed=${parsed#jq: error (at <stdin>:*): }
+    case "$parsed" in
+      "jq: parse error: "*) parsed="the arguments aren't JSON: ${parsed#jq: parse error: }" ;;
+    esac
+    echo "$parsed" >&2
     exit 2
   fi
   echo "$parsed"
@@ -178,7 +187,13 @@ $text
 
 case "${1:-}" in
   start) start "${2:-}" ;;
-  models) models ;;
+  models)
+    # It takes none: fields, given no names, refuses any.
+    json=${2:-}
+    [ -n "$json" ] || json="{}"
+    fields "$json" > /dev/null
+    models
+    ;;
   steer) steer "${2:-}" ;;
   ask) ask "${2:-}" ;;
   *) fail "start, models, steer or ask, not '${1:-}'" ;;

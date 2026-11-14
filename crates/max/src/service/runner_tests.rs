@@ -708,13 +708,35 @@ async fn commands_call_max_tools_with_maxx(pool: PgPool) {
     for joined in ["agent-start", "agent_start"] {
         let ran = maxx(&url, &[joined, "--task", "x"], "").await;
         assert_eq!(ran.status, 2, "{}", ran.stdout);
-        assert!(
-            ran.stderr
-                .starts_with(&format!("maxx: there is no tool named {joined}; ")),
-            "{}",
-            ran.stderr
+        assert_eq!(
+            ran.stderr,
+            format!("maxx: there is no tool named {joined}; it is written maxx agent start\n"),
         );
     }
+    let ran = maxx(&url, &["units", "stop_all"], "").await;
+    assert_eq!(ran.status, 2, "{}", ran.stdout);
+    assert_eq!(
+        ran.stderr,
+        "maxx: there is no units stop_all; it is written maxx units stop-all\n"
+    );
+    // What comes back, and how it is used: all an agent is told of a tool.
+    assert!(
+        help.stdout
+            .contains("\nReturns: { name: string, said: string }\n")
+            && help
+                .stdout
+                .contains("\nStarts a background agent on task, "),
+        "{}",
+        help.stdout
+    );
+    let help = maxx(&url, &["say", "--help"], "").await;
+    assert!(
+        help.stdout
+            .contains("\nArguments:\n  --text (string, required): ")
+            && help.stdout.lines().count() > 4,
+        "{}",
+        help.stdout
+    );
 
     // By flags, as JSON, from stdin: the result as JSON.
     let around = id.to_string();
@@ -755,12 +777,24 @@ async fn commands_call_max_tools_with_maxx(pool: PgPool) {
         ),
         (&["history", "--before", "x"][..], "--before takes a number"),
         (&["nosuch"][..], "there is no tool named nosuch"),
-        (&["history", "{"][..], "the argument isn't JSON"),
+        (&["history", "{\"limit\": "][..], "the argument isn't JSON"),
+        (
+            &["history", "-"][..],
+            "standard input isn't JSON: Unexpected end of JSON input; a text is read from it as an argument's value, --text -",
+        ),
     ] {
         let ran = maxx(&url, words, "").await;
         assert_eq!(ran.status, 2, "{words:?}");
         assert!(ran.stderr.contains(said), "{words:?}: {}", ran.stderr);
     }
+    // Its arguments as one JSON object: the host says itself that it has
+    // no such tool, and isn't asked for its list first.
+    let ran = maxx(&url, &["nosuch", "{}"], "").await;
+    assert_eq!(ran.status, 1, "{}", ran.stdout);
+    assert_eq!(
+        ran.stderr,
+        "nosuch: there is no tool named nosuch (unknown_tool)\n"
+    );
 
     // A picture for the model, from a command that is part of a call:
     // left in the call's directory, and nothing asked of the host.
@@ -806,6 +840,26 @@ async fn commands_call_max_tools_with_maxx(pool: PgPool) {
             json!({ "text": "[reply#1] 好" }),
         ),
         (&["history"][..], "history", json!({})),
+        // What only begins with a brace is a text, and so is every word
+        // after --; -h asks for help in the first place alone.
+        (&["say", "{笑}"][..], "say", json!({ "text": "{笑}" })),
+        (
+            &["wake", "{ make; } 2>&1 挂了"][..],
+            "wake",
+            json!({ "text": "{ make; } 2>&1 挂了" }),
+        ),
+        (
+            &["say", "--", "--help"][..],
+            "say",
+            json!({ "text": "--help" }),
+        ),
+        (&["say", "--", "-"][..], "say", json!({ "text": "-" })),
+        (&["say", "--text", "-h"][..], "say", json!({ "text": "-h" })),
+        (
+            &["history", "{ \"limit\": 2 }"][..],
+            "history",
+            json!({ "limit": 2 }),
+        ),
     ] {
         let ran = maxx(&echo, words, "").await;
         assert_eq!(ran.status, 0, "{words:?}: {}", ran.stderr);

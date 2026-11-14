@@ -60,6 +60,24 @@ usage() {
   exit 2
 }
 
+# What jq said of arguments it wouldn't take, without what is jq's own.
+wrong() {
+  local said=${1#jq: error (at <stdin>:*): }
+  case "$said" in
+    "jq: parse error: "*) said="the arguments aren't JSON: ${said#jq: parse error: }" ;;
+  esac
+  echo "$said"
+}
+
+# One that takes no arguments is given none: one given is a mistake its
+# caller should hear of.
+none() {
+  case "${2-}" in
+    "" | "{}") ;;
+    *) jq -e 'type == "object" and length == 0' <<< "$2" > /dev/null 2>&1 || usage "$1 takes no arguments" ;;
+  esac
+}
+
 # A piece of output: its size, and all of it if it fits in $shown;
 # otherwise its head and its tail, and the file that has the whole.
 piece() {
@@ -95,18 +113,24 @@ took() {
 }
 
 # A call or a background command, as the JSON object asks for it:
-# launch's options, and for a background command what is said of it.
+# launch's options, and for a background command what is said of it. A
+# field it doesn't take is refused, not left out in silence: timeout_ms
+# for limit would run for the 6 hours nobody asked for.
 asked() {
   local kind=$1 parsed
   local unit="" title="" workdir="" command="" limit=0 input=0 shown=0 split=""
-  if ! parsed=$(jq -r '
+  if ! parsed=$(jq -r --arg kind "$kind" '
       def text(name): .[name] // "" | if type == "string" then . else error("\(name) is text") end;
       def count(name): .[name] // 0
         | if type == "number" and . == floor and . >= 0 then . else error("\(name) is a whole number") end;
-      if type == "object" then . else error("the arguments are a JSON object") end
+      (["command", "title", "workdir", "limit", "unit"]
+        + if $kind == "call" then ["split", "shown", "input"] else [] end) as $known
+      | if type == "object" then . else error("the arguments are a JSON object") end
+      | (keys - $known) as $odd
+      | if $odd == [] then . else error("there is no argument \($odd[0]); there are: \($known | join(", "))") end
       | @sh "unit=\(text("unit")) title=\(text("title")) workdir=\(text("workdir")) command=\(text("command")) limit=\(count("limit")) input=\(count("input")) shown=\(count("shown")) split=\(if .split == true then "1" else "" end)"
     ' <<< "$2" 2>&1); then
-    usage "${parsed#jq: error (at <stdin>:*): }"
+    usage "$(wrong "$parsed")"
   fi
   eval "$parsed"
   [ -n "${command//[[:space:]]/}" ] || usage "there is no command to run"
@@ -159,6 +183,11 @@ launch() {
     esac
   done
   [[ $unit =~ ^max-(job|agent)-[a-z0-9-]+$ ]] || usage "--unit is max-job-… or max-agent-…, not '$unit'"
+  # One name, one unit: a second would write over what the first is known
+  # by here, fail to start, and take that away with it, so that the
+  # first's end was told to nobody. An agent's is made for it, with its
+  # task, before it comes here (max-agent.sh).
+  [ "$kind" = agent ] || [ ! -e "$jobs/$unit" ] || usage "there is a unit named $unit already"
   [[ $limit =~ ^[0-9]+$ ]] || usage "--limit is in seconds, not '$limit'"
   [[ $input =~ ^[0-9]*$ ]] || usage "--input is in bytes, not '$input'"
   [ $# -gt 0 ] || usage "$kind needs a command after --"
@@ -429,28 +458,49 @@ running() {
 # What runs, each with what it is and how long it has run, and after
 # them what /work/.max/systemd keeps, each as systemd has it.
 list() {
-  local units unit name dir now file
+  local units unit name dir now file kind title started
   mapfile -t units < <(running)
   now=$(date +%s)
-  {
-    for unit in "${units[@]}"; do
-      name=${unit%.service}
-      dir=$jobs/$name
-      if [ -f "$dir/started" ]; then
-        jq -nc --arg name "$name" --arg kind "$(cat "$dir/kind")" --arg title "$(cat "$dir/title")" \
-          --argjson seconds "$((now - $(cat "$dir/started")))" \
-          '{name: $name, kind: $kind, title: $title, seconds: $seconds}'
-      else
-        jq -nc --arg name "$name" '{name: $name, kind: "job"}'
-      fi
-    done
-    for file in "$installed"/*; do
-      [ -f "$file" ] || continue
-      name=${file##*/}
-      jq -nc --arg name "$name" --arg state "$(systemctl is-active "$name" || true)" \
-        '{name: $name, kind: "unit", state: $state}'
-    done
-  } | jq -sc '{units: .}'
+  # Four words for each that runs, for the one jq that writes them all.
+  local ran=()
+  for unit in "${units[@]}"; do
+    name=${unit%.service}
+    dir=$jobs/$name
+    if [ ! -f "$dir/started" ]; then
+      ran+=("$name" job "" "")
+      continue
+    fi
+    # One that ends as it is read is left out: its files go with it.
+    kind=$(cat "$dir/kind" 2> /dev/null) || continue
+    title=$(cat "$dir/title" 2> /dev/null) || continue
+    started=$(cat "$dir/started" 2> /dev/null) || continue
+    [[ $started =~ ^[0-9]+$ ]] || continue
+    ran+=("$name" "$kind" "$title" "$((now - started))")
+  done
+  # What is kept, and how systemd has each: a line a unit, in their order.
+  local names=() states=()
+  for file in "$installed"/*; do
+    [ -f "$file" ] || continue
+    names+=("${file##*/}")
+  done
+  if [ "${#names[@]}" -gt 0 ]; then
+    mapfile -t states < <(systemctl is-active "${names[@]}" || true)
+    if [ "${#states[@]}" != "${#names[@]}" ]; then
+      states=()
+      for name in "${names[@]}"; do
+        states+=("$(systemctl is-active "$name" || true)")
+      done
+    fi
+  fi
+  jq -nc --argjson ran "${#ran[@]}" '
+    $ARGS.positional as $all
+    | $all[$ran:] as $kept
+    | ($kept | length / 2) as $count
+    | {units: (
+        [range(0; $ran; 4) | $all[.:. + 4]
+          | {name: .[0], kind: .[1]} + (if .[3] == "" then {} else {title: .[2], seconds: (.[3] | tonumber)} end)]
+        + [range($count) | {name: $kept[.], kind: "unit", state: $kept[$count + .]}])}
+  ' --args "${ran[@]}" "${names[@]}" "${states[@]}"
 }
 
 # Whether the guest has had nothing of Max's to do for so long. A unit's
@@ -475,8 +525,14 @@ stop_all() {
 case "${1:-}" in
   run) asked call "${2:-}" ;;
   start) asked job "${2:-}" ;;
-  list) list ;;
-  stop-all) stop_all ;;
+  list)
+    none list "${2-}"
+    list
+    ;;
+  stop-all)
+    none stop-all "${2-}"
+    stop_all
+    ;;
   agent) shift && launch job --agent "$@" ;;
   ended) ended "${2:?maxx units ended needs a unit}" ;;
   notify) notify "${2:?maxx units notify needs a unit}" ;;
