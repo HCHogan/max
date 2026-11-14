@@ -11,6 +11,7 @@ mod http;
 mod mute_member;
 mod program;
 mod recall_message;
+pub(crate) mod rows;
 mod send_file;
 mod send_image;
 pub mod tool;

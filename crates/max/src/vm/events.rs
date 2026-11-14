@@ -2,12 +2,13 @@
 //! committed, a JSON line a row, for the programs Max keeps in the VM,
 //! which read it with `maxx events`. `?after=<id>` first sends the rows
 //! after that one, the latest [`EVENTS_CAUGHT_UP`] of them, from the database. A
-//! line with nothing on it is the heartbeat. Which group it is is the VM's
-//! own socket's to say, as for the programs' calls. See "Resident programs" in
-//! docs/rust-rewrite.md.
+//! line with nothing on it is the heartbeat. With `full=1` a line has the
+//! row as data too, as the `rows` tool gives it (service/rows.rs). Which
+//! group it is is the VM's own socket's to say, as for the programs'
+//! calls. See "Resident programs" in docs/rust-rewrite.md.
 
 use std::borrow::Borrow;
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::io;
 use std::time::Duration;
 
@@ -24,7 +25,7 @@ use max_core::message::{Content, Message};
 use max_core::render::Render;
 use max_db::ledger;
 use serde::Serialize;
-use serde_json::json;
+use serde_json::{Value, json};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
@@ -34,6 +35,7 @@ use tracing::warn;
 
 use crate::conversation::Signal;
 use crate::conversation::{Subscription, ingest, project};
+use crate::service::rows;
 use max_core::limits::EVENTS_CAUGHT_UP;
 
 /// A stream with no row for this long sends the heartbeat, so that the
@@ -72,6 +74,21 @@ struct Line<'a> {
     reply_to: Option<i64>,
     /// As `history` shows it.
     text: String,
+    /// The row as data, and whose its accounts are, for a stream that
+    /// asked for them: as `rows` gives both.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    row: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    people: Option<BTreeMap<String, i64>>,
+}
+
+/// What a stream's query asks for.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Asked {
+    /// The rows after this one first; from now without it.
+    after: Option<i64>,
+    /// Each row as data too.
+    full: bool,
 }
 
 /// `/events` for the VM of `conversation`; its streams end at `stop`.
@@ -100,8 +117,11 @@ fn beating(
 }
 
 async fn events(State(events): State<Events>, uri: Uri) -> Response {
-    let Some(after) = after(uri.query()) else {
-        return refuse(StatusCode::BAD_REQUEST, "only ?after=<number> is taken");
+    let Some(Asked { after, full }) = asked(uri.query()) else {
+        return refuse(
+            StatusCode::BAD_REQUEST,
+            "only after=<number> and full=1 are taken",
+        );
     };
     let conversation = events.conversation;
     let (reply, subscribed) = oneshot::channel();
@@ -136,6 +156,7 @@ async fn events(State(events): State<Events>, uri: Uri) -> Response {
         last: after.map_or(head, MessageId),
         subscription,
         backlog,
+        full,
         heartbeat: events.heartbeat,
         stop: events.stop,
     };
@@ -151,16 +172,19 @@ async fn events(State(events): State<Events>, uri: Uri) -> Response {
         })
 }
 
-/// The id `?after=<id>` asks for: Some(None) without a query, None for
-/// any other query.
-fn after(query: Option<&str>) -> Option<Option<i64>> {
-    match query.unwrap_or_default() {
-        "" => Some(None),
-        query => query
-            .strip_prefix("after=")
-            .and_then(|id| id.parse().ok())
-            .map(Some),
+/// What `?after=<id>&full=1` asks for, either of them or neither; None
+/// for anything else in a query.
+fn asked(query: Option<&str>) -> Option<Asked> {
+    let mut asked = Asked::default();
+    for pair in query.unwrap_or_default().split('&') {
+        match pair.split_once('=') {
+            _ if pair.is_empty() => {}
+            Some(("after", id)) => asked.after = Some(id.parse().ok()?),
+            Some(("full", "1")) => asked.full = true,
+            _ => return None,
+        }
     }
+    Some(asked)
 }
 
 /// The rows after `after` up to the head, the latest [`EVENTS_CAUGHT_UP`].
@@ -190,6 +214,8 @@ struct Following {
     backlog: VecDeque<MessageId>,
     /// The last row sent; or where the stream starts.
     last: MessageId,
+    /// Whether a line has its row as data too.
+    full: bool,
     heartbeat: Duration,
     stop: CancellationToken,
 }
@@ -244,6 +270,15 @@ impl Following {
         let place = &self.subscription.place;
         let mut conn = self.subscription.services.pool.acquire().await?;
         let people = project::people(&mut conn, messages.iter().copied(), place).await?;
+        // As the ledger has them now: a row just committed has no more
+        // to it than its message, and one caught up on may.
+        let mut stored = BTreeMap::new();
+        if self.full {
+            let ids: Vec<MessageId> = messages.iter().map(|message| message.id).collect();
+            for row in ledger::picked(&mut conn, place.conversation, &ids).await? {
+                stored.insert(row.message.id, rows::data(&row));
+            }
+        }
         drop(conn);
         let render = Render {
             people: &people,
@@ -273,6 +308,8 @@ impl Following {
                 by,
                 reply_to,
                 text: render.body(message),
+                people: self.full.then(|| rows::known(message, &people)),
+                row: stored.remove(&message.id),
             };
             serde_json::to_writer(&mut out, &line).expect("a line is JSON");
             out.push(b'\n');

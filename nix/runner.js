@@ -80,7 +80,7 @@ async function main() {
   const tools = Object.create(null);
   for (const name of input.tools) tools[name] = args => call(name, args);
   for (const tool of LOCAL) {
-    tools[tool.name] = tool.stream ? (args = {}) => follow({ after: args?.after }) : args => call(tool.name, args);
+    tools[tool.name] = tool.stream ? (args = {}) => follow({ after: args?.after, full: args?.full }) : args => call(tool.name, args);
   }
   const max = Object.freeze({ raw, cancel, race, browser, page, snapshot });
   const AsyncFunction = (async () => {}).constructor;

@@ -14,7 +14,8 @@
 //   maxx say -- '--help 是什么'            after --, every word is a text
 //   maxx units list                        one of the guest's own, by its words
 //   maxx events --after 123                the group's rows after #123 as
-//                                          they come, a JSON line each
+//                                          they come, a JSON line each;
+//                                          --full has each as data too
 //
 // The result goes to stdout; a failure's reason to stderr, with exit
 // status 1. A wrong command line exits with 2. One of the guest's own
@@ -121,11 +122,11 @@ function listing(tools) {
 async function follow(tools, words, tool) {
   if (asksHelp(words)) return EVENTS_HELP;
   const numbered = words.map(word => word.replace(/^(--after=)?#(\d+)$/, "$1$2"));
-  const { after } = await parse(numbered, tool.inputSchema);
+  const { after, full } = await parse(numbered, tool.inputSchema);
   // Whoever read the rows is gone.
   process.stdout.on("error", () => process.exit(0));
   const told = (why, wait) => process.stderr.write(`maxx events: ${why}; reconnecting in ${wait / 1000} seconds\n`);
-  for await (const row of tools.follow({ after, told })) {
+  for await (const row of tools.follow({ after, full, told })) {
     if (!process.stdout.write(`${JSON.stringify(row)}\n`)) await once(process.stdout, "drain");
   }
 }
@@ -140,6 +141,7 @@ const EVENTS_HELP = [
   "It reconnects by itself, and goes on from the last message before the break.",
   "Arguments:",
   "  --after <number>  from after this message, catching up on at most the latest 1000; without it, from now.",
+  "  --full            each line with the row as data too, as maxx rows gives it: row, and people, the person behind each of its accounts.",
 ].join("\n");
 
 function help(tool) {

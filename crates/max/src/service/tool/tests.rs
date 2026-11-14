@@ -101,11 +101,9 @@ fn only_an_arguments_fields_are_described() {
                 tool.name,
             );
         }
-        assert!(
-            !tool.declaration.contains("unknown"),
-            "{}",
-            tool.declaration
-        );
+        // Its types, which come after the guide: each has a name.
+        let types = tool.declaration.rsplit("*/").next().unwrap_or_default();
+        assert!(!types.contains("unknown"), "{}", tool.declaration);
     }
 }
 

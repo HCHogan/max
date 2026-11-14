@@ -25,6 +25,7 @@ use super::history::History;
 use super::mute_member::MuteMember;
 use super::program::{Say, Wake};
 use super::recall_message::RecallMessage;
+use super::rows::Rows;
 use super::send_file::SendFile;
 use super::send_image::SendImage;
 use super::web_search::WebSearch;
@@ -91,6 +92,7 @@ pub static TOOLS: LazyLock<Vec<Spec>> = LazyLock::new(|| {
         spec::<Config>(),
         spec::<Say>(),
         spec::<Wake>(),
+        spec::<Rows>(),
     ]
 });
 

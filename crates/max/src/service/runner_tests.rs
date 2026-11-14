@@ -678,6 +678,7 @@ async fn commands_call_max_tools_with_maxx(pool: PgPool) {
         "file",
         "say",
         "wake",
+        "rows",
         "mute_member",
         "ask",
         "show",
@@ -752,6 +753,13 @@ async fn commands_call_max_tools_with_maxx(pool: PgPool) {
         let value: Value = serde_json::from_str(&ran.stdout).unwrap();
         assert_eq!(value["text"], read, "{words:?}");
     }
+
+    // The timeline as data, for a program: a tool like the rest.
+    let rows = maxx(&url, &["rows", "--limit", "1"], "").await;
+    assert_eq!(rows.status, 0, "{}", rows.stderr);
+    let rows: Value = serde_json::from_str(&rows.stdout).unwrap();
+    assert_eq!(rows["rows"][0]["content"]["nodes"][0]["text"], "你好");
+    assert_eq!(rows["head"], id);
 
     // A tool's failure, a word by position, and a wrong command line.
     let after = (id + 1).to_string();

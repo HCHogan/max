@@ -113,11 +113,11 @@ function connect({ url = MAX } = {}) {
 }
 
 // The group's rows after the one numbered `after`, or from now, as the
-// host's /events sends them, an object each; `told` hears why a stream
-// broke and when it opens again. A stream that ends or goes quiet is
-// opened again after the last row, so this never ends. See "Resident
-// programs" in docs/rust-rewrite.md.
-async function* events({ url = new URL("/events", MAX).href, after, told = () => {} } = {}) {
+// host's /events sends them, an object each, with the row as data too
+// if `full`; `told` hears why a stream broke and when it opens again. A
+// stream that ends or goes quiet is opened again after the last row, so
+// this never ends. See "Resident programs" in docs/rust-rewrite.md.
+async function* events({ url = new URL("/events", MAX).href, after, full = false, told = () => {} } = {}) {
   let last = after;
   let wait = RETRY;
   for (;;) {
@@ -130,7 +130,8 @@ async function* events({ url = new URL("/events", MAX).href, after, told = () =>
     let why;
     try {
       listen();
-      const response = await fetch(last === undefined ? url : `${url}?after=${last}`, { signal: quiet.signal });
+      const query = [last === undefined ? [] : [`after=${last}`], full ? ["full=1"] : []].flat().join("&");
+      const response = await fetch(query ? `${url}?${query}` : url, { signal: quiet.signal });
       if (!response.ok) throw new Error(await refused(response));
       const head = response.headers.get("max-head");
       if (last === undefined && head !== null) last = Number(head);

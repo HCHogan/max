@@ -283,12 +283,13 @@
     "run": "node",
     "stream": true,
     "turn": false,
-    "description": "The chat's new messages, a line of JSON each, for as long as it runs: maxx events [--after <number>]",
-    "guide": "The chat's new messages as they come, for as long as the program reads them: for await (const row of tools.events({ after })). A row is {id, at, sender, person, by, reply_to, text}.",
+    "description": "The chat's new messages, a line of JSON each, for as long as it runs: maxx events [--after <number>] [--full]",
+    "guide": "The chat's new messages as they come, for as long as the program reads them: for await (const row of tools.events({ after })). A row is {id, at, sender, person, by, reply_to, text}; with full it has row too, the message as data, and people, as the rows tool gives both.",
     "inputSchema": {
       "type": "object",
       "properties": {
-        "after": { "type": "integer", "description": "from after this message, catching up on at most the latest 1000; without it, from now" }
+        "after": { "type": "integer", "description": "from after this message, catching up on at most the latest 1000; without it, from now" },
+        "full": { "type": "boolean", "description": "each row as data too, as the rows tool gives it" }
       }
     },
     "outputSchema": { "type": "object" }

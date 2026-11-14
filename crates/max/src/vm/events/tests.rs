@@ -217,6 +217,73 @@ async fn a_program_follows_the_timeline(pool: PgPool) {
     scope.close(PATIENCE).await;
 }
 
+/// A stream asked for the rows as data has each whole, the ones it
+/// catches up on and the ones that come, as the `rows` tool gives them.
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn a_stream_asked_for_data_has_each_row_whole(pool: PgPool) {
+    let mut conn = pool.acquire().await.unwrap();
+    let place = Arc::new(group(&mut conn).await);
+    drop(conn);
+    let first = from_xiaoming_says(&pool, &place, 1, "早").await;
+    let mut scope = Scope::new();
+    let (url, mut asked) = served(&mut scope).await;
+    let (rows, _) = broadcast::channel(16);
+
+    let full = format!("{url}?after=0&full=1");
+    let answer = follow(&full, &mut asked, &place, &pool, (first.id, &rows)).await;
+    assert_eq!(answer.status(), StatusCode::OK);
+    let mut lines = Lines {
+        answer,
+        read: Vec::new(),
+    };
+    let caught = lines.row().await;
+    let identity = first.sender.identity.0;
+    assert_eq!(caught["text"], "早");
+    assert_eq!(
+        caught["row"],
+        json!({
+            "id": first.id.0,
+            "conversation": place.conversation.0,
+            "sender": { "identity": identity, "name": "小明", "role": "member" },
+            "at": caught["row"]["at"],
+            "content": {
+                "type": "message",
+                "reply_to": null,
+                "nodes": [{ "type": "text", "text": "早" }],
+            },
+            "turn": null,
+            "raw": null,
+            "command": false,
+            "delivery": null,
+        })
+    );
+    assert_eq!(
+        caught["people"],
+        json!({ identity.to_string(): caught["person"] })
+    );
+    let again = from_xiaoming_says(&pool, &place, 2, "ping").await;
+    rows.send(Arc::new(again.clone())).unwrap();
+    let live = lines.row().await;
+    assert_eq!(live["row"]["id"], again.id.0);
+    assert_eq!(live["row"]["content"]["nodes"][0]["text"], "ping");
+    drop(rows);
+    lines.end().await;
+
+    // Anything else in a query is refused.
+    for wrong in ["full=2", "after=x", "rows=1", "after=1&nope"] {
+        let answer = reqwest::get(format!("{url}?{wrong}")).await.unwrap();
+        assert_eq!(answer.status(), StatusCode::BAD_REQUEST, "{wrong}");
+    }
+    assert_eq!(
+        super::asked(Some("full=1&after=7")),
+        Some(Asked {
+            after: Some(7),
+            full: true
+        })
+    );
+    scope.close(PATIENCE).await;
+}
+
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
 async fn a_stream_from_now_ends_with_the_service(pool: PgPool) {
     let mut conn = pool.acquire().await.unwrap();

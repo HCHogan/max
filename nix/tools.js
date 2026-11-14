@@ -99,7 +99,7 @@ function open({ url = MAX, work = "/work" } = {}) {
     return outcome.ok ? { ok: true, value: [...outcome.value, ...LOCAL] } : outcome;
   }
 
-  const follow = ({ after, told } = {}) => events({ url: new URL("/events", url).href, after, told });
+  const follow = ({ after, full, told } = {}) => events({ url: new URL("/events", url).href, after, full, told });
 
   return { request, list, follow };
 }
@@ -116,7 +116,7 @@ function program() {
     get(_, name) {
       // No promise itself, whatever awaits it.
       if (typeof name !== "string" || name === "then") return undefined;
-      if (local.get(name)?.stream) return (args = {}) => follow({ after: args?.after });
+      if (local.get(name)?.stream) return (args = {}) => follow({ after: args?.after, full: args?.full });
       return async (args = {}) => {
         const outcome = await request(name, args);
         if (outcome.ok) return outcome.value;
