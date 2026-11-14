@@ -1,146 +1,378 @@
 # Context projection
 
-## Context projection
+What a turn's model sees: the raw tail of the chat plus a memory file Max
+keeps itself, carried in every turn; anything older the model searches for
+with `history`. There are no summaries
+([decisions/2026-11-02-no-summaries.md](../decisions/2026-11-02-no-summaries.md)).
+Tool output lives only in one turn's transcript; the next turn is projected
+afresh from the ledger, so tool output never piles up across turns.
 
-Decided 2026-10-27, revised 2026-10-30. Initially, following [magic-context](https://github.com/cortexkit/magic-context), a historian and decaying summaries were implemented; they were removed on 2026-10-30, reinstated that same evening as a per-group switch, and removed again on 2026-11-02 (see [Summaries](#summaries)). The context consists only of the raw tail plus the memory carried in every turn (see [Memory](#memory)); anything older the model searches for itself. Tool output lives only in the transcript of a single turn; the next turn is projected afresh from the ledger, so tool output does not accumulate across turns.
+The Haskell version's lessons shape it: its raw tail was a sliding window
+that pushed out the oldest message for every new one; summary levels were
+recomputed every turn by age; captions arriving rewrote old lines. Each of
+the three invalidated the prefix cache on almost every turn. It also had
+four mechanisms for "what happened last turn" and three token counts for the
+same line.
 
-Lessons from the Haskell version: the raw tail was a token-based sliding window which, once full, pushed out the oldest message for every new one that arrived; summary levels were recomputed every turn according to their age in days; and captions, when they arrived, went back and rewrote old lines. All three invalidated the prefix cache on almost every turn. The historian cut segments by token count, one summary per segment, rather than by topic. There were four mechanisms for "what happened in the previous turn" (`[recent turns]`, continuation summaries, `context_resume` and in-turn compaction), and three different token-counting algorithms for the same message line.
+## Request layout
 
-### Request layout
+Blocks are ordered by how often they change:
 
-The blocks are ordered by frequency of change, each coming after the previous one:
+1. **System**: the persona, the rules, the TypeScript declarations of
+   Max's tools, the keyed APIs and, for operations groups, the operations
+   network's section. The same for every turn of a conversation.
+2. **Tools**: `run_code` and `shell`, which never change.
+3. **Raw tail**: every message after the tail's mark up to the snapshot
+   position `from`, except the first inputs, one per line as
+   `[HH:MM name #id]: text`, with a date line where the day changes and a
+   gap marker after a long silence. It is split into several user messages
+   at the points where earlier turns' tails ended (see
+   [Rules for a stable prefix](#rules-for-a-stable-prefix)). Max's own
+   messages are lines like anyone's; those that may not have gone out are
+   marked (see [Outbound](ledger.md#outbound)).
+4. **Volatile block**: the current time, the roster (see
+   [What the model sees](identity.md#what-the-model-sees)), the memory (see
+   [Memory](#memory)), quoted messages and forwards, the first inputs (the
+   triggers; chatter is in the tail) and attached pictures.
 
-1. System: the persona, the rules, the TypeScript declarations of Max's tools and the skill index. Fixed per conversation.
-2. Tools: `run_code` and `shell`, which never change.
-3. Raw tail: all messages after the tail's marker up to the snapshot position `from` (excluding those in the first batch), one per line as `[HH:MM name #id]: text`. A date line is inserted when the day changes, and a gap marker after a long interval. The tail is split into several user messages according to where the tails of earlier turns ended (see [Rules for a stable prefix](#rules-for-a-stable-prefix)). Max's own messages are a line like anyone else's; those that could not be sent carry a marker (see [Outbound](ledger.md#outbound)).
-4. Volatile block: the current time, the roster (see [What the model sees](identity.md#what-the-model-sees)), the memory (see [Memory](#memory)), quoted messages and forwards, the first batch of input (the triggers; small talk is not here but in the tail) and attached images.
+That is the base context. The actor projects it once before creating the
+core (step 3 of the [Processing flow](actor.md#processing-flow)), and it
+doesn't change afterwards; the transcript follows it.
 
-The base context consists of exactly these blocks. The conversation actor projects it once before creating the core (step 3 of [Processing flow](actor.md#processing-flow)), and it does not change afterwards; the transcript follows it. Original text older than the tail is not in the context; the model looks it up with `history` (see [Recall](#recall)).
+## Follow-up input
 
-### Follow-up input
+While a core runs, later input is rendered into a `[新消息]` block before
+the next model call and appended to the transcript, leaving the prefix
+alone:
 
-While the core is alive, later input is rendered into a `[新消息]` ("new messages") block before the next model call and appended to the end of the transcript, leaving the prefix untouched:
+- Message lines are in the tail's format. Trigger lines are marked `@你`
+  or `回复你的 #123`; others aren't. In a private chat every message is to
+  Max, so none is marked; the system prompt is the same for private and
+  group chats, and its rules say so.
+- The rules also say a private chat belongs to the other party: only they
+  use the VM, `/work` and the browser, so the group's conventions out of
+  consideration for others are relaxed. Max may log in with an account and
+  password they give for themselves (without recording or repeating it),
+  needn't quote a message in every segment, and may answer at more length;
+  the red lines stay.
+- When someone appears for the first time, a roster line is added.
+- Wakes from outside the chat are lines of their own: a background agent's
+  report as `[max-wake] [max-agent-3 完成] …`, a background command's as
+  `[max-wake] [max-job-… 完成] …`; see [Jobs](jobs.md).
+- **A cap per item**: a message or a wake shows at most
+  `min(C × 15%, 25k)` tokens, and at least 2k (`Budgets::single`); the same
+  in the tail and in the first inputs. Past it, the first ~2,000
+  characters are shown and then `全文见 #123`, and the model reads the rest
+  with `history` (`{ around, before: 0, after: 0 }`), page by page, each
+  page within the cap, so one overlong message can't push the core to its
+  limit at once. With no VM there are no tools, and the model sees only
+  the excerpt.
+- `run_code` and `shell` results are cut too, by bytes: past
+  `SHOWN_BYTES` (16 KiB) only the first and last 8 KiB are kept, the whole
+  being in `/work/.max/out/<unit>.txt` (`<unit>.log` for `run_code`'s
+  console), whose path the result gives.
+- Input isn't folded by count: past nine tenths of the core's limit the
+  model is warned to wrap up, and past the limit the run ends (see
+  [The core](core.md#what-the-core-decides)).
+- The system prompt says a batch may hold several things to answer, or
+  none, in which case Max outputs nothing; several people get a reply each.
 
-- Message lines use the same format as the tail. Trigger lines are marked "@你" ("@you") or "回复你的 #123" ("replying to your #123"); other lines are not marked. In a private chat every message is addressed to Max, so no line is marked; the system prompt is the same for private and group chats, and the rules explain this (decided by the owner 2026-11-03; previously the prompt said only "也可能是私聊" ("it may also be a private chat"), and under the rules no message in a private chat was calling Max). On the same day a passage on private chats was added to the rules: a private chat belongs to the other party, and only that person uses the VM, /work and the browser, so the conventions that exist in groups out of consideration for others are relaxed. If the other party provides their own account and password, Max may log in on their behalf (without recording it in memory or disclosing it); Max need not quote a message in every segment; answers may be longer and more detailed; the red lines remain unchanged. The cause: in a private chat, someone gave Max the password of their own school account and asked it to log in. Under the rule "只登录你自己的小号" ("only log in to your own secondary accounts") Max should have refused, but in practice it alternately logged in and refused. The owner noted that private chats are used only by the owner and a few friends, and opened this up. When a person appears for the first time, a line is added to the roster.
-- A background agent's report appears as `[max-wake] [max-agent-3 完成] …` ("max-agent-3 done"; `[agent#3 完成] …`, without the wake's mark, until 2026-11-12), a background command's as `[max-wake] [max-job-… 完成] …`, and automations as `[自动化 m#2 触发] …` ("automation m#2 triggered").
-- **Per-item cap** (decided 2026-10-27): messages, job results and automation results share one cap of `min(C × 15%, 25k)` tokens, with a minimum of 2k; it applies equally to messages in the tail and in the first batch. For an item over the cap, only the first \~2,000 characters are rendered, followed by a line "全文见 `#123`" ("full text at `#123`"), and the model fetches the rest with `history` (`{ around, before: 0, after: 0 }`; this was originally `context_read`, which read the full text, and that is why it was the first tool opened in v1). It fetches page by page, each page no larger than the per-item cap, so reading one overlong message does not push the core to its limit in one go. The original text is already in the ledger or the job record and is not stored separately. When the VM cannot start there are no tools, and the model sees only the excerpt. Results of `run_code` and `shell` are also truncated to this cap: the full text is written to a file in the VM, the result gives its path, and the model reads it with its next call. At present both are first truncated by bytes: beyond 16 KiB only the first and last 8 KiB are kept, with the full text in `/work/.max/out/<unit>.txt`; the console output of `run_code` is truncated separately, with the full text in `<unit>.log`.
-- For reference (checked 2026-10-27): Claude Code's Bash output is limited to about 30,000 characters and Read to 25,000 tokens per call; Codex's tool output to 10,000 tokens; OpenCode and pi to 2,000 lines or 50 KiB; Gemini CLI to 40,000 characters; Hermes to 100,000 characters per item, scaled down to 15% of the window. When the limit is exceeded, all of them keep the full text and give the model a path or handle. Content sent by users themselves is generally not truncated.
-- **Give up when it does not fit**: input is not folded by item count. When the accumulated input together with the transcript exceeds 90% of the core's limit, the model is first reminded to wrap up; once the limit is exceeded, the run ends at that boundary and `ContextExhausted` is recorded (see [The core](core.md#the-core-1) and [Processing flow](actor.md#processing-flow)).
-- The system prompt makes clear that a batch may contain several things that need a response, or none at all; when nothing needs a response, Max outputs nothing; when responding to several people, it uses a separate reply for each.
+For comparison, other harnesses' caps on a tool result: Claude Code about
+30,000 characters for Bash and 25,000 tokens a Read; Codex 10,000 tokens;
+OpenCode and pi 2,000 lines or 50 KiB; Gemini CLI 40,000 characters;
+Hermes 100,000 characters, scaled to 15% of the window. All keep the whole
+and give the model a path. What users themselves send is generally not
+cut.
 
-### Rules for a stable prefix
+## Rules for a stable prefix
 
-Goal: between two truncations, everything before the volatile block is byte-for-byte identical; the first call of a turn begins with everything in the first call of the previous turn except the volatile block, down to the way the messages are split.
+Goal: between two truncations, everything before the volatile block is
+byte for byte the same, and a turn's first call begins with everything its
+predecessor's first call had except the volatile block, down to how the
+messages are split.
 
-- **The tail is split into messages by turn** (2026-10-31). Previously the tail was a single user message that kept growing. Gemini's implicit cache can reuse any identical prefix at token granularity within a few seconds, but after a few minutes it recognises only whole messages: it retains only the part of each request before its last message, and a later request hits only if it begins with exactly those messages. Tested live through cliproxy (Flash and Argon alike, after 6 minutes): appending to the previous request left unchanged reused about 90%; appending lines within the same message reused 0; keeping the messages before the previous request's last message unchanged and starting a new message after them reused about 90%; earlier boundaries (for example after the system prompt, or after the third-to-last message) reused 0. New turns are at least one idle window (300 seconds) apart, so the first calls of Argon's 99 turns hit only 2%, leaving about 5.7 million uncached tokens, the bulk of Argon's input cost; later calls within a turn hit 80–90%. On 2026-10-30 this was taken to mean "Gemini's cache expires too quickly", which was wrong: with a byte-identical prefix there was no hit even when turns were less than 2 minutes apart.
-  - Method: during projection, every turn after the marker (`turns.from_id`, the message that woke it) makes a cut in the tail where its own tail ended: before the snapshot position and before the first message that woke it. Each segment is rendered separately, with date lines computed from the last line of the previous segment, and becomes one user message. All the tail segments of the previous turn's first call are present unchanged; there is only one more segment at the end. No new table is needed.
-  - A turn's tail is "everything before the snapshot position, excluding the messages that woke it". If someone spoke after the waking message (during the seconds of debounce and classification), the turn's tail has a piece on each side of that message, which the next turn cannot match; that call misses, and the one after it lines up again. A truncation, or a caption arriving and changing a line, also invalidates the cache once.
-  - The number of segments equals the number of turns after the marker; a busy group has dozens to a hundred or more user messages before truncation. They are not merged: merging would change the previous request's split, and the whole thing would miss. OpenAI's cache works on token prefixes, so splitting makes no difference there.
-- **The tail's starting point moves only on truncation** (decided 2026-10-28; changed 2026-10-30 to keep its own marker). The tail starts after `conversations.tail_after` (migration 0018), or after the `/clear --all` watermark if that is later; normally it only grows. When the tail exceeds the high watermark during projection, it is truncated from the marker onwards in chunks of fixed length (the high watermark minus the low watermark) until what remains lies between the low and high watermarks, and the new marker is written back. Messages are not pushed out one at a time; otherwise this would again be a sliding window that invalidates the cache with every message. Cut points are counted forward from the marker, not backward from the end, so the starting point does not move as new messages arrive. Conversations that have no marker yet are counted from their first line, so the first projection after deployment has to read the whole conversation, but only that once. The tail is truncated first, and quoted messages and the roster are computed afterwards, so people in the truncated part do not enter the roster, and lines that quote the truncated part still carry the quoted message as usual.
-- **No waiting for captions.** Whatever exists is rendered; when a caption arrives, its line changes, and that one invalidation is accepted. Nothing blocks. The Haskell version polled and waited for the media worker, for up to 30 seconds for images and 60 seconds for videos.
-- **Only one turn per conversation at a time**, so in-flight trigger messages do not need to be hidden.
+- **The tail is split into messages by turn.** During projection, every
+  turn after the tail's mark (`turns.from_id`, the row that woke it) cuts
+  the tail where its own tail ended: before its snapshot position and
+  before the first row that woke it. Each piece is rendered alone, its date
+  lines reckoned from the last line before it, as one user message. So the
+  previous turn's first call is all there, unchanged, with one more piece
+  at the end. Gemini's cache, after a few minutes, matches only whole
+  messages before a request's last one, which is why; the measurements are
+  in [decisions/2026-10-31-tail-split-by-turn.md](../decisions/2026-10-31-tail-split-by-turn.md).
+  - A turn's tail is everything before its snapshot position except the
+    rows that woke it. Someone speaking after the waking row (in the
+    seconds of debounce and classification) puts a piece on each side of
+    it, which the next turn can't match: that call misses, and the one
+    after lines up again. A truncation, or a caption changing a line,
+    misses once too.
+  - There are as many pieces as turns after the mark: dozens, or more than
+    a hundred in a busy group. They aren't merged, since merging would
+    change the previous request's split. OpenAI's cache works on token
+    prefixes, where the split makes no difference.
+- **The tail's start moves only on truncation.** The tail starts after
+  `conversations.tail_after`, or after the `/clear --all` watermark if that
+  is later, and otherwise only grows. When it passes the high watermark
+  during projection, whole stretches of fixed length (high minus low) are
+  dropped from the mark until what is left is between the watermarks, and
+  the new mark is written back (`project::tail_start`). Messages are never
+  pushed out one at a time, which would be a sliding window again. Cut
+  points are counted from the mark, not the end, so the start doesn't move
+  as messages arrive. The tail is cut first, and quoted messages and the
+  roster are worked out after, so people only in the dropped part aren't
+  in the roster, while lines quoting it still carry the quote.
+- **No waiting for captions.** What exists is rendered; when a caption
+  arrives its line changes, and that one miss is accepted.
+- **One turn per conversation at a time**, so trigger messages in flight
+  needn't be hidden.
 - Everything that changes is in the volatile block.
 
-### Budget
+## Budget
 
-Defaults are derived from the window C and capped; they can be changed in the configuration, and the values are tuned during v1:
+From the window C (`Budgets::for_window`):
 
-| Block | Default |
+| Block | Size |
 | --- | --- |
-| Tail high watermark | `min(C / 8, 64k)` (on 2026-10-30 the owner raised it from 32k to 128k: on a 1M window the tail was only 16k–32k, about 270–540 messages, much shorter than in the Haskell version, and group members found Max forgetful. That evening it was lowered to 64k: at 128k the input doubled and Max's speaking style changed as well; see [Summaries](#summaries)). The tail is truncated when it exceeds this |
-| Tail low watermark | Half the high watermark. After truncation, what remains lies between the low and high watermarks |
-| Memory block | 3k; see [Memory](#memory) |
+| Tail, high watermark | `min(C / 8, 64k)`; the tail is cut when it passes it |
+| Tail, low watermark | half the high; what is left after a cut lies between the two |
+| One item | `min(C × 15%, 25k)`, at least 2k |
+| Memory | 3k (`MEMORY_TOKENS`); see [Memory](#memory) |
 
-In the Haskell version the tail was W/2: on a 260,000-token window, about 100,000 tokens of raw group chat, paid for on every turn. There is only one token-estimation function (tiktoken-rs, in `max`), shared by every caller; the core receives only precomputed numbers (see [The core](core.md#the-core-1)).
+On a 1M window the tail is 64k: a larger tail made Max seem less forgetful
+but doubled the input and changed how it spoke. (The Haskell version's was
+half the window: about 100,000 tokens of raw chat paid for every turn.)
+There is one token estimator (tiktoken-rs, in `max`) for every caller; the
+core gets only the numbers.
 
-### Summaries
+## Commands
 
-On 2026-10-27 a historian and three-level summaries were implemented following magic-context; on 2026-10-30 the owner decided to remove all of it and rely only on the raw tail, memory (see [Memory](#memory)) and recall (see [Recall](#recall)). The reasons:
+The commands that change what the context holds, or whether Max takes
+part at all:
 
-- **Cost**: over the preceding day the historian was called 49 times and produced 406,000 output tokens, more than the output of all turns (304,000), and output is the most expensive part.
-- **Second-hand errors**: summaries can misremember; the original words cannot. On 2026-10-30 Max itself said in the group that it had been misled by a summary, which had recorded "13 块搓完整个原型" ("built the whole prototype for 13 yuan") as "修一轮 bug 花 13 块" ("spent 13 yuan on one round of bug fixes").
-- **Complexity**: the historian's scheduling, validation, retries and discard-last, the decay curve, the watermarks and publication timing, `/compact`, and the summary vectors and search added up to more than 3,000 lines.
-- **Direction**: when the model is strong enough, raw records plus its own searching work better than pre-processed material (MemoryTax; see [Memory](#memory)). The most useful thing summaries provided was an index of "what was discussed on those days", which has been replaced by `history` reading the original text by time and filtering by speaker.
+- `/clear --all`: sets a message-id watermark; messages before it are no
+  longer in the prompt, though `history` still finds them. The reply says
+  how to undo it.
+- `/unclear` (group owner and administrators): removes the watermark, so
+  earlier messages return to the context, back to the tail's mark. There
+  is one watermark, so one undo undoes every clear; with none, the reply is
+  `skipped: never cleared`.
+- `/stop` and `/start` (group owner and administrators; in a private chat,
+  the other party): `/stop` leaves Max in the group without replying,
+  `/start` brings it back. The flag is `conversation_settings.stopped`, so
+  it survives a restart.
+  - `/stop` first does what `/kill` does: it ends the running turn quietly
+    and stops what runs in the VM. It also drops what intent holds (an @
+    waiting for the rest of its sentence, chatter waiting for the
+    classifier, the batch in flight, whose verdict then wakes nobody;
+    `Intent::forget`). The reply is
+    `stopped: messages are still recorded, but Max won't reply until @maxx /start`.
+  - While stopped, every message is still entered, and the workers and
+    `maxx events` see it. Intent doesn't: nothing is classified, and an @
+    or a reply starts no turn. Commands are answered, and `/status` shows
+    `state     stopped`. A program's `maxx wake` is refused with
+    `Max is stopped here (/stop), so this wasn't done`, and so is a
+    background command's end notice: `max-notify@` tries it again every
+    minute, so Max hears it after `/start` however long ago the command
+    ended. There are few such, as `/stop` stops what runs and a unit
+    stopped on request tells nobody. What programs can still do is in
+    [Resident programs](jobs.md#resident-programs).
+  - `/start` clears the flag. What was said meanwhile isn't answered, but
+    is in the next turn's context like any row. A second `/stop` or
+    `/start` answers `skipped: already stopped` or `skipped: not stopped`.
+- `/config` shows and sets the limits the conversation sets for itself; see
+  [Settings a conversation sets](config.md#settings-a-conversation-sets).
 
-Removed: the historian worker and the `[llm] historian` configuration, the summary block and decay, `/compact`, summary results in `context_search`, `{ summary }` in `context_read`, and the summary vectors. The three tables `summaries`, `summary_runs` and `summary_embeddings`, together with their data, are kept.
+Every command and who may run it is in [Permissions](identity.md#permissions).
 
-That evening the owner changed course: after the removal Max's speaking style had changed, the automatic historian was not so bad after all, and the owner wanted a long-term comparison with it switched on in one group and off in another. The historian, the summary block, decay and `/compact` were therefore restored unchanged, behind a per-group switch `/historian on|off` (only owners can change it; off by default; `conversation_settings.historian`, migration 0021). Groups with it on carried a summary block in their context, and their tail started after the latest summary; the historian did not touch groups with it off.
+## Memory
 
-On 2026-11-02 the owner decided that the comparison was over and the historian was no longer wanted; it was removed again, this time without keeping a switch. By then only conversation 12 had it on. Removed: the historian worker (`max/src/historian`, `max-core/src/historian.rs`), the `[llm] historian` configuration (removed at the same time from tank's `hosts/tank/maxx.nix`, since the service does not start with configuration keys it does not recognise), the summary block, decay (`project/decay.rs`), `/historian` and `/compact` (now ordinary messages), the historian line in `/status`, the summary queries in `max-db`, and the historian purpose in `llm_usage` (old rows are kept and the constraint is unchanged). Migration 0023 drops `conversation_settings.historian`. The three tables `summaries`, `summary_runs` and `summary_embeddings`, together with their data, are still kept, and are neither read nor written; the code in `max-import` that imports summaries is also untouched. For the group that had it on, the next core's tail starts from the tail's marker and is truncated as usual when it exceeds the high watermark. The design of the historian and of decay is in the version of this document at `672f74ee`.
+Memory is a file Max writes itself and carries in every turn; why not
+extracted entries is in
+[decisions/2026-10-30-memory-is-a-file.md](../decisions/2026-10-30-memory-is-a-file.md).
 
-### Commands
+- **The file**: `/work/.max/memory.md` in the conversation's VM, on the
+  host `<vm.dir>/<conversation id>/work/.max/memory.md`. Max edits it with
+  `shell`. With no VM configured there is no memory; when the VM can't
+  start, memory can be read but not written.
+- **Injection**: projecting for a new core, the host reads the file without
+  following symlinks, as `send_image` does, and puts it in the volatile
+  block as `[记忆]`, after the roster. Not in system: changing it then
+  doesn't invalidate what precedes it; group members can influence what is
+  in it, so it mustn't read as system instructions; and later in the
+  context it gets more of the model's attention. The cost is up to 3k
+  uncached tokens a turn. A change made during a turn is seen by the next;
+  the current turn has it in its transcript.
+- **The cap**, `MEMORY_TOKENS` (3,000):
+  - at 80%, a sentence at the end reminds Max to tidy;
+  - past it, only the lines that fit are injected, with a note that the
+    rest weren't loaded and the file needs tidying;
+  - a file over `MEMORY_FILE_BYTES` (256 KiB) isn't read at all, and one
+    sentence says so.
 
-- `/clear --all`: only a message-id watermark; messages before it are no longer included in the prompt, but `history` can still find them (see [Recall](#recall)). The reply says how to undo it.
-- `/unclear` (requested by the owner 2026-10-29; for the group owner and administrators): removes the watermark, so that messages before it return to the context, back as far as the tail's marker. There is only one watermark, so however many times the conversation has been cleared, a single undo removes all of it; if it was never cleared, the reply is "skipped: never cleared".
-- `/stop` and `/start` (requested by the owner 2026-11-08; for the group owner and administrators, and in a private chat for the other party): `/stop` leaves Max in the group without replying, and `/start` brings it back. The flag is `conversation_settings.stopped` (migration 0025), so a restart or a deployment keeps it.
-  - `/stop` first does what `/kill` does: it ends the running turn quietly and stops the background jobs. It also drops what intent holds (an @ waiting for the rest of its sentence, chatter waiting for the classifier, and the batch in flight, whose verdict then wakes nobody; `Intent::forget`). The reply is `stopped: messages are still recorded, but Max won't reply until @maxx /start`. (Until 2026-11-12 it was followed by `jobs stopped: agent#1, …` if any were running; what runs in the VM is stopped there, and the actor keeps no jobs to list.)
-  - While stopped, every message is still committed, and the workers (captions, embeddings) and `maxx events` still see it. Intent doesn't: nothing is classified, and an @ or a reply starts no turn. Commands are answered, and `/status` shows `state     stopped`. A program's `maxx wake` is refused with `Max is stopped here (/stop), so this wasn't done`. So is the notice of a background command's end, which is a wake of the guest's: `max-notify@` tries it again every minute and Max hears it after `/start`, however long ago the command ended (the owner kept it so on 2026-11-13; before the notices were the guest's, max dropped them). There are few such: `/stop` stops what runs, and a unit stopped on request tells nobody. See [Resident programs](jobs.md#resident-programs) for what the programs can still do.
-  - `/start` clears the flag: what was said meanwhile isn't answered, but it is in the next turn's context like any other row. A second `/stop` or `/start` answers `skipped: already stopped` or `skipped: not stopped`.
-- `/config` (added 2026-11-08, proposed by the owner): shows and sets the limits the conversation sets for itself, which Max's `config` tool sets too; anyone can look, and setting is for the group owner and administrators, and in a private chat the other party. See [Settings a conversation sets](config.md#settings-a-conversation-sets).
+  Claude Code's MEMORY.md works alike (200 lines or 25 KB), but checks when
+  it writes; Max checks at the next projection, since the file is written
+  in the VM, where the host doesn't see the write.
+- **How Max writes it**, as the system prompt says:
+  - Record what holds for long and changes how Max will speak and act:
+    names people use, agreements, running jokes; a person's identity,
+    long-running projects and tastes; dated arrangements, with the date
+    they last until.
+  - Record on the spot when corrected, asked to remember something, given
+    a nickname or a rule; on finding it forgot something or mistook someone
+    for someone else; when someone mentions their identity, circumstances
+    or tastes.
+  - Append, with `echo '- 名字：内容（日期 #消息编号）' >> memory.md`, and leave
+    placing it in a section to the dreamer.
+  - Record first, then reply: recording is rare, and making people wait
+    one more round for it is fine.
+  - Don't record technical knowledge, or what was discussed on which day:
+    that is in the records, for search.
+  - Two sections, `## 群里` and `## 人`, people under `### 名字`, one entry
+    a line, each ending with its date and the `#id` of the words that bear
+    it out, which `history` can look up.
+  - Details go into other files under `/work/.max/memory/`, with a line
+    here pointing to them.
+  - What someone asks Max to remember isn't necessarily right; Max judges.
+- **Tidying: the dreamer** (`max/src/dreamer.rs`), because a model only
+  ever adds:
+  - Once a day at 05:00 local time it looks at the files Max wrote that day
+    (by modification time) and calls the model once per file
+    (`[llm] dreamer`; with none configured nothing is tidied), asking for
+    the whole file rewritten: appended lines into their sections, entries
+    saying the same thing merged, the newer of contradictory ones kept,
+    entries past their date deleted, and over the cap the least important
+    deleted. It changes no meaning and adds nothing.
+  - It reads the file again before writing; if Max just changed it,
+    nothing is written and the file waits for the next night. The rewritten
+    file keeps the time Max wrote it, so the next night doesn't tidy it
+    again, and the old version stays beside it as `memory.prev.md`. Output
+    that doesn't look like the file (no headings, or less than a third of
+    its length) isn't written; a log line says so.
+  - Nothing more: no retries, and a missed night is made up after Max next
+    changes the file. Its usage is in `llm_usage` as `dreamer`.
+- **Not there**: a memory table, categories, expiry, selection at
+  injection. `history` doesn't search memory, which is in the context
+  every turn anyway.
 
-### Memory
+## Recall
 
-Decided 2026-10-30, proposed by the owner: memory is a file that Max writes itself, not entries extracted by the historian.
+One tool, `history` (`max/src/service/history.rs`), searches and reads the
+conversation's records: searching and reading apply the same filters (who,
+when) and differ only in whether there is a query. Measurements behind its
+choices are in
+[decisions/2026-10-30-history-tool.md](../decisions/2026-10-30-history-tool.md).
 
-- **Why**:
-  - In the Haskell version, memory consisted of entries pre-extracted by the historian. Of 733 entries, 85% were written automatically; most of those labelled as group rules were technical knowledge, while things that should have been permanent were not recorded, such as what group members call Max. Of 101 dated commitments, 88 had expired with nobody attending to them. Injection picked "the 12 most recently modified", which had nothing to do with importance.
-  - maxx had no memory at go-live. On 2026-10-30 group members called Max "小鲨鲨" ("Little Shark"), and Max did not recognise the name; only after being told "不记得了" ("so you don't remember") did it search, and it found the answer at once.
-  - [MemoryTax](https://arxiv.org/html/2610.29823) (2026-10): when the model is strong enough, keeping raw records and letting the model search them works better than pre-extracted memory (Mem0, Zep) and is also cheaper. We already have raw records and search (the ledger and `history`). However, the questions in that paper all prompt the model to "go and look it up"; in a group chat, when memory is needed there is often no such prompt, and the model does not know what it has forgotten. Something carried in every turn is therefore also needed, with the main model judging for itself what to record, modelled on Claude Code's auto memory.
-- **File**: one `/work/.max/memory.md` per conversation, in the `/work` of the conversation's VM; on the host it is `<vm.dir>/<conversation id>/work/.max/memory.md`. Max edits it with shell. With no VM configured there is no memory; when the VM cannot start, the memory can be read but not written.
-- **Injection**: when projecting for a new core, the host reads this file without following symlinks, as `send_image` does, and places it in the volatile block as `[记忆]` ("memory"), after the roster. It is not placed in system, for three reasons: changing it does not invalidate the cache of what precedes it; group members can influence what is written in it, so it should not be treated as system instructions; and, coming later, it is more likely to receive the model's attention. The cost is up to 3k extra uncached tokens per turn. Changes made during a turn are seen only by the next turn; what was changed in the current turn is already in the transcript.
-- **Cap** of 3,000 tokens (`max_core::limits::MEMORY_TOKENS`):
-  - at 80%, a sentence is appended at the end as a reminder to tidy;
-  - over the cap, only the lines that fit are injected, with a note that the rest were not loaded and the file needs tidying;
-  - a file over 256 KiB is not read at all, and a single sentence says so.
-
-  This matches Claude Code's handling of MEMORY.md, whose limit is 200 lines or 25 KB, beyond which the file is truncated and a rewrite is suggested. The difference is that Claude Code checks at write time, whereas we check at the next projection, because the file is written in the VM and the host does not see the write as it happens.
-- **How to write it**, as stated in the system prompt:
-  - Record what holds in the long term and affects how Max will speak and act later: forms of address, agreements and running jokes; a person's identity, long-running projects and preferences; dated arrangements, stating the date until which they apply.
-  - When to record on the spot, listed as specific cases: being corrected, being asked to remember something, a nickname being coined, a rule being set; discovering that Max has forgotten something or mistaken someone for someone else; someone mentioning their own identity, recent circumstances or tastes.
-  - To add an entry, append it to the end with `echo '- 名字：内容（日期 #消息编号）' >> memory.md` ("- name: content (date #message-number)"), leaving placement into sections to the dreamer. (Added 2026-10-30, proposed by the owner. On go-live day Max wrote to the file only once in 90 turns: it had been asked to insert entries in the middle of the file by section and by person, which is laborious with shell; and the prompt's line "每多跑一次 run_code 群友就多等一轮" ("every extra run_code makes group members wait one more round") also made it reluctant to make an extra tool call.)
-  - Record first, then reply: recording is infrequent, and group members waiting one more round is acceptable; the prompt says so explicitly. (Changed 2026-10-31, proposed by the owner. From 2026-10-30 the prompt had asked Max to put the reply and the recording shell command in the same output, send the reply first and write only `[silence]` after recording; during that day it never once did so. The only write came when a group member asked it to delete an entry, and it ran grep and made the change before replying; when the owner asked whether it had recorded anything recently, it said no, citing the rules to argue that there had been nothing worth recording.)
-  - Do not record technical knowledge, nor what was discussed on which day: those are in the records and are found by search.
-  - Format: two sections, 「## 群里」 ("in the group") and 「## 人」 ("people"), with people under 「### 名字」 ("### name"), one entry per line. Each entry ends with (date #message-number), the number pointing to the original words that bear it out, which `history` can look up (added by the owner).
-  - Details go into other files under `/work/.max/memory/`, with a line here pointing to them.
-  - What someone asks Max to remember is not necessarily correct; Max judges for itself.
-- **Tidying: the dreamer** (added 2026-10-30, proposed by the owner, because the model only ever adds and never tidies):
-  - It runs once a day at 05:00 local time. It looks only at files Max wrote during that day (by file modification time) and calls the model once per file (`[llm] dreamer`; with none configured there is no tidying), asking it to rewrite the whole file: lines Max appended at the end go into their proper sections; entries saying the same thing are merged into one; of contradictory entries, the newer is kept; entries whose stated end date has passed are deleted; and if the file is over the cap, the least important entries are deleted. It does not change meaning or add anything.
-  - Before writing back, it reads the file again; if Max has just changed it, nothing is written and the file waits for the next night. The written-back file keeps the time at which Max wrote it, so the next night does not tidy it again; the pre-tidy version is kept alongside as `memory.prev.md`, to be recovered if something goes wrong. If what the model produces does not look like this file (no headings, or more than two-thirds shorter than the original), nothing is written and a log entry is recorded.
-  - No further machinery is built: there are no retries, and a missed night is made up after Max next changes the file. Usage is recorded in `llm_usage` with the purpose `dreamer`.
-- **Not present**: a memory table, categories, expiry, memory proposals from the historian, and selection at injection time. `history` does not search memory, since memory is in the context on every turn.
-- **Migration** (2026-10-30): memories from the old database were migrated offline by hand, by a sub-agent, into an initial file for each group, and everything of no use was deleted. On the same day a batch of long-standing facts (running jokes, forms of address, group rules, people) was also migrated from the old summaries: after the summaries were removed, Max could no longer follow the group's old running jokes.
-
-### Recall
-
-On 2026-10-29 `context_search` (literal and semantic search) and several read modes of `context_read` were implemented; on 2026-10-30 they were merged into a single tool, `history` (decided by the owner). With two separate tools, a request such as "that thing Xiaoming said the day before yesterday" required first deciding which tool to use and how to assemble its arguments; searching and reading apply the same set of filters (who, when) and differ only in whether there is a search term. The Haskell version also had a single entry point for recall (Unified recall in features.md); this is carried over, except that memory is not searched.
-
-- **Scope**: only this conversation's messages are searched (since 2026-10-30; before that, summaries were searched as well; see [Summaries](#summaries)).
-  - Search looks only at rows whose kind is chat; commands and events are not searched, and neither are retracted messages. A term matches if it occurs in `messages.text` (the rendered text) or in the caption of an image or sticker in that message. Stickers are searched too (decided by the owner 2026-10-29: "永远是全部能搜" ("everything is always searchable"); the original proposal was not to search them, because their captions describe what the sticker is and when to use it). Reading, like the tail, covers every kind of row.
-- **`/clear --all`**: ignored; messages before the watermark are still searched and read (decided by the owner 2026-10-29, as above; the same as the Haskell version). `/clear --all` governs only what is shown in the context.
-- **Parameters**: all of them can be combined, except `around`.
-  - `query`: if given, the call is a search and returns a list of results; if not, it is a read and returns the original text.
-  - `who`: a few characters of the speaker's name, lowercased like the terms and compared as a substring against `messages.sender_name`, that is, the speaker's group card name at the time (added 2026-10-30). Matching is by name rather than by `[mention#N]`: the same person is two principals on the old platform and on the new bot, but the name is most likely the same.
-  - `from`, `to`: a local `YYYY-MM-DD`, `YYYY-MM-DD HH:MM`, or `#id`. They are first converted to row ids and the query then uses those (`from` is the first row at or after that time, inclusive; `to` is the first row after it, exclusive; a date given as `to` extends to midnight of the following day, so both ends include the whole day), and search and read use the same id range. The first row is found by `sent_at`; migration 0017 added an index on `(conversation_id, sent_at)`. If there is no row after `from`, the range is empty.
-  - `around`, `before`, `after`: read this row and the rows before and after it, 10 on each side by default and at most 50, larger values being treated as 50; if both are 0, the result is the full text of this single row (this is what "全文见 `#123`" ("full text at `#123`") relies on). `around` is not combined with other filters or with `limit`, and `before` and `after` are used only with `around`.
-  - `limit`, `page`: see below. With no filter at all, `bad_arguments` is returned.
+- **Scope**: this conversation only.
+  - Search looks at rows of kind chat, not commands or events, and not
+    retracted messages. A term matches if it is in `messages.text` or in
+    the caption of a picture or sticker in the message; stickers too.
+    Reading, like the tail, covers every kind of row.
+  - `/clear --all` doesn't apply: it governs only what the context shows.
+- **Parameters**, all combinable except `around`:
+  - `query`: given, the call searches and returns results; without, it
+    reads and returns the messages.
+  - `who`: a few characters of the speaker's name, lowercased and matched
+    as a substring of `messages.sender_name` (their group card at the
+    time). By name rather than `[mention#N]`, since the same person may be
+    two principals, on the old platform and the new bot, with one name.
+  - `from`, `to`: a local `YYYY-MM-DD`, `YYYY-MM-DD HH:MM` or `#id`, turned
+    into row ids once (`from` the first row at or after it, inclusive; `to`
+    the first after it, exclusive; a date as `to` runs to the next
+    midnight, so both ends include the whole day), and search and read keep
+    to that range. The first row is found by `sent_at`, on an index on
+    `(conversation_id, sent_at)`.
+  - `around`, `before`, `after`: that row and the rows on each side, 10 by
+    default and at most 50; both 0 gives the full text of the one row,
+    which `全文见 #123` relies on. `around` takes no other filter or
+    `limit`.
+  - `limit`, `page`: below. With no filter at all, `bad_arguments`.
 - **Search**:
-  - **Matching**: the query is split into terms on whitespace, at most 8 terms of up to 50 characters each, with duplicates removed, and lowercased character by character, mapping each character to exactly one character as Postgres's `lower` does, so snippet positions do not shift. Each term is looked up as a substring of the lowercased text (`lower(text) like '%term%'`, escaping `% _ \`), without word segmentation. A row containing any one term is a candidate.
-  - **Indexes**: migration 0011 installs pg_trgm and builds `gin_trgm_ops` indexes on `lower(messages.text)` and `lower(media_captions.text)`. Terms of three or more characters use the index; terms of one or two characters have no trigrams and are compared row by row within this conversation. A database whose ctype is C (as the dev shell's is) does not produce trigrams for Chinese, so Chinese terms are always compared row by row, with the same results; tank's `maxx` database is en_US.UTF-8 and does produce them. Queries set `plan_cache_mode = force_custom_plan` within the transaction: after a few executions, sqlx's prepared statements switch to a generic plan, which cannot see how long the terms are and would read the whole index for a two-character term.
-  - **Ranking**: scores range from 0 to 1. The literal score is the number of matching terms divided by the total number of terms, the semantic score is the cosine similarity, and a row found both ways takes the higher of the two; ties are broken newest first. Messages are deduplicated by body, so of repeated messages only the latest is kept. `limit` defaults to 10, with a maximum of 30. There is no paging.
-  - **Results**: `{ results: [{ ref, time, text, read }] }`. `ref` is `#id`; `time` looks like `2026-10-03 周六 14:02` (周六 = Saturday); `text` is "name: body", the body being the same as in the tail, with images carrying their captions. A body longer than 160 characters is cut to a span starting 40 characters before the match (rows found only semantically are cut from the start), with "…" where text was removed. `read` is `{ around: id }`, which, passed back to `history` unchanged, reads 10 rows on either side of this one.
-- **Read**: the same format as the tail: date lines and one message per line, overlong messages showing only their beginning. Results are paged by whole lines, each page no larger than the per-item cap, and `page` selects the page; the full text of a single message is split evenly into pages by characters.
-  - With `from`, it reads `limit` rows forward from the start of the range; without it, it reads the latest `limit` rows in the range, in chronological order. `limit` defaults to 50, with a maximum of 100. This serves questions with no keyword, such as "that thing we discussed the day before yesterday": paging through that day's original text replaces the line that summaries used to provide. It can also show only what one person has said.
-  - When there is more, `next` is returned, and passing it back unchanged continues the read: for a read from `from`, `from` becomes the id after the last row, continuing forward; for a read of the latest rows, `to` becomes the first row, continuing backward. `who` and `limit` are carried along. If the range contains no rows, a single line "（没有这样的消息）" ("no such messages") is returned.
-- **Limits**: at most 60 calls per run (previously 20 searches and unlimited reads, now combined and relaxed); at most 4 concurrent searches across all groups, since short terms are compared against every row of a conversation; reads do not count towards this. The system prompt's line on raw records says that older material is not in the context, and that to find past events Max should use `history`, which can search by content and can also read the original text by person and by time.
-- **Tested live** (2026-10-29): run read-only on tank's `maxx`, which did not yet have these two indexes, so everything was compared row by row. On the largest conversation, 62,000 rows, searching messages took about 85 ms with 1 term, about 97 ms with 2 and about 145 ms with 8. Searching summaries (a conversation with 848 of them) took about 36 ms with 2 terms and about 61 ms with 8. The indexed case was measured on the old Haskell database on tank (290,000 rows, with the same trigram index on `rendered_text`): a 3-character term took 19 ms, a 4-character term 2 ms, and two 3-character terms 13 ms; for a two-character term the custom plan does not touch the index and scans row by row in 182 ms, whereas the generic plan reads the whole index in 496 ms. `ilike` is more than three times slower than `lower() like` (178 ms against 50 ms), so it is not used. The trigram index takes 88 MB on the old database.
-- **Semantic search**: the whole query is turned into one vector, using the model shared with the sticker library (see [Sending images](media.md#sending-images)) (bge-m3, 1024 dimensions), with a 5-second wait; if no model is configured, or on error or timeout, only literal search is performed and no error is reported. `max_db::recall` takes the nearest messages by cosine distance, with the same filters as literal search (chat, not retracted, time, speaker), comparing only vectors produced by the same model; the number of rows fetched is the same as for literal search (3·limit). A similarity of at least 0.5 is required to become a candidate (a proposal: an estimate, not tuned on real data). These candidates are merged with the literal ones by id, the same `ref` taking the higher score; the subsequent deduplication, ranking and result shape are unchanged.
-- **Vectors**: one per chat message (migration 0013, `message_embeddings`; before 2026-10-30 summaries had them too, in `summary_embeddings`, which is kept but not read). They are per row rather than per window: a result is a single row anyway (`#id`), and surrounding context is provided by `history`'s `around`; the ledger is append-only, so a row's vector never goes stale, whereas a window's would change with later messages; and the old database's vectors are also per row and are imported directly by id. A message's text is its `text` with textless handles removed (`[mention#3]`, `[reply#12]`, `[image]` and the like; SQL function `recall_text`); if fewer than 4 characters remain, the message is skipped ("在吗" ("are you there?") and "好的" ("OK") yield nothing useful in semantic search, and literal search still finds them; the Haskell version also used 4), and only the first 2,000 characters are used. Captions of stickers and images do not get their own vectors; literal search still covers them.
-- **Precision**: `halfvec(1024)`, rather than `vector` as in the sticker library: at 225,000 rows the table and HNSW index together take about 1.2 GB, whereas `vector` would take 3 GB. The nearest neighbours remain the same: in 50 searches over 20,000 random vectors (where distances are most crowded and hardest to separate), the top ten were identical every time and in the same order in 49 cases, with distances differing by at most 0.00004. Besides HNSW (`halfvec_cosine_ops`) there is a btree on `conversation_id`. Queries set `hnsw.iterative_scan = relaxed_order` within the transaction, so that if the first 40 rows HNSW fetches are filtered out by conversation or time, it keeps searching further; for small conversations the planner fetches directly by conversation and sorts exactly, which is why, as with literal search, a custom plan is used.
-- **Recall vector worker** (`max::recall`): every row entered in the ledger is handed to it, and only rows without a vector from the current model are computed, 2 requests at a time, retried twice on failure (after 10 seconds and 60 seconds) and then abandoned. At startup and hourly thereafter it sweeps the table: newest first, 16 rows per request, without retries, the next sweep serving as the retry. If a page fails, each of its rows is retried once individually, so that one text the service rejects does not block everything older than it; if none of them succeeds, the service is down and the worker waits for the next sweep. Changing the model recomputes everything. The worker is the only writer to this table; its usage is not recorded in `llm_usage`. With no embedding model configured, the worker does not exist.
-- **Tested live** (2026-10-29, dev Postgres 17 on the Mac, `maintenance_work_mem` 64 MB, 225,000 random unit vectors): building HNSW on a populated table took 9 min 30 s with `vector` (index 1.76 GB) and 6 min with `halfvec` (586 MB); the migration builds it on an empty table, in milliseconds. Inserting into an empty table with the index already built (which is what import does) took 17 minutes for 225,000 `halfvec` rows (somewhat slow, with a compilation running at the same time); for 20,000 rows, `vector` took 50 seconds and `halfvec` 38 seconds. Queries (`halfvec`, limit 90): a 56,000-row conversation took 36 ms via HNSW, and a 2,250-row conversation 16 ms via the btree plus a sort.
-- **Import**: the bge-m3 vectors of the old database's 225,000 messages and 3,200 summary segments are imported by id with `max-import vectors` (see [Import](ledger.md#import)); the summary vectors are no longer used.
+  - **Matching**: the query is split on whitespace into at most 8 terms of
+    up to 50 characters, deduplicated and lowercased a character at a time
+    as Postgres's `lower` does, so snippet positions don't shift. Each term
+    is a substring match on the lowercased text (`lower(text) like
+    '%term%'`, escaping `% _ \`), with no word segmentation; a row with any
+    term is a candidate.
+  - **Indexes**: pg_trgm `gin_trgm_ops` on `lower(messages.text)` and
+    `lower(media_captions.text)`. Terms of three or more characters use the
+    index; shorter ones have no trigrams and are compared row by row within
+    the conversation. A database with ctype C (as the dev shell's) makes no
+    trigrams for Chinese, so Chinese terms are compared row by row there,
+    with the same results; tank's is en_US.UTF-8. Queries set
+    `plan_cache_mode = force_custom_plan`, since after a few executions a
+    prepared statement's generic plan can't see a term's length and would
+    read the whole index for a two-character term.
+  - **Meaning**: the whole query becomes one vector with the model the
+    sticker library uses (bge-m3, 1024 dimensions; see
+    [Sending images](media.md#sending-images)), waiting at most 5 seconds;
+    without a model, or on error or timeout, the search is literal only,
+    with no error. `max_db::recall` takes the nearest messages by cosine
+    distance, with the same filters, comparing one model's vectors only,
+    as many rows as literal search fetches (3 × limit), and a similarity of
+    at least 0.5 (a guess, still to be tuned) makes a candidate.
+  - **Ranking**, 0 to 1: the literal score is the share of terms matched,
+    the meaning score the cosine similarity, and a row found both ways
+    takes the higher; ties go newest first. Messages are deduplicated by
+    body, keeping the latest. `limit` is 10 by default, at most 30; no
+    paging.
+  - **Results**: `{ results: [{ ref, time, text, read }] }`: `ref` is
+    `#id`, `time` like `2026-10-03 周六 14:02`, `text` "name: body" as in
+    the tail, pictures with their captions, cut past 160 characters to a
+    span starting 40 before the match (from the start for a row found by
+    meaning alone), with `…` where text was cut. `read` is `{ around: id }`,
+    which passed back reads 10 rows on each side.
+  - At most 4 searches run at once across all groups, since short terms
+    are compared against every row of a conversation; reads don't count.
+- **Read**: the tail's format, date lines and a message a line, overlong
+  messages showing their beginning. Pages hold whole lines, each within the
+  per-item cap, and `page` picks one; one message's full text is split
+  evenly into pages by characters.
+  - With `from`, it reads `limit` rows forward from the range's start;
+    without, the latest `limit` rows in the range, in time order. `limit`
+    is 50 by default, at most 100. This is how a question with no keyword
+    ("what we discussed the day before yesterday") is answered: by paging
+    through that day, or through one person's messages.
+  - When there is more, it returns `next`, which passed back continues:
+    forward from the row after the last for a read from `from`, backward
+    from the first for a read of the latest. `who` and `limit` carry over.
+    An empty range gives one line, `（没有这样的消息）`.
+- **Vectors**: one per chat message, in `message_embeddings`, per row
+  rather than per window: a result is one row anyway and `around` gives
+  its surroundings; the ledger is append-only, so a row's vector never goes
+  stale, where a window's would; and the old database's vectors were per
+  row, imported by id. A message's text for embedding is its `text` without
+  textless handles (`[mention#3]`, `[reply#12]`, `[image]`; the SQL
+  function `recall_text`), skipped if under 4 characters (`在吗`, `好的`:
+  meaning search gets nothing from them, and literal search still finds
+  them), and cut to 2,000 characters. Captions don't get vectors of their
+  own; literal search covers them.
+  - `halfvec(1024)`, not `vector`: about 1.2 GB for 225,000 rows with the
+    HNSW index, against 3 GB, with the same nearest neighbours. Besides
+    HNSW (`halfvec_cosine_ops`) there is a btree on `conversation_id`.
+    Queries set `hnsw.iterative_scan = relaxed_order`, so that when the
+    first rows HNSW fetches are filtered out by conversation or time it
+    looks further; small conversations are fetched by the btree and sorted
+    exactly, which is again why plans are custom.
+- **The recall vector worker** (`max::recall`) gets every row entered and
+  computes those without a vector from the current model, 2 requests at a
+  time, retrying after 10 and then 60 seconds, then giving up. At startup
+  and hourly it sweeps the table, newest first, 16 rows a request, with no
+  retries: the next sweep is the retry. A page that fails is retried row by
+  row once, so one text the service rejects doesn't block everything older;
+  if none succeeds, the service is down, and the worker waits for the next
+  sweep. A change of model recomputes everything. Its usage isn't
+  recorded. With no embedding model there is no worker.
+- The system prompt's line on records says older material isn't in the
+  context, and that `history` finds the past by content, or reads it by
+  person and time.
 
-### What was cut
+## Not there
 
-- `[recent turns]` summaries, continuation summaries, `context_resume` and in-turn locator compaction. Old tool output is not trimmed within a turn either; if the context grows too large, the run ends (see [The core](core.md#the-core-1)). If it later becomes necessary to see what the previous turn did, a `turn_read(t#N)` tool that reads turn snapshots will be added.
-- Automatic injection of retrieval results. Each turn carries only Max's own memory file (see [Memory](#memory)); everything else relies on the model calling `history`.
+- Summaries of the last turn, continuation summaries, `context_resume`,
+  compaction within a turn. Old tool output isn't trimmed within a turn
+  either; a context grown too big ends the run (see
+  [The core](core.md#what-the-core-decides)). If seeing what the previous
+  turn did becomes necessary, a `turn_read(t#N)` tool reading turn
+  snapshots could be added.
+- Retrieval injected automatically. Each turn carries only Max's memory
+  file; everything else is the model calling `history`.
