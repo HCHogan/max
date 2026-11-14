@@ -1,167 +1,610 @@
 # Jobs: agents, commands, programs and questions
 
+What runs apart from a turn: background agents, background commands and
+resident programs, all units of the guest's systemd that max keeps no
+state about, and questions between conversations, which live only as long
+as the turn that read them. Why lifetimes are the guest's is in
+[decisions/2026-11-12-lifetimes-to-systemd.md](../decisions/2026-11-12-lifetimes-to-systemd.md).
+
 ## Background agents
 
-Work that takes many steps runs apart from the turn, as an agent of Max's: pi, in the group's VM, on a task Max wrote for it, for hours if need be, while Max goes on in the chat. Since 2026-11-12 an agent is a unit of the guest's and max keeps nothing of it: step 3 of [Lifetimes move to systemd](../decisions/2026-11-12-lifetimes-to-systemd.md#lifetimes-move-to-systemd-1). From 2026-10-30 until then the host drove each agent: `job.rs` held its steers, its questions, its deadline and its report, at first over pi's RPC and from 2026-11-07 over a contract of its own, `/job/…`; that is in the history, at `b52b4afa` and before.
+Work of many steps runs apart from the turn, as an agent of Max's: pi, in
+the group's VM, on a task Max wrote for it, for hours if need be, while Max
+goes on in the chat. An agent is a unit of the guest's; max keeps nothing
+of it.
 
-- **A unit.** `maxx agent start` (`nix/max-agent.sh`), which Max runs with `shell`, starts a transient unit `max-agent-<n>` in `max-jobs.slice` through `maxx units agent`: the same path as a background command, with `KillSignal=SIGUSR2`, `KillMode=mixed`, `TimeoutStopSec=30` and a `RuntimeDirectory`. The unit runs `max-pi <unit>` (`nix/max-pi.sh`), which execs `pi --print --no-approve` with the plugin `nix/max-agent.ts`. What an agent is, is in its directory, `/run/max/jobs/<unit>/`: `task`, `workdir`, `model.json`, `title`, `limit`, `started`, the steers in `inbox/`, and the markers `asked`, `stopped` and `error`. The count of those that run, three at most, and the number are taken under one lock, held until the unit is started (2026-11-13: two starts at once could both find room for the third). The number comes from `/work/.max/jobs/.count`, so it goes on across restarts of max and boots of the VM; the host's own count started again at 1 with every restart.
-- **Limits** are the guest's, in `max-agent.sh`: 3 at once, counted from the units that run, and 6 hours each (two until 2026-11-11, when the owner found it too short), as the unit's `RuntimeMaxSec`. The prompt names neither: `maxx agent start` says the time as it starts one, and why it starts none.
-- **Model** (decided 2026-10-30): `job = { model, effort }` in `[llm]` is the agents' own; without it there are no agents. pi holds no key: its calls go to `http://127.0.0.1:7777/llm/<endpoint>` in the VM, and max replaces `model` with the provider's id, adds the provider's key and headers, and passes the rest on as pi wrote it; the answer streams back unchanged. If the provider keeps quiet for `stream_idle_timeout_secs`, before the answer or within it, the connection is cut as in max-llm, and pi retries. Only the endpoint of the model's protocol is accepted. `GET /llm` says what the harness has to know before it calls: `{api, model, window, max_output, effort}` for the agents' own, and under `models` the same of every model a call can name, without the effort; or 404 when the agents have no model. `maxx agent start` writes the one it starts the agent on into `model.json`. The keys are read once as max starts, so a missing one stops max there.
-- **Max chooses an agent's model** (2026-11-12, the owner: forward to every configured model as it is, with nothing more to it). A call names its model as `/model` does, `provider/model`, and goes to that provider with that provider's key. One that names none, or a name that isn't configured, goes to the agents' own: an agent from before this sends the provider's id alone, and a program that knows no names can call a model all the same. `maxx agent start --model <name> --effort <level>` starts an agent on one, and `maxx agent models` lists them with their windows. There is no list of the models agents may use, and no setting of a conversation's: whatever `/model` offers a turn, an agent can run on, the priced ones too. How hard to think is the guest's to say, being a field of the request that max passes on (`reasoning_effort`, or `reasoning.effort` over Responses): `--effort` is one of pi's levels, checked as the agent starts, since pi takes a word it doesn't know for `medium`; and `max-pi` has pi send `xhigh` and `max` as they are, since pi sends `high` for them to a model it has no list for. So the agents' `effort = "xhigh"` had reached the provider as `high` until then. The contract's number stayed: an older guest reads the five fields it always did.
-- **No sessions** (2026-11-12, the owner): `/llm` takes any call that comes on a VM's socket. The socket says which conversation pays; nothing in the VM holds a token, and nothing on the host knows which agent called. Anything in the VM can therefore spend on a model, the agents' own or any other that is configured: accepted, as the VM is the group's own and its programs could always start an agent.
-- **Usage**: each model call is a row of `llm_usage` with `purpose` `job` and no turn, for the conversation whose VM made it. The forwarder (`service/forward.rs`) feeds the answer to `max_llm::Meter` on its way back, which reads the usage as max-llm reads Max's own, and hands it to one recorder task (`service::Models::start`). The row has the provider and the model the call went to, and the effort its request asked for. A call that ends before the provider counted anything records nothing. An answer that isn't streamed, one JSON object, is read for its usage once it has all come (2026-11-13: until then only event streams were, which is all pi asks for, and a call a program of Max's made with curl went unrecorded). A streamed Chat call that doesn't ask for `stream_options.include_usage` still records nothing, since the provider then says nothing of it. The tools the model called are no longer read: how far an agent is, is the guest's to say (`maxx units list`, pi's session under `/work/.max/jobs`).
-- **Tools** (2026-11-12, the owner: "an agent is a program that calls every tool with `maxx`"). An agent has no MCP adapter and no tools of its own on the host: it runs `maxx history`, `maxx web-search` and `webread` from its shell, as any program in the VM does, with no token. So it could also speak in the chat; its system text tells it not to, and nothing enforces it. Until then `mcp::Caller::Job` and a `job` mark on each tool kept it to the tools that read.
-- **Steers.** `maxx agent steer max-agent-3 '…'`, or `--text -` with the words on standard input, writes a file into the agent's `inbox/` (under a dotted name first, then renamed, so the plugin never reads half of one; its name is the time in nanoseconds, so they sort). The plugin takes them at each `turn_end`, and they go in before the next model call; it refuses if the unit doesn't run. A steer the agent never took is counted in what Max hears of its end.
-- **Questions.** An agent stuck on what only Max or the people know runs `maxx agent ask '问题'`: a wake, `[max-agent-3 问] 标题`, the question, and how to answer it, and the marker `asked`. Max answers with `maxx agent steer`: an answer is a steer like any other. The agent goes on meanwhile; with nothing left to do, pi would settle, so the plugin hooks `agent_before_settle`: if `asked` is there and the inbox empty, it waits up to 10 minutes for something to come, and what comes is one more turn's input. An answer taken at a turn's end, while the agent still works, removes `asked` as well (2026-11-13: left there, it held the agent for the 10 minutes once its work was done). The question has no number, and there is nothing to decline: unanswered, the agent goes on by its own judgement. To ask another conversation, the agent runs `maxx ask` as Max would; the answer wakes Max, who passes it on. From 2026-11-11 until then an agent asked with Max's `ask` without `to`, numbered `ask#5`, answered with `answer`, and the host held it before settling (`AgentWaits`, `Open`, `/job/turn`'s `settling`); before that, `ask_max` blocked inside a tool call.
-- **Results.** Once pi has settled, the plugin writes the last text the agent wrote to `/work/.max/jobs/<unit>.md`, and the last model call's error, if it failed, to `error`. The unit's `ExecStopPost` (`maxx units ended`) starts `max-notify@<unit>`, which wakes Max with `maxx wake`: `[max-agent-3 完成] 标题`, `[max-agent-3 到点了，下面是做到一半的] 标题` when the unit ran out of time, or `[max-agent-3 失败] 标题：why`; then the report, its first 2000 characters, `（全文在 …）`, and how many steers it never took. The notice is retried for as long as max doesn't take it, as a background command's is. A wake is `Reason::Program`: in the running core, or a new one, and what to say of it in the chat is Max's to decide.
-- **Stopping.** `systemctl stop max-agent-3`, or `/kill` and `/stop`, which have the guest stop everything (`maxx units stop-all`). The unit's `KillSignal` is SIGUSR2, since pi exits at once on SIGTERM with nothing written: the plugin leaves `stopped`, aborts the run, and the report is written as pi settles. One stopped on request wakes nobody; one stopped by its limit does. Five minutes before the limit the plugin puts a steer of its own in the inbox, telling the agent to update its notes and report.
-- **What max shows.** `/status` lists no agents: `maxx units list` in the VM shows them with the background commands. `agent#3`, as the host named them, is still read from the wakes the ledger kept, as a reason `job` (`Reason::Answered`'s alias).
-- **When to hand work off** (2026-10-31): the system prompt says that work of many steps goes to an agent, not into the turn: reading a whole repository, reviewing or changing code, installing, building, testing, opening PRs, reading many pages or files. Max first says in the chat that it has taken it on and about how long it will take, then starts the agent; what a few steps answer, it does itself. The prompt's paragraph is also where `maxx agent` is described: from 2026-11-12 there was no tool whose guide would, and since 2026-11-14 `agent_start`, `agent_steer` and `agent_models` are declared too, each with its guide.
-- **Project directories** (2026-11-08): `--workdir` is `/work` by default, an absolute guest path or one under `/work`, made if it isn't there. The VM, not the directory, is the boundary. pi reads the directory's `AGENTS.md` or `CLAUDE.md`, and its parents', even with `--no-approve`; the project's `.pi/` stays untrusted.
-- **Notes** (2026-11-08): the agents keep notes for each directory they start in, `/work/.max/projects/<name>.md`, the name being the path with letters and digits kept and the rest made `-` (`/work/max` is `work-max.md`). `max-pi.sh` appends the file to the agent's system text under `[笔记]`, cut at a line at 16 KiB; a link, or a file past 1 MiB, isn't read. The agent is told to update it before it reports. Max's own memory keeps only a project's name, path and one line.
-- **The system text** is `nix/agent-system.md`, appended to pi's own: it is Max's background agent and doesn't see the chat; `maxx history`, `maxx web-search` and `webread` for looking things up; not to speak in the chat; its last message is its report; `maxx agent ask` for what only Max or the people know; its directory and notes.
+- **A unit.** `maxx agent start` (`nix/max-agent.sh`), which Max runs with
+  `shell`, starts a transient unit `max-agent-<n>` in `max-jobs.slice`
+  through `maxx units agent`: the path of a background command, with
+  `KillSignal=SIGUSR2`, `KillMode=mixed`, `TimeoutStopSec=30` and a
+  `RuntimeDirectory`. The unit runs `max-pi <unit>` (`nix/max-pi.sh`), which
+  execs `pi --print --no-approve` with the plugin `nix/max-agent.ts`. What
+  an agent is, is in its directory, `/run/max/jobs/<unit>/`: `task`,
+  `workdir`, `model.json`, `title`, `limit`, `started`, the steers in
+  `inbox/`, and the markers `asked`, `stopped` and `error`. The count of
+  those that run and the next number are taken under one lock held until the
+  unit has started. The number comes from `/work/.max/jobs/.count`, so it
+  goes on across restarts of max and boots of the VM.
+- **Limits** are the guest's, in `max-agent.sh`: 3 at once, counted from the
+  units that run, and 6 hours each, as the unit's `RuntimeMaxSec`. The
+  prompt names neither: `maxx agent start` says the time as it starts one,
+  and why when it starts none.
+- **Models.** `job = { model, effort }` in `[llm]` is the agents' default;
+  without it there are no agents. pi holds no key: its calls go to
+  `http://127.0.0.1:7777/llm/<endpoint>`, where the VM's forwarder sends a
+  call that names a configured model (`provider/model`, as `/model` names
+  them) to that provider and any other to the agents' own, replaces `model`
+  with the provider's id, adds the provider's key and headers, and passes
+  the rest on as pi wrote it; the answer streams back unchanged. A provider
+  quiet for `stream_idle_timeout_secs` is cut off, and pi retries. Only the
+  endpoint of the model's protocol is accepted.
+  - `GET /llm` says what a harness must know before it calls: `{api, model,
+    window, max_output, effort}` for the agents' own, and under `models` the
+    same for every configured model, without the effort; 404 when there are
+    no agents. `maxx agent start` writes the chosen one into `model.json`.
+  - `maxx agent start --model <name> --effort <level>` starts an agent on
+    another model, and `maxx agent models` lists them with their windows.
+    There is no list of models agents may use: whatever `/model` offers a
+    turn, an agent can run on, priced ones too. The effort is a field of the
+    request max passes on (`reasoning_effort`, or `reasoning.effort` over
+    Responses): `--effort` is one of pi's levels, checked at start, since pi
+    takes a word it doesn't know for `medium`; and `max-pi` has pi send
+    `xhigh` and `max` as they are, which it would otherwise send as `high`
+    to a model it has no list for.
+  - **No sessions**: `/llm` takes any call on a VM's socket; the socket says
+    which conversation pays, and nothing knows which agent called. So
+    anything in the VM can spend on any configured model, which is accepted,
+    as the VM is the group's own and its programs could always start an
+    agent.
+- **Usage**: each model call is an `llm_usage` row of purpose `job`, no
+  turn, for the conversation whose VM made it. The forwarder
+  (`service/forward.rs`) feeds the answer to `max_llm::Meter` on its way
+  back, which reads the usage as max-llm reads Max's own, and hands it to one
+  recorder task (`service::Models::start`), with the provider and model the
+  call went to and the effort it asked for. A call that ends before the
+  provider counted anything records nothing; an answer that isn't streamed
+  is read once it has all come; a streamed Chat call that doesn't ask for
+  `stream_options.include_usage` records nothing, since the provider says
+  nothing of it.
+- **Tools**: an agent is a program, which calls every tool with `maxx` from
+  its shell (`maxx history`, `maxx web-search`, `webread`), with no tools of
+  its own on the host. It could speak in the chat too; its system text tells
+  it not to, and nothing enforces that.
+- **Steers**: `maxx agent steer max-agent-3 '…'`, or `--text -` from stdin,
+  writes a file into the agent's `inbox/`, under a dotted name first and then
+  renamed, so the plugin never reads half of one; its name is the time in
+  nanoseconds, so they sort. The plugin takes them at each `turn_end`, before
+  the next model call; it refuses if the unit isn't running. A steer the agent
+  never took is counted in what Max hears of its end.
+- **Questions**: an agent stuck on what only Max or the people know runs
+  `maxx agent ask '问题'`, a wake: `[max-agent-3 问] 标题`, the question and how
+  to answer, and the marker `asked`. Max answers with `maxx agent steer`. The
+  agent goes on meanwhile; with nothing left to do pi would settle, so the
+  plugin hooks `agent_before_settle`: with `asked` there and the inbox empty,
+  it waits up to 10 minutes, and what comes is one more turn's input. An
+  answer taken at a turn's end removes `asked` too. The question has no
+  number and nothing to decline: unanswered, the agent goes on by its own
+  judgement. To ask another conversation, the agent runs `maxx ask` as Max
+  would; the answer wakes Max, who passes it on.
+- **Results**: once pi has settled, the plugin writes the agent's last text to
+  `/work/.max/jobs/<unit>.md`, and the last model call's error, if any, to
+  `error`. The unit's `ExecStopPost` (`maxx units ended`) starts
+  `max-notify@<unit>`, which wakes Max with `maxx wake`: `[max-agent-3 完成]
+  标题`, `[max-agent-3 到点了，下面是做到一半的] 标题` when the unit ran out of time,
+  or `[max-agent-3 失败] 标题：why`; then the report's first 2,000 characters,
+  `（全文在 …）`, and how many steers it never took. The notice is retried for as
+  long as max doesn't take it. A wake is `Reason::Program`: input to the
+  running core or a new one, and what to say of it in the chat is Max's to
+  decide.
+- **Stopping**: `systemctl stop max-agent-3`, or `/kill` and `/stop`, which
+  have the guest stop everything that was started (`maxx units stop-all`).
+  pi exits at once on SIGTERM with nothing written, so the unit's
+  `KillSignal` is SIGUSR2: the plugin leaves `stopped`, aborts the run, and
+  the report is written as pi settles. One stopped on request wakes nobody;
+  one stopped by its limit does. Five minutes before the limit the plugin
+  steers the agent itself, to update its notes and report.
+- **What max shows**: `/status` lists no agents; `maxx units list` shows them
+  with the background commands. `agent#3`, as the host once named them, is
+  still read from the wakes the ledger kept, as the reason `job`
+  (`Reason::Answered`'s alias).
+- **When to hand off**: the system prompt says work of many steps goes to an
+  agent, not into the turn (reading a whole repository, reviewing or changing
+  code, installing, building, testing, opening PRs, reading many pages or
+  files); Max says in the chat that it has taken it on and about how long it
+  will take, then starts the agent. What a few steps answer, it does itself.
+  `agent_start`, `agent_steer` and `agent_models` are declared in the prompt
+  with their guides.
+- **Project directories**: `--workdir` is `/work` by default, or an absolute
+  guest path or one under `/work`, made if missing. The VM, not the
+  directory, is the boundary. pi reads the directory's `AGENTS.md` or
+  `CLAUDE.md`, and its parents', even with `--no-approve`; a project's `.pi/`
+  stays untrusted.
+- **Notes**: agents keep notes for each directory they start in,
+  `/work/.max/projects/<name>.md`, the name being the path with letters and
+  digits kept and the rest `-` (`/work/max` is `work-max.md`). `max-pi.sh`
+  appends it to the agent's system text under `[笔记]`, cut at a line at 16
+  KiB; a link, or a file past 1 MiB, isn't read. The agent updates it before
+  it reports. Max's memory keeps only a project's name, path and one line.
+- **The system text** is `nix/agent-system.md`, after pi's own: it is Max's
+  background agent and doesn't see the chat; `maxx history`, `maxx
+  web-search` and `webread` for looking things up; not to speak in the chat;
+  its last message is its report; `maxx agent ask` for what only Max or the
+  people know; its directory and notes.
 
-The behaviours of pi that the plugin relies on (tested with RPC on 2026-10-29 and with print mode on 2026-11-07 with pi 1.4.0, and with the files and the signal on 2026-11-12 with 1.5.0):
+### What the plugin relies on in pi
 
-- A steer does not interrupt a running tool. In its `turn_end` handler the plugin calls `pi.sendUserMessage(steer, { deliverAs: "steer" })`: pi takes the queue only after the handlers have finished, so the steer goes into the next model call; with `"steeringMode": "all"` in `settings.json`, several go in together. If the last `turn_end` picks one up, pi runs another turn.
-- `ctx.abort()` kills the running tool at once, and pi stops. pi itself exits on SIGTERM with status 143 and reports nothing, and leaves SIGUSR2 to the plugin.
-- `agent_end` is not the end: automatic retries and queued steers come before `agent_settled`, and pi exits only after its handlers have finished, which is where the report is written.
-- An `agent_before_settle` handler that returns `continue: true` with entries added has pi run again with them; it is skipped on abort.
-- When the last message is a failure or an interruption, print mode prints nothing and exits with 1: the report is the plugin's to write.
-- Print mode exits only once the event loop is empty, so the plugin leaves nothing waiting: its timer is unref'd.
-- The task comes on stdin: as an argument, a leading `@` would be read as a file.
-- `--append-system-prompt` goes after pi's own prompt. A `SYSTEM.md` in the agent directory would replace pi's; the file is `agent-system.md`.
-- pi retries a failed model call 3 times by default, about 14 seconds in all. `"retry": {"maxRetries": 8}` outlasts a restart of max, while the guest's forwarder answers 503 for it.
+Checked with pi 1.4.0 and 1.5.0:
 
-The pi in the guest comes from numtide's llm-agents.nix, pinned in the flake. Its extension API has no version, so `scripts/check-pi-job` is run after moving the pin or changing `max-agent.ts`, `max-pi.sh` or `agent-system.md`: with the pinned pi and the real wrapper and plugin against a fake `/llm`, six agents (steers, a steer in the last turn, a stop by SIGUSR2, an answer that comes while it is held, and a project with `AGENTS.md` and one with `CLAUDE.md`). What surrounds pi, `maxx agent` and `maxx units`, is in the NixOS test `checks.<system>.jobs`, with pi itself and a model that says what the test has it say; and `max vm-check` starts one agent in a real VM against a provider of its own, which the nested test reads.
+- A steer doesn't interrupt a running tool. In its `turn_end` handler the
+  plugin calls `pi.sendUserMessage(steer, { deliverAs: "steer" })`; pi takes
+  the queue only after the handlers finish, so the steer goes into the next
+  model call; with `"steeringMode": "all"` several go together. If the last
+  `turn_end` picks one up, pi runs another turn.
+- `ctx.abort()` kills the running tool at once and pi stops. pi exits on
+  SIGTERM with status 143 and reports nothing, and leaves SIGUSR2 to the
+  plugin.
+- `agent_end` isn't the end: automatic retries and queued steers come before
+  `agent_settled`, and pi exits only after its handlers finish, which is
+  where the report is written.
+- An `agent_before_settle` handler that returns `continue: true` with entries
+  added has pi run again with them; it is skipped on abort.
+- When the last message is a failure or an interruption, print mode prints
+  nothing and exits 1, so the report is the plugin's to write.
+- Print mode exits only once the event loop is empty, so the plugin's timer
+  is unref'd.
+- The task comes on stdin: as an argument, a leading `@` would be read as a
+  file.
+- `--append-system-prompt` goes after pi's own prompt; a `SYSTEM.md` in the
+  agent directory would replace it, so the file is `agent-system.md`.
+- pi retries a failed model call 3 times by default, about 14 seconds in all;
+  `"retry": {"maxRetries": 8}` outlasts a restart of max, while the
+  forwarder answers 503.
 
-### Decoupling from the harness
+pi comes from numtide's llm-agents.nix, pinned in the flake. Its extension
+API has no version, so `scripts/check-pi-job` runs after moving the pin or
+changing `max-agent.ts`, `max-pi.sh` or `agent-system.md`: the pinned pi with
+the real wrapper and plugin against a fake `/llm`, through six agents
+(steers, a steer in the last turn, a stop by SIGUSR2, an answer that comes
+while it is held, a project with `AGENTS.md` and one with `CLAUDE.md`). What
+surrounds pi is in the NixOS test `checks.<system>.jobs`, and `max vm-check`
+starts one agent in a real VM against a provider of its own.
 
-Decided 2026-11-07, at the owner's proposal: the host doesn't speak a harness's own protocol. Then it was a wire contract, `/job/turn`, `/job/stop` and `/job/report`, which a plugin in the guest kept; the rules (the steer queue, the hold, the deadline) stayed on the host. Since 2026-11-12 the host has no part in it at all, and what a harness keeps is the guest's own, in files and a signal:
+### What a harness keeps
 
-- **Start**: `maxx agent start` runs the wrapper as a unit with the agent's directory. The wrapper reads `task`, `workdir` and `model.json` there.
-- **Model calls** go to `http://127.0.0.1:7777/llm/<endpoint>`, with any key or none, and the model by the name `model.json` has for it.
-- **Steers** are the files of `inbox/`, oldest first by name, each removed once taken; one with a dot before its name is still being written.
-- **Stop** is SIGUSR2: leave `stopped`, stop what runs, and write the report within 30 seconds.
-- **The report** is `/work/.max/jobs/<unit>.md`, a heading line, an empty line, and the text; `error` holds why the last model call failed.
-- **Asking** is `maxx agent ask`, and holding for the answer is the harness's own: `asked` says a question is out.
+The host speaks no harness's protocol; what a harness keeps is the guest's,
+in files and a signal:
 
-A harness that keeps none of it still runs as an agent: Max hears how it exited, and that it left no report. Another harness needs a wrapper like `max-pi.sh` and whatever of the above it can hook; `/llm` speaks chat/completions and responses.
+- **Start**: `maxx agent start` runs the wrapper as a unit with the agent's
+  directory, from which it reads `task`, `workdir` and `model.json`.
+- **Model calls** go to `http://127.0.0.1:7777/llm/<endpoint>`, with any key
+  or none, naming the model as `model.json` does. `/llm` speaks Chat
+  Completions and Responses.
+- **Steers** are the files of `inbox/`, oldest first by name, each removed
+  once taken; a dotted name is still being written.
+- **Stop** is SIGUSR2: leave `stopped`, stop what runs, and write the report
+  within 30 seconds.
+- **The report** is `/work/.max/jobs/<unit>.md`, a heading, an empty line and
+  the text; `error` holds why the last model call failed.
+- **Asking** is `maxx agent ask`, and holding for the answer is the harness's
+  own; `asked` says a question is out.
+
+A harness that keeps none of it still runs as an agent: Max hears how it
+exited and that it left no report. Another harness needs a wrapper like
+`max-pi.sh` and whatever of the above it can hook.
 
 ## Background commands
 
-Added 2026-11-01; units of the guest's since 2026-11-12, the first step of [Lifetimes move to systemd](../decisions/2026-11-12-lifetimes-to-systemd.md#lifetimes-move-to-systemd-1). A command that runs for several minutes (a build, a test run, a download) does not need another model, so a background agent is too heavy for it; running it inside the turn, however, leaves the group waiting. `shell` therefore has a parameter `background`: when it is true, the tool returns at once, the command runs on, and Max is woken when it ends. Only `shell` has it.
+A command that runs for minutes (a build, a test run, a download) needs no
+other model, but inside the turn it keeps the group waiting. So `shell` has
+`background`: the tool returns at once, the command runs on, and Max is
+woken when it ends.
 
-- **A unit, not a job.** Everything Max runs in the VM is a transient unit in the guest's `max-jobs.slice`, started by `maxx units` (`nix/max-jobs.sh`, `nix/jobs.nix`): systemd limits it (`RuntimeMaxSec=`), stops it and sees it end, and max keeps nothing about it. A unit is a call or a background command from its start, and neither becomes the other. The host says what it wants, as one JSON object since 2026-11-14 (`maxx units run '{…}'`; options until then), and the flags are the guest image's. One of them is `--expand-environment=no` (2026-11-13): systemd otherwise fills in every `${…}` of a command from the unit's environment, and makes each `$$` a `$`, before bash sees it, and a heredoc's quotes don't keep it out. The commands had gone through that since they first were units; a review found it, and it is likely what emptied the `${id}` in programs Max wrote with a heredoc (see `say`'s unfilled ids).
-- **A call** (`maxx units run`) is `shell` without `background`, and `run_code`. The guest starts the unit, waits for its end and prints one line of JSON: how systemd says it ended (`success`, `exit-code`, `timeout`…) and what it wrote, all of it, or 8 KiB of its head and as much of its tail with the file that has the whole. `tools::wait` reads the line, which is the last of what came: whatever the shell sshd runs the command in writes first, as a `/work/.bashrc` that prints would, isn't taken for it (2026-11-13). `run_code` is the same with the runner as the command, the program on its stdin and its stderr apart. The unit writes its own output, under `/work/.max/out/`, and the file stays only when the output didn't fit. **A call ends with its caller** (the owner, 2026-11-13). max gives `maxx units run` the command's input, as many bytes as `input` says, and then holds the channel's input open and says nothing on it for as long as it waits. When that input ends, the caller is gone: `maxx units run` stops the unit, removes what it wrote, and prints nothing. So a turn killed while its call runs stops the call by closing the channel (dropping `ssh::Command` hands it to the VM's `closer`, since russh closes nothing on drop), and a call whose max restarted, crashed or lost its connection is stopped by the guest alone, where it used to run on to its limit, 10 minutes at most, and could still say something in the chat for a turn that was over. Until then max stopped a dropped call's unit by name, `systemctl stop` on a second channel from a queue of the VM's (the stopper), and could stop nothing once it was gone itself; earlier the same day the owner had left such calls to run on, and then took this instead. If `maxx units run` itself is killed, its unit ends at its limit and the unit's hook clears up. The contract is 4 with it.
-- **A background command** (`maxx units start`): the tool returns the unit's name, `max-job-<start>-<n>`, its limit (6 hours, or `timeout_ms` up to 24), and where its output is written as it runs. It has no run's token: its `maxx` calls as a program's.
-- **When it ends**, the unit's `ExecStopPost=` (`maxx units ended`) writes how, and starts `max-notify@<unit>.service`, a oneshot that calls `maxx wake` with `[<unit> 完成] $ make`, the exit status and run time, the end of the output (a wake takes 4,000 characters) and the file's path; `到点了，下面是做到一半的` at its limit. With `Restart=on-failure` systemd tries it again until max takes it, so a notice isn't lost while max is away, and `systemctl list-units 'max-notify@*'` lists those that wait. Max sees it as a program's wake, `[max-wake] [max-job-… 完成] …`. A unit stopped on request (`systemctl stop`, `/kill`) tells nobody: whoever asked knows. The hook knows it by systemd's stop job for the unit, which is there until the hook has run (`systemctl list-jobs`; 2026-11-13). Until then it went by how the main process ended, killed by SIGTERM: a server that takes the signal and exits with 0 or 143 woke Max all the same, with a turn for it, and a script that ended itself with SIGTERM was told to nobody. One that ends so by itself is told now, as `ended by SIGTERM`.
-- **What Max does with one**: `maxx units list` shows what runs, and `systemctl stop <unit>` stops one; the tools `cancel` and `status`, which knew of them until then, went altogether on 2026-11-12. `/kill` has the guest stop them all (`maxx units stop-all`, in a task of the actor's `side`), a person's way to stop what runs without asking Max; `/status` doesn't list them.
-- **The VM stays up** while one runs: every minute a task of the VM asks the guest `maxx units list` and counts those whose kind isn't `unit`, and a VM with any counts as used and is passed over by `evict`. Until now the job's task held the `Vm`.
-- **A working directory is checked first.** systemd applies it to the unit's hook too, so a unit in a directory that isn't there would end without saying how; `maxx units` refuses it, and the model is told there is no such directory. It needn't be there at the end: the unit has `WorkingDirectory=-…`, so a command that removes its own directory still has its hook run (2026-11-13; until then such a call was told it hadn't run, and a background command's end was told to nobody).
-- **What went** (2026-11-12, with the owner): the actor's job for a command, its handle `shell#N` and its line in `/status`; the limit of 8 at once and the setting `commands_at_once`, since the VM's room is what bounds them; the host writing output files (`tools::Output`); and the move of 2026-11-08, by which a foreground command someone waited on went to the background after 15 seconds. That move served 3 of 2,573 calls in five days, and needed a command to change what it was while it ran: its channel, its limit, its token. A command not done at its limit is stopped, as before the move, and Max runs it again with `background`.
-- **Prompt.** The tools section says that a command that will run for several minutes should use `background`: it is a unit, whose name comes back at once; in the same output Max first tells the group, then stops and waits for `[max-job-… 完成]`; and `maxx units list` and `systemctl stop` are how it looks at them and stops one.
-- **Tests.** `nix/tests/jobs.nix` boots the guest's jobs with a fake max, no VM inside the test machine: a call's line, its limit, a long output, its input and environment, a background command's notice, one stopped, the notice that waits while max is away, and a call whose caller is gone. `vm-check` starts a background command that greps its own output file, and waits for the guest's notice; the nested test on tank checks both. What `tools` makes of a call's line has tests in Rust.
+- **Everything Max runs in the VM is a unit**, a transient one in the guest's
+  `max-jobs.slice`, started by `maxx units` (`nix/max-jobs.sh`,
+  `nix/jobs.nix`): systemd limits it (`RuntimeMaxSec=`), stops it and sees it
+  end. A unit is a call or a background command from its start, and neither
+  becomes the other. The host says what it wants as one JSON object
+  (`maxx units run '{…}'`), and the flags are the guest image's. One is
+  `--expand-environment=no`, since systemd would otherwise fill in every
+  `${…}` of a command (and make `$$` a `$`) before bash saw it, heredoc quotes
+  or not.
+- **A call** (`maxx units run`) is `shell` without `background`, and
+  `run_code`. The guest starts the unit, waits for its end, and prints one
+  line of JSON: how systemd says it ended (`success`, `exit-code`,
+  `timeout`…) and what it wrote, all of it, or 8 KiB of its head and as much
+  of its tail with the file that has the whole. `tools::wait` reads that
+  line, the last of what came, so whatever a `/work/.bashrc` prints first
+  isn't taken for it. `run_code` is the same with the runner as the command,
+  the program on stdin and its stderr apart. The unit writes its own output,
+  under `/work/.max/out/`, kept only when the output didn't fit.
+- **A call ends with its caller.** max gives `maxx units run` the command's
+  input, as many bytes as `input` says, then holds the channel's input open,
+  silent, for as long as it waits. When that input ends, the caller is gone:
+  `maxx units run` stops the unit, removes what it wrote and prints nothing.
+  So a turn killed during a call stops it by closing the channel (dropping
+  `ssh::Command` hands it to the VM's `closer`, since russh closes nothing on
+  drop), and a call whose max restarted, crashed or lost its connection is
+  stopped by the guest alone. If `maxx units run` itself is killed, its unit
+  ends at its limit and the unit's hook clears up.
+- **A background command** (`maxx units start`): the tool returns the unit's
+  name, `max-job-<start>-<n>`, its limit (6 hours, or `timeout_ms` up to 24)
+  and where its output is written as it runs.
+- **When it ends**, the unit's `ExecStopPost=` (`maxx units ended`) writes
+  how, and starts `max-notify@<unit>.service`, a oneshot that calls `maxx
+  wake` with `[<unit> 完成] $ make`, the exit status and run time, the end of
+  the output (a wake takes 4,000 characters) and the file's path; `到点了，下面是
+  做到一半的` at its limit. With `Restart=on-failure` systemd retries it until
+  max takes it, so a notice isn't lost while max is away, and `systemctl
+  list-units 'max-notify@*'` lists those that wait. Max sees it as
+  `[max-wake] [max-job-… 完成] …`. A unit stopped on request (`systemctl stop`,
+  `/kill`) tells nobody, since whoever asked knows: the hook knows it by
+  systemd's stop job for the unit, still there while the hook runs
+  (`systemctl list-jobs`). One that ends by SIGTERM of its own is told, as
+  `ended by SIGTERM`.
+- **What Max does with them**: `maxx units list` shows what runs and
+  `systemctl stop <unit>` stops one. `/kill` has the guest stop them all (in
+  a task of the actor's `side`), a person's way to stop what runs without
+  asking Max; `/status` doesn't list them.
+- **The VM stays up** while one runs: every minute the VM service asks the
+  guest `maxx units list` and counts those whose kind isn't `unit`; a VM with
+  any is in use and isn't evicted.
+- **A working directory is checked first**, since systemd applies it to the
+  unit's hook too and a unit in a missing directory would end without saying
+  how; `maxx units` refuses it. It needn't be there at the end: the unit has
+  `WorkingDirectory=-…`, so a command that removes its own directory still
+  has its hook run.
+- No limit on how many run at once: the VM's room bounds them. A call not
+  done at its limit is stopped, and Max runs it again with `background`.
+- **The prompt** says a command that will run for minutes should use
+  `background`: a unit whose name comes back at once; in the same output Max
+  tells the group, then stops and waits for `[max-job-… 完成]`; `maxx units
+  list` and `systemctl stop` look at them and stop one.
+- **Tests**: `nix/tests/jobs.nix` boots the guest's jobs with a fake max and
+  no VM: a call's line, its limit, a long output, its input and environment,
+  a background command's notice, one stopped, the notice that waits while
+  max is away, and a call whose caller is gone. `vm-check` starts a background
+  command that greps its own output file and waits for its notice. What
+  `tools` makes of a call's line has Rust tests.
 
 ## Resident programs
 
-Decided 2026-11-01, proposed by the owner. Things that Max needs to keep running (scheduled reminders, checking CI or a web page every few minutes, a listener that stays connected) are not built one kind at a time according to their source (the Haskell version's monitor had four kinds: cron, message matching, external polling and HTTP). Instead, Max is given a general mechanism: it writes ordinary systemd units in the group VM and combines what is already in the sandbox. A `.timer` is cron, a `.path` watches files, and `Restart=` handles crashes.
+What Max needs to keep running (reminders, checking CI or a page every few
+minutes, a listener that stays connected) isn't built kind by kind. Max
+writes ordinary systemd units in its VM: a `.timer` is cron, a `.path`
+watches files, `Restart=` handles crashes. Why this rather than a monitor
+with kinds is in
+[decisions/2026-11-01-resident-programs.md](../decisions/2026-11-01-resident-programs.md).
 
-- **Step 1 (done): units follow `/work`.** The writable layer of the VM's `/` and `/etc` is a tmpfs, rebuilt from the NixOS configuration at every boot; the VM is stopped after 120 idle minutes, when it is evicted, and on every deployment. Unit files are therefore kept in `/work/.max/systemd/`. As with memory, this directory is the registry: there is no table and no tool.
-  - `maxx units apply` (`nix/max-units.sh`) makes the units in this directory the ones that are running: new and changed files are copied to `/run/systemd/system`, and each service gets a drop-in that places it in `max-units.slice`; units with an `[Install]` section are enabled and started for this boot (`enable --runtime --now`); changed units that are running are restarted; units no longer in the directory are stopped and removed. A unit with the same name as a system unit is not installed (the one in `/etc` takes precedence, so installing it would have no effect). Neither is a link (2026-11-07): when maxx starts, it counts only files, since on the host a link could point anywhere. Before this, a unit file that was a link ran and kept the VM on, but after a restart maxx did not boot that VM, so the program quietly stopped. Finally, it says the state of each unit, with the last 10 log lines of any that failed, in one JSON object; until 2026-11-14 it printed lines, and exited non-zero if any had failed. It takes a lock, so the run at boot and a manual run by Max cannot collide.
-  - At boot, `max-units.service` runs once, after `/work` is mounted and the network and nix-daemon are up; when Max changes the directory, it runs `maxx units apply` again itself. Starting never blocks (`--no-block`); it waits at most 5 seconds before reporting status.
-  - `max-units.slice`: `CPUWeight=20` and `IOWeight=20`, so that it yields to commands; `MemoryMax=50%`, so that it cannot use up all the memory.
-  - Hand-written units have no PATH: NixOS units each set their own, and systemd's built-in default does not include `/run/current-system/sw/bin`. The manager's `DefaultEnvironment` is therefore set to the system PATH; an `Environment=PATH=` written in a unit still takes precedence.
-  - **Escape hatch**: with `max.units=off` on the kernel command line, nothing is installed at boot. A broken unit (one that stops sshd, shuts the machine down or uses up all the memory) comes back at every boot, and this is the only way out; the host decides when to add it, see step 2.
-  - Only `/work` and the Nix store survive: whatever a unit runs goes in `/work`, or uses a store path or `nix run`. Programs are restarted on every deployment, so state must be written to files.
-  - **The home directory is `/work`** (decided by the owner 2026-11-05): `DefaultEnvironment` includes `HOME=/work`, and root's home directory in passwd is also changed to `/work`. Before this, systemd did not set `HOME` for units without `User=`, so the `bash -lc` of `shell` and `run_code` started without `$HOME`, and `/etc/profile` built a PATH from entries hanging off `/`, such as `/.nix-profile/bin` and `/.local/state/nix/profile/bin`; and a home of `/root` would also be on tmpfs, so `~/.profile`, `~/.gitconfig`, `gh auth` and the like would be lost at every boot. A separate persistent `/root` was not added: the host reads only `/work` (memory, `send_image`, `send_file`, `max.file`, full output, the unit registry), and with two persistent directories Max would have to remember which of them the host can see; renaming the mount point, in turn, would break every script and unit in which Max has hard-coded `/work`. Max was already using `/work` as its home (group 9's `/work` contains a `.pnpm-store`), and tank's disk still has 11T free, so keeping caches does no harm, and they stay warm for the next boot. Packages installed with `nix profile add` live in `/nix/var/nix/profiles/default`, which is already persistent and on PATH. PATH and environment variables go in `~/.profile`, which `bash -lc` reads every time; if that file is broken, neither `shell` nor `run_code` can run, and the only fix is to delete it on the host. The prompt says so. Units do not read `~/.profile`, so the prompt tells Max to use `Environment=` for them. In groups that already had `/work/.ssh`, `.config` and `.local` when this changed, those take effect from then on.
-  - **Tests**: `vm-check` puts a unit that records the boot id in `/work/.max/systemd` and runs `maxx units apply`. The nested test runs `vm-check` twice: the first time, `maxx units apply` starts the unit; on the second boot, the unit has already been started (it is active before `maxx units apply` runs), and both boots are recorded.
-  - The prompt is added in step 2: with only step 1, the VM still stops as before, so telling Max that its programs are "resident" would be wrong.
-- **Step 2 (done, 2026-11-01): the host side.**
-  - ~~**The host port**~~ (removed 2026-11-02, see step 3): a second hybrid vsock port, 7778, for each VM, taking one line of JSON per connection, `{"wake": "……"}` or `{"units": 2}`, answered with `{"ok": true, "said": "……"}`. Each VM has its own socket, so no token is needed to tell which group is connecting.
-  - **Kept running**: `[vm] kept`, 4 groups by default (tank has 62 GiB; on 2026-11-01 the three running VMs used 0.8, 2.2 and 4.6 GiB, and the page cache makes this grow slowly towards 16 GiB). On tank it has been 12 since 2026-11-03: by then the 4 slots were full (three groups and one private chat), and the owner wanted to invite a few friends to use Max as a personal agent in private chats; since the cache is dropped when idle, a VM that is kept running but idle no longer keeps growing. The prompt does not state the number of slots; when they are full, `maxx units apply` says so. VMs that are kept running are not shut down when idle and are not evicted, and the sweep boots any of them that are not running. Which groups are kept running:
-    - When maxx starts, it reads `<vm.dir>/<conversation>/work/.max/systemd/`; conversations that have unit files (with the same suffixes that `maxx units apply` accepts; links do not count) are taken in order of conversation id, up to the first `kept`, and booted at once. Conversation 0 belongs to `vm-check` and does not count.
-    - `vm-check` uses its own directory, `<vm.dir>/check` (2026-11-03): the VM service it starts also boots, at startup, the conversations that have units in its directory. It used to share the directory with maxx, so on the last slot it would start a second instance of a VM that maxx was already running for some group. The second start first deleted the "leftover" sockets (`store.sock`, `work.sock`, `notify.vsock` and MCP's `notify.vsock_7777`) and then bound its own: virtiofsd failed to start because of its pid-file lock, and cloud-hypervisor did not start either, but the socket files of the running VM had already been replaced, so the guest could no longer reach the host's MCP, and maxx could not open new SSH connections into it. This was hit that same day when `vm-check` was run by hand on tank; restarting the affected VM fixed it.
-    - After that, it follows `maxx units apply`: every time `maxx units apply` runs (at boot and manually by Max), it reports the number of units to the host. If there are any, the VM is kept running (unless the slots are full, which the reply says); with 0, it is no longer kept running. `maxx units apply` gives the reply verbatim, as `said`, so Max can see whether this group's VM will stay running.
-  - **Waking**: `maxx wake '……'` (`max-wake`, `nix/max-wake.sh`, at first, taking an argument or standard input; that name went on 2026-11-14). The VM service hands it to the conversation table as `Signal::Wake`; the conversation table finds this conversation's actor, starting one if none is running (looking up `endpoint_on` and `find_endpoint` for the platform Max is on, as when a message arrives), and sends it `Event::Woken`. In the actor the reason is `Reason::Program`, and the model sees `[max-wake] ……`, truncated to the single-message limit; if a core is running, this becomes its input, otherwise a core is started. The program receives "叫醒了 Max" ("Max has been woken"). The originally planned `[自动化 m#2 触发]` ("automation m#2 triggered") was not used: there is no registry, and therefore no numbers.
-  - **No limit on the count, but the count is shown** (`actor/woken.rs`, changed 2026-11-05): previously each group could wake Max at most 6 times an hour, and any further wakes were held back and delivered together when the hour was up. This limit was removed: Max wanted to play chess with someone move by move on its own, and every move needs a wake. Every wake is a model call, and a malfunctioning program that wakes Max constantly is invisible in the group (Max can answer `[silence]` every time), so from the second wake in an hour onwards, `[max-wake]` is followed by "（这一小时第 N 次）" ("(time N this hour)"). Wakes are not lines in the record, so the next turn cannot see the earlier ones; with this number, every turn knows whether wakes are frequent, and Max can find out for itself which program is responsible. `/status` gains two lines: `units` lists the unit files, and `woken` is the number of wakes in this hour.
-  - **Failing to boot**: each time a group's VM fails to start, or stops by itself while running, this is recorded (whether or not the VM is kept running). After two such events within 30 minutes, the next boot adds `max.units=off`, the group is no longer kept running, and Max is told through `Signal::Notice` (`[VM] ……`, the same path, not rate-limited). Once Max has fixed the problem and run `maxx units apply`, the VM is kept running again. If the VM fails to start even without units, the units are not the cause: it is likewise no longer kept running, and is booted when a tool needs it instead of being retried every minute. The report from the boot-time run of `maxx units apply` does not reset this count: at that point the units have not yet had time to cause trouble.
-  - **Prompt**: the sentence saying that an idle VM is shut down gains "有常驻程序的群除外" ("except in groups with resident programs"). After background commands, a paragraph is added: anything that must keep running, run on a schedule or watch something is written as a unit in `/work/.max/systemd/`, followed by running `max-units`; use `.timer`, `.path` and `Restart=on-failure`; write absolute paths in ExecStart; write state to `/work`; check with `systemctl status` and `journalctl -u`; `max-wake` wakes Max itself, 6 times an hour, and only when there is genuinely something new.
-  - **Tests**: `vm-check` handles `Signal` itself and replies "vm-check 收到了" ("vm-check received it"). The nested test checks that `maxx units apply` says this VM will stay running and that `maxx wake` reached `vm-check`. The conversation table's test: a group in which nobody has spoken and whose actor is not running is woken by `maxx wake`, Max replies, and `[VM]` reaches the same actor. Rate limiting, the kept-running slots and the scan at startup each have pure tests.
-  - Later: webhooks are received by the host and handed to the group's programs through the same port.
+### Units follow /work
 
-* **Step 3 (done, 2026-11-02): programs call tools with `maxx`.** Proposed by the owner: programs do not only wake Max; they can also speak in the group and read the record themselves, using the same set of tools as Max; see `maxx` in [Pure codemode](tools.md#pure-codemode).
-  - **Calls without a token**: when the MCP service receives a request without `authorization`, or since 2026-11-11 with a token that is not open, it treats the request as coming from a resident program in this VM. Which group it belongs to is still determined by the VM's own socket. `tools/list` lists all tools; `tools/call` is handed as `Signal::Call` through the conversation table to this group's actor (starting one if none is running, as with waking), and the actor runs it in `side` with a `Caller::Program` context, outside the core and not counted towards any turn. It has a 60-second timeout, like other calls, and a VM's programs together run at most 64 calls at once (`CALLS_AT_ONCE`, as one run's calls do). When the MCP service stops waiting, because of the timeout or because the program closed its connection, the actor drops the call (2026-11-07). Before this, only the wait was limited: the call went on in `side` after the program had been told it timed out, and nothing limited how many ran at once. Since 2026-11-12 every call takes this path, a turn's too, and the context has only a `Poster`: there is no `Caller::Program`, and no token to send or leave out. Since 2026-11-14 the two are `GET /tools` and `POST /tools/<name>`.
-  - **What is available**: all of Max's tools, plus `say` and `wake`, which exist only for programs (`mcp/program.rs`, now `service/program.rs`), and `max.file` (`maxx file`). The only tools not available are `tools.show` and `tools.video` (they show content to the model, and a program has no model). Originally only `history`, `find_stickers`, `web_search`, `send_image` and `send_file` were provided: `mute_member` and `recall_message` were withheld for fear that they would act on group members without Max's judgement, and `agent` for fear of spending money with nobody watching. On 2026-11-05 the owner decided to provide them all: programs are written by Max, and what they do is Max's decision, for the same reason that muting and retracting are left to Max's judgement. Background agents can still use only the tools marked `job`: a background agent is a different model whose results go back to Max, and it does not speak or act in the group on Max's behalf.
-  - **`say`**: its argument is a piece of text written the way Max writes replies, and it goes through the same segmenter: `[reply#id]`, `[mention#id]`, `[sticker#id.n]`, `[image#id.n]`, `[split]`, and blank lines separating messages. A person in `[mention#id]` must be someone this group knows (`platform::roster`), as with the model's output. There are no structured arguments: a single way of writing, which Max already knows. All of its messages are handed to the actor before any receipt is waited for, so a `say` goes out whole, as Max's own reply does, even after the program has stopped waiting for it (2026-11-07). Until then the messages were sent one at a time, each waiting for the platform's receipt; once the actor came to drop a call that nobody waits for, a `say` given up on partway would have lost the rest. The tool returns `{messages: [id, …]}` once every receipt has arrived; if some messages fail, the reason states which were sent and how many were not.
-  - **Unfilled ids are refused** (2026-11-05): if the text given to `say` contains markers such as `[reply#]`, `[mention#undefined]` or `[reply#${id}]`, outside code, whose id is missing or not a number, nothing is sent, and the error is "编号是空的或者不是数字：程序里的变量没填进去？" ("The id is empty or not a number: was a variable in the program not filled in?"). The segmenter's parser notes them (`Segment::unfilled`), where it turns a `[` that starts no placeholder back into text, so the check agrees with what is sent: inside a code fence or an inline code span such a marker is an example and goes out (2026-11-08, after a review; until then `say` ran a scanner of its own over the raw text, which refused examples in code and judged ids by a list of words: empty, `undefined`, `null`, `NaN`, or beginning with `$` or `{`). These are not markers, and they used to be sent into the group as text: when Max wrote scripts through the shell, the shell swallowed the JS `${…}` into nothing, and three programs in groups 4 and 9 did this (2026-11-02, 2026-11-03 and 2026-11-05). Explanatory text written as `[reply#id]` and the like is sent only in code, `` `[reply#id]` ``: in prose it is refused like any other marker without a number (it was let through until 2026-11-08). Only programs' `say` is checked, not the model's own replies.
-  - **`wake`**: the former `max-wake`, sending `Request::Wake` through `Poster::wake`. `max-wake` remained until 2026-11-14 as a wrapper around `maxx wake` (taking an argument or standard input, and printing `said`), since the units Max had written since 2026-11-01 all used it, and they live in each group's `/work`; it went with the guest's other old names, and what uses it is moved by hand (see "One command" under [Pure codemode](tools.md#pure-codemode)).
-  - **No limits** (decided by the owner 2026-11-05): messages sent by programs used to be capped at 30 per group per hour, to leave headroom within QQ's quota of 20 messages per group per minute and 1000 per day. On 2026-11-04 a gomoku program written by Max sent one board image per move and used up the 30 messages before a single game was finished; Max then worked around the cap by having the program wake Max to send on its behalf once over the limit, which cost more than before the cap existed. The cap was first raised to 200, and the next day it was removed altogether, together with the tools' per-run limits (`per_run`: 5 images for `send_image`, 5 times for `mute_member`, 20 times for `web_search`, and so on). When a program sends too much, it is immediately visible in the group: someone will say so, and Max will stop by itself; QQ's own limit of 20 messages per minute is the backstop. The cost: a runaway loop can use up this group's daily quota within an hour, after which Max cannot speak in this group; and `web_search` is charged per call, so searching in a loop costs money.
-  - **Markers in the record**: lines sent by programs have `raw` set to `{"said_by": "program"}` (Max's other lines have null); no column is added, so no migration is needed. When rendered, the header gains `  程序发的 ` ("sent by a program") (`Mark::Program`): `[12:00 maxx #45 程序发的]: ……`, the same in `history` and in the tail, so Max can tell which lines it said itself and which a program said. A running core does not see these lines (as with command answers); the next core's tail includes them. Since 2026-11-12 what a turn's own tools send (`send_image`, `send_file`, a `say` from its command) carries the mark too, as the host can't tell who in the VM called; the prompt says so, so that Max doesn't take its own picture for someone else's.
-  - **Can also be tried within a turn**: the program-only tools (`say`, `wake`) are treated as program calls even when called with a token, and go to the actor by the same path. A script Max has written can therefore be run once through `shell` first: `say` is not refused, and what it sends is likewise marked as sent by a program. `run_code` has them as `tools.say` and `tools.wake` (since 2026-11-11; before that only through `max.raw`). Background agents calling with a token are still refused.
-  - **7778 removed**: `maxx units apply` now uses `curl` to POST to `http://127.0.0.1:7777/units` (`{"units": 2}`, with the reply unchanged), going through MCP's socat to the same service as `/mcp` (`/tools` since 2026-11-14) and `/llm` (`vm/host.rs` is now this router); waking goes through `maxx wake`. Each VM has one socket and one task fewer. `max-units.service` is ordered after `max-mcp.socket` (`max-host.socket` since 2026-11-14).
-  - **Prompt**: `max-wake` is replaced with `maxx wake`, and a paragraph is added: whatever needs no judgement from Max, a program says itself with `maxx say`, written the same way as replies, up to 200 messages an hour (previously 30), and marked "程序发的" ("sent by a program"); images and files are sent with `maxx send-image` and `send-file`; and the limited set of tools usable in units and background commands.
-  - **Tests**: in the runner tests, `maxx` without a token lists all tools (including `say`, `file`, `mute_member` and `ask`, but not `show` or `video`), and calls are sent as `Signal::Call`, `mute_member` included; `maxx wake` with a token also takes this path. Actor tests: `say` sends two messages and returns the ids only after the receipts have arrived, `raw` carries the marker, and the next core sees `程序发的`. The background command in `vm-check` runs `maxx wake` (without a token), and `vm-check` handles `Signal::Call` and replies "vm-check 收到了" ("vm-check received it"); `maxx units apply` reports the unit count through `/units`.
-* **Step 4 (done, 2026-11-02): `maxx events`.** Decided by the owner. After step 3, a program that wanted to react to messages in the group could only poll `history`: the ping-responder Max wrote in group 9 on 2026-11-02 queried every 2 seconds, about 19 MCP calls a minute, each going through the conversation actor to the database, with rmcp logging 3 info lines every time. It also had to split the rendered lines with regular expressions, which break without any error whenever the format changes.
-  - **Published by the conversation actor**: after each line is entered in the ledger (at `committed`, the same place as the derived-data workers), it is sent into a `broadcast` (256 lines) if anyone is subscribed. A subscription is a `Signal::Subscribe` handed through the conversation table to this group's actor (starting one if none is running, as when programs call tools), and the actor replies with a `Subscription`: the place, the `head` at that moment, and a receiver. The actor processes one event at a time, so everything up to `head` is in the database and everything after it will arrive, with no duplicates and no gaps. When the actor stops (on an error or a restart), the stream ends.
-  - **Route**: `GET /events` on max's service to each VM (`vm/events.rs`), which, like `/units` and `/api`, requires no token; which group it belongs to is determined by the VM's own socket. It responds with `application/x-ndjson`, and the header `max-head` carries the `head` at the time of subscription. `?after=<id>` first backfills from the database the lines after that one up to `head`, at most the latest 1000, read 100 at a time; it then continues with new lines, and nothing before `after` is sent. After 30 seconds without a new line, an empty line is sent as a heartbeat. If the subscriber falls behind by more than 256 lines, if the actor stops, or if the VM's service stops, the stream ends: the program asks again from the last line, and the backfill comes from the database.
-  - **A line**: `{id, at, sender, person, by, reply_to, text}`. `at` is local time in RFC 3339; `person` is the sender's person id, and `[mention#person]` can @ them; `by` is `max` (sent by Max's account) or `program` (sent by a program), and is absent for group members; `reply_to` is the message being replied to; `text` is the same as what follows the colon in a `history` line (`Render::body`), and is not truncated even when very long. Kinds are not distinguished: commands, edits (`[edit#…]`) and retractions (`[unsend#…]`) are included too, as in `history`.
-  - **`maxx events [--after <id>]`** (`events()` in `nix/client.js`): prints each line verbatim as one line of JSON and keeps running. If the connection breaks, an error occurs, or 90 seconds pass without even a heartbeat, it reconnects after 1 second, doubling the delay up to 30 seconds after that, and resumes from the last line it printed; if it has not printed any line yet, it resumes from `max-head`, so nothing that arrived in between is lost. The reason for reconnecting is written to standard error. If the reader goes away (EPIPE), it exits. `--after` accepts both `123` and `#123`.
-  - **Logs**: rmcp's target logs only warn and above, instead of 3 lines per request (since rmcp was removed on 2026-11-03, these logs no longer exist).
-  - **Prompt**: the resident programs paragraph gains: to react to new messages in the group, use `maxx events` rather than polling `history`; the fields of each line; using `by` so as not to reply to itself; reconnecting itself when the stream breaks; and `--after`, with the id written to `/work`, to resume. `events` is added to the list of what can be used in units and background commands.
-  - **Tests**: actor tests: the `head` at subscription is the line last entered in the ledger, after which group members' messages and Max's answers arrive in order, and the stream ends when the actor stops. The conversation table's test: `Signal::Subscribe` reaches the actor started by `maxx wake`. Tests of `vm/events.rs`: lines after `after` are backfilled from the database (`by`, `reply_to`, `person`, `at`), then new ones are received, nothing before `after` is resent, heartbeats are sent, and the stream ends when the actor stops; without `after`, only new lines are sent; other queries get 400; a conversation that does not answer gets 503; when the service stops, the stream ends and does not hold up shutdown. `maxx events` is run with Node against this route: it prints the backfilled and the new lines, reconnects from the last printed line after the stream breaks, the line that arrived in between is backfilled, and the reconnection is reported on standard error.
-  - The polling ping-responder in group 9 is not changed on Max's behalf: it is in the group's `/work` and belongs to Max; after deployment, Max is to be asked to switch it to `maxx events` itself.
-* **Rows as data (2026-11-14).** A program had the timeline only as the text a model reads: `history`'s pages and an event's `text`. What makes that text, which media a row has, whom it mentions, whether it is an edit or an unsend of another row, it had to parse back out. It is the first thing a turn that ran in the guest would need, and it costs the host nothing it doesn't already have.
-  - **`rows`** is a tool of the host's that the prompt doesn't declare, as it doesn't `say` and `wake` (`service/rows.rs`): `tools.rows({after, before, limit})`, `maxx rows`. With `after` it reads on from that row, the first `limit` of them; without, the newest, before `before` if given; 100 by default and 1000 at most. It answers `{rows, people, head}`.
-  - **A row** is the message as max's core has it, `max_core::message::Message` as serde writes it, with `command` and `delivery` from the ledger beside it: `{id, conversation, sender: {identity, name, role}, at, content, turn, raw, command, delivery}`, where `content` is a `message`, an `edit` or an `unsend` and a message's `nodes` are the core's. No second format was designed: what max's projection reads is what a program reads, so a program can do what the projection does. A field that goes or changes its meaning is a change to the contract with the guests; one more isn't. The tool's schema names a row's own fields, and a test holds it to what is written.
-  - **`people`** maps each identity among the rows' senders and those they mention to the person's number, which `[mention#…]` takes and the rendered text shows.
-  - **`maxx events --full`**, `tools.events({full: true})`, `?full=1`: each line also has `row` and `people`, the same two, read from the ledger as the line is written. It is asked for and not always there: a line is three times as long with it, and a program that only reacts to what is said has no use for it.
-  - **Not `history`:** an argument there would be declared in the system prompt, for a turn that should never ask for it.
-- **After `/stop`** (2026-11-08; see [Commands](context.md#commands)): the programs keep running, and what reads still works: `history`, the searches, `/api`, `maxx events`. What would act in the group is refused with `Max is stopped here (/stop), so this wasn't done`: `say`, `send_image`, `send_file` and `recall_message`, as their posts reach the actor; `mute_member`, which goes to QQ by itself and so asks the actor first (`Request::Act`); starting a background agent or command; `ask`, `answer` and `wake`. VM notices are dropped. `/start` lets them through again.
-- **One rule says what is refused** (2026-11-10; `Conversation::refuses`). Each handler used to check for itself whether Max was stopped, shutting down, or the turn over, and they had drifted apart: one checked `/stop` only when the tool's name was `mute_member`. Now an event says what it would do, and one function answers. A request of a turn that isn't running is refused whatever it is (`this turn has ended, so this wasn't done`). After `/stop`, what has Max say or do something is refused. As Max shuts down, what starts work is refused (`Max is restarting, so this wasn't done`); the core that still runs may finish what it says. Looking at the jobs, steering or cancelling one and changing a setting are never refused. What the conversation's actor tells a tool or a program, refusals and errors alike, is in English, as the command replies are (decided by the owner 2026-11-10). So is what the tools say, since the same day: their descriptions and guides in the system prompt, their arguments' descriptions and checks, their results and their failures, `shell`'s and `run_code`'s included; what the guest's own commands print (`maxx` and its help, the runner's errors, `webread`, `max-units`, `max-wake`); and what the VM service, the sender and the search tell a tool that failed. A failure's code follows its message in ASCII brackets now, ` (not_found)`. Still Chinese: the system prompt's own prose, the notices maxx gives Max and their tags (`[agent#3 完成]`, `[ask#5 问]`, which the English guides quote as they are), the marks of the timeline and what stands in for a picture left out, the background agent's own prompt, and what `vm-check` prints for whoever runs it.
-- **One event for what tools ask** (2026-11-10). A tool that needed the conversation's actor had an event of its own (`Jobs`, `Move`, `Configure`, `Ask`, `Answer`, `Woken`), a method on `Poster` that built the same channel, and an arm in the actor; the jobs had a pair of enums whose replies weren't tied to their requests. They are one event, `Event::Request`, whose `Request` has a kind for each thing asked, each with where its own answer goes; `Poster` sends them one way, and `actor/requests.rs` does them after the rule above has let them through. What the model's text, a post and the VM service bring keep their own events: their answers come from elsewhere or not at all.
+The VM's `/` and `/etc` are a tmpfs rebuilt from the NixOS configuration at
+every boot, and a VM stops when idle, evicted or replaced. So unit files live
+in `/work/.max/systemd/`, and that directory is the registry: no table, no
+tool.
+
+- **`maxx units apply`** (`nix/max-units.sh`) makes the units in the
+  directory the ones that run: new and changed files are copied to
+  `/run/systemd/system`, each service gets a drop-in putting it in
+  `max-units.slice`; units with an `[Install]` section are enabled and
+  started for this boot (`enable --runtime --now`); changed running units are
+  restarted; units gone from the directory are stopped and removed. A unit
+  named like a system unit isn't installed (the one in `/etc` would win), nor
+  is a link (the host counts only files, since on the host a link could point
+  anywhere). It answers with each unit's state, the last 10 log lines of any
+  that failed, the files skipped and why, and what it removed, as one JSON
+  object, and whether the VM will be kept on (below). It takes a lock, so the
+  run at boot and Max's can't collide.
+- At boot `max-units.service` runs it once, after `/work`, the network and
+  nix-daemon are up, and after `max-host.socket`; when Max changes the
+  directory, it runs `maxx units apply` itself. Starting never blocks
+  (`--no-block`); it waits at most 5 seconds before reporting.
+- **`max-units.slice`**: `CPUWeight=20` and `IOWeight=20`, yielding to
+  commands; `MemoryMax=50%`.
+- **The environment**: the manager's `DefaultEnvironment` sets the system
+  PATH (systemd's default lacks `/run/current-system/sw/bin`) and
+  `HOME=/work`, and root's home in passwd is `/work` too. A unit's
+  `Environment=` still wins.
+- **The home is `/work`**, the one directory the host reads and the one that
+  survives, so `~/.profile`, `~/.gitconfig`, `gh auth` and caches persist and
+  stay warm. `bash -lc` reads `~/.profile` every time, so a broken one stops
+  `shell` and `run_code` until it is deleted on the host; the prompt says so,
+  and that units don't read it (`Environment=` instead). Packages from `nix
+  profile add` are in `/nix/var/nix/profiles/default`, persistent and on
+  PATH.
+- Only `/work` and the store survive: whatever a unit runs is in `/work`, a
+  store path or `nix run`, and its state is written to files, since programs
+  restart at every deploy's switch or boot.
+- **The escape hatch**: with `max.units=off` on the kernel command line
+  nothing is installed at boot, the only way out of a unit that stops sshd,
+  shuts the machine down or eats the memory, which would come back every boot.
+  The host adds it (below).
+
+### Kept on, woken, failing
+
+- **Kept on**: at most `vm.kept` groups' VMs (4 by default; 12 on tank) are
+  kept running for their units: not stopped when idle, not evicted, and booted
+  by the sweep if down. When max starts it reads each
+  `<vm.dir>/<conversation>/work/.max/systemd/` and keeps, in order of
+  conversation id, up to `kept` of those with unit files (the suffixes `maxx
+  units apply` accepts; links don't count), booting them at once.
+  Conversation 0 is `vm-check`'s, which uses its own directory,
+  `<vm.dir>/check`. After that it follows `maxx units apply`, which POSTs the
+  number of units to `http://127.0.0.1:7777/units` each time it runs: with
+  any, the VM is kept on unless the slots are full; with none, it isn't. The
+  answer comes back as `said`, so Max sees whether its VM will stay up. The
+  prompt doesn't name the number of slots. A kept but idle VM still drops its
+  caches (see [Resources](vm.md#resources)).
+- **Waking**: `maxx wake '…'` is `Request::Wake`, through the conversation
+  table to the actor (started if not running) as `Event::Heard`. The reason
+  is `Reason::Program`, and the model sees `[max-wake] …`, cut to one item's
+  cap; it is input to the running core or starts one. The program is told
+  Max was woken. There is no limit on how often, but from the second wake in
+  an hour the line ends with `（这一小时第 N 次）`, so a turn that didn't see the
+  earlier wakes (they are no rows) still knows, and Max can find which program
+  it is; `/status` shows `woken`.
+- **Failing to boot**: each time a group's VM fails to start or stops by
+  itself, it is counted, kept or not. Twice within 30 minutes and the next
+  boot adds `max.units=off`, the group is no longer kept, and Max is told
+  (`Heard::Vm`, `[VM] …`). Once Max has fixed it and run `maxx units apply`,
+  the VM is kept again. If it fails even without units, they aren't the
+  cause: it isn't kept, and boots when a tool needs it rather than every
+  minute. The boot-time `maxx units apply` doesn't reset the count.
+- **The prompt**: an idle VM stops, except in groups with resident programs;
+  anything that must keep running, run on a schedule or watch something is a
+  unit in `/work/.max/systemd/` followed by `maxx units apply`; `.timer`,
+  `.path` and `Restart=on-failure`; absolute paths in `ExecStart`; state in
+  `/work`; `systemctl status` and `journalctl -u` to check; `maxx wake` only
+  when there is genuinely something new.
+- **Tests**: `vm-check` puts a unit that records the boot id in
+  `/work/.max/systemd` and runs `maxx units apply`; the nested test runs it
+  twice, checking the unit is active before the second boot's apply and both
+  boots are recorded, that `maxx units apply` says the VM stays up, and that
+  `maxx wake` reached `vm-check`. The table's test: a group whose actor isn't
+  running is woken by `maxx wake`, Max answers, and `[VM]` reaches the same
+  actor. The slots and the startup scan have pure tests.
+
+### Programs call tools
+
+Programs use the same tools as Max (see [maxx](tools.md#maxx-one-command-for-everything-in-the-vm)):
+a call is the VM's, whatever made it. Why programs have every tool, and no
+caps, is in
+[decisions/2026-11-05-no-limits-for-programs.md](../decisions/2026-11-05-no-limits-for-programs.md).
+
+- **Every tool**, plus `say` and `wake`, which the prompt doesn't declare
+  (`service/program.rs`). Only `show` and `video` fail outside a call, as
+  nobody is there to see.
+- **`say`** takes text written as Max writes replies, through the same
+  segmenter: `[reply#id]`, `[mention#id]`, `[sticker#id.n]`, `[image#id.n]`,
+  `[split]`, blank lines between messages. A `[mention#id]` must be someone
+  the group knows (`platform::roster`). All its messages are handed to the
+  actor before any receipt is awaited, so a `say` goes out whole even if the
+  program stops waiting. It returns `{messages: [id, …]}` once every receipt
+  is in; if some fail, the reason says which went and how many didn't.
+- **Unfilled ids are refused**: a marker outside code whose id is missing or
+  not a number (`[reply#]`, `[mention#undefined]`, `[reply#${id}]`) sends
+  nothing, with "编号是空的或者不是数字：程序里的变量没填进去？". The segmenter notes them
+  (`Segment::unfilled`) where it turns a `[` that starts no placeholder back
+  into text, so the check agrees with what is sent: in a code fence or inline
+  code such a marker is an example and goes out; explanatory text like
+  `[reply#id]` goes only in code. Only programs' `say` is checked, not the
+  model's own replies. (Shells swallowing JS's `${…}` used to send these into
+  groups as text.)
+- **Marked in the record**: rows a tool sent have `raw` `{"said_by":
+  "program"}`, and render with `程序发的` (`Mark::Program`): `[12:00 maxx #45
+  程序发的]: …`, in `history` and the tail alike, so Max can tell what it said
+  from what a program said. That includes what a turn's own tools send
+  (`send_image`, `send_file`, a command's `say`), since the host can't tell who
+  called; the prompt says so. A running core doesn't see these rows; the next
+  core's tail has them. A script can be tried once through `shell`, and what
+  it sends is marked the same.
+- **The prompt**: what needs no judgement from Max, a program says itself
+  with `maxx say`, written as replies are, marked `程序发的`; pictures and files
+  go with `maxx send-image` and `send-file`.
+- **Tests**: the runner tests list every tool through `maxx` (`say`, `file`,
+  `mute_member` and `ask` among them, not `show` or `video`) and see calls
+  arrive as `Signal::Call`; the actor tests have `say` send two messages and
+  return the ids only after the receipts, with `raw` marked and the next core
+  seeing `程序发的`; vm-check's background command runs `maxx wake`, and
+  `maxx units apply` reports through `/units`.
+
+### Following the chat: maxx events
+
+- **Published by the actor**: after each row is entered (where the workers
+  are notified), it goes into a `broadcast` of 256 if anyone subscribes. A
+  subscription is `Signal::Subscribe` through the table to the actor (started
+  if not running), which answers with a `Subscription`: the place, the `head`
+  at that moment and a receiver. The actor handles one event at a time, so
+  everything up to `head` is in the database and everything after will
+  arrive: no duplicates, no gaps. When the actor stops, the stream ends.
+- **The route**: `GET /events` (`vm/events.rs`) answers
+  `application/x-ndjson`, with `max-head` carrying the head. `?after=<id>`
+  first backfills from the database the rows after it up to `head`, the latest
+  1,000 at most, 100 at a time, then goes on with new rows. After 30 seconds
+  without a row an empty line is sent as a heartbeat. If the subscriber falls
+  256 rows behind, or the actor or the VM's service stops, the stream ends,
+  and the program asks again from its last row.
+- **A line**: `{id, at, sender, person, by, reply_to, text}`. `at` is local
+  RFC 3339; `person` is the sender's person number, which `[mention#person]`
+  takes; `by` is `max` or `program`, absent for members; `text` is what
+  follows the colon in a `history` line (`Render::body`), never cut. Commands,
+  edits (`[edit#…]`) and retractions (`[unsend#…]`) are included, as in
+  `history`. With `--full` (`tools.events({full: true})`, `?full=1`) each line
+  also has `row` and `people`, as `rows` gives them (below), read from the
+  ledger as the line is written; it triples a line's length, so it is asked
+  for.
+- **`maxx events [--after <id>]`** (`events()` in `nix/client.js`) prints each
+  line as one line of JSON and keeps running. If the connection breaks, an
+  error occurs, or 90 seconds pass without even a heartbeat, it reconnects
+  after 1 second, doubling to 30, from the last line it printed, or from
+  `max-head` if it printed none, so nothing in between is lost; the reason goes
+  to stderr. EPIPE exits. `--after` takes `123` or `#123`.
+- **The prompt**: to react to new messages, `maxx events` rather than
+  polling `history`; its fields; `by`, so as not to answer itself;
+  reconnecting when the stream breaks; and `--after` with the id kept in
+  `/work`, to resume.
+- **Tests**: the actor's (the head is the last row entered, then members'
+  messages and Max's answers in order, ending when the actor stops), the
+  table's (`Signal::Subscribe` reaches an actor `maxx wake` started),
+  `vm/events.rs`'s (backfill, new rows, nothing before `after` again,
+  heartbeats, the end, 400 for other queries, 503 for a conversation that
+  doesn't answer, no holding up shutdown), and `maxx events` run with Node
+  against the route, reconnecting from the last line.
+
+### Rows as data
+
+A program also has the timeline as data, not only as the text a model
+reads, so it needn't parse back out what a row's media, mentions and edits
+are.
+
+- **`rows`** is a host tool the prompt doesn't declare (`service/rows.rs`):
+  `tools.rows({after, before, limit})`, `maxx rows`. With `after` it reads on
+  from that row, the first `limit`; without, the newest, before `before` if
+  given; 100 by default, 1,000 at most. It answers `{rows, people, head}`.
+- **A row** is the message as the core has it, `max_core::message::Message`
+  as serde writes it, with `command` and `delivery` from the ledger beside it:
+  `{id, conversation, sender: {identity, name, role}, at, content, turn, raw,
+  command, delivery}`, `content` being a `message`, an `edit` or an `unsend`,
+  and a message's `nodes` the core's. What the projection reads is what a
+  program reads. A field that goes or changes meaning is a change to the
+  contract with the guests; one more isn't. The tool's schema names a row's
+  own fields, and a test holds it to what is written.
+- **`people`** maps each identity among the rows' senders and those they
+  mention to the person's number.
+- It isn't part of `history`, whose arguments are declared in the prompt for
+  turns that should never ask for it.
+
+## What a stopped or stopping conversation refuses
+
+One function answers what an event may do (`Conversation::refuses`):
+
+- A request of a turn that isn't running is refused whatever it is: `this turn
+  has ended, so this wasn't done`.
+- After `/stop`, what would have Max say or do something is refused with `Max
+  is stopped here (/stop), so this wasn't done`: `say`, `send_image`,
+  `send_file` and `recall_message` as their posts reach the actor;
+  `mute_member`, which asks the actor first (`Request::Act`); starting an agent
+  or a background command; `ask`, `answer` and `wake`. VM notices are dropped.
+  What reads still works: `history`, the searches, `/api`, `maxx events`.
+  `/start` lets them through again. See [Commands](context.md#commands).
+- As Max shuts down, what starts work is refused (`Max is restarting, so this
+  wasn't done`); the core still running may finish what it says.
+- Looking, steering and changing a setting are never refused.
+
+Every tool's request of the actor is one event, `Event::Request`, whose
+`Request` has a kind for each thing asked (configure, ask, answer, wake,
+act), each carrying where its answer goes; `actor/requests.rs` does them once
+the rule has let them through.
+
+What the actor tells a tool or program, refusals and errors alike, is in
+English, as are the tools' descriptions, guides, argument descriptions,
+checks, results and failures, what the guest's commands print, and what the
+VM service, the sender and the search tell a failed tool; a failure's code
+follows its message in brackets, ` (not_found)`. Chinese stays in the system
+prompt's own prose, the notices Max is shown and their tags (`[max-agent-3
+完成]`, `[ask#5 问]`, which English guides quote as they are), the timeline's
+marks, what stands in for a picture left out, the agent's own prompt, and what
+`vm-check` prints.
 
 ## Asking another conversation
 
-Decided 2026-11-10, proposed by the owner. All of it is implemented (2026-11-10): the edges and their commands, the question's way from one actor to the other, and the two tools. Conversations are isolated from one another: `history` searches only its own, a VM and its `/work` belong to one conversation, and a job's result goes back to the conversation that started it; only the sticker library is shared. The first thing to connect them: Max in one conversation asks Max in another, which answers by its own rules, with its own memory and its own people at hand. The asker gets the answer and nothing else: it never sees the other conversation's context, memory or files.
+Max in one conversation can ask Max in another, which answers by its own
+rules, with its own memory and people at hand. The asker gets the answer and
+nothing else, never the other conversation's context, memory or files.
+Conversations are otherwise isolated (`history`, the VM and `/work` are each
+one conversation's; only the sticker library is shared). The reasoning behind
+edges and their direction is in
+[decisions/2026-11-10-asking-another-conversation.md](../decisions/2026-11-10-asking-another-conversation.md).
 
-- **Permission is an edge between two conversations**, not something a person holds (decided by the owner). Below a conversation nothing could be enforced anyway: its members share one VM as root, and one context. A person's own permission is their private chat's, a conversation of one.
-- **An edge has a direction.** A→B lets Max in A ask Max in B, and not the other way. What it exposes is B. Anyone in A can have A's Max ask, so the edge lets A's members try to talk B's Max into whatever B's Max can do, the [operations network](vm.md#the-operations-network) included; and the host can't give the answering turn fewer tools, because the core that answers is the one that serves B's own chat. An edge into B is therefore a weaker kind of membership of B, and is made only where that is acceptable.
-- **`/link` makes one**, with a code, as `/bind` does:
-  1. `/link` in A answers with a six-digit code, valid for 10 minutes and held in memory.
-  2. `/link <code>` in B makes A→B. For both directions, it is done twice.
-
-  The side that will be asked redeems the code, because it is the one exposed: A's members see the code, and with it one of them can expose only a conversation in which they may run `/link` themselves. `/unlink c#N` removes the edges between this conversation and that one, in both directions, from either side. All three are for owners only for now (decided by the owner 2026-11-10; to be widened after testing): every question is a turn of the asked conversation's model. `/status` lists whom this conversation may ask, and who may ask it.
-
-  The answers say which way the edge runs, since the two commands look alike:
+- **Permission is an edge between conversations**, not a person's: below a
+  conversation nothing could be enforced, since its members share one VM as
+  root and one context. A person's own permission is their private chat's.
+- **An edge has a direction.** A→B lets Max in A ask Max in B, not the other
+  way, and what it exposes is B: anyone in A can have A's Max ask, so the edge
+  lets A's members try to talk B's Max into whatever B's Max can do, the
+  [operations network](vm.md#the-operations-network) included, and the
+  answering core is the one serving B's own chat, with all its tools. An edge
+  into B is a weaker membership of B, made only where that is acceptable.
+- **`/link` makes one**, with a code, as `/bind` does: `/link` in A answers
+  with a six-digit code, valid 10 minutes and held in memory; `/link <code>`
+  in B makes A→B. The side to be asked redeems the code, since it is the one
+  exposed. Both directions take two links. `/unlink c#N` removes the edges
+  between this conversation and that one, both ways, from either side. All
+  three are owners' only for now, since every question is a turn of the asked
+  conversation's model. The answers say which way an edge runs:
 
   | Command | Answer |
   | --- | --- |
   | `/link` in A | `code issued: 123456 lets Max here ask Max in another conversation, and not the other way`, then `send /link 123456 there (in a group: @maxx /link 123456)` and `valid for 10 minutes, once` |
   | `/link 123456` in B | `linked: Max in c#7 <title> may ask Max here now, and not the other way`, then `@maxx /unlink c#7 removes it`; or `skipped: Max in c#7 <title> may ask Max here already` |
-  | `/link 123456` in A itself | `error: that code was issued here; send it in the conversation Max here is to ask`. The code is looked at before it is used (`Codes::peek`), so this slip doesn't use it up |
-  | a code that is wrong, used or older than 10 minutes | `error: no such code, or it has run out` |
+  | `/link 123456` in A itself | `error: that code was issued here; send it in the conversation Max here is to ask` (the code is looked at before it is used, `Codes::peek`, so the slip doesn't use it up) |
+  | a wrong, used or expired code | `error: no such code, or it has run out` |
   | `/unlink c#7` | `unlinked: Max here and Max in c#7 <title> can't ask each other any more`, or `skipped: no link with c#7` |
-  | `/status` | `may ask   c#9 · c#12` and `asked by  c#7`, each only when there is someone; by number alone since 2026-11-13, when the owner had the titles taken out of `/status` (`/link` and `/unlink` still answer with them) |
+  | `/status` | `may ask   c#9 · c#12` and `asked by  c#7`, each only when there is someone |
 
-  The codes are kept as `/bind`'s are, in a store of their own (`code::Codes`, which both use), so a `/bind` code isn't a `/link` code. A is not told when its code is used: B's actor can't reach A's until the question's way between actors exists; A's `/status` shows the edge.
-- **Stored** in `links` (migration 0027): `asker_id`, `asked_id`, `made_at`, with `(asker_id, asked_id)` as the key. It is mutable, like `conversation_settings`; the commands that changed it are rows of the ledger. No rule derives edges. The first idea, that a person's private chat may ask Max in every group the person is in, can't be derived on QQ: a person's openid differs from group to group, and differs again in private chat (see [The official QQ bot](qq.md#the-official-qq-bot-1)). Such an edge is made by hand like any other.
-- **Names.** A conversation's handle is `c#N`, its id, shown with `conversations.title` when there is one (`links::Peer`). A private chat's title is the other party's name as its first message gave it; QQ gives a private message's author no name, so on QQ such a chat has no title or only the stand-in `某人` (in production on 2026-11-10: 21 without, 4 with the stand-in, none with a name), and is told apart by its number alone. How a private chat should be named is open. A group bound with `/bind` has none, so a group's actor asks QQ's `info` what the group is called once as it starts, and stores the answer as its title (`Conversation::learn_title`; until 2026-11-10 it asked whenever it handled a `/link`, a side effect of a command that had nothing to do with names). The call runs in a task of the actor's side scope, since the actor waits only on the database, and a failure is only logged: the title stays as it was, and a group that never had one shows as its number alone. A group renamed later is known by its new name once Max restarts. A title is a name its people chose, and it goes into what maxx says and what Max is shown, so it is shown on one line, control characters as spaces, and cut at 40 characters.
-- **Tools** (`service/ask.rs`). `ask({ to, question })` returns `{ asked: "c#9 <title>" }` at once, and the answer wakes Max later, if one comes; `to` is the conversation's number, 9 for `c#9`. `answer({ to, text })` answers a question, `to` being the number the question got where it was asked, 5 for `ask#5`, and returns `{ to: "c#7 <title>" }`. (Until 2026-11-12 `ask` returned `{ ask: "ask#3" }`, the asker's own number for the question, which it kept a job for.) Each takes the number alone, not the handle as well (the owner, 2026-11-10: less code). A question or an answer is at most 2,000 characters (`ASK_CHARS`), and a longer one is refused rather than cut. From 2026-11-11 to 2026-11-12 a background agent called both with a session of its own: without `to`, `ask` asked its own Max. Now `to` is always given, an agent asks its Max with `maxx agent ask`, and what it asks another conversation with `maxx ask` is answered to Max (see **Questions** under [Background agents](#background-agents)). A program Max keeps in the VM can call them, as it can every tool of Max's: the answer wakes Max, as a job's report does.
-- **Neither is said in a chat** (the owner, 2026-11-10, on seeing the first version). A question and its answer reach the other side's Max as a wake's item, shown to the model alone, the way a job's report, a `maxx wake` and maxx's own reminders are. They are not rows of the ledger, and nothing goes to QQ. The first version, deployed for a few hours that day, said four lines on Max's account, two in each chat (`asked`, `asks`, `answered`, and `answered` or `didn't answer`): the owner had said to reuse the system-notice mechanism, meaning the notices in the transcript, and it was built with the lines maxx says, as a command's answer is. What Max is shown:
+  `/link` codes are kept apart from `/bind`'s (`code::Codes`). A isn't told
+  when its code is used; its `/status` shows the edge.
+- **Stored** in `links`: `asker_id`, `asked_id`, `made_at`, keyed by the pair.
+  Mutable, like `conversation_settings`; the commands that changed it are rows
+  of the ledger. No rule derives edges: on QQ a person's openid differs per
+  group and in private chat, so even "a person's private chat may ask the
+  groups they're in" can't be derived.
+- **Names**: a conversation's handle is `c#N`, shown with
+  `conversations.title` when there is one (`links::Peer`). A group's actor asks
+  QQ's `info` for the group's name once as it starts, in a `side` task, and
+  stores it as the title (`Conversation::learn_title`); a failure is only
+  logged, and a renamed group is known by its new name after max restarts. A
+  private chat on QQ has no name (see [The official QQ bot](qq.md#inbound)), so
+  it is told apart by its number; how to name one is open. A title is a name
+  its people chose and goes into what Max is shown, so it is one line,
+  control characters as spaces, cut at 40 characters.
+- **Tools** (`service/ask.rs`): `ask({ to, question })` returns
+  `{ asked: "c#9 <title>" }` at once, and the answer wakes Max later;
+  `to` is the conversation's number. `answer({ to, text })` answers question
+  `ask#N` by its number and returns `{ to: "c#7 <title>" }`. A question or
+  answer is at most 2,000 characters (`ASK_CHARS`), and a longer one is
+  refused, not cut. A program in the VM can call both, as any tool; an agent
+  asks its own Max with `maxx agent ask`, and another conversation with `maxx
+  ask`, whose answer wakes Max.
+- **Neither is said in a chat.** A question and its answer reach the other
+  side's Max as a wake's item, shown to the model alone, like an agent's
+  report. Nothing is a row of the ledger or goes to QQ:
 
   | Conversation | When | Item |
   | --- | --- | --- |
   | B | the question arrives | `[ask#5 问] c#7 <title>`, the question, and a line saying to answer with `answer` in this turn, that the asker hears it wasn't answered if the turn ends first, and that neither goes to the chat |
   | A | the answer arrives | `[回答] c#9 <title>`, then `问：` the question again and `答：` the answer |
-  | A | it can't be asked, or B's turn ends or B is stopped before it answers | `[没答成] c#9 <title>：<why>`, then the question |
+  | A | it can't be asked, or B's turn ends or B is stopped before answering | `[没答成] c#9 <title>：<why>`, then the question |
 
-  A's `ask` and B's `answer` are tool calls in their own transcripts and need no item. The answer's item repeats the question because nothing in A kept it, and the core that asked may be gone: the question travels to B and comes back with the answer. The people of either chat see nothing of it unless Max says so, which is Max's to decide. What was asked and answered is in the turns' records (`turns.trigger`, `turn_outcomes.run`), not where `history` and `maxx events` look, and a later core sees none of it but what Max said or noted.
-- **What Max is told besides.** The conversations it may ask are listed in the volatile block after the people, under `[能问的会话]`, a line each as `c#9 <title>`, read from `links` when a core starts; a conversation with no edge out has no such block. So the system prompt stays the same for every conversation, and an edge made while a core runs shows from the next core on (`ask` checks the edge when it is called). Until 2026-11-12 a block `[等你回答的问题]` followed it, a line for each question asked before the core started and not yet answered; a question ends with the core that read it now, so a later core has none to be told of (the owner: the list wasn't needed). The prompt names the block, and the tools' guides say the rest: that the other Max answers by its own rules and sees only the question, that neither goes to a chat, and how an answer or its absence comes back. Nothing says when to ask or what to answer: that is Max's to judge on each side.
-- **The transcript stays append-only.** A question, or an answer, reaches a running core as a wake's item at the end of its input, as a job's report does (`Conversation::wake_with`); with no core running, the wake starts one, with the item among its first inputs. Nothing in a base context or a transcript is rewritten. B's wake has a reason of its own, `asked`, in the turn's record, and A's is `answered` (`job` until 2026-11-12, which is still read).
-- **Nothing waits, and nothing is timed** (2026-11-12, step 5 of [Lifetimes move to systemd](../decisions/2026-11-12-lifetimes-to-systemd.md#lifetimes-move-to-systemd-1)). A keeps nothing of a question it asked: no number, no job, no timer. The question carries who asks and whom, and B's actor keeps it for as long as the core that read it runs: that entry is all that lets B's Max reach A, with one answer to that question. The answer goes back through the conversation table (`Signal::Heard`), which starts A's actor if it isn't running, and wakes A's Max with the question and the answer. When B's core ends with the question still there (its idle window ran out, the turn was killed or failed), B's actor answers for it as it does on `/stop`: A's Max hears `[没答成] c#9 <title>：Max there ended its turn without answering`, and whether to ask again is for A's side to judge (the owner, 2026-11-12: a question that runs out is handled as `/stop` is, with no logic of its own). So the turn is the only time a question has, and no later core needs to be told of it. Until then a question that waited was a job in A's table, `ask#N`, which `status` listed and `cancel` withdrew; it waited 2 hours (`ASK_WAIT`) and then woke A's Max with `[ask#3 没答成]`; B kept it across its cores, listed under `[等你回答的问题]`; and B could decline one with `cancel`. `cancel`, `status`, the job table (`actor/jobs.rs`, `mcp/jobs.rs`) and the handles (`max_core::ids::Handle`) are gone: to say it won't answer, B's Max answers that.
-- **In B**, the question is handed to B's actor by the conversation table, which starts the actor if it isn't running, as it does for a program's `maxx wake`. The actor numbers it (`ask#N`, within the conversation while max runs) and keeps it until `answer` names the number or the core ends (`Conversation::end`, which every ending of a core goes through). An `answer` to a number that isn't kept (answered already, or asked in an earlier turn) is refused, and nothing is sent.
-- **When there is no answer**, A's Max hears why, as `[没答成] c#9 <title>：<why>`, which wakes it as an answer does. B can't be asked: it is stopped (`/stop`), Max is restarting there, or Max serves no chat of B, which the table says; B's Max is not told of such a question. Or B was asked and didn't answer: `/stop` in B, or B's core ended. Only a restart of max is silent: it forgets what B kept, and A's actor isn't there to hear. A conversation A has no edge to and one that doesn't exist are refused alike, so that asking tells nothing about which conversations exist: that, and `/stop` here, are `ask`'s own errors.
-- **Not done**: a chain of origin when B asks C in order to answer A (the host can't tell why B asks, and every edge is one the owner made by hand); files, which can't cross from one `/work` to another; edges that a rule derives; any record in the ledger of what was asked and answered.
-
-In steps, each useful on its own: `info` in `qqbot`, and its pin (done 2026-11-10); `links` and its queries (done); `/link`, `/unlink` and the two lines of `/status` (done); the question's way from one actor to the other (done 2026-11-10: `Signal::Ask` through the conversation table, `actor/asking.rs`; `Signal::Heard` both ways since 2026-11-12; first with four lines said in the two chats, then the same day as items in the two transcripts alone); the two tools, the lists in the volatile block and the prompt (done 2026-11-10).
+  A's `ask` and B's `answer` are tool calls in their own transcripts. The
+  answer's item repeats the question because nothing in A kept it, and the core
+  that asked may be gone. The chats' people see nothing unless Max says so.
+  What was asked and answered is in the turns' records (`turns.trigger`,
+  `turn_outcomes.run`), not where `history` and `maxx events` look.
+- **What Max is told**: the conversations it may ask are listed in the volatile
+  block after the people, under `[能问的会话]`, a line each, read from `links`
+  when a core starts (none, no block), so the system prompt stays the same for
+  every conversation, and an edge made during a core shows from the next
+  (`ask` checks the edge when called). The tools' guides say the rest; when to
+  ask and what to answer is Max's to judge on each side.
+- **The transcript stays append-only**: a question or an answer reaches a
+  running core as a wake's item at the end of its input
+  (`Conversation::wake_with`), or starts a core among its first inputs. B's wake
+  has the reason `asked`, A's `answered`.
+- **Nothing waits and nothing is timed.** A keeps nothing of a question: no
+  number, no job, no timer. The question carries who asks and whom, and B's
+  actor keeps it, numbered `ask#N`, for as long as the core that read it runs
+  (`actor/asking.rs`); that entry is all that lets B's Max reach A, with one
+  answer. The answer goes back through the table (`Signal::Heard`), which starts
+  A's actor if needed and wakes A's Max with the question and the answer. When
+  B's core ends with the question unanswered (idle window, killed, failed),
+  B's actor answers for it as on `/stop`: A hears `[没答成] c#9 <title>：Max there
+  ended its turn without answering`, and whether to ask again is A's to judge.
+  An `answer` to a number not kept (answered, or from an earlier turn) is
+  refused.
+- **No answer**: A hears why, as `[没答成] …`. B can't be asked when it is
+  stopped, Max is restarting there, or Max serves no chat of B (B's Max isn't
+  told of such a question); or B was asked and didn't answer. Only a restart of
+  max is silent: it forgets what B kept. A conversation A has no edge to and one
+  that doesn't exist are refused alike, so asking tells nothing of which exist.
+- **Not done**: a chain of origin when B asks C to answer A; files, which can't
+  cross from one `/work` to another; derived edges; any record in the ledger.
