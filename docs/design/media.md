@@ -1,64 +1,219 @@
 # Media
 
-## Media
+Pictures, stickers, videos, voice messages and files: how they are
+stored, described, shown to the model, sent and read back. The Haskell
+version's lessons are noted with the commits that taught them.
 
-Decided 2026-10-29, and the first thing built after v1 (chosen by the owner). The Haskell version served as a reference; its lessons are noted after the relevant items.
+## Storing
 
-- **Nodes and handles**: on inbound, the download URL of a QQ attachment is written into the node, `Media { media: Some(Remote(url)) }`. The ledger is append-only, so download results are recorded in `message_media` (message, index, sha256). The index is the media item's position within the message, counted from 0; the handle given to the model is `image#<message id>.<index>`, and likewise `video#`, `audio#` and `file#`. In the Haskell version `[image#id]` referred to the message rather than to a particular image, with up to 20 media items per message; only later was it changed to two parts (ADR 004).
-- **Content store**: `/var/lib/maxx/media/objects/<first two characters of sha256>/<sha256>`, with read-only permissions, written to a temporary file first and then renamed; objects that already exist are not written again. It uses the same layout as the Haskell version, so import moves the files across directly. There is no GC.
-- **Download**: a derived-data worker (see [The three roles](../architecture.md#the-three-roles)), triggered by the ledger-entry notification, with at most 4 concurrent downloads, each with a 60-second timeout; for any single item over 64 MiB only the metadata is recorded and nothing is downloaded. Failures are retried twice (after 1 second and 4 seconds) and then abandoned, with only a log entry and no failure table. At startup the worker catches up only on downloads from the last hour that did not complete: QQ URLs expire, and the Haskell version requeued hundreds of expired links on every restart, flooding the logs with warnings for half an hour (9f27fa7). Images, stickers, videos, voice messages and files are all downloaded, since reading files (see [Reading files](#reading-files)) and future tools need them. Anything whose first 16 bytes identify it as an image (PNG, JPEG, GIF, WebP) is read entirely into memory to compute its dimensions and produce the model's copy; everything else is hashed and written to a temporary file in the content store as it downloads, so videos of tens of MiB are never held entirely in memory (2026-11-06).
-- **The model's version**: produced once at download time, with its sha256 recorded in `media`. Images whose long side exceeds 1568 pixels, or whose size exceeds 1 MiB, are re-encoded as JPEG with a long side of 1568; for GIFs the first frame is taken; other images are used as they are. The Haskell version initially sent multi-MB originals, which was pure waste in base64 (0a2addb).
-- **Captions**: configured with `[llm] caption`; if none is configured, nothing is written. This model must be able to see images. Captions are stored in their own `media_captions` table, since `media` belongs to the download worker. Once the download worker has stored an image (with a version for the model), it hands the image over; the startup sweep only fills in images first seen within the last 14 days that have no caption yet. There is one caption per image, keyed by sha256, so a re-sent sticker is not captioned again (975eb59). Each call has a 2-minute timeout, with at most 2 concurrently, and usage is recorded as `caption`. A caption is one or two sentences in Chinese; for a screenshot it says what the screenshot shows and quotes the key text verbatim; it is stored at no more than 300 characters. After two failures the worker gives up, records an empty caption and does not try again. Videos and files are not captioned; voice messages use the recognised text that Tencent provides. Stickers use a separate prompt (added 2026-10-29, carried over from the Haskell version), which says what the sticker is and when it is appropriate, for example "翻白眼的猫，表示无语" ("a cat rolling its eyes, meaning speechless"); anything that does not look like a sticker (private photos, screenshots) is judged SKIP and does not enter the sticker library (see [Sending images](#sending-images)). Each sha256 is captioned only once, with the prompt chosen according to the kind under which it was first seen.
-- **What the model sees**:
-  - The tail contains text only: `[image#123.0: caption]`, or `[image#123.0]` if there is no caption yet. Images in the history are not sent as images: the Haskell version's lesson was that they compete for attention (0ec5752). When a caption arrives, its line changes, and that one cache invalidation is accepted (see [Rules for a stable prefix](context.md#rules-for-a-stable-prefix)).
-  - Attached images: images and stickers in the first batch of input and in the messages it quotes are placed in the volatile block as real image input; images in follow-up input are placed in their `[新消息]` ("new messages") block. Each image follows the line of its message, preceded by its handle; images whose line cannot be found go at the end of the block. An image a trigger quotes is attached even when its message is in the tail, where it is only its caption; it goes at the end of the volatile block. Likewise, when a row fed to a running core quotes a message from before the core started, that message's images follow the row's block (both added 2026-11-08: someone quoted a picture from a few minutes earlier and asked "这是什么" ("what is this"); the picture was in the tail as a caption, and only a picture quoted from beyond the tail was attached). All images seen within a turn are kept, with no cap: the request only grows at the end, so its front keeps hitting the cache, and in the next turn's tail these images are merely `[image#123.0: caption]`. Each image is first estimated at 1,200 tokens, after which the usage reported by the provider is authoritative. Changed 2026-11-04 (decided by the owner): previously all images followed at the end of the block, labelled only with their handles, so when several people had sent images the model had to match handles to lines itself to know who had sent what; previously a run was also limited to 8 images, with any further images kept as text only.
-  - Models that cannot see images are not supported (decided by the owner 2026-10-29): every model Max uses is treated as able to see images; there is no `input` configuration and no text-only fallback. Intent classification reads only text and is unaffected.
-  - To look at an image from the history, a program calls `tools.show({path: 'image#123.0'})` (not yet implemented; it currently accepts only files under `/work`); see [Multimodal results](tools.md#multimodal-results).
-- **In the request**: entries store only references (principle 7). A `User` entry carries an `images` list in which each item identifies "which media item of which message", not a sha256: a message must be displayed as soon as it is entered in the ledger, and at that point the image has usually not finished downloading. Before each model call, `max` looks up `message_media` and `media` to find the model's version, reads it from the content store and hands it to `max-llm`; only when writing the request body does `max-llm` encode the file as a base64 data URL, written directly into the request body without keeping a separate copy (2026-11-05). For Responses it is lowered to `input_image`, and for Chat to `image_url`, each image preceded by a text part giving its handle. An image entered less than 10 seconds earlier that has not finished downloading is waited for, inside the task that calls the model, without blocking the conversation actor; older images, images that cannot be downloaded and images that cannot be read are simply not sent, with only a warning logged, and the handle remains in the text. QQ URLs are not passed on: they expire, and the provider may not be able to reach them.
-- **`/chat`**: the original plan was a read-only mount in the VM of a media view for this conversation, hard-linked into the content store; on 2026-10-29 this was changed to programs copying files into `/work/chat` by handle (see [Reading files](#reading-files)).
+- **Nodes and handles**: inbound, a QQ attachment's download URL is written
+  into its node, `Media { media: Some(Remote(url)) }`. The ledger is
+  append-only, so a download's result is recorded in `message_media`
+  (message, index, sha256). The index is the item's position in the
+  message, from 0, and the model's handle is `image#<message id>.<index>`,
+  likewise `video#`, `audio#` and `file#`. (In the Haskell version
+  `[image#id]` once named the message, which could hold 20 items.)
+- **The content store**: `<media dir>/objects/<first two of sha256>/<sha256>`,
+  read-only, written to a temporary file and renamed; an existing object
+  isn't written again. The Haskell version's layout, so its files moved
+  across as they were. No GC.
+- **Download** (`media/download.rs`): a derived-data worker (see
+  [The three roles](../architecture.md#the-three-roles)), fed by ledger
+  notifications, 4 at a time, each within the HTTP client's 10-second
+  connect and 60-second overall timeouts; an item over `KEPT_FILE_BYTES`
+  (64 MiB) keeps only its metadata. Retries after 1 and 4 seconds, then a
+  log line and no failure table. Its scans look back only an hour, since QQ
+  URLs expire (the Haskell version retried hundreds of dead links on every
+  restart, 9f27fa7). Everything is downloaded, files included, for
+  [Reading files](#reading-files). What its first 16 bytes show to be a
+  picture (PNG, JPEG, GIF, WebP) is read whole, to get its dimensions and
+  make the model's version; anything else is hashed and written to a
+  temporary file as it arrives, so a video of tens of MiB is never held in
+  memory.
+- **The model's version** is made once, at download, and its sha256
+  recorded in `media`: a picture over 1568 pixels on its long edge or over
+  1 MiB becomes a JPEG 1568 on its long edge, a GIF its first frame, and
+  others stay as they are (`media/prepare.rs`). The Haskell version first
+  sent multi-MB originals as base64 (0a2addb).
 
-The work was done in six small steps (steps 4 and 5 were added 2026-10-29):
+## Captions
 
-1. The content store, `media` and `message_media`, and the download worker; inbound nodes carry the URL.
-2. The model's `input`, images in entries, lowering for both protocols, attached images and handles.
-3. The caption worker, with a separate prompt for stickers; import of the old image descriptions and stickers. Went live 2026-10-29: the model is GPT-5.6 Luna via cliproxy, at effort low; the old descriptions were imported before the new maxx started (21,040 images and 3,421 stickers, 94 of them SKIP), and the startup sweep filled in 10 images missed in the last 14 days.
-4. Sending images: qqbot's upload, image sending and the `file_info` cache in the sender, the segmenter keeping handles and their resolution at ledger entry, and `send_image`. Went live 2026-10-29 and tested live in the group: handles written in replies sent a JPEG and a GIF sticker (the GIF animates), and `send_image` sent a PNG drawn in the VM, with a caption.
-5. The sticker library: embeddings and `find_stickers`. Done 2026-10-29; see `max.find_stickers` under [Sending images](#sending-images).
-6. Reading media in the records, and `max.image()`. `max.image()` accepting images under `/work` was done 2026-10-29; `/chat` was replaced by `max.file()`, done the same day (see [Reading files](#reading-files)). Accepting message handles is not yet done for `tools.show` (`max.image()` until 2026-11-14); for now, a file is first copied out with `tools.file` and then its path is passed.
+`[llm] caption` picks the model, which must see pictures; without one,
+nothing is captioned. Captions are in `media_captions`, since `media` is the
+download worker's (`media/caption.rs`).
 
-### Sending images
+- The download worker hands over each picture it stored with a model's
+  version; the startup scan fills in pictures first seen in the last 14 days
+  without a caption. One caption per sha256, so a sticker sent again isn't
+  captioned again (975eb59).
+- 2 minutes a call, 2 at a time, usage recorded as `caption`. A caption is
+  one or two sentences in Chinese; for a screenshot it says what it shows
+  and quotes the key text; at most 300 characters are stored. After a
+  second failure an empty caption is written and the picture isn't tried
+  again.
+- Stickers get their own prompt: what the sticker is and when it fits, such
+  as "翻白眼的猫，表示无语". Anything that doesn't look like a sticker (a
+  private photo, a screenshot) is judged SKIP and stays out of the sticker
+  library. Each sha256 is captioned once, with the prompt of the kind it
+  was first seen as.
+- Videos and files get no caption; voice messages use Tencent's
+  transcription.
 
-Decided 2026-10-29. The feature was removed earlier the same day, and the owner promptly restored it; sharing the sticker library across groups was also the owner's decision. How images are sent on the QQ side, and the live test results, are described under outbound in [The official QQ bot](qq.md#the-official-qq-bot-1).
+## What the model sees
 
-All images Max sends take the same outbound path (see [Outbound](ledger.md#outbound)): each is first entered in the ledger as a message from Max whose node is media pointing into the content store (`Blob(sha256)`), with `message_media` recorded at the same time, and is then handed to the sender. Images Max sends therefore also have handles on the timeline and, like those sent by group members, can be quoted and re-sent.
+- **The tail is text**: `[image#123.0: caption]`, or `[image#123.0]` before
+  the caption arrives. Pictures in the history aren't sent as pictures,
+  since they compete for attention (0ec5752). A caption arriving changes
+  its line, and that one cache miss is accepted (see
+  [Rules for a stable prefix](context.md#rules-for-a-stable-prefix)).
+- **Attached pictures**: pictures and stickers in the first inputs and in
+  the messages they quote go into the volatile block as real images, those
+  in follow-up input into its `[新消息]` block. Each follows its message's
+  line, after its handle; one whose line isn't found goes at the end of the
+  block. A picture a trigger quotes is attached even when its message is in
+  the tail, at the end of the volatile block; likewise a row fed to a
+  running core that quotes a message from before the core started brings
+  that message's pictures after its block (so "这是什么" about a picture
+  from a few minutes ago sees the picture, not only its caption). Every
+  picture seen in a turn is kept, with no cap: the request grows only at
+  the end, so its front keeps hitting the cache, and the next turn's tail
+  has them as captions. Each is estimated at 1,200 tokens until the
+  provider's usage says otherwise.
+- **Every model Max uses must see pictures**: there is no text-only
+  fallback. Intent reads only text and isn't affected.
+- **In the request**, entries store references (principle 7): a `User`
+  entry's `images` names which item of which message, not a sha256, since a
+  message is shown as soon as it is entered, usually before its picture has
+  downloaded. Before each model call `max` looks up `message_media` and
+  `media` for the model's version, reads it from the content store and
+  hands it to `max-llm`, which encodes it as a base64 data URL straight into
+  the request body, keeping no other copy: `input_image` for Responses,
+  `image_url` for Chat, each after a text part with its handle. A picture
+  entered less than 10 seconds ago and still downloading is waited for,
+  within the model call's task; older ones, and those that can't be
+  downloaded or read, are left out with a warning, their handle staying in
+  the text. QQ's URLs are never passed on: they expire, and the provider may
+  not reach them.
+- To look at a picture from the records, a program copies it out with
+  `tools.file` and shows it with `tools.show`; see
+  [Multimodal results](tools.md#multimodal-results).
 
-- **Handles in replies**: when the model writes `[sticker#123.0]` or `[image#123.0]` in a reply, that image is sent. This is the main way stickers are sent: a sticker is part of what is being said, its position must line up with the text, and it saves a tool call. The segmenter cuts a handle out into a message of its own, and the text before and after it in the same segment each becomes a separate message, in the order written; a `: description` copied from the display form is removed. When entering the message in the ledger, the conversation actor looks the handle up in `message_media`, as it does for `[reply#id]` (see [Resolution and sending](identity.md#resolution-and-sending)): images and stickers from this conversation can all be sent; from other conversations only stickers can be sent, since images do not leave their conversation. The kind is determined by the kind of the node in that message. Handles that cannot be found, whose media has not been downloaded, or that are not permitted are dropped, and a warn is logged.
-- **`max.send_image({ path, caption? })`**: sends images produced in the VM, such as charts, screenshots and images downloaded from the web. The file is read on the host from this group's `/work` without following symlinks, so it cannot escape `/work`. Only PNG, JPEG and GIF are accepted, judged by file header; WebP is converted to PNG; the maximum size is 10 MiB. The image is stored in the content store, written to `media` and entered in the ledger via `Post` (with `origin`); once the sender reports back, the new message's handle is returned. `caption` is the text shown below the image, in the same message as the image. At most 5 calls per run. It has side effects and is not available to background jobs.
-- **`max.find_stickers({ query, limit? })`**: semantic search over the sticker library; it only searches and does not send, returning `{ stickers: { handle, description }[] }`, with `limit` from 1 to 10, default 5; the model picks one and writes its handle into the reply. The library consists of all stickers seen in any conversation (node kind sticker), deduplicated by sha256, the handle being that of the most recent message in which the sticker appeared as a sticker, in any conversation. Stickers whose caption was judged SKIP or is empty are excluded, as are those captioned with the image prompt (because they were first seen as an image). The search runs over vectors of the descriptions, with the embedding shared with `history`. Done 2026-10-29:
-  - The model is the Haskell version's bge-m3 (1024 dimensions), served in production by Ollama on h610, to which tank connects (tested from tank on 2026-10-29: it returns normalised 1024-dimension vectors, and the old database's vectors match what it computes, at distance 0). Configuration `[embedding]`: `base_url` (OpenAI-compatible, ending in `/v1`), `model`, and an optional `api_key_file`. If it is not configured, there is no embedding worker and `find_stickers` returns `unavailable`. The dimension follows the table and is not a configuration option: a vector from the model whose length is not 1024 is treated as an error.
-  - Vectors are stored in `caption_embeddings`, one row per file, recording the model; searches compare only against vectors from the current model.
-  - Embedding worker: whenever the caption worker writes a sticker caption (not SKIP and not empty), it hands it to this worker; at startup and hourly thereafter the worker sweeps for captions without a vector from the current model, so changing the model recomputes everything. One file is one unit of work, with 2 concurrently and 30 seconds per request; failures are retried twice (after 10 seconds and 60 seconds) and then abandoned until the next sweep. Packet loss between tank and h610 in the evenings receives no further remedy. Usage is not recorded in `llm_usage`.
-  - Vectors for the old stickers are imported with `max-import vectors` (see [Import](ledger.md#import)).
-  - Query: the query is turned into a vector and the nearest stickers are taken by cosine distance; on failure `unavailable` is returned, without retry. There is no distance threshold (the Haskell version used 0.65): on 2026-10-29 a dozen or so queries were tried against the 3,328 vectors in the old database, and the distances of relevant and irrelevant results overlapped (relevant ones mostly at 0.31–0.45; the nearest result for "吃瓜看戏" ("eating melon and watching the show", i.e. watching drama unfold from the sidelines) was at 0.45, while even the nearest for "今天天气怎么样" ("how's the weather today") was at 0.44). No threshold separates them, so the model is left to choose by reading the descriptions.
-- **Sender**: it uploads the file to obtain `file_info` (directly in base64 up to 5 MiB, in chunks beyond that; see [The official QQ bot](qq.md#the-official-qq-bot-1)), then sends `msg_type = 7`; only `send_image` carries `content`, files do not. `file_info` is cached in memory by (endpoint, sha256, filename) and invalidated an hour before it expires, so re-sending the same sticker within a day needs no new upload; the cache is lost on restart, and files are uploaded again. qqbot reads the file from the content store as it uploads it (since 2026-11-08): its digests a MiB at a time, then each part as it is put, so a file of hundreds of MiB is never held whole. Each chat has one queue, so what Max says after a big file waits until the file is up; other groups don't wait. Upload failures are recorded in `deliveries` like any other send failure. Each image counts as one proactive message against the group's quota.
-- **Prompt**: stickers are for occasional use, at most one per answer, and not to accompany every sentence; if nothing suitable is in the records, Max uses `find_stickers` to find one.
+## Sending images
 
-### Sending files
+Every picture Max sends takes the outbound path (see
+[Outbound](ledger.md#outbound)): entered as a message of Max's whose node is
+media in the content store (`Blob(sha256)`), with its `message_media`, then
+handed to the sender. So Max's pictures have handles on the timeline too,
+and can be quoted and sent again like anyone's. How QQ uploads and sends
+them is in [The official QQ bot](qq.md#outbound).
 
-Added 2026-10-29 (requested by the owner). How files are uploaded on the QQ side, and the live test results, are described under outbound in [The official QQ bot](qq.md#the-official-qq-bot-1).
+- **Handles in replies**: a `[sticker#123.0]` or `[image#123.0]` the model
+  writes sends that picture. This is how stickers are mostly sent: a sticker
+  is part of what is said, its place has to line up with the text, and it
+  saves a tool call. The segmenter cuts the handle into a message of its
+  own, the text before and after becoming messages of their own in order,
+  and drops a `: description` copied from the display form. Entering it,
+  the actor looks the handle up in `message_media`, as it checks
+  `[reply#id]` (see [Resolution and sending](identity.md#resolution-and-sending)):
+  this conversation's pictures and stickers can all be sent, other
+  conversations' stickers only, since pictures don't leave their
+  conversation; the kind is the node's in that message. A handle not found,
+  not downloaded or not allowed is dropped, with a warning.
+- **`send_image({ path, caption? })`** sends a picture made or fetched in
+  the VM: a chart, a screenshot, a download. It is read on the host from
+  the group's `/work` without following symlinks (see
+  [Reading files](#reading-files)), PNG, JPEG or GIF by their header, WebP
+  turned into PNG, at most 10 MiB (`PICTURE_BYTES`). It is stored, written
+  to `media`, entered with a `Post`, and once the sender reports back, its
+  handle is returned. `caption` is text under the picture, in the same
+  message.
+- **`find_stickers({ query, limit? })`** searches the sticker library by
+  meaning and sends nothing: `{ stickers: { handle, description }[] }`,
+  `limit` 1 to 10, 5 by default; the model picks one and writes its handle.
+  The library is every sticker seen in any conversation (node kind sticker),
+  by sha256, its handle the latest message where it appeared as a sticker.
+  Stickers captioned SKIP or empty are left out, as are those captioned with
+  the picture prompt (first seen as a picture).
+  - The embedding model is bge-m3 (1024 dimensions), served by Ollama on
+    h610. `[embedding]` has `base_url` (OpenAI-compatible, ending in
+    `/v1`), `model` and an optional `api_key_file`; without it there is no
+    embedding worker and `find_stickers` answers `unavailable`. The
+    dimension is the table's, not an option: a vector of another length is
+    an error.
+  - The vectors are in `caption_embeddings`, one per file with its model,
+    and searches compare the current model's only.
+  - **The embedding worker** (`media/stickers.rs`) gets each sticker
+    caption the caption worker writes (not SKIP, not empty), and at startup
+    and hourly sweeps for captions without a vector from the current model,
+    so a change of model recomputes everything. A file is a unit, 2 at a
+    time, 30 seconds a request, retried after 10 and 60 seconds, then left
+    for the next sweep. Its usage isn't recorded.
+  - A query becomes a vector and the nearest stickers by cosine distance
+    come back; a failure answers `unavailable`, without retry. There is no
+    distance threshold: relevant and irrelevant results overlap (relevant
+    ones mostly at 0.31 to 0.45, while the nearest for "今天天气怎么样" was at
+    0.44), so the model chooses by reading the descriptions.
+- **The sender** uploads for a `file_info` (base64 up to 5 MiB, in parts
+  past it) and sends `msg_type = 7`; only `send_image` carries `content`.
+  `file_info` is cached in memory by (endpoint, sha256, file name) until an
+  hour before it expires, so a sticker sent again within a day isn't
+  uploaded again; a restart loses the cache. `qqbot` reads the file from the
+  content store as it uploads: digests a MiB at a time, then each part as it
+  is put, so a file of hundreds of MiB is never held whole. A chat has one
+  queue, so what Max says after a big file waits for it; other groups don't.
+  A failed upload is a failed delivery. Each picture counts as one proactive
+  message against the group's quota.
+- **The prompt**: stickers are occasional, at most one an answer; when
+  nothing fitting is in the records, `find_stickers` finds one.
 
-- **`max.send_file({ path, name? })`**: sends files from the VM, such as generated documents, spreadsheets, PDFs and archives. Like `send_image`, it reads the file on the host from this group's `/work` without following symlinks. Empty files are not sent. The maximum size is 200 MiB (`SENT_FILE_BYTES`; 64 MiB, the download limit, until 2026-11-08, when the owner chose 200 MiB to start with; QQ is said to take up to 5 GB). The file is copied into the content store as it is read, a MiB at a time, so it is never held whole either. On 2026-10-29 uploading 32 MiB from tank took 14 seconds, so a file of 200 MiB takes a minute or two, more than a call's default 60 seconds (`call_time_secs`); the tool therefore doesn't wait for QQ. `name` is the filename shown in the group, defaulting to the one in the path; leading and trailing whitespace is stripped, it must not contain `/`, `\` or control characters, and it is limited to 100 characters. The file is stored in the content store, written to `media` (without recording a mime type) and entered in the ledger via `Post` (`Act::Queue`) as a message from Max whose node is named file media (`DraftNode::File`); as soon as it is entered, `file#id.0` is returned, while the sender uploads it in its turn. If it doesn't go out, the records mark it "（没发出去）", as they do any message of Max's. At most 5 per run. It has side effects and is not available to background jobs.
-- **Sender**: uploads the file by name as `file_type = 4`; the message carries no `content`.
-- Files already in the records cannot be re-sent by writing their handle, because the segmenter recognises only image and sticker handles. To re-send one, Max first copies it into `/work` with `max.file` and then uses `send_file` (see [Reading files](#reading-files)); this will be reconsidered if it turns out to be used often.
-- Files can be sent in private chats as well: on 2026-10-29 a txt file was sent to the owner's private chat using qqbot's `send` example, and it arrived.
+## Sending files
 
-### Reading files
+- **`send_file({ path, name? })`** sends a file from the VM: a document, a
+  spreadsheet, a PDF, an archive. Read like `send_image`'s, from `/work`
+  without following symlinks; empty files aren't sent; at most
+  `SENT_FILE_BYTES` (200 MiB), copied into the content store a MiB at a time.
+  An upload of that size takes a minute or two, longer than a call's 60
+  seconds, so the tool doesn't wait for QQ: the file is entered with a
+  `Post` of `Act::Queue` as a message of Max's whose node is named file media
+  (`DraftNode::File`), `file#id.0` is returned as soon as it is entered, and
+  the sender uploads it in its turn; if it doesn't go out, the records mark
+  it `（没发出去）` like any message. `name` is the name shown in the group,
+  the path's by default, trimmed, without `/`, `\` or control characters, at
+  most 100 characters.
+- The sender uploads it by name as `file_type = 4`, with no `content`.
+- A file in the records can't be sent again by writing its handle, since
+  the segmenter knows only picture and sticker handles: Max copies it into
+  `/work` with `file` and sends it with `send_file`.
+- Files go to private chats too.
 
-Added 2026-10-29 (requested by the owner). The original plan was a read-only `/chat` mount in the VM, hard-linked into the content store. This was changed to copying on demand, which needs no additional virtiofsd and no changes to the guest. Hard links also had a pitfall: the guest's root is `maxx` on virtiofs, so if the view were mounted writable, the guest could chmod and rewrite the same inode in the content store.
+## Reading files
 
-- **`file({ handle })`** (`service/chat_file.rs`): one of Max's tools since 2026-11-12, declared in the prompt as the others are, `tools.file` in a program and `maxx file` in a command. Until then it was `max.file(handle)`, a request of the runner's own that wasn't a tool, and it has no alias under that name (the owner). The host looks up the handle in `message_media`. The handle is written as `file#123.0`; the form `[file#123.0: name]` shown in the records is also accepted, as are handles of images, stickers, videos and voice messages. Only media from this conversation that have been downloaded (up to 64 MiB) are accepted; they are copied to `/work/chat/`, and `{ path, name, size }` is returned.
-  - Files that have a filename are named `<message id>.<index>-<filename>`: since the filename was chosen by a group member, `/`, `\` and control characters are replaced with `_`, and at most 150 bytes are kept.
-  - Others are named `<message id>.<index>.<extension>`, with the extension derived from the mime type: `image/jpeg` gives `jpg`, short subtypes are used as they are, and in other cases no extension is added.
-- **Writing into /work**: the guest can place symlinks in `/work`, and the host must not follow them when writing. The host opens `/work` without following links, creates or opens `chat`, writes a temporary file inside it, and then renames it into place. If `chat` is a link, or the target is a directory, `bad_path` is reported; if the target location was previously a link, it is the link itself that gets replaced. Fetching the same file again copies it again.
-- **All host access to /work goes through one place** (2026-10-30, found in review): `max::service::work` reads, writes and creates directories, creating and opening directories one path component at a time and following links at no component. The full output of `run_code` and `shell` (`.max/out`), job reports (`.max/jobs`) and the dreamer also go through it. Previously the first two used the ordinary file API, so if the guest replaced `/work/.max/out` with a link, the host would write output outside `/work` as the maxx user. Full output is written while the run proceeds, and only to newly created files: if anything already exists under that name (a link included), nothing is written.
-- No cleanup: `/work/chat` holds ordinary files, and programs delete them themselves.
+Programs copy media from the records into `/work` on demand; nothing of
+the content store is mounted in the VM (a writable hard-linked view would
+let the guest, root on virtiofs as `maxx`, chmod and rewrite the store's own
+inodes).
+
+- **`file({ handle })`** (`service/chat_file.rs`; `tools.file` in a
+  program, `maxx file` in a command): the host looks up the handle in
+  `message_media`. It takes `file#123.0`, the display form
+  `[file#123.0: name]`, and handles of pictures, stickers, videos and voice
+  messages. Only this conversation's media that has been downloaded (up to
+  64 MiB) is accepted; it is copied to `/work/chat/` and
+  `{ path, name, size }` returned.
+  - A file with a name is `<message id>.<index>-<name>`, the name (chosen by
+    a group member) with `/`, `\` and control characters replaced by `_` and
+    cut to 150 bytes.
+  - Others are `<message id>.<index>.<extension>`, the extension from the
+    MIME type (`image/jpeg` gives `jpg`, short subtypes are used as they
+    are, otherwise none).
+- **All host access to `/work` goes through one place**, `max::service::work`:
+  it reads, writes and makes directories one path component at a time,
+  following a link at no component, so a link the guest places can't send
+  the host outside `/work`. It writes a temporary file and renames it into
+  place; a `chat` that is a link, or a target that is a directory, is
+  `bad_path`; a link at the target is itself replaced. The full output of
+  `run_code` and `shell` (`.max/out`), the memory file and the dreamer go
+  through it too, and full output is written only to new files: if anything
+  already has that name, a link included, nothing is written.
+- No cleanup: `/work/chat` holds ordinary files, which programs delete
+  themselves.
