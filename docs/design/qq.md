@@ -1,55 +1,288 @@
 # The official QQ bot
 
-## The official QQ bot
+Max is on QQ through Tencent's official bot API (the QQ Open Platform,
+individually verified; the bot is named maxx), with the protocol in
+[qqbot](https://github.com/HCHogan/qqbot) and the mapping to Max's types in
+`crates/max/src/qq`. Why not NapCat and OneBot, and how sending settled on
+what it is, is in
+[decisions/2026-10-28-official-qq-bot.md](../decisions/2026-10-28-official-qq-bot.md).
+"Tested" below means tried in the test group; the rest is from QQ's
+documentation.
 
-Decided 2026-10-28: QQ moves to Tencent's official bot API (the QQ Open Platform, with individual verification; the bot is named maxx), and NapCat and OneBot are no longer used. The original QQ account was banned by Tencent that day. With the official API, a ban falls on the bot rather than on an account, and there is no longer any need to maintain NapCat and QR-code login. Old messages are imported as before; see [Import](ledger.md#import). What follows are the results of reading the documentation and testing with the credentials on 2026-10-28; items marked "tested live" were to be verified in the test group once the adapter could send and receive.
+The configuration is `[platforms.qq]`: `app_id_file` and
+`app_secret_file`. The AppID isn't a secret, but it identifies the bot, so
+like group ids it stays out of the repository.
 
-- **Connection**: the AppID and AppSecret are exchanged for an access token (`bots.qq.com/app/getAppAccessToken`, valid for about two hours; a new token can be obtained only during the old token's last minute, and the old one stays valid for one more minute, so the token is exchanged 50 seconds before expiry). REST goes to `api.bot.qq.com` (the new domain since 2026-08; the old `api.sgroup.qq.com` still works), and calls carry `Authorization: QQBot <token>`. Some errors return 200, so the `err_code` in the body is checked. Events arrive over a WebSocket gateway to which Max connects outward, so tank needs no public ingress. The gateway works the same way as Discord's: Hello gives the heartbeat interval, Identify carries the token and intents, and after a disconnect the session id and the last sequence number are used to Resume; 1500 new sessions can be created per day. Webhooks are not used: they require a public HTTPS ingress and are mutually exclusive with the WebSocket. Tested live on 2026-10-29: `qqbot`'s `listen` example connected to the gateway from the Mac, Identify received READY, and heartbeats worked normally.
-- **Resume across restarts** (decided 2026-10-29): at shutdown, the gateway's session id and last sequence number are stored in the database, and at startup they are used first to Resume rather than to create a new session, so that messages sent in groups during the few seconds of a restart are redelivered by the server. A new session does not redeliver (one message was lost in testing). Tested live (2026-10-29): stops of both 2 minutes and 10 minutes resumed successfully, and all messages from the interval were redelivered; longer stops were not tested. Beyond the window, only a new session is possible, and the messages of that interval are lost. Implementation (2026-10-29): `qqbot` sends events into an unbounded channel, so when the connection's future is dropped, there are no events that have been counted in the sequence number but not yet delivered. Therefore, after intake stops, the events remaining in the channel are read, and the sequence number in `Session::resumable` is exactly where to continue. Redelivered messages may duplicate ones already entered in the ledger before the stop; the actor drops those already entered, by platform id. Neither splitting out a resident platform process nor adding a queue such as Redis for this purpose is worth it: the only thing a separate process would buy is an unbroken connection, and Resume achieves the same.
-- **Which groups**: a bot owned by an individual can be added only by its creator, and only to groups in which the creator is the group owner or an administrator. Decided 2026-10-28: the bot joins only such groups, and the group owner must turn on two switches in the group settings:
-  - "接收群内全部消息" ("receive all messages in the group"): all messages arrive as `GROUP_MESSAGE_CREATE`, including those that @ Max; whether a message is an @ is seen in `mentions`. Without this switch, only @s are received.
-  - "机器人主动发言" ("bot may speak proactively"): Max can send at any time. All of Max's messages are proactive messages, so without this switch it cannot send a single one; QQ returns 40034105 "主动消息失败, 无权限" ("proactive message failed, no permission") (tested live).
-- **Private chat**: for now, a bot owned by an individual can chat privately only with the trial users added under "开发设置" ("Development settings") in the management console (tested live). That list is the private-chat allowlist; QQ does not use `private_file`. Private chat also sends only proactive messages; the quota has not yet been tested.
-- **Identity**: there are no QQ numbers or group numbers, only openids assigned per bot. A group is a `group_openid`; a group member is a `member_openid`, which differs for the same person from group to group; a private chat is a `user_openid`, which is different again. So on QQ an identity is one person in one group, or one private-chat partner. Recognising people across groups was never planned, and memory is isolated per conversation as well; the cross-group `union_openid` requires a separate application, which will not be made. Only the owner needs to be recognised, and `/bind` handles that.
-- **Endpoints**: `native_id` is `group:<group_openid>` or `c2c:<user_openid>`. The old database's QQ endpoints and accounts are imported as a separate platform, `qq_legacy`, because the numbers on the two sides are not in the same namespace; `qq_legacy` has no adapter.
-- **`/bind`**: a new group starts out unbound; its messages are dropped and no conversation is created, just as for groups not on the list (see step 1 of [Processing flow](actor.md#processing-flow)). Binding takes two steps:
-  1. The owner sends Max `/bind <old group number>` in private chat, or `/bind` without a group number (to open a new conversation). Max replies with a 6-digit code, valid for 10 minutes.
-  2. The owner sends `/bind <code>` in the new group. This group's endpoint is attached to the conversation of the old group number (the conversation that holds the `qq_legacy` endpoint), and the timeline continues on from the old messages. At the same time, the sender's identity in this group is merged into the owner's principal (by setting `merged_into`), so that the owner is recognised in this group from then on.
+## Connection
 
-  The code is held in memory and becomes invalid on restart. A group is bound only once; rebinding is not supported. In an unbound group, `@Max /bind <code>` is the only command recognised; a wrong code is dropped and only logged, because there is no endpoint to reply through. The `/bind` that succeeds is handed by the conversation table to the actor (`Event::Bound`), entered in the ledger as usual, and answered with "绑好了" ("bound"); it is not executed as a command. A stretch of old records can be joined to only one group (decided 2026-10-29): a conversation can have only one endpoint served by an adapter, otherwise two actors would write the same timeline. This is therefore checked once when the code is issued and again when it is used (for the case where two codes have been issued for the same old group). In the owners file, only the private-chat `user_openid` is listed for QQ; it is taken from the `c2c:` endpoint in the database after the owner first chats privately with Max.
-- **Inbound**:
-  - Group messages and private messages share one message type, in which `group_openid` is nullable (2026-10-29); a group event missing `group_openid` counts as malformed and logs a warning. Other events (joining or leaving a group, switching proactive messages on or off, and so on) are not entered in the ledger; only the event name and raw content are logged at info level.
-  - Sender: `username` is the QQ nickname, not the group card (tested live 2026-10-29), and the group card is not available. Yet the QQ client shows the group card in quotes and @s, so the name Max calls people by may differ from what is seen in the group. Decided 2026-10-29: this is accepted, and only the nickname is used. `member_role` is owner, admin or member. In a private chat the sender has no name at all, and QQ offers no way to one (looked into 2026-11-10): the documentation gives the author only `user_openid`; the payloads do carry `username` and `union_openid`, both empty in all 113 private messages from 10-29 to 11-10; and no path asks about a user as `info` asks about a group, `/v2/users/{user_openid}`, the same with `/info`, `/bot_state` or `/profile`, and `/users/{user_openid}` all answering 404 "不支持的调用" (11001, err_code 40011002). `union_openid` and `union_user_account` are filled only for a bot tied to a QQ 互联 application, which is applied for through the platform's staff; not tried. Of the 5 private chats on the official API, one's person is known by a name elsewhere: the owner, whose group accounts `/bind` merged.
-  - @: written in the body as `<@member_openid>`, and also present in `mentions`, where the entry for Max carries `is_you: true`. With all messages enabled, messages that @ Max also arrive as `GROUP_MESSAGE_CREATE` (tested live).
-  - Quotes: the quoting message's `message_type` is 103, the quoted message is in `msg_elements` (the original text, the quote index and the quoted message's attachments, a picture with its file name among them; it carries no author), and the quote index is also in `ref_msg_idx` in `message_scene.ext`. When the quoted message itself quotes another or holds a forward, `content` is not its text but a dump (seen 2026-11-08, 255 of 2,236 quotes): `=== 消息 1 ===`, its text after `[消息内容]` ("message content"), `[消息类型] 引用消息` ("message type: quote"), its files on `[附件N] 类型:图片 文件名:… URL:…` ("attachment N type: picture file name: …") lines, then what it quotes, indented, after `[关联消息]` ("related messages"). The adapter keeps the quoted message's own text, without mentions or faces, and its files' names; of a dump, only its own lines.
-  - Media: images, voice messages and files are in `attachments`, with download URLs; voice messages also come with a converted wav and Tencent's transcription. Tested live: images carry width, height and size; files have `content_type` `file` and carry the filename, as do videos sent as files; native videos are `video/mp4` with width, height and size but no duration or cover; voice messages are `.amr`. All of these URLs can be downloaded without authentication.
-  - QQ emoticons (tested live): written in the body as `<faceType=1,faceId="306",ext="<base64>">`; `ext` decodes to `{"text":"牛气冲天"}`, so the name comes with it and no lookup table is needed. `faceType=3` is a super emoticon; `6` is a saved sticker, whose name is empty and whose image is in `attachments`. The model sees `[face: name]`.
-  - Merged forwards (tested live): `message_type = 102`; the body is a text transcript assembled by QQ, each entry with its content and the sender's nickname, and there are no structured sub-messages. Images in the forward are also written into the text, with filename, dimensions, size and download URL.
-  - Cards (tested live): `message_type = 3`; `ark_data` holds the title, source and preview image, and the body is a text summary. Mini-program cards such as those of Bilibili and Zhihu do not carry the original link, so Max sees only the title.
-  - A message has two ids: the event's `id`, used for passive replies and retraction, and `msg_idx`, used for quoting. `native_id` stores the former. For messages Max sends, the send API returns `id` and `ext_info.ref_idx`. Tested live (2026-10-29): when a user's message is quoted, `ref_msg_idx` matched the original message's `msg_idx` exactly; when one of Max's messages is quoted, the quote index is also stable but differs from the `ref_idx` obtained at send time, and both can be used for quoting. That held only about half the time (found 2026-11-08): of the 289 picture quotes whose picture could be found by its file name, 151 named it by an index other than the one it came with, at any delay and whoever quoted; 586 text quotes and all 255 dumps went unresolved too, so Max saw no quote at all. An index is 96 bytes in 16-byte blocks: the last three are the same for the whole group, the second and third appear to follow the sender, and only the first is the message's, and that is the block that differed. So a quote is looked up first by the stored `msg_idx` (`messages.quote_id`, indexed) or a delivery's `ref_idx`; failing that, among the conversation's latest 1,000 rows, the newest first: by a picture's or file's name (`meta.name`, QQ's hash of the file), then by text, the first 16 characters of what is left once brackets, whitespace and `⏎` are removed, contained in a row's text. On 2026-11-08's ledger the text lookup chose the row the index named in 1,584 of 1,615 quotes, and an older row with the same text in 15; 99% of quotes go back fewer than 540 rows. Until then only Max's latest 50 rows were searched by text, so a quote of someone else's message was found only by index. When Max itself quotes, it uses the stored `ref_idx` or `msg_idx`.
-  - The gateway does not push the bot's own messages, so there is no echo to drop.
+- The AppID and AppSecret are exchanged for an access token
+  (`bots.qq.com/app/getAppAccessToken`, valid about two hours; a new one
+  can be had only in the old one's last minute, and the old one stays valid
+  a minute more, so it is exchanged 50 seconds before expiry). REST goes to
+  `api.bot.qq.com` (the old `api.sgroup.qq.com` still works) with
+  `Authorization: QQBot <token>`. Some errors come back as 200, so the
+  body's `err_code` is checked.
+- Events arrive over a WebSocket gateway that Max connects out to, so the
+  host needs no public ingress (webhooks would, and exclude the
+  WebSocket). It works like Discord's: Hello gives the heartbeat interval,
+  Identify carries the token and intents, and after a disconnect the session
+  id and the last sequence number Resume it; 1,500 new sessions a day.
+- **Resume across restarts**: at shutdown the session id and last sequence
+  number are stored in the database, and at startup Max resumes rather than
+  starting a new session, so what was said during a restart is delivered
+  again (a new session delivers nothing missed). Stops of 2 and 10 minutes
+  resumed with everything delivered (tested); beyond the window only a new
+  session is possible, and what was said meanwhile is lost. `qqbot` sends
+  events into an unbounded channel, so a dropped connection future leaves
+  no event counted in the sequence number but undelivered: after intake
+  stops, the events left in the channel are read, and
+  `Session::resumable`'s sequence number is exactly where to continue. A
+  message delivered again that was already entered is dropped by the actor,
+  by platform id. A separate resident process or a queue such as Redis would
+  buy only an unbroken connection, which Resume already gives.
+- The gateway session is a pure state machine (heartbeat, Resume,
+  reconnection, each close code), tested without I/O; its driver is tested
+  against a local WebSocket server.
 
-* **Outbound**:
-  - Everything is a proactive message (decided 2026-10-29): no passive replies are sent, on the assumption that every group Max is in has "机器人主动发言" ("bot may speak proactively") turned on. Originally passive replies took priority: if the message being replied to had been sent less than 5 minutes earlier and had not yet received 5 replies, a passive reply was sent carrying its `id` and an incrementing `msg_seq`; otherwise a proactive message was sent (tested live: the 6th reply returned 40034128; the 5 minutes count from the message's own send time, and counting a message redelivered after downtime from the time it was received leads to 40034005 "回复消息msg_id已过期" ("reply message msg_id has expired")). In a test group without proactive speaking enabled, the 6th segment of an answer could not be sent. Passive replies require counting the window and the number of replies, and they duplicate the premise that all groups enable proactive speaking, so they were removed.
-  - Quotas: proactive messages are limited to 60 per minute for the whole bot, and to 20 per minute and 1000 per day for each group. The sender queues per group and waits when over the limit; nothing is dropped.
-  - Format: plain text, or native Markdown (`msg_type = 2`, open to both group and private chats since 2026-04-23, with no template application required). Tested live 2026-10-29: headings, bold, italic, strikethrough, inline code, nested lists, ordered lists, block quotes, code blocks (with syntax highlighting and a copy button) and tables all render, and `<` and `&` need no escaping. A single newline breaks the line, and two trailing spaces add an extra blank line; a space after bold text is swallowed. LaTeX `$…$`, `\(…\)`, `$$…$$` and `math` code blocks render; `\[…\]` does not, so it is converted to `$$…$$` before sending. Markdown links and bare links are both clickable; URLs in plain text were not rejected either and are equally clickable (the 40054010 mentioned in the documentation was not encountered). Images in Markdown are shown only from QQ's own domains; images from other sites appear broken. The length limit has not been tested yet. Decided 2026-10-29: always send Markdown, which saves deciding between the two, and fall back to plain text when Markdown is rejected. Changed 2026-10-30 (found in review): a message counts as rejected, and is resent as plain text, only when QQ explicitly returns an error or no connection was made at all. If the request went out and then timed out, or the response could not be parsed, the platform may already have accepted it, so it is not resent: the message is recorded as `unknown`, the model sees "（可能没发出去）" ("(may not have been sent)"), and a waiting tool is told that it is unknown whether the message was sent. Previously every error led to a plain-text resend, and the message was finally recorded as failed regardless, which could send two copies.
-  - @: `<qqbot-at-user id="<member_openid>" />`, which in testing is displayed in Markdown as @ followed by the group card.
-  - Emoticons (tested live): they cannot be sent; both `<faceType=…>` and `<emoji:id>` are displayed literally. Decided 2026-10-29: Max does not send emoticons; see [How replies are written](ledger.md#how-replies-are-written).
-  - Quotes: `message_reference.message_id` is set to the quoted message's `msg_idx` or `ref_idx`; this works in testing.
-  - Retraction: `DELETE /v2/groups/{group_openid}/messages/{id}`, and for private chat `/v2/users/{user_openid}/messages/{id}`; success returns 200 with no body. According to the documentation (updated 2026-08): no message, whoever sent it, can be retracted more than 2 minutes after it was sent (40064004); when the bot is a group administrator, it can retract its own messages and those of ordinary members (for members' messages, using the event's `id`); when it is not an administrator, it can retract only its own, and otherwise gets 40062003 "无操作权限" ("no permission for this operation"); 50065001 means retry later. In private chat, only the bot's own messages can be retracted. Tested live (2026-10-29, in the test group, with maxx as an ordinary member): sending a message and retracting it immediately succeeded; retracting the same id again also returned success; a made-up id returned 40061001 "请求参数无效" ("invalid request parameter"). Messages older than 2 minutes and other people's messages were not tested.
-  - **`recall_message({ id })`** (implemented 2026-10-29): Max's tool for retracting one message in this group by `#id`; whether to retract is left to Max's judgement, as in the Haskell version. Each segment of a reply is already one line and one QQ message with its own `#id`, so one id retracts only one message, and a whole reply has to be retracted segment by segment, unlike the Haskell version, where one id retracted several messages. Whatever QQ would certainly refuse is refused on the host first, with the reason explained, and is not entered in the ledger: messages older than 2 minutes (for Max's, counted from the delivery receipt time; for other people's, from the message time), messages from the group owner and administrators (judged from the identity snapshot in the message, which rarely changes within 2 minutes), other people's messages in private chat, Max's messages that were not sent or whose sending is uncertain, and messages already retracted. Whether Max is an administrator would require a separate query to QQ (`bot_state`; see group management below), which is not made here: other people's messages are retracted anyway, and if QQ refuses, the reason is passed back to the program. A retraction is entered in the ledger via `Post` as one of Max's unsend rows, carrying the turn. The sender retracts in ledger order, so retracting something Max has just said is also queued behind the sending of that message. On success, `deliveries` records sent, and on refusal, failed; in the projection that row reads `[unsend#id]（没发出去）` ("(not sent)"). At most 10 per run.
-  - Media must first be uploaded to obtain a `file_info`, and then sent with `msg_type = 7`. In testing, base64 can be uploaded directly, and a `file_info` is valid for one day; `content` is the caption text below the image, in the same message as the image. Tested live 2026-10-29: GIFs can be sent and are animated, even one of 134 frames and 1.9 MB; `content` can be omitted, in which case the group sees only the image, just like a sticker sent by group members; the `raw_url` returned by the upload is empty, so the image cannot be embedded in Markdown. For how this is used, see [Sending images](media.md#sending-images) and [Sending files](media.md#sending-files).
-  - Sending files (`file_type = 4`, tested live 2026-10-29): the upload must carry `file_name`, and the group shows a file with that name, which can be downloaded; both txt and PDF files have been sent. The test group at first returned 50015014 "系统繁忙" ("system busy"); only `upload_prepare` revealed the reason, 40093003 "群文件超过上限" ("group files over limit"): that group's group files were full, and the same request went through in another group.
-  - Size: a direct base64 upload of 6 MiB goes through, and 8 MiB returns 850012, so the sender switches to chunked upload above 5 MiB, for both images and files. Chunked upload: `upload_prepare` carries `file_type`, `file_name`, `file_size`, `md5`, `sha1` and `md5_10m` (the MD5 of the first 10,002,432 bytes), and returns 850012 if a digest is missing. It returns an `upload_id`, a `block_size`, and for each part its `index` (counted from 1), a presigned URL and its `block_size` (all as strings). Each part is PUT to its URL, followed by `upload_part_finish` reporting the `upload_id`, `part_index`, `block_size` and the part's MD5; finally, `upload_id`, `file_type` and `file_name` are sent to `files`, which returns the `file_info`. Files are uploaded in 10 MiB parts, and an image as a single part. Uploading the same file again does not get an "instant upload"; it goes through the whole process again. A 12 MiB file and a 9 MiB PNG were both uploaded, and a 5.5 MiB txt was sent into the group in parts.
-  - Platform moderation: content that violates the rules is rejected (40034006) and recorded as a failure in `deliveries`. A banned bot "暂不支持解封" ("cannot be unbanned for now").
+## Groups and private chats
 
-- **Not available**: reactions, nudges, edits, group cards and sending emoticons. No "someone retracted a message" event has been found either, so other people's retractions are not visible on the timeline. The group management API is covered in the next item.
-- **Group management**: these APIs were added on 2026-08-10 and 2026-09-03. The following are the results of reading the documentation and testing in the test group on 2026-10-29; muting was tested after the owner made maxx an administrator of the test group that day, and everything else was tested while maxx was still an ordinary member. All paths are under `/v2/groups/{group_openid}/`.
-  - Usable without being an administrator, tested live: `info` (group name, introduction, category, tags, member count) and `bot_state` (maxx's `member_openid` in this group, its join time, its role owner/admin/member, whether proactive messages are enabled, and whether it receives all messages or only @s). The documentation says these two are allowlist-only, but in testing maxx could get both. 30 calls per minute each. `info` was tried again on 2026-11-10 for every group maxx serves, and answered each time: `group_openid`, `group_name`, `group_finger_memo` (the introduction, empty if none), `group_class_text`, `group_tags` and `group_member_num`. `qqbot` has it as `Client::info` since that day, and a group takes its title from it; see [Asking another conversation](jobs.md#asking-another-conversation).
-  - Requiring maxx to be a group administrator: muting with `POST restrict_chat_setting`, whose body is `members: [{op, member_openid, mute_expire_at}]`. `op` is add, update or del; the expiry time is in RFC3339, at most 30 days ahead; at most 20 people per call. add and update work only on ordinary members, and del with an empty string lifts the mute immediately. `GET restrict_chat_setting` returns the whole-group mute rules and the people currently muted. There are also the join request list `join_request_list` and the approval `approval_join_request/{member_openid}`, and the join request event `GROUP_JOIN_REQUEST` is likewise received only by administrators; and there is `<qqbot-at-everyone />` for @everyone (added 2026-10-26), once per group per day. Tested live: none of these return 11253; with maxx not an administrator, querying mutes, querying join requests and a del on an ordinary member who was not muted all returned 11703 "机器人不是群管理员" ("the bot is not a group administrator") (err_code 40011030).
-  - Muting tested live (maxx an administrator, `bot_state` returning `member_role: admin`, on an ordinary member): an add with an expiry time 60 seconds ahead in `+08:00` returned 200 and `{}`; an immediate `GET` showed the person, with an expiry 1 second earlier than the one given; a del with an empty string returned 200 and `{}`, and a further `GET` showed no one. An add with an empty-string expiry returned 40103009 "请求参数mute_expire_at无效" ("request parameter mute_expire_at is invalid"); a del on someone who was not muted returned 200. Not tested: update, add on someone already muted, muting the group owner or an administrator, and more than 30 days.
-  - Allowlist-only (the documentation says "内邀接入中", "invitation-only access in progress"): the member list `members`, a single member `members/{member_openid}`, batch removal `batch_remove_members` (optionally blacklisting at the same time), and querying and editing the blacklist `member_blacklist`. In testing, the member list and the single member returned 11253 "应用无接口访问权限" ("the application has no access to this API") (err_code 40012010): maxx is not on the allowlist, so it cannot get the openids of people who have not spoken.
-  - Events: `GROUP_MEMBER_ADD` and `GROUP_MEMBER_REMOVE` (intent `GROUP_MEMBER_EVENT`, `1<<24`), carrying only `member_openid`, with no nickname.
-  - **`mute_member({ member, seconds })`** (implemented 2026-10-29): Max's tool for muting or unmuting a person in this group. Whether to mute and for how long is left to Max's judgement, and after muting, Max briefly says so in the group. `member` is the number from `[mention#N]`; the `member_openid` is found from the account with which this person most recently spoke in this group, so a person who has not spoken in this group cannot be found and cannot be muted. A `seconds` of 0 unmutes (del), and the maximum is 2592000 seconds (30 days). For a nonzero value, the tool first does a `GET` to see whether the person is currently muted, and uses update if so and add if not, with the expiry written in `+08:00`. Whatever QQ would certainly refuse is refused on the host first: private chats, Max itself, and the group owner and administrators (judged from the identity snapshot in the person's latest message). Whether Max is an administrator is not queried; if QQ refuses (40011030), the reason is reported as it is. The tool goes through neither the actor nor the sender and is not entered in the ledger: a mute is not a message on the timeline, and there is nothing it needs to be ordered against in what Max says. Muting twice does no harm, so when it is unknown whether a mute succeeded, simply muting again is enough. The tool calls the QQ client directly (`qq::groups`, which also asks what a group is called) and leaves only a log line; the next core can learn whom Max muted only from what Max said in the group. At most 5 per run.
+- **Which groups**: an individual's bot can be added only by its creator,
+  only to groups where the creator is owner or administrator. The group
+  owner turns on two switches in the group's settings:
+  - "接收群内全部消息": every message arrives as `GROUP_MESSAGE_CREATE`,
+    those that @ Max included (whether one does shows in `mentions`).
+    Without it only @s arrive.
+  - "机器人主动发言": Max may send at any time. Every message Max sends is
+    proactive, so without it Max can't send at all; QQ answers 40034105
+    "主动消息失败, 无权限" (tested).
+- **Private chats**: an individual's bot can chat privately only with the
+  trial users added under "开发设置" in the management console (tested).
+  That list is the private-chat allowlist.
+- **Identity**: no QQ numbers or group numbers, only openids per bot. A
+  group is a `group_openid`; a member is a `member_openid`, different for
+  the same person in each group; a private chat is a `user_openid`,
+  different again. So on QQ an identity is one person in one group, or one
+  private-chat partner. People aren't recognised across groups (memory is
+  per conversation too); `union_openid` needs a separate application, which
+  isn't made. Only the owner needs recognising, and `/bind` does it.
+- **Endpoints**: `native_id` is `group:<group_openid>` or
+  `c2c:<user_openid>`. The Haskell version's QQ endpoints and accounts are
+  the platform `qq_legacy`, which has no adapter: openids and QQ numbers
+  aren't one namespace.
+- **`/bind`**: a new group is unbound; its messages are dropped and no
+  conversation is created (step 1 of the
+  [Processing flow](actor.md#processing-flow)). Binding takes two steps:
+  1. The owner sends Max `/bind <old group number>` in a private chat, or
+     `/bind` alone for a new conversation. Max answers with a 6-digit code,
+     valid for 10 minutes.
+  2. The owner sends `@maxx /bind <code>` in the new group. Its endpoint
+     joins the old group's conversation (the one holding the `qq_legacy`
+     endpoint), so the timeline continues from the old messages, and the
+     sender's identity in the group is merged into the owner's principal
+     (`merged_into`), so the owner is known there from then on.
 
-The configuration is in `[platforms.qq]`: `app_id_file`, `app_secret_file`. The AppID is not a secret, but it identifies this bot, so, like group numbers, it stays out of the repository.
+  The code is held in memory and lost on restart. A group is bound once.
+  In an unbound group `@maxx /bind <code>` is the only command recognised;
+  a wrong code is dropped and logged, there being no endpoint to answer
+  through. The `/bind` that succeeds goes from the conversation table to
+  the actor as `Event::Bound`, is entered as usual and answered with
+  `绑好了`. A stretch of old records joins one group only: a conversation may
+  have one endpoint with an adapter, or two actors would write one
+  timeline, so this is checked when the code is issued and again when it is
+  used. The owners file lists only the owner's private `user_openid` for
+  QQ, taken from the `c2c:` endpoint after the owner first writes to Max.
+
+## Inbound
+
+- Group and private messages share one message type, with `group_openid`
+  nullable; a group event without one is malformed and logged. Other events
+  (joining or leaving, switching proactive messages, …) aren't entered;
+  their name and content are logged at info.
+- **Sender**: `username` is the QQ nickname, not the group card (tested),
+  and the group card isn't available, though the QQ client shows group
+  cards in quotes and @s; so the name Max uses may differ from the one seen
+  in the group, which is accepted. `member_role` is owner, admin or member.
+  In a private chat the sender has no name and QQ offers no way to one: the
+  documented author is only `user_openid`; the payloads' `username` and
+  `union_openid` were empty in every private message seen; and every path
+  that might describe a user (`/v2/users/{user_openid}`, with `/info`,
+  `/bot_state` or `/profile`, and `/users/{user_openid}`) answers 404
+  "不支持的调用" (11001, err_code 40011002). `union_openid` is filled only for
+  a bot tied to a QQ 互联 application, applied for through the platform's
+  staff; not tried.
+- **@**: written in the body as `<@member_openid>`, and in `mentions`, where
+  Max's entry has `is_you: true`.
+- **Quotes**: the quoting message's `message_type` is 103; the quoted
+  message is in `msg_elements` (its text, its quote index and its
+  attachments, a picture with its file name; no author), and the quote index
+  is also `ref_msg_idx` in `message_scene.ext`. When the quoted message
+  itself quotes or holds a forward, `content` is a dump instead of its text
+  (about one quote in nine): `=== 消息 1 ===`, its text after `[消息内容]`,
+  `[消息类型] 引用消息`, its files on `[附件N] 类型:图片 文件名:… URL:…` lines,
+  then what it quotes, indented, after `[关联消息]`. The adapter keeps the
+  quoted message's own text, without mentions or faces, and its files'
+  names; of a dump, only its own lines.
+- **Finding what a quote quotes**: a message has two ids, the event's `id`
+  (for retraction; `native_id`) and `msg_idx` (for quoting); for what Max
+  sends, the send API returns `id` and `ext_info.ref_idx`. A quote's index
+  is 96 bytes in 16-byte blocks: the last three are the group's, the second
+  and third seem to follow the sender, and only the first is the message's,
+  and that first block often differs from the one the message came with (in
+  about half of picture quotes, at any delay and whoever quoted). So a quote
+  is looked up first by the stored `msg_idx` (`messages.quote_id`, indexed)
+  or a delivery's `ref_idx`; failing that, among the conversation's latest
+  1,000 rows, newest first: by a picture's or file's name (`meta.name`, QQ's
+  hash of the file), then by text, the first 16 characters of what is left
+  once brackets, whitespace and `⏎` are removed, contained in a row's text.
+  The text lookup picked the row the index named in 1,584 of 1,615 quotes,
+  and an older row with the same text in 15; 99% of quotes go back fewer
+  than 540 rows. When Max quotes, it uses the stored `ref_idx` or
+  `msg_idx`.
+- **Media**: pictures, voice messages and files are in `attachments`, with
+  download URLs that need no authentication; voice messages also come as a
+  converted wav with Tencent's transcription (tested: pictures carry width,
+  height and size; files have `content_type` `file` and a file name, as do
+  videos sent as files; native videos are `video/mp4` with width, height
+  and size but no duration or cover; voice messages are `.amr`).
+- **QQ emoticons** (tested): `<faceType=1,faceId="306",ext="<base64>">` in
+  the body, whose `ext` decodes to `{"text":"牛气冲天"}`, so the name comes
+  with it. `faceType=3` is a super emoticon; `6` is a saved sticker, with no
+  name and its picture in `attachments`. The model sees `[face: name]`.
+- **Merged forwards** (tested): `message_type = 102`; the body is a text
+  transcript QQ assembles, each entry with its content and sender's
+  nickname, and no structured sub-messages. Pictures in it are written into
+  the text with file name, dimensions, size and URL.
+- **Cards** (tested): `message_type = 3`; `ark_data` holds the title, source
+  and preview picture, and the body a text summary. Mini-program cards
+  (Bilibili, Zhihu) don't carry the original link, so Max sees the title.
+- The gateway doesn't push the bot's own messages, so there is no echo.
+
+## Outbound
+
+- **Every message is proactive**: no passive replies, as every group Max is
+  in has "机器人主动发言" on.
+- **Quotas**: proactive messages are limited to 60 a minute for the bot, and
+  20 a minute and 1,000 a day per group. The sender queues per group and
+  waits when over; nothing is dropped.
+- **Format**: always native Markdown (`msg_type = 2`, in groups and private
+  chats, no template needed), falling back to plain text when QQ rejects
+  it. Tested: headings, bold, italic, strikethrough, inline code, nested and
+  ordered lists, block quotes, code blocks (highlighted, with a copy button)
+  and tables render, and `<` and `&` need no escaping. A single newline
+  breaks the line; two trailing spaces add a blank line; a space after bold
+  is swallowed. LaTeX `$…$`, `\(…\)`, `$$…$$` and `math` code blocks render;
+  `\[…\]` doesn't, so it is turned into `$$…$$`. Markdown links, bare links
+  and URLs in plain text are all clickable. Pictures in Markdown show only
+  from QQ's own domains. The length limit hasn't been tested.
+- **Rejected or unknown**: a message counts as rejected, and is sent again
+  as plain text, only when QQ answers with an error or no connection was
+  made. If the request went out and then timed out, or the answer can't be
+  parsed, QQ may have accepted it: the message is recorded `unknown`, the
+  model sees `（可能没发出去）`, and a waiting tool is told it isn't known
+  whether it went out. Never two copies.
+- **@**: `<qqbot-at-user id="<member_openid>" />`, shown in Markdown as @
+  and the group card.
+- **Emoticons** can't be sent: `<faceType=…>` and `<emoji:id>` show
+  literally (tested). See [How replies are written](ledger.md#how-replies-are-written).
+- **Quotes**: `message_reference.message_id` is the quoted message's
+  `msg_idx` or `ref_idx` (tested).
+- **Retraction**: `DELETE /v2/groups/{group_openid}/messages/{id}`, or
+  `/v2/users/{user_openid}/messages/{id}` in a private chat; 200 with no
+  body. By the documentation: no message, whoever sent it, can be retracted
+  more than 2 minutes after it was sent (40064004); as a group
+  administrator the bot can retract its own messages and ordinary members'
+  (by the event's `id`), otherwise only its own (40062003 "无操作权限");
+  50065001 means try later; in a private chat only its own. Tested as an
+  ordinary member: retracting a fresh message works, retracting it again
+  also answers success, and a made-up id gives 40061001 "请求参数无效".
+- **Media** is first uploaded for a `file_info`, then sent with
+  `msg_type = 7`. Base64 can be uploaded directly, and a `file_info` lasts a
+  day; `content` is a caption under the picture, in the same message, and
+  may be left out, so the group sees only the picture, as with a member's
+  sticker. GIFs are sent animated (134 frames and 1.9 MB tested). The
+  upload's `raw_url` is empty, so a picture can't be put in Markdown. See
+  [Sending images](media.md#sending-images) and [Sending files](media.md#sending-files).
+- **Files** (`file_type = 4`, tested): the upload needs `file_name`, which
+  the group shows on a downloadable file. A group whose group files are full
+  answers 50015014 "系统繁忙"; only `upload_prepare` gives the reason,
+  40093003 "群文件超过上限".
+- **Size**: a direct base64 upload of 6 MiB works and 8 MiB answers 850012,
+  so past 5 MiB the sender uploads in parts, pictures and files alike:
+  `upload_prepare` with `file_type`, `file_name`, `file_size`, `md5`, `sha1`
+  and `md5_10m` (the MD5 of the first 10,002,432 bytes; 850012 if a digest is
+  missing) returns an `upload_id`, a `block_size` and each part's `index`
+  (from 1), presigned URL and `block_size`, all strings. Each part is PUT to
+  its URL and reported with `upload_part_finish` (`upload_id`,
+  `part_index`, `block_size`, the part's MD5); then `upload_id`,
+  `file_type` and `file_name` go to `files`, which returns the `file_info`.
+  Files go in 10 MiB parts, a picture as one. Uploading the same file again
+  goes through the whole process again.
+- **Moderation**: content QQ rejects (40034006) is a failed delivery. A
+  banned bot "暂不支持解封".
+
+## Group management
+
+All paths under `/v2/groups/{group_openid}/`.
+
+- **Without being an administrator** (tested): `info` (name, introduction
+  `group_finger_memo`, category `group_class_text`, `group_tags`, member
+  count `group_member_num`) and `bot_state` (maxx's `member_openid` here,
+  when it joined, its role, whether proactive messages are on, whether it
+  gets every message or only @s), 30 calls a minute each; the documentation
+  says both are allowlist-only, yet both answer. A group takes its title from
+  `info` (`qqbot`'s `Client::info`).
+- **As an administrator**: muting, `POST restrict_chat_setting` with
+  `members: [{op, member_openid, mute_expire_at}]`: `op` is add, update or
+  del; the expiry is RFC3339, at most 30 days ahead; at most 20 people a
+  call; add and update work only on ordinary members, and del with an empty
+  expiry lifts a mute at once. `GET restrict_chat_setting` returns the
+  group-wide rules and who is muted. Also the join requests
+  (`join_request_list`, `approval_join_request/{member_openid}`, the event
+  `GROUP_JOIN_REQUEST`) and `<qqbot-at-everyone />`, once per group a day.
+  Without the role these answer 11703 "机器人不是群管理员" (err_code 40011030).
+  Tested as an administrator on an ordinary member: an add 60 seconds ahead
+  in `+08:00` answers 200 and `{}`, a `GET` shows the person (expiring a
+  second earlier than given), a del with an empty string answers 200 and
+  `{}`, and an add with an empty expiry answers 40103009; a del on someone
+  not muted answers 200. Not tested: update, add on someone muted, the
+  owner or an administrator, more than 30 days.
+- **Allowlist-only** ("内邀接入中"): the member list `members`, a member
+  `members/{member_openid}`, `batch_remove_members` and `member_blacklist`.
+  They answer 11253 "应用无接口访问权限" (err_code 40012010), so Max can't
+  learn the openids of people who haven't spoken.
+- **Events**: `GROUP_MEMBER_ADD` and `GROUP_MEMBER_REMOVE` (intent
+  `GROUP_MEMBER_EVENT`, `1<<24`), carrying only `member_openid`.
+- **Not available**: reactions, nudges, edits, group cards, sending
+  emoticons, and any event for someone else's retraction, so others'
+  retractions don't show on the timeline.
+
+## Max's tools for the group
+
+- **`recall_message({ id })`** retracts one message of this group by `#id`,
+  at Max's judgement. Each segment of a reply is its own QQ message with its
+  own `#id`, so a whole reply is retracted segment by segment. What QQ would
+  surely refuse is refused on the host first, with the reason, and leaves
+  no row: anything older than 2 minutes (Max's counted from its delivery
+  receipt, others' from their time), the group owner's and administrators'
+  messages (by the role their message carries), others' messages in a
+  private chat, Max's messages that weren't sent or may not have been, and
+  messages already retracted. Whether Max is an administrator isn't asked:
+  others' messages are tried, and QQ's refusal comes back in words. A
+  retraction is a `Post`, entered as one of Max's unsend rows and retracted
+  by the sender in ledger order, so retracting what Max just said waits
+  behind its sending. Success records sent, refusal failed, which projects
+  as `[unsend#id]（没发出去）`.
+- **`mute_member({ member, seconds })`** mutes or unmutes someone in this
+  group, at Max's judgement, and Max says so briefly in the group after.
+  `member` is the N of `[mention#N]`; the `member_openid` is the account the
+  person last spoke with here, so someone who hasn't spoken here can't be
+  muted. `seconds` 0 unmutes (del), at most 2,592,000 (30 days); otherwise
+  a `GET` first tells whether to update or add, with the expiry in `+08:00`.
+  What QQ would surely refuse is refused first: private chats, Max itself,
+  the group owner and administrators (by their latest message's role).
+  Whether Max is an administrator isn't asked; QQ's refusal (40011030) is
+  passed back. The actor is asked whether a mute may go ahead (it refuses
+  while the conversation is stopped), but a mute is no message and isn't
+  entered: it leaves a log line, and the next core learns of it only from
+  what Max said. Muting twice does no harm, so a mute that may have failed
+  is simply done again.
