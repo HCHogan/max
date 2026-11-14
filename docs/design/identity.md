@@ -1,86 +1,112 @@
 # Identity
 
-## Identity
+The Rust version keeps the three judgements of the Haskell version's
+[ADR 004](https://github.com/HCHogan/max/blob/a5de2e1410f5cdfaa4b88c052bd499ee8b676759/docs/adr/004-canonical-handles-for-the-model.md):
 
-Decided 2026-10-27. The Rust version keeps the three judgements of [ADR 004](https://github.com/HCHogan/max/blob/a5de2e1410f5cdfaa4b88c052bd499ee8b676759/docs/adr/004-canonical-handles-for-the-model.md):
+- **The model faces people; the ledger stores accounts.** A person is a
+  principal; a platform account is an identity. A message's sender and its
+  mention nodes store identities, since the platform vouches for the
+  account; the principal is looked up only when rendering for the model, so
+  merges never touch the ledger.
+- **A principal only asserts "these accounts are one person".** On QQ,
+  `/bind` merges the owner's own accounts. Any other link, or fixing a
+  wrong one, is the owner editing the database. Identity is never inferred
+  from names or avatars
+  ([decisions/2026-11-06-no-avatar-matching.md](../decisions/2026-11-06-no-avatar-matching.md)),
+  and users' own claims aren't trusted.
+- **A merge is an alias, not a rewrite.** `principals.merged_into` points to
+  the principal kept, and the merged row stays as a tombstone. Reads use
+  `coalesce(merged_into, id)`; chains are one deep, and a merge can be
+  undone.
 
-- **The model faces people; the ledger stores accounts.** A person is a principal; a platform account is an identity. The sender and the mention nodes of a message store identities, because the platform authenticates that account; the principal is looked up only when rendering for the model. Merges therefore do not touch the ledger.
-- **A principal is only an assertion that "these accounts are the same person"**: on QQ, `/bind` merges the owner's own accounts. For a while, people from old groups were linked to their old QQ numbers by avatar; this was removed on 2026-11-06 and the links it had made were undone (see [Matching by avatar](#matching-by-avatar) below). Making a link, or fixing a wrong one, is done by the owner editing the database. Identity is not inferred from names, and users' own claims are not trusted.
-- **A merge is an alias, not a rewrite.** `principals.merged_into` points to the principal that is kept, and the merged row remains as a tombstone. Reads use `coalesce(merged_into, id)`; the chain depth is fixed at 1, and a merge can be undone.
+## Tables
 
-### Tables
-
-| Table | Columns | Description |
+| Table | Columns | What it holds |
 | --- | --- | --- |
-| `principals` | `display_name`, `merged_into` (nullable) | People. `display_name` takes the first name seen when the row is created, and is used only when this person has no message snapshot on the current endpoint |
-| `identities` | `principal_id`, platform, `native_user_id` | Accounts, unique per `(platform, native_user_id)`. Max itself is also a principal, and its accounts on each platform are identities; there is no separate account table |
-| `endpoints` | `self_identity_id` | Which of Max's accounts this endpoint sends and receives with. "Did Max say this?" is simply `sender_identity_id = self_identity_id` |
-| `messages` | `sender_identity_id`, `sender_name`, `sender_role` | A snapshot taken at the time of sending. On QQ the name is the event's `username`, and "某人" ("someone") is written when it is empty (for imported old messages the group card is preferred, falling back to the nickname). The role is owner, admin or member; on QQ it is the event's `member_role`. It is null in private chats |
+| `principals` | `display_name`, `merged_into` (nullable) | People. `display_name` is the first name seen, used only for someone with no message on the current endpoint |
+| `identities` | `principal_id`, platform, `native_user_id` | Accounts, unique per `(platform, native_user_id)`. Max is a principal too, and its accounts identities; there is no account table |
+| `endpoints` | `self_identity_id` | Which of Max's accounts an endpoint uses. "Did Max say this?" is `sender_identity_id = self_identity_id` |
+| `messages` | `sender_identity_id`, `sender_name`, `sender_role` | A snapshot at sending: on QQ the event's `username` (`某人` when empty; for imported messages the group card, else the nickname) and `member_role` (owner, admin or member; null in private chats) |
 
-There is no member table. The Haskell version's `endpoint_known_identities` recorded who had appeared on which endpoint; here that is derived from the ledger. Names and roles are snapshots carried by the messages themselves; they are neither queried from the platform nor cached.
+There is no member table: who appeared where is derived from the ledger,
+and names and roles are snapshots carried by the messages, never asked of
+the platform or cached.
 
-**Writers** (decided 2026-10-28): every other table has a single writer (see the diagram in [Runtime structure](../architecture.md#runtime-structure)); `principals` and `identities` are the exception. When a conversation actor, entering a message in the ledger, encounters an account it has not seen before (the sender, or a mentioned person), it creates the identity and its principal; if the same new person speaks in two groups at once, both actors create them concurrently. Resolving the owners at startup and merging the owner's accounts with `/bind` also write these two tables (matching by avatar did too, until it was removed on 2026-11-06). The rules:
+**Writers**: every other table has one writer; `principals` and
+`identities` are the exception. An actor entering a message that brings an
+account it hasn't seen (the sender, or someone mentioned) creates the
+identity and its principal, and a new person speaking in two groups at once
+has both actors creating them. Resolving the owners at startup and `/bind`
+write them too. The rules:
 
-- Rows are only inserted, never updated, except for `merged_into`.
-- Before creating a row, look it up once without a lock, and use it if found. If it is not found, take `pg_advisory_xact_lock` on (platform, account) within the ledger transaction, look it up again, and create it only if it still does not exist. The same new account therefore yields only one principal. Accounts already seen need no lock, so ledger writes in different conversations normally do not wait for one another.
+- Rows are only inserted, never updated, except `merged_into`.
+- Look the row up once without a lock and use it if found. Otherwise take
+  `pg_advisory_xact_lock` on (platform, account) inside the ledger
+  transaction, look again, and create it only if it still isn't there. So a
+  new account yields one principal, and accounts already seen need no lock:
+  writes in different conversations don't wait for each other.
 
-### Matching by avatar
+## What the model sees
 
-Removed on 2026-11-06 (decided by the owner), and the links it had made were undone without a trace (migration 0024): on tank, each of the 134 accounts it had linked became a person of its own again (`principals.merged_into` cleared); the `text` of the 802 rows that mention them (rendered when the rows were entered in the ledger, and read by search) was changed back to their own `[mention#id]`; and `legacy_avatars` and `avatar_checks` were dropped. Merges the owner had made by hand were to be left untouched; at the time there were none. Recall vectors did not need recomputing: `recall_text` strips handles, and Max's memory files contain no handles of old numbers either. The transcripts in turn records are what the model saw at the time and are not changed. From then on, people from old groups count as new people in the new groups, and linking them is done by the owner editing the database. The code is in commit `12d420cb` and earlier. What follows is how it worked at the time.
+- A person's handle is `[mention#12]`, in the syntax of `#123`,
+  `[image#123.0]` and `t#42` (see
+  [How replies are written](ledger.md#how-replies-are-written)). Numbers
+  from different namespaces haven't been seen confused, so there are no
+  typed prefixes.
+- Each tail line is `[HH:MM name #id]`, the name being the `sender_name`
+  snapshot, so a name change leaves old lines, and the prefix, as they
+  were. Mentions in the body render as `[mention#12]`.
+- The **roster** is projected with the base context into the volatile
+  block: the people in the context (senders and those mentioned in the
+  tail, and the senders of the first inputs), a line each, such as
+  `[mention#12] 名字（管理员）`, with the name and role from the person's latest
+  message on this endpoint, or `principals.display_name` for someone who
+  never spoke. One `DISTINCT ON` query, on the `messages (endpoint_id,
+  sender_identity_id, id)` index.
+- Someone who first appears while the core runs gets a roster line in that
+  batch's `[新消息]`, and `Input::Messages` carries them; once the model sees
+  the batch the core adds them to the roster, so later output can @ them.
+- The model never sees platform ids.
 
-Decided by the owner on 2026-10-29, replacing `/link`, which was removed the same day (see [Permissions](#permissions)). The official API provides only openids, and the same person has a different one in each group, while people from old groups are stored by QQ number. maxx compared an account's avatar with the avatars of old QQ numbers and linked the account to whichever one matched. No one had to request a link, so no one could request one on someone else's behalf.
+## Resolution and sending
 
-- **Avatars**: the official bot can fetch an account's avatar by openid (`q.qlogo.cn/qqapp/<AppID>/<openid>/640`), and a public endpoint can fetch one by QQ number (`q1.qlogo.cn/g?b=qq&nk=<number>&s=640`). Both images were scaled down to 16×16 greyscale (a fingerprint of 256 bytes), and a root-mean-square difference within 5% counted as the same image. Tested live on 2026-10-29: two images of the same person differed by 0.03%, while those of different people differed by 36–60%. Accounts without an avatar all return the same default image; QQ also returns this image (1512 bytes) for nonexistent openids, which is how maxx obtained its fingerprint.
-- **Whom to compare**: only in groups that continue an old group (the conversation has both a `qq` and a `qq_legacy` endpoint). The `qq` accounts in such a group that had not yet been compared and had not been merged into someone else were compared with the old numbers that had spoken in this conversation's old records. The owner's and Max's accounts were not compared. The fingerprints of old numbers were stored in `legacy_avatars`; those older than 7 days were refetched when needed, the old fingerprint was used if a refetch failed, and numbers whose avatar had never been fetched did not take part.
-- **Whether to link**: an account was not linked if it had the default image (`default`), if no old number resembled it (`none`), or if more than one did (`ambiguous`). If the number it resembled was the owner's or Max's old number (`barred`), it was not linked and a warning was logged, since this was most likely impersonation. If another account in the same batch also resembled that old number, or an account in this group was already linked to it (`taken`), it was not linked and a warning was logged: when both an impersonator and the real person were in the group, neither was linked, and the owner investigated. Only when exactly one old number resembled it and no other account competed for that number was its principal merged into that old number's person (`linked`). Each account was compared only once, and the result and the matched old number were recorded in `avatar_checks`. If the account's avatar could not be fetched, nothing was recorded, and it was retried the next time the account spoke, once 10 minutes had passed.
-- **When**: at startup, every account not yet compared in each such group was compared; after that, each account was compared when it first spoke, together with all the other accounts in that group not yet compared. The worker subscribed to rows entered in the ledger, like the other derived-data workers; see [Runtime structure](../architecture.md#runtime-structure).
-- **What to do when it was wrong**: the owner edited the database directly, changing or clearing `principals.merged_into`; to have an account compared again, the owner deleted its row in `avatar_checks`. The risk of impersonation remained, since anyone can change their avatar: an account that switched to the avatar of an old member who was not in the group would be linked as that person. The owner accepted this, relying on the logs as a safeguard.
-- When `/link` was removed on 2026-10-29, the 18 links it had made were cleared, and those accounts were then compared again under the rules above.
+- The core keeps the roster's principals and stores them in the snapshot
+  with the base context; the model call's segmenter has them too. A
+  `[mention#N]` whose principal isn't in it doesn't become a mention, so a
+  number the model made up never becomes a real @: with a name
+  (`[mention#N: name]`) it is sent as the text `@name`, without one it is
+  removed.
+- **Quotes**: entering a `Said`, the actor checks its `[reply#id]`, which
+  must be a message on this conversation's timeline and not an event row.
+  If it isn't (a made-up number, another conversation's message), the
+  quote is removed, the body sent as is, and a warning logged. This isn't
+  the core's check: the model may rightly quote an old message it found
+  with a tool, and only the database knows whose it is. A quoted message
+  with no platform id (one that was never sent, say) is sent without the
+  quote.
+- At send time the adapter resolves a mention's principal to the person's
+  identity on the endpoint's platform, the one that last spoke there if
+  there are several, and sends a native @; with none, the text `@name`.
 
-### What the model sees
+## Permissions
 
-- A person's handle is `[mention#12]`, in the same syntax as `#123`, `[image#123.0]` and `t#42`; see [How replies are written](ledger.md#how-replies-are-written). The typed-prefix notation that ADR 004 deferred is not implemented this time either: numbers from different namespaces have not been observed being confused.
-- Each line of the tail is `[HH:MM name #id]`. The name is the `sender_name` snapshot, so when someone changes their name, old lines stay the same and the prefix is unaffected. Mentions in the body render as `[mention#12]`.
-- The **roster** is projected together with the base context when the core is created, and is placed in the volatile block (decided 2026-10-27). It covers the people who appear in the context: the senders and the mentioned people in the truncated tail, and the senders of the first batch of input. There is one line per person, such as `[mention#12] 名字（管理员）` ("name (administrator)"); the name and role come from the snapshot of this person's latest message on this endpoint, and for people who have never spoken, from `principals.display_name`. It is a single `DISTINCT ON` query that uses the `messages (endpoint_id, sender_identity_id, id)` index.
-- For a person who first appears while the core is alive, a roster line is added to that batch's `[新消息]` ("new messages") block, and `Input::Messages` carries these people. When the core shows the batch to the model, it adds them to the roster set, so that later output can @ them.
-- The model does not see platform numbers.
+- **Owners** are listed in the owners file (from sops), one
+  `platform:native_id` a line, resolved to identities at startup (created if
+  unseen). Permissions go by principal, so every account merged into an
+  owner is an owner. For QQ only the private `user_openid` is listed; the
+  owner's group accounts are merged in by `/bind` (see
+  [The official QQ bot](qq.md#groups-and-private-chats)).
+- **Platform roles** come only from the `sender_role` a message carries: a
+  command carries its sender's role at that moment, so the platform is
+  never asked.
+- **Ranks** (`Rank` in `actor/commands.rs`), lowest first: anyone; the
+  group's owner and administrators (`Admin`); the other party of a private
+  chat (`ChatOwner`); Max's owners (`Owner`). What each command needs is in
+  [Commands](commands.md#who-may-run-what).
 
-### Resolution and sending
+## Open
 
-- The core holds the set of principals in the roster and saves it into the snapshot together with the base context; the segmenter of the model-call task holds it as well. A `[mention#N]` whose principal is not in the set does not become a mention, so a number the model made up never becomes a real @: if it carries a name (`[mention#N: name]`), it is sent as the text `@name`; if not, it is removed.
-- Quotes (decided 2026-10-28): when the conversation actor enters a `Said` in the ledger, it checks `[reply#id]`, which must be a message on this conversation's timeline and not an event row (a retraction or an edit). If it is not, for example a made-up number or a message from another conversation, the quote is removed, the body is sent as is, and a warning is logged. Unlike mentions, this check is not done in the core: the model may legitimately quote an old message that it found with a tool and that is not in its context, and only the database knows whether that number belongs to this conversation. If, at send time, the quoted message has no platform id (for example, because it was itself never sent), `lower` omits the quote.
-- At send time, the adapter's `lower` resolves `DraftNode::Mention(principal)` to this person's identity on the target endpoint's platform and sends a native @. If the person has several there, it takes the one that most recently spoke on this endpoint; if there is none, it falls back to the text `@name`.
-- With mirroring, these rules need no change: a person with accounts on both sides gets a native @ on both sides, and a person with an account on only one side gets text on the other.
-
-### Permissions
-
-- Owners are listed in the sops file, one `platform:native_id` per line. They are resolved to identities at startup (created if not yet seen), and permissions are decided by principal, so every account merged into an owner has the owner's permissions. For QQ, only the private-chat `user_openid` is listed; the owner's accounts in groups are merged in by `/bind` (see [The official QQ bot](qq.md#the-official-qq-bot-1)).
-- Platform roles are taken only from the `sender_role` carried by the message: a command message itself carries the sender's role at that moment, so the platform is not queried separately.
-- **Commands start with `/`** (decided 2026-10-29, at the owner's wish): a `/` or a full-width `／` followed by the command name. `!` is no longer a command prefix, and things like `/nix/store` are not commands. In a group, a command must also @Max (decided by the owner the same day: there are other bots in the group that also recognise `/` commands); without the @ it is an ordinary message. In private chat the @ is not needed. Replying to Max does not count as an @. Messages that explain how to use commands (the `/bind` code, `/clear`) are all written as `@maxx /…` in groups. The command panel of the official QQ bot (`/v2/panels`, or 「高级设置」 ("Advanced settings") in the management console) only fills the command into the input box; the user presses send, and the bot receives an ordinary message, so the panel and typing by hand take the same path. The panel cannot show parameter hints, and it is visible to the whole group. The panel is the command list, so there is no `/help` (decided 2026-10-29). On 2026-10-29 a group panel was registered with `POST /v2/panels` (`scope: group`, `target_type: all`), and it was changed once the same day at the owner's wish: `status` ("查看当前状态", view current status) can be tapped by everyone, while `compact` ("压缩上下文", compress the context) and `kill` ("停止当前会话", stop the current session) are `only_admin`; `link`, which everyone could tap, was removed together with its command. `persona` is not on the panel, but the command still works. Names do not include the `/`; QQ adds it when filling the input box. A name is at most 7 Chinese characters and a description at most 15; each panel has at most 20 items, and a bot at most 20 panels. The panel is changed with `PUT /v2/panels/{panel_id}`, not in code. To be revisited when Matrix is built: Element intercepts messages that start with `/`.
-- **Command replies look like logs** (decided by the owner 2026-10-29): they go in a `text` code block whose first line is the result, with any further lines below it. Until 2026-11-13 the first line began with the command, as `/command → result`; the owner had that taken out of every command's reply, which comes right under the command itself. The tone is brief and mechanical, such as `switched to …`, `error: …` and `refused: Max's owners only`, so that they are distinguishable at a glance from what Max says in a turn. They are all in English (decided by the owner 2026-11-08, like `/status` and the error lines before them); until then the rest were in Chinese, such as "已切换：…" and "拒绝：仅限主人". When the content contains three or more consecutive backticks (a persona, for example), the fence is lengthened. Commands and their replies enter the context like everything else, and a reply counts as something Max said: the owner believes this will not lead the model to chat in the log tone.
-- **`/status`** is a small business card like the Haskell version's `!version`, which is folded into it; it does not show a version number (decided 2026-10-29). The first line is maxx and the commit it was built from (the flake sets `MAX_COMMIT` on the `max` package; a build by cargo itself writes dev). Below it come key-value lines, one per line, with the keys aligned: the conversation's VM, its /work and Max's units (since 2026-11-13, see the next item; until then the host's system and architecture); the model and reasoning effort for the next reply (requested by the owner 2026-10-29; when the running turn uses a different one, the turn's is shown on a separately marked line); proactive replies; `state stopped` after `/stop`; the settings the conversation has set, if any (`config    idle_window_secs 1800 · call_time_secs 120`); the running turn; the context watermark, if the context has been cleared; what this conversation's model calls used in the last 24 hours and the last 7 days, a line each (`24h       in 34.2M · out 360k · cache 79.8% · $5.31`: input and output tokens, the share of the input that hit the cache, and the cost at the models' list prices; `none` when there were no calls; added 2026-11-12, asked by the owner, who wanted only this conversation's and not the cached tokens on their own); and the uptime of maxx and of the host. Everything is in English. Once the card was put in a code block, the emoji formerly at the start of each line were removed. The model and persona are not shown (decided by the owner); see `/model` and `/persona`.
-- **The VM in `/status`** (2026-11-13, asked by the owner: what the guest runs, its memory, what `/work` takes, and the units as the guest's systemd has them, which says more than their names):
-
-  ```text
-  vm        NixOS 26.05.20261108.ac588ef · x86_64
-  memory    1.21G of 7.76G
-  /work     264M
-  units     web.service · running 3d 4h · 182M · 2 restarts
-            poll.timer · waiting 41s
-            scrape.service · failed (exit-code) 5m 12s
-            new.service · not installed
-  ```
-
-  - **The guest is asked, when it runs** (`Vm::about`, `vm/about.rs`): one line over SSH that reads `/run/current-system/nixos-version`, `/proc/uptime` and `/proc/meminfo`, and runs `systemctl show` for the units the files in `/work/.max/systemd` name (the names are read on the host's side, as for keeping a VM on). The memory is `MemTotal` less `MemAvailable`, of `MemTotal`. A unit shows its substate, how long it has been in it (`StateChangeTimestampMonotonic` against the uptime), the memory its processes hold, how often systemd started it again, and how it failed if it did (`Result`); `not installed` when systemd has no unit of the name, which is a file `maxx units apply` hasn't run over; `bad-setting` or `error` when systemd couldn't read it. At most 12 units get a line each, and then `and N more`. Nothing in the line is the contract's: every guest has these files and `systemctl`, so one an older max booted answers too.
-  - **A VM that isn't running isn't started for it**: `vm        off`, no `memory`, and the units by name alone. One that runs, or is booting, and hasn't answered in 2 seconds is `vm        no answer`.
-  - **`/work` is counted on the host's side** (`vm::taken`), where it is whether or not the VM runs, as `du` counts: the blocks of everything under it, a file with several names once, no link followed. After 2 seconds it stops and says `over 12.3G`. On tank that day the largest `/work` had 117,000 files in 16 GiB.
-  - **The actor waits for both, at once, for at most those 2 seconds.** It waits on nothing else of a guest's: `/kill`'s `maxx units stop-all` is a task of its own.
-  - **Tests**: what a guest answers is parsed from a recorded answer, and the walk is run over a directory with a hard link and a link out of it (`vm/about.rs`); how a unit and a size show (`actor/commands.rs`); an actor with a VM directory and no VM service shows `/work` and the units by name. `vm-check` asks a real guest and prints `客户机：NixOS …` and `unit：boot-note.service loaded exited`, which the nested test looks for.
-- **When changes take effect**: a model change, `/effort` and `/persona` are stored in settings, and a running turn keeps using what it started with (the model and persona are fixed when a turn starts: the context is projected according to the model's window, and the persona is in the system prompt). The reply therefore comes in two forms (changed 2026-11-04): with no running turn, it is `takes effect from the next reply`; with one, it is `takes effect when the running turn ends, after 5 minutes idle`, where the number of minutes is this turn's idle window (the model's, or the conversation's own). `/config` says when its change takes effect, which differs by setting; see [Settings a conversation sets](config.md#settings-a-conversation-sets). Previously the reply was always "takes effect from the next reply", and if the group kept chatting, the next few messages were still answered by the old model.
-- Command permissions follow the Haskell version (decided 2026-10-29). Viewing commands (`/status`, `/model` and the like without arguments, `/model list`, `/config` without a value) can be used by anyone. Those that affect only this conversation (`/kill`, `/stop`, `/start`, changing the persona, `/clear --all`, `/unclear`, setting with `/config`) require the group owner, an administrator or an owner. Those that cost money or have a global effect (changing the model, `/effort`, `/proactive`, `/bind`, and `/link` and `/unlink`, see [Asking another conversation](jobs.md#asking-another-conversation)) are owner-only. Without permission, the reply is `refused: Max's owners only` or `refused: the group owner and admins only`. `/kill` sends no reply unless it stopped jobs. A private chat belongs to the other party (decided by the owner 2026-11-03: only the owner and a few friends use private chat): the other party in a private chat can use every command except `/bind`, `/link` and `/unlink`, including changing the model, `/effort` and `/proactive`, because these change only that private chat. `/bind`, `/link` and `/unlink` remain owner-only (in code the other party's rank is `Rank::ChatOwner`, which sits between the group owner and administrators on one side and the owner on the other).
-- **`/persona`**: without arguments it shows the current persona; `clear`, `reset` and `default` return to the default (`default` was added 2026-10-30: the Haskell version recognised only `clear`, so `/persona default` was stored as a persona consisting of nothing but the word default, which one group had been using since 2026-07-31; migration 0019 clears such personas). On the same day, the "do not ..." statements in the default persona and in the rules were removed (decided by the owner), and whatever could be phrased positively was rephrased that way: listing what not to do actually puts that very thing in front of the model. Only one red-line paragraph remains (added by the owner the same day): Chinese politics, circumventing the Great Firewall, pornography, gambling, drugs and cults, discussion of which on QQ gets groups and accounts banned; when someone raises them, Max plays dumb and changes the subject, or uses `[silence]`. The paragraph is in the rules, not in the persona, so it remains when the persona is changed.
-
-### Deferred from v1, with room reserved
-
-- ~~`/link <QQ number>`~~ (added 2026-10-29, removed the same day): verified by avatar, it linked the sender's account to the person of an old QQ number. Avatars are public, and on that same day someone switched to another person's avatar and got linked to that person. The owner decided: remove both the command and the reminders urging people to link, and clear the 18 existing links. maxx links people from old groups by avatar on its own (see [Identity](#identity-1)); conflicts and mismatches are only logged, problems are fixed by the owner editing the database directly, and users' own claims are not trusted. Matching by avatar was removed as well on 2026-11-06.
-- Cross-platform permissions follow principal merges and are not implemented separately. Memory is a conversation's files, so it remains when a different platform is joined to the same conversation.
+People are per platform account; joining someone's accounts across
+platforms would follow principal merges and needs nothing of its own.
+Memory is a conversation's file, so it stays when another platform joins
+the same conversation.
