@@ -1,7 +1,5 @@
 # Matrix is deferred
 
-## Matrix
-
 Decided 2026-10-29: Matrix is not implemented for now, and neither is mirroring (see [Message format](../design/ledger.md#message-format)). It was originally to be built together with QQ so that the message format (see [Message format](../design/ledger.md#message-format)) would not take the shape of any single platform; now that the message format is settled, supporting Matrix later means adding one adapter. What follows is what was decided and found out for encrypted rooms on 2026-10-27 and 2026-10-28, kept for future reference.
 
 Decided 2026-10-27: encrypted rooms are supported. matrix-sdk's `e2e-encryption` and `sqlite` features are both enabled; unencrypted rooms work as usual. The Haskell version called the Client-Server API with only an access token and could not read encrypted rooms.

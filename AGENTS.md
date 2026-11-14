@@ -1,7 +1,8 @@
 # Repository instructions
 
 This is the Rust rewrite of Max, on `main` since 2026-10-31. The design lives in
-`docs/rust-rewrite.md` and is updated as decisions are made. The Haskell
+`docs/` ([docs/README.md](docs/README.md) is the index); keep it true as you
+change the code, as "Documentation" below says. The Haskell
 version, with its docs and assets, is at tag `haskell-base`; bring a file
 back with `git restore --source=haskell-base -- <path>` when the feature
 that needs it is being built.
@@ -55,7 +56,7 @@ working with, such as a field more in what a route answers, needs no new
 number.
 
 A VM's forwarder (`max forward`, a unit beside the VM's, see "A VM's
-forwarder" in the design) outlives max as the VM does, and is as old as
+forwarder" in docs/design/vm.md) outlives max as the VM does, and is as old as
 its VM's boot. It reads the configuration the newest max names it, and
 of that only `[database]`, `[llm]`, `[api]` and `[log]`
 (`config::Forwarded`): a key added to those is one an older forwarder
@@ -92,32 +93,82 @@ runs; never print or commit them.
 
 ## Toolchain
 
-Stable, edition 2024 (decided 2026-10-27). `rust-toolchain.toml` pins a specific version number rather than a floating `stable`; crane and devenv in Nix use the same version. Upgrades are committed separately.
+Stable Rust, edition 2024. `rust-toolchain.toml` pins an exact version
+rather than a floating `stable`, and crane and the dev shell build with the
+same one; bump it in a commit of its own. No nightly: every nightly feature
+the design might want has a stable alternative.
 
-Nightly is not used. Every nightly feature that this design might want has a stable alternative:
+- Async drop: not wanted; see [How resources end](docs/design/lifetimes.md#how-resources-end).
+- `async fn` in traits: stable. Where `dyn` is needed (the tool registry),
+  the method returns `Pin<Box<dyn Future + Send>>`; no
+  `impl_trait_in_assoc_type`.
+- `gen` and `try` blocks: not needed.
+- rustfmt: the default stable formatting, no import grouping options.
+- Tools that need nightly (cargo-udeps) stay out of CI; cargo-machete
+  instead.
 
-- async drop: decided against; see [How resources end](docs/design/lifetimes.md#how-resources-end).
-- `async fn` in traits: stable since 1.75. Where `dyn` is needed (the tool registry), the method returns `Pin<Box<dyn Future + Send>>`; `impl_trait_in_assoc_type` is not used.
-- `gen` blocks and `try` blocks: not needed.
-- rustfmt's import grouping options: the default stable formatting is used.
-- Tools that require nightly (cargo-udeps) are kept out of CI; cargo-machete is used instead.
+## Reviewability
 
-# Reviewability constraints
+- Direct dependencies are declared in `[workspace.dependencies]` in the
+  root `Cargo.toml`. A new dependency comes in a commit of its own, which
+  gives the reason.
+- cargo-deny checks licences, duplicate versions and sources; cargo-audit
+  checks advisories against the advisory-db pinned in the flake, since the
+  Nix sandbox has no network.
+- Every commit is reviewable on its own: about 400 lines of hand-written
+  change is the guide, not counting `Cargo.lock`, `.sqlx`, snapshots and
+  fixtures; split by content, and a little over is fine. A commit does one
+  thing, and compiles and passes the tests by itself.
+- Few crates, split further only when needed; see
+  [Crate layout](docs/architecture.md#crate-layout).
+- No legacy or compatibility code: what is removed is removed completely.
+- `timeout(` and `sleep(` appear only in the places listed in
+  [Timeouts](docs/design/lifetimes.md#timeouts); `select!` loops hold only
+  cancel-safe branches, see
+  [Cancellation safety](docs/design/lifetimes.md#cancellation-safety).
 
-- Direct dependencies are declared centrally in `[workspace.dependencies]` in the workspace root's `Cargo.toml`. A new dependency is added in a commit of its own, and the commit gives the reason.
-- cargo-deny checks licences, duplicate versions and sources; security advisories are checked with cargo-audit against the advisory-db pinned in the flake, since the Nix build sandbox has no network.
-- Every commit must be reviewable on its own (decided 2026-10-27): about 400 lines of hand-written changes is the guide, not counting `Cargo.lock`, `.sqlx`, snapshots and fixtures; changes are split sensibly by content, and going slightly over is acceptable (relaxed 2026-10-28). A commit does one thing, and it compiles and passes the tests when taken on its own.
-- The number of crates is kept small, and crates are split further only when needed. The initial layout is described in [Crate layout](docs/architecture.md#crate-layout).
-- No legacy or compatibility code is written: when something is removed, it is removed completely.
-- ADRs record only genuine trade-offs.
-- `timeout(` and `sleep(` appear only in the places listed in [Timeouts](docs/design/lifetimes.md#timeouts); `select!` loops contain only cancel-safe branches, see [Cancellation safety](docs/design/lifetimes.md#cancellation-safety).
+## Testing
 
-# Testing
+- All tests run with cargo-nextest.
+- Pure logic is tested with a fake provider and a fake platform; timeouts
+  and graces with tokio's `start_paused` (the actor's tests use real time;
+  see [Testing](docs/design/actor.md#testing)).
+- Cancellation: the actor's tests insert `/kill` between every two events,
+  and each I/O task is dropped once at every poll point (see
+  [Cancellation safety](docs/design/lifetimes.md#cancellation-safety));
+  normal-path tests assert that nothing was killed because its connection
+  dropped, which catches a missed `close`.
+- Database tests use `#[sqlx::test]`, a temporary database each. Locally
+  they use the dev shell's Postgres (`devenv up`, port 5434, role and
+  database `max`); the flake's nextest check starts its own, on TCP only.
+- Prompt rendering uses insta snapshots.
+- The codemode runner runs with Node locally against max's service, no VM
+  needed.
+- The platform layer uses recorded QQ gateway events as fixtures, with fake
+  openids and AppIDs only.
 
-- All tests are run with cargo-nextest.
-- Pure logic is tested with a fake provider and a fake platform; timeouts and grace periods use tokio's `start_paused`.
-- Cancellation: the conversation actor has a `/kill` inserted between any two events, and each I/O task is dropped once at every poll point, see [Cancellation safety](docs/design/lifetimes.md#cancellation-safety); tests of the normal path assert that no resource was killed because its connection was dropped, which catches missed calls to `close`.
-- Database tests use `#[sqlx::test]`, with a temporary database per test. Locally they use the Postgres started by `devenv up` in the dev shell (port 5434, with both the role and the database named `max`); the flake's nextest check starts its own temporary Postgres, listening only on TCP.
-- Prompt rendering uses insta snapshots. Whether they replace the documentation generated by `max-prompt-flow` is **TBD**.
-- The codemode runner runs node locally against max's service and needs no VM.
-- The platform layer uses recorded QQ gateway events as fixtures. Fixtures use only fake openids and AppIDs.
+## Documentation
+
+`docs/` is laid out by kind (see [docs/README.md](docs/README.md)); keep
+each kind in its place:
+
+- **`docs/design/` says what is true now**, in the present tense, with no
+  dates and no "until", "previously" or "changed on". When you change how
+  something works, change its description in the same commit. A short "why"
+  belongs there; the story of how it got so doesn't.
+- **`docs/decisions/` says why**, one decision a file, named
+  `YYYY-MM-DD-what.md`: its context, the decision, why, and its cost. Write
+  one for a genuine trade-off, or when a design is replaced, and link it
+  from the design. A decision that a later one replaces stays, with a line
+  pointing to the new one; don't edit history to match the present.
+- **Open questions** go in an "Open" section at the end of their design
+  file, not scattered through it.
+- **`docs/research/`** is what was looked at; **`docs/archive/`** finished
+  history (v1, go-live, the import). Neither is kept up to date.
+- **`docs/rust-rewrite.md`** only maps old section names to their places,
+  for comments in code that still name them. New comments name the design
+  file (`See "Memory" in docs/design/context.md`). Never edit a migration
+  to update such a comment: sqlx checks an applied migration's checksum.
+  Changing a comment in a guest file (`nix/guest.nix`, the scripts and JS
+  under `nix/`) changes the guest image, so leave those for a commit that
+  changes the guest anyway.

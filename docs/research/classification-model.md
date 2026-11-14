@@ -1,7 +1,5 @@
 # Research: the classification model
 
-## Research: the classification model
-
 Recorded 2026-10-28. This is a record only, not a to-do list.
 
 [Jev](https://docs.typesafe.ai/models) (TypeSafe AI, 2026-09) is a non-autoregressive judgement model: it handles three kinds of question (yes/no, multiple choice and scoring) and returns probabilities directly. It costs $0.042 per million input tokens, with output free; it is available only as a hosted API in the United States and is closed-source; officially, English works best, while Chinese, Japanese and Korean are usable but somewhat weaker.

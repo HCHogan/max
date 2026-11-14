@@ -1,16 +1,14 @@
 # Lifetimes move to systemd
 
-## Lifetimes move to systemd
-
 The guest's commands this section names, `max-jobs`, `max-agent`, `max-units` and `max-wake`, are `maxx units` and `maxx agent` since 2026-11-14; see "One command" under [Pure codemode](../design/tools.md#pure-codemode). The steps below are as they were planned and landed.
 
-Decided 2026-11-12 with the owner, who proposed letting the VMs outlive max and switching a running guest to a new image. This is a plan: none of it is implemented, and the sections above describe what runs today. Each is rewritten as its step lands.
+Decided 2026-11-12 with the owner, who proposed letting the VMs outlive max and switching a running guest to a new image. All five steps landed on 2026-11-12, and what runs now is in [VMs](../design/vm.md) and [Jobs](../design/jobs.md); this is the decision as it was made, what was checked before it, and each step as it was planned, with where it landed otherwise.
 
 **Why.** By 2026-11-11 a conversation's actor kept a turn, background agents, background commands, commands moving from the foreground to the background, questions waiting in both directions and the calls of resident programs. Each new kind of thing that lives on its own needed its creation, number, permission, state, cancellation, end, limit and tests, and then had to be fitted to every other kind and to `/kill`, `/stop`, restarts and failures: what becomes of an agent's question when the agent is cancelled, of a command's token when it moves, of an answer whose turn has ended. Of the twenty files changed most from 2026-11-06 to 2026-11-12, seventeen were this code. The actor was supervising processes in a VM that has a supervisor of its own. Resident programs had gone the other way ("this directory is the registry: there is no table and no tool") and cost the host the least.
 
 **The rule.** max keeps no state about what runs in a VM. Whatever runs there is a systemd unit in the guest: systemd starts it, names it, limits it, stops it and notices its end. When max starts, it attaches to the VMs that run and asks. The host keeps primitives only, few enough that its actor and its lifetimes can be taken in at a glance (the owner, 2026-11-12); a feature may add a primitive, and may not add a lifetime to the actor. Behaviour needn't stay as it is where the difference buys a simpler host: what changes is listed at the end.
 
-### What the host knows
+## What the host knows
 
 - **A conversation:** its ledger, and at most one turn that runs.
 - **A VM:** one for a conversation. The host knows whether it runs, on which slot, and whether it says it is busy.
@@ -46,7 +44,7 @@ These are all the lifetimes the host has: the process; a conversation's actor, f
 | "Tell me if nothing came by then" | `ASK_WAIT` in a job's task | a timer unit that wakes Max, if Max sets one |
 | Dropping an idle guest's caches | `Running::trim`, over SSH | a timer in the guest |
 
-### Decided
+## Decided
 
 The owner, 2026-11-12:
 
@@ -58,7 +56,7 @@ The owner, 2026-11-12:
 - **A client retries over the gap.** While max restarts, a call from a guest is refused for some tens of seconds; `client.js` tries again. No file descriptor store.
 - **A link stays one way.** A→B lets A's Max ask B's. B answers through the record of a question it was asked, once (see step 5), not through an edge back.
 
-### Checked first
+## Checked first
 
 Tried 2026-11-12, before any step. 1, 2, 3, 5, 7 and 8 ran in a NixOS test on the pinned nixpkgs, in a machine set up as the guest is (nixos-init, an overlaid `/etc`, userborn, the guest's `DefaultEnvironment`; systemd 260.5, which is also the guest's on tank) and with a service hardened as `maxx.service` is. 6 ran the pinned pi 1.5.0 against a fake `/llm`. The test's pieces go into step 1's test.
 
@@ -71,7 +69,7 @@ Tried 2026-11-12, before any step. 1, 2, 3, 5, 7 and 8 ran in a NixOS test on th
 7. **Holds**, in the test machine and then in a guest (with step 2, in the nested test on tank). `switch-to-configuration test` remounts `/etc`, restarts an unmarked unit that changed, and leaves a job that runs through it. The guest's system deployed on tank has `bin/switch-to-configuration`, and its only switch inhibitor is the dbus implementation. In the nested test a deploy brought a second image, and a real guest, with its store overlay and its registration, was switched to it in the same boot, a unit of Max's running through.
 8. **Holds.** A link max's user makes under `/nix/var/nix/gcroots/per-user/<user>/` is a root. On tank that directory is root's and empty, so the module makes max's; and tank collects weekly (`nix-gc.timer`), so the root is needed.
 
-### Step 1: a call is a unit, and so is a background command
+## Step 1: a call is a unit, and so is a background command
 
 Done 2026-11-12; [Background commands](../design/jobs.md#background-commands) has it as it is. Until then `tools::unit_line` ran `systemd-run --pipe --wait`: the command's output was the SSH channel, max enforced the limit and stopped the unit (`wait_until`, `Command::stop`), and `tools::Output` wrote a long output's file from the host's side of `/work`. A background command was a task in the actor's job table that held the channel (`tools::background`), and one that moved handed its channel over (`Request::Adopt`, `tools::Moved`). What follows is the step as it was planned, and it landed so but for `/kill`'s answer, which says nothing of the guest's jobs. Since 2026-11-13 a call ends with its caller and the stopper is gone; see "A call ends with its caller" there.
 
@@ -86,9 +84,9 @@ Done 2026-11-12; [Background commands](../design/jobs.md#background-commands) ha
 - **Goes:** `tools/background.rs` and `tools/output.rs`, whole; `Request::Shell` and `Request::Adopt`; `Moved`, `Movable`, `wait_or_move`, `due` and `moved_away`; `tools::Waiting`, `Active::waiting`, `Run::waited_on` and `MOVE_AFTER`; `unit_line`, `start_in`, `wait_until`, `ended`, `Ran` and `stopping` in `tools.rs`, and `Command::stop`; `run_code`'s `Split`; `Kind::Command`, `start_command`, `adopt`, `command_job` and `room_for_command` in `actor/jobs.rs`; `Handle::Shell`; `COMMANDS_AT_ONCE` and the setting `commands_at_once`, since the slice's weights and memory limit are what bound commands; `moving` in `main.rs`.
 - **Tests.** The guest's part has no Rust to test, so a NixOS test boots the guest's own configuration as the test machine, not nested, with a fake `/mcp` that records the wakes: a call prints its result and wakes nobody; one at its limit says so; a background command that ends wakes Max once; a stopped one doesn't; with the fake host down, the notice arrives once it is back. What the host makes of a call's line is tested in Rust against a fake VM. `vm-check` keeps the command that greps its own output file.
 
-### Step 2: the VMs outlive max
+## Step 2: the VMs outlive max
 
-Done 2026-11-12. [VM processes](../design/vm.md#vm-processes) has it as it is. What follows is the step as it was planned; it landed so, with two things the plan didn't have: while max is away the guest's forwarder says so (503 with `max-away`), which is what a client's retry goes by, and max attaches again to a VM whose connection it lost.
+Done 2026-11-12. [VM processes](../design/vm.md) has it as it is. What follows is the step as it was planned; it landed so, with two things the plan didn't have: while max is away the guest's forwarder says so (503 with `max-away`), which is what a client's retry goes by, and max attaches again to a VM whose connection it lost.
 
 Until then the two virtiofsd and cloud-hypervisor were max's children (`machine::spawn`, `kill_on_drop`), `maxx.service` stops with `KillMode=mixed`, the SSH key is made at each boot and kept in memory (`PrivateKey::random`), the slots are in `vm::Free`, and `vm::run` ends with "Dropping the VMs kills them".
 
@@ -105,7 +103,7 @@ Until then the two virtiofsd and cloud-hypervisor were max's children (`machine:
 - **Goes:** the children in `Machine`; `Running::trim`, `ssh::trim` and `TRIM`; "programs are restarted on every deployment".
 - **Tests.** The nested test on tank restarts `maxx.service` under a running background command: the VM's unit stays active, a resident unit keeps its process, and the command's end wakes Max afterwards. With the contract changed, the VM is restarted; with only the system changed, the guest is switched and a command running through it ends as it would have; with the kernel changed too, it is restarted once the command has ended and it has gone unused. What attaching does with a set of `boot.json` records is a pure function with its own tests, and so is `Free` taking a named slot. `nix/tests/module.nix` checks the unit and the polkit rule.
 
-### Step 3: an agent is a unit of its own
+## Step 3: an agent is a unit of its own
 
 Done 2026-11-12. [Background agents](../design/jobs.md#background-agents) has it as it is. What follows is the step as it was planned; what landed differs in five things:
 
@@ -128,7 +126,7 @@ Until then `job::run` opens a session (`Caller::Job` with a `job::Link`), starts
 - **Prompt.** `tools.agent` becomes `max-agent start` in `shell`, in the tools section and the memory's line about `workdir`.
 - **Tests.** `scripts/check-pi-job` checks the plugin against the inbox, SIGUSR2 and the report's file, with a fake `/llm` and no `/job/…`. The NixOS test of step 1 gains an agent: started, steered, ended, told. The forwarder's tests lose the session and keep the metering.
 
-### Step 4: one caller
+## Step 4: one caller
 
 Done 2026-11-12. [The guest's calls](../design/tools.md#the-guests-calls) and [Multimodal results](../design/tools.md#multimodal-results) have it as it is. What follows is the step as it was planned; it landed so, with these things the plan left open:
 
@@ -148,7 +146,7 @@ Until then a call from a VM is run in one of two ways (`Handler::call` in `mcp/s
 - **Goes:** `Sessions`, `Session` and `Grant`; `Caller`, `Route` and `Call`, for a `Context` that has a `Poster` or none (vm-check's); `Poster::new`'s turn, `Post::origin`, the origin of `Event::Request` and `Refusal::Ended`; `Tool::JOB`, and what `Tool::TURN` routes (it still says whether the prompt declares a tool); the token in the runner's input, `MAXX_TOKEN` and `--setenv`; the line "Max tools called" (`called`, `tally`).
 - **Tests.** `mcp/runner_tests.rs` runs the runner and `maxx` against the service without tokens: a call reaches the actor, a picture's path comes back on the call's line, and what is said carries the program's mark.
 
-### Step 5: a question keeps no wait
+## Step 5: a question keeps no wait
 
 Done 2026-11-12. [Asking another conversation](../design/jobs.md#asking-another-conversation) has it as it is. What follows is the step as it was planned; it landed so, with these things the plan left open:
 
@@ -169,7 +167,7 @@ Until then a question Max asks is a job: `question_job`'s task holds a oneshot f
 - **Goes:** `actor/jobs.rs` and `mcp/jobs.rs`, whole, with `cancel` and `status`; `Handle`; `Event::JobDone`; `Request::Cancel` and `Request::Status`; `question_job`, `question_answered` and `decline`; `ASK_WAIT`; `Reason::Job`, once it is settled that nothing reads the old rows of `turns.trigger` that hold one (`turns::running_since` is the one query that parses a trigger).
 - **Tests.** The test of two actors asks and answers, and answers a question that was pushed out; none of them advances a clock.
 
-### Afterwards
+## Afterwards
 
 - **The actor** keeps where it is in the ledger, its settings, the core, `intent`, `side`, `asked`, `woken` and the subscribers. Its events are a message, a bind, a post, a segment, a model call's end, a call's end, a verdict, a request, a wake from outside, a caller's call, a subscription and the stop: 12 for 15. A request is one of 5 for 11: configure, ask, answer, wake, and whether a mute may go ahead. (As it is since 2026-11-12, counted in `conversation.rs`.)
 - **A guest says to the host:** `/mcp` (`tools/list`, `tools/call`), `/llm` (and `GET /llm`), `/api`, `/events`, `/units`.
@@ -177,7 +175,7 @@ Until then a question Max asks is a job: `question_job`'s task holds a oneshot f
 - **A restart** loses the running turn, as now, with the call it was waiting for (2026-11-13), and nothing else: background commands, agents and resident programs run on, and their notices wait for max. An actor that fails (`give_up`) stops no job.
 - **By size** (counted 2026-11-12; the files that go whole are counted, the rest estimated from what the steps name, roughly). Eight files go whole (`actor/jobs.rs`, `job.rs`, `job/run.rs`, `mcp/harness.rs`, `mcp/agent.rs`, `mcp/jobs.rs`, `tools/background.rs`, `tools/output.rs`), 2,136 lines, with three files of their tests, 809. In all the host loses about 3,700 lines outside tests and gains about 600 (attaching, the older image, a call's line, an answer's way back): some 3,100 fewer of 30,567, a tenth. Step 2 adds to the host, since outliving max is something new. The guest gains two commands, three units, a timer and a slice: about 450 lines of shell, TypeScript and Nix, and a NixOS test. Max has 13 tools for 16.
 
-### What changes for the group and for Max
+## What changes for the group and for Max
 
 - A command someone waits on no longer moves to the background; a call runs to its end or its limit.
 - `agent`, `agent_steer`, `cancel` and `status` are commands in the VM (`max-agent`, `max-jobs`, `systemctl`), and a job is known by its unit's name, not `agent#3` or `shell#4`.
