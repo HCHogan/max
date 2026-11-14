@@ -1,100 +1,215 @@
 # The core
 
-## The core
+The core is a turn's agent loop, written as a pure state machine:
+`Run` in `crates/max-core/src/run.rs`. All its methods are synchronous,
+and each call is one complete state transition; it does not `await`,
+spawn, read the clock or touch the network. The conversation actor feeds
+it messages, tool results and model output, and asks it what to do next
+(see [The conversation actor](actor.md)). It is written in-house rather
+than taken from an agent framework; why is in
+[decisions/2026-10-26-own-agent-loop.md](../decisions/2026-10-26-own-agent-loop.md).
 
-Written in-house, sans-I/O (decided 2026-10-26). In 2026-10, rig, yoagent, adk-rust, autoagents, swiftide-agents, aisdk and genai were evaluated, as was pi-agent (a third-party Rust port; the official repository does not contain this code). Their common problem is that each brings its own provider layer or session layer, which conflicts with our own protocol adapters and ledger; they are also far larger than the part we would use: rig-core plus rig-agent come to about 130,000 lines, and yoagent to about 39,000. Writing our own is estimated at 1.2k–1.5k lines, including the adapters for both protocols. Two things are borrowed: rig-agent's `AgentRun`, which writes the loop as a sans-I/O state machine, and the steer semantics of pi and yoagent.
+## Interface
 
-The core is a pure state machine: all its methods are synchronous, and each call is one complete state transition; it does not `await`, does not spawn, does not read the clock and does not touch the network. A sketch, with signatures **TBD**:
+Abridged from the code:
 
 ```rust
-struct Run {
-    spec: RunSpec,            // immutable: model profile, window, output limit, the Max tools available to this turn
-    base: Context,            // immutable: the base context's entries and roster; the first batch of input is in its volatile block
-    transcript: Vec<Item>,    // entries produced in this turn, append-only
-    pending: Vec<Input>,      // accumulated messages and Wakes, rendered as one [新消息] ("new messages") block at the next model call
-    phase: Phase,             // which phase it is in; each phase's own data lives in the phase, see below
-    measured: Option<(u32, usize)>, // the provider-reported token count of the previous request plus its output, and how far into the transcript it covers
-    unhandled: Vec<Wake>,     // Wakes since the last idle, the first batch's included: those the model has not finished handling
-    roster: BTreeSet<PrincipalId>, // the base's roster, plus newcomers shown to the model since
-    // plus round
+pub struct RunSpec {
+    pub model: ModelTag,
+    pub window: u32,              // the model's context window, C
+    pub max_output: Option<u32>,  // the model's output limit; C / 8 is reserved when it has none
 }
 
-// Changed 2026-10-29: previously five fields, in_flight, due, outstanding, model_due and ended, represented the phase together,
-// and the legal combinations were maintained by hand (pointed out by the owner); now it is one enum, and illegal combinations cannot be written
+pub struct Run {
+    spec: RunSpec,                // fixed for the turn
+    base: Context,                // fixed: the base context's entries and roster; the first inputs are in its volatile block
+    base_tokens: u32,
+    transcript: Vec<Arc<Item>>,   // what this turn produced, append-only
+    pending: Vec<Input>,          // inputs since the last model call, shown as one [新消息] block at the next one
+    phase: Phase,
+    round: u32,
+    measured: Option<(u32, usize)>, // the provider's count for the last request and its output, and how much of the transcript that covers
+    unhandled: Vec<Wake>,         // wakes since the run was last waiting, the first ones included, that the model hasn't finished with
+    roster: BTreeSet<PrincipalId>,// the base roster plus everyone a later input brought a roster line for
+    quiet: u32,                   // tool calls since the model last said something to the group, or since the last reminder
+    warned: bool,                 // the model has been shown the nearly-full warning
+}
+
 enum Phase {
-    ModelDue,                 // the next step is a model call: at the start, after all tool results are back, after a call is interrupted, when there are malformed calls, when a trigger arrives
-    Calling,                  // a model call is in flight
-    ToolsDue(Vec<Call>),      // well-formed tool calls from the previous output that have not started yet
-    Running(Vec<CallId>),     // a tool batch is in flight: the calls that have not returned yet, never empty
-    Waiting,                  // nothing in flight and nothing due: ending now loses nothing
+    ModelDue,             // a model call is next: at the start, after the tool results, after a cut-off or malformed call, when a trigger comes
+    Calling,
+    ToolsDue(Vec<Call>),  // well-formed calls from the last output, not started yet
+    Running(Vec<CallId>), // a tool batch in flight: the calls without a result, never empty
+    Waiting,              // nothing in flight and nothing due: ending now loses nothing
     Interrupted,
-    Failed(FailReason),
+    Failed(FailReason),   // Model { error } or ContextExhausted
 }
 
-enum Step {
-    CallModel(Request),       // the request is built in full by the core and not modified afterwards: entries, the two tools, output limit, roster
-    RunTools(Vec<Call>),      // calls already parsed into run_code or shell
-    Idle,                     // nothing in flight and nothing due; the actor decides whether to wait or to end
+pub enum Step {
+    CallModel(Request),   // complete; nothing changes it afterwards
+    RunTools(Vec<Call>),  // already parsed into run_code or shell
+    Idle,                 // whether to wait or end is the actor's call
 }
 
 impl Run {
-    fn new(spec: RunSpec, base: Context, first: Vec<Input>) -> Self;
-    fn record(&self) -> RunRecord<'_>;              // serialises by borrowing the core's data, without copying
-    fn busy(&self) -> bool;                         // a model call or tool is in flight; the actor asks for next_step only when this is false
-    fn next_step(&mut self) -> Step;                // starts a call or a batch, and the phase changes accordingly
-    fn model_output(&mut self, out: ModelOutput) -> Result<(), Rejected>;
-    fn partial_output(&mut self, text: String, tokens: u32) -> Result<(), Rejected>;
-    fn tool_result(&mut self, call: CallId, out: ToolOutput) -> Result<(), Rejected>;
-    fn input(&mut self, input: Input) -> Result<(), Rejected>; // accepts only Messages and Wake, at any time; the core decides when they take effect
-    fn interrupt(&mut self) -> Result<(), Rejected>; // who issued the /kill is recorded in the log
-    fn fail(&mut self, reason: FailReason) -> Result<(), Rejected>;
-    fn at_limit(&self) -> bool;                     // the transcript plus accumulated input exceeds the limit; the actor ends the core at a boundary
-    fn unhandled(&self) -> Vec<Wake>;               // triggers not fully handled; on failure or interruption, used to find the one that gets a one-line reply
-    fn idle(&self) -> bool;                         // nothing in flight and nothing due: ending now loses nothing
-    fn outcome(&self) -> Outcome;                   // read by the actor at the end
+    pub fn new(spec: RunSpec, base: Context, first: Vec<Input>) -> Self;
+    pub fn busy(&self) -> bool;          // a model call or a tool is in flight; the actor asks for next_step only when it isn't
+    pub fn next_step(&mut self) -> Step; // starts a call or a batch; the phase changes with it
+    pub fn model_output(&mut self, out: ModelOutput) -> Result<(), Rejected>;
+    pub fn partial_output(&mut self, text: String, tokens: u32) -> Result<(), Rejected>; // a call cut off after `text` was said
+    pub fn retract(&mut self) -> Result<(), Rejected>;   // takes back the call in flight, which has said nothing
+    pub fn tool_result(&mut self, call: CallId, out: ToolOutput) -> Result<(), Rejected>;
+    pub fn input(&mut self, input: Input) -> Result<(), Rejected>; // messages and wakes, at any time; the core decides when they take effect
+    pub fn interrupt(&mut self) -> Result<(), Rejected>;
+    pub fn fail(&mut self, reason: FailReason) -> Result<(), Rejected>;
+    pub fn at_limit(&self) -> bool;
+    pub fn near_limit(&self) -> bool;
+    pub fn context_tokens(&self) -> (u32, u32); // what at_limit compares
+    pub fn warned(&self) -> bool;
+    pub fn unhandled(&self) -> Vec<Wake>;
+    pub fn idle(&self) -> bool;
+    pub fn outcome(&self) -> Outcome;    // Answered, Silent, Interrupted or Failed
+    pub fn round(&self) -> u32;
+    pub fn roster(&self) -> &BTreeSet<PrincipalId>;
+    pub fn record(&self) -> RunRecord<'_>; // serialises by borrowing the core's data
 }
 ```
 
-- Anything inconsistent with the state (a `ModelOutput` that arrives when no model call is in flight, the result of an unknown call, any input after the end) returns `Rejected` and changes nothing.
-- Messages that arrive while a model call is in flight do not belong to that request; they wait for the next one (decided 2026-10-28). Originally, so that replay could tell them apart, starting a call and starting a tool batch were each recorded as an input; since replay was dropped (2026-10-29), these are simply phase transitions inside `next_step`.
+Anything inconsistent with the state (a `ModelOutput` when no model call
+is in flight, the result of an unknown call, any input after the end)
+returns `Rejected` and changes nothing. Messages that arrive while a model
+call is in flight don't belong to that request; they wait for the next
+one.
 
-Rules for which the core is responsible:
+## What the core decides
 
-- **Building requests**: a request consists of the base context, the transcript and the two fixed tools, and is not trimmed (decided 2026-10-28). Individual inputs and tool results each have a cap (see [Follow-up input](context.md#follow-up-input)); the overall size is governed by the limit below, and hitting the limit ends the run, so a request never exceeds the window. The only exception is images: when they exceed the vision budget, the earlier ones are omitted; see [Multimodal results](tools.md#multimodal-results).
-- **Tools**: `run_code` and `shell`, which never change. Which Max tools programs can call is determined by the spec and stays the same for the whole turn; loading a skill does not change it either; see [Pure codemode](tools.md#pure-codemode). A malformed call gets an error result straight away and is not handed to the actor for execution.
-- **Token counts are data** (decided 2026-10-28): the core does not estimate tokens. The base context, each input and each tool result come in carrying token counts already estimated by `max`; model output uses the usage returned by the provider. Size is calculated from the input tokens the provider reported for the previous request, plus the entries added since, so estimation error falls only on that increment. The counts are stored in the snapshot along with the entries. When the provider reports no usage (input is 0), this is not taken as a measurement, and accumulation continues from the previous measurement or estimate (changed 2026-10-30, found in review: previously everything before was treated as 0, and the core could never reach the limit).
-- **Round and token limits** (changed 2026-10-28):
+- **Building requests.** A request is the base context, the transcript
+  and the two fixed tools, and is never trimmed. Each input and each tool
+  result has a cap (see [Follow-up input](context.md#follow-up-input));
+  the whole is governed by the limit below, and reaching it ends the run,
+  so a request never exceeds the window. The one exception is images:
+  past the vision budget the earlier ones are left out; see
+  [Multimodal results](tools.md#multimodal-results).
+- **Tools.** `run_code` and `shell`, which never change. What a program in
+  the VM may call is no business of the core's; see
+  [Pure codemode](tools.md#pure-codemode).
+  A malformed call gets an error result at once and never reaches the
+  actor.
+- **Token counts are data.** The core estimates nothing. The base
+  context, each input and each tool result arrive with counts `max`
+  estimated; model output carries the provider's usage. A request's size
+  is the input tokens the provider reported for the previous request plus
+  what was added since, so estimation error falls only on that increment.
+  A provider that reports no usage (input 0) isn't a measurement: the
+  count goes on from the previous measurement or estimate. The counts are
+  stored in the snapshot with the entries.
+- **The limit** (`RunSpec::limit`):
 
   ```
-  available  = C − output reserve − margin
+  available  = C − output reserve − C / 20
   core limit = min(available − base context, C / 2)
   ```
 
-  C is the model's window; the output reserve is the model's configured `max_output`, or C / 8 if it is not set (the Haskell version's approach); the margin absorbs estimation error and is proposed at 5% of C. When the transcript plus accumulated input exceeds the core limit and the model has also seen the nearly-full reminder described below, `at_limit` becomes true, and the actor ends the run at the next boundary: if the core is idle, this counts as a normal end; otherwise `Failed(ContextExhausted)` is recorded, and the unhandled direct triggers get a one-line reply (changed 2026-10-29; previously the unhandled triggers were handed to a new core; see step 4 of [Processing flow](actor.md#processing-flow)). When the base context alone fills the available space, the limit is 0, which likewise counts as hitting the limit. The limit takes accumulated input into account, so a request cannot overflow. Example: for a model with a 400k window and a 128k `max_output`, about 252k is available, and with a 100k base context the core limit is 152k; calculating by C / 2 alone would give 200k, and the request would exceed the 272k of input that the provider allows.
-- **Definition of handled**: once the model has seen an input, that input is handled when the model reaches an output with no tool calls and the core becomes idle, whether or not it replied. When a model that has seen the nearly-full reminder says something, what it has seen also counts as handled; see below. The mark is set at the moment the core becomes idle, without waiting for the actor's next `next_step` call. `unhandled` returns the triggers among the first batch and the inputs passed in later that are not yet handled (`Wake`, and later job results and automations); messages are not included, since they are in the ledger. When the core fails or is interrupted, the actor uses it to find the direct triggers that get a one-line reply; see [What the group sees](actor.md#what-the-group-sees).
-- **Timing of input**: after all results of the current tool batch are back, and before the next model call. A batch of input causes a model call only if it contains a trigger (`Wake`, job result, automation). Messages themselves are not triggers; when to wake is decided by [Intent](intent.md#intent-1); when there are only messages, they are kept and go in with the next model call.
-- **Reminder after working heads-down for too long** (2026-10-31): when the model has called tools 12 times in a row without saying a word in the group (output from which the segmenter cuts no message does not count, nor does `[silence]`), a `[maxx 提醒]` ("maxx reminder") section is appended after the last result of that tool batch: first say in the group what it is doing and how much longer it will take; if much work remains, hand it to a background agent; answer anyone who is waiting first. Saying something resets the count, and so does a reminder, so another reminder comes after a further 12 calls. The reason: on 2026-10-31, a turn in conversation 9 was asked to turn the previous night's changes into a PR; it installed dependencies, ran tests and changed code directly within the turn, made 49 tool calls and took 41 minutes before saying its first word, and did not answer two people who @-mentioned it in the meantime.
-- **Nearly-full reminder** (2026-11-01, proposed by the owner): when the transcript plus accumulated input passes 90% of the core limit (`near_limit`), a `[maxx 提醒]` is appended at the end before the next model call, at most once per run: the context is nearly used up; wrap up now, and say clearly in the group how far it got, what it found and what remains; the next turn cannot see this turn's tool results, only what was said in the group; if the remaining work is to continue, hand it to a background agent, and call no other tools.
-  - After the reminder has been given, `at_limit` holds only once the limit is exceeded. If no reminder has been given and a batch of tool results jumps straight from below 90% to beyond the limit, this one call carrying the reminder is still made first: on a model with a small window, the gap between 90% and the limit is only a few thousand tokens, while a single result can be up to 15% of C. This call uses the headroom: the output reserve plus 5% of C.
-  - When a reminded model says something, the triggers it has seen count as handled, even if the same output also calls tools (to hand over to an agent). That way, if it hits the limit after reporting progress and handing the work over, it does not add an error message saying that the context is full.
-  - If the core passes 90% while idle, it ends at once, without waiting for the idle window; the next trigger starts a new core, projected afresh from the ledger.
-  - The reason: a turn that hit the limit replied only with a single line, "读不完" ("too much to get through"), everything its tools had found was lost, and the next turn could see only what was said in the group. Up to 2026-11-01, not one of 392 turns had hit the limit: on a 1M window the core limit is about 524k, and the turn that grew the most grew by 176k. The reminder mainly guards against models with small windows, and against very long tasks in future.
-- **Interruption**: tool calls that have not returned get a "已取消" ("cancelled") result filled in, so that the history stays valid. Responses requires every `function_call` to have a corresponding output.
-- **Idle detection**: when the model's output in this round is text only, with no tool calls, and the accumulated input contains no trigger, `next_step` returns `Idle`. Ending is decided by the actor: expiry of the idle window, hitting the limit, `/kill`, failure, restart. If the whole run never said anything, the outcome is `Silent`; whether something was said is determined by running the model's text through the segmenter: if a message is cut out, it counts.
+  The output reserve is `max_output`, or C / 8 without one; C / 20 is the
+  margin for estimation error. With a 400k window, a 128k `max_output` and
+  a 100k base context, the core limit is 152k; by C / 2 alone it would be
+  200k, and the request would pass the 272k of input the provider allows.
+  The limit counts waiting inputs too, so a request cannot overflow. When
+  the base context alone fills the available space, the limit is 0.
+- **At the limit.** `at_limit` holds when the limit is 0, or when the
+  transcript and waiting inputs are over it and the model has been warned
+  (below). The actor then ends the run at the next boundary: an idle core
+  ends normally; otherwise the run fails with `ContextExhausted` and the
+  unhandled direct triggers get a one-line reply. The next trigger
+  projects afresh from the ledger. This is Max's compaction: rather than
+  compressing a transcript, it projects again.
+- **Handled.** An input the model has seen is handled when the model
+  reaches an output with no tool calls and the core becomes waiting,
+  whether or not it said anything; the mark is set at that moment. A
+  warned model that says something has also handled what it saw, even if
+  the same output calls tools (to hand over to an agent), so a run that
+  reports its progress, hands over and then reaches the limit adds no
+  error line. `unhandled` returns the wakes not yet handled; messages are
+  never in it, as they are in the ledger. On failure or interruption the
+  actor uses it to find the direct trigger that gets a reply; see
+  [What the group sees](actor.md#what-the-group-sees).
+- **When inputs take effect.** After every result of the current tool
+  batch is back, before the next model call. A batch of inputs causes a
+  model call only if it holds a trigger (a `Wake`); messages alone are
+  kept for the next call. When to wake is [Intent](intent.md)'s
+  decision.
+- **Reminder after too many quiet calls.** After `QUIET_CALLS` (12) tool
+  calls in a row with nothing said to the group (output the segmenter cuts
+  no message from doesn't count, nor does `[silence]`), a `[maxx 提醒]`
+  follows the batch's last result: say in the group what it is doing and
+  how long it will take, hand long work to a background agent, and answer
+  whoever is waiting first. Saying something resets the count, and so does
+  the reminder. Without it, a turn once made 49 calls over 41 minutes
+  before its first word, while two more people asked it something.
+- **Nearly-full warning.** When the transcript and waiting inputs pass
+  nine tenths of the limit (`near_limit`), the next model call ends with
+  `WARNING`, once per run: the context is nearly used up; say in the group
+  how far it got, what it found and what is left, since the next turn sees
+  only what was said; hand the rest to a background agent, and call no
+  other tool.
+  - Until the warning has been shown, a run over its limit isn't at it:
+    it still gets the call that shows the warning. On a small window the
+    gap between nine tenths and the limit is a few thousand tokens, while
+    one tool result may be 15% of C; that call spends the headroom, the
+    output reserve and the margin.
+  - An idle core past nine tenths ends at once, without waiting for the
+    idle window, and the next trigger starts afresh.
+  - Without the warning, a run that reached the limit lost everything its
+    tools had found and said only that it couldn't finish.
+- **Interruption.** Tool calls without a result get `已取消`, so that the
+  history stays valid: Responses requires an output for every
+  `function_call`.
+- **Taking back a call.** `retract` returns a model call that has said
+  nothing to `ModelDue`; the next step makes it again with what came
+  since. The actor uses it when someone finishes what they were asking;
+  see [Starting a model call over](actor.md#starting-a-model-call-over).
+- **Idle.** When the model's latest output is text only and no trigger
+  waits, `next_step` returns `Idle`. When to end is the actor's: the idle
+  window, the limit, `/kill`, failure, a restart. A run that never said
+  anything ends `Silent`; whether something was said is decided by running
+  the model's text through the segmenter.
 
 ## I/O tasks and protocol adapters
 
-The conversation actor spawns the I/O that the core needs as tasks, attached to that core's `io` scope, and their results return to the actor's mailbox as events (decided 2026-10-28; see [The conversation actor](actor.md#the-conversation-actor-1)). Tasks share no mutable state with one another or with the actor.
+The actor spawns the I/O the core asks for as tasks in that core's `io`
+scope, and their results return to its mailbox as events. Tasks share no
+mutable state with one another or with the actor.
 
-- **Model calls**: one task per `CallModel`. It holds the model client and the segmenter: it hands the request to the protocol adapter layer to be downgraded into the wire format, sends it and reads the stream; each time a segment is cut from the streamed text it sends `Said`, and when the stream ends it sends `ModelDone`. Retryable errors are retried within the task, provided that no `Said` has been sent yet; once one has been sent, there is no retry and the error is reported straight away, and the text already entered in the ledger is recorded by the actor as `partial_output` (decided 2026-10-28). Otherwise a retry would send the paragraphs already sent all over again from the beginning, which is most likely to happen during evening packet loss. As soon as a `run_code` or `shell` call appears in the stream, the VM service is notified to start the group VM.
-- **`run_code` and `shell`**: one task per call, run in the group VM, sending `ToolDone` when finished. Several calls in the same batch run concurrently, and whichever finishes first is fed to the core first.
-- **Intent classification**: attached to `side`, sending `Verdict` when finished; see [Intent](intent.md#intent-1).
-- **Receipts**: each task holds a receipt (`Report`); on normal completion it uses it to send its completion event, and if the task is aborted or panics, the receipt sends a "no result" event from its `Drop`. Every task therefore has exactly one completion event, which goes through the same mailbox as its `Said` events and is queued after them.
-- **Stale events**: each task has a number that increases within the conversation and is never reused, and all its events carry it. Events from a task that is not in flight for the current core (events arriving after the core has ended) are simply dropped.
+- **Model calls**: one task per `CallModel`. It holds the model client and
+  the segmenter: it has the protocol adapter downgrade the request into
+  the wire format, sends it and reads the stream, sends `Said` for each
+  segment cut from the streamed text and `ModelDone` when the stream
+  ends. A retryable error is retried within the task only while no `Said`
+  has been sent; after that the error is reported at once and the actor
+  records what was said as `partial_output`, since a retry would send the
+  paragraphs already sent again. As soon as a `run_code` or `shell` call
+  appears in the stream, the VM service is told to start the group's VM.
+- **`run_code` and `shell`**: one task per call, run in the group's VM,
+  sending `ToolDone`. Calls in a batch run concurrently, and whichever
+  finishes first is fed first.
+- **Intent classification**: in `side`, sending `Verdict`; see
+  [Intent](intent.md).
+- **Receipts**: each task holds a `Report`. It sends the task's completion
+  event on the normal path, and a "no result" event from its `Drop` if the
+  task is aborted or panics. Every task therefore has exactly one
+  completion event, queued in the same mailbox after its `Said` events.
+- **Stale events**: each task has a number, increasing within the
+  conversation and never reused, that all its events carry. Events from a
+  task not in flight for the current core are dropped.
 
-The protocol adapter layer is stateless and retains nothing between calls. Downgrading only removes entries or adjusts their shape; it never adds content:
+The protocol adapter layer is stateless. Downgrading only removes entries
+or changes their shape; it never adds content:
 
-- An `opaque` whose `source` does not match the current model is simply dropped. The model within a turn is fixed by the spec, so the two always match under normal circumstances; this rule is only a safety net.
-- **Responses**: all reasoning entries from the current turn are sent back.
-- **Chat**: several entries from the same round are joined back into one assistant message; `reasoning_content` is sent back within the current turn's tool-call loop.
-- For how images and videos in tool results are downgraded, see [Multimodal results](tools.md#multimodal-results).
+- An `opaque` whose `source` isn't the current model is dropped. The
+  model is fixed for the turn, so this is only a safety net.
+- **Responses**: every reasoning entry of the current turn is sent back.
+- **Chat**: the entries of one round are joined back into one assistant
+  message; `reasoning_content` is sent back within the current turn's
+  tool-call loop.
+- For images and videos in tool results, see
+  [Multimodal results](tools.md#multimodal-results).
