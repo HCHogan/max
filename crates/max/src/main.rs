@@ -788,7 +788,7 @@ async fn serve(config: Config) -> Result<()> {
     senders.close(DRAIN + Duration::from_secs(5)).await;
     // What they were doing is redone on the next start, or given up.
     workers.close(Duration::ZERO).await;
-    // The VMs are killed: what still ran in them was interrupted already.
+    // The VMs stay, and what runs in them: the next max attaches to them.
     services.close(Duration::ZERO).await;
     pool.close().await;
     if failed.is_cancelled() {

@@ -47,7 +47,7 @@ impl Tool for File {
 
     fn guide() -> String {
         format!(
-            "Copies a file of this chat's records into /work/chat/ and returns {{ path, name, size }}. handle is as the records show it, file#123.0; what the people sent as a picture, a sticker, a video or a voice message has one too (image#123.0). Only what was downloaded is there: at most {} MiB each. Read the copy from there with shell: pdftotext for a PDF, max.video for a video.",
+            "Copies a file of this chat's records into /work/chat/ and returns {{ path, name, size }}. handle is as the records show it, file#123.0; what the people sent as a picture, a sticker, a video or a voice message has one too (image#123.0). Only what was downloaded is there: at most {} MiB each. Read the copy from there with shell: pdftotext for a PDF, maxx video for a video.",
             KEPT_FILE_BYTES >> 20
         )
     }

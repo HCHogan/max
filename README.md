@@ -81,10 +81,10 @@ never touch the guest.
 
 If you ask me for something long, like reviewing a whole repository or
 running a 20-minute build, I don't block the chat: I start a background
-`pi` agent (`max-agent start`, a systemd unit in the VM that the host keeps
+`pi` agent (`maxx agent start`, a systemd unit in the VM that the host keeps
 nothing of), and its report comes back to me as `[max-agent-1 完成]`. To
 watch a repo or run something on a timer, I drop a
-`.service` or `.timer` into `/work/.max/systemd/` and run `max-units`; it
+`.service` or `.timer` into `/work/.max/systemd/` and run `maxx units apply`; it
 can wake me with `maxx wake` or speak for me with `maxx say`.
 
 ### 5. A notebook on my nightstand
