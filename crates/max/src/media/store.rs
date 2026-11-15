@@ -43,11 +43,7 @@ impl Store {
     /// left alone. A new file is renamed into its place, so no one reads
     /// half of one.
     pub async fn put(&self, bytes: Vec<u8>) -> io::Result<String> {
-        // A video's hash takes a while: not on the runtime's threads.
-        let (sha256, bytes) =
-            tokio::task::spawn_blocking(move || (hex(&Sha256::digest(&bytes)), bytes))
-                .await
-                .map_err(io::Error::other)?;
+        let (sha256, bytes) = named(bytes).await?;
         let path = self.path(&sha256);
         if fs::try_exists(&path).await? {
             return Ok(sha256);
@@ -133,6 +129,15 @@ impl Drop for Partial<'_> {
             let _ = std::fs::remove_file(&self.path);
         }
     }
+}
+
+/// The name `bytes` are stored by, their lowercase hex SHA-256, without
+/// storing them; and the bytes back.
+pub async fn named(bytes: Vec<u8>) -> io::Result<(String, Vec<u8>)> {
+    // A video's hash takes a while: not on the runtime's threads.
+    tokio::task::spawn_blocking(move || (hex(&Sha256::digest(&bytes)), bytes))
+        .await
+        .map_err(io::Error::other)
 }
 
 fn hex(bytes: &[u8]) -> String {

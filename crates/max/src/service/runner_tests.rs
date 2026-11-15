@@ -77,6 +77,14 @@ fn sha256(part: &Part) -> &str {
     }
 }
 
+/// How many files the content store in `dir` keeps.
+fn objects(dir: &Path) -> usize {
+    std::fs::read_dir(dir.join("store/objects"))
+        .unwrap()
+        .map(|shard| std::fs::read_dir(shard.unwrap().path()).unwrap().count())
+        .sum()
+}
+
 /// A call's directory, as `maxx units run` gives a call's unit one, in `dir`:
 /// what MAX_CALL names.
 fn call_dir(dir: &Path) -> PathBuf {
@@ -353,6 +361,8 @@ async fn programs_show_the_model_pictures() {
         seen_now.refused[1].ends_with(" wasn't shown: one call shows at most 4 pictures"),
         "{seen_now:?}"
     );
+    // What there was no room for isn't kept.
+    assert_eq!(objects(&dir), 4);
 
     // Outside a call, nobody is there to see it.
     let ran = run_with(
@@ -499,6 +509,7 @@ async fn programs_show_the_model_videos() {
         ),
         "{seen_now:?}"
     );
+    assert_eq!(objects(&dir), 3, "what there was no room for isn't kept");
 
     // A model that doesn't watch videos.
     let blind = seen(&store, &work, &call, false).await;

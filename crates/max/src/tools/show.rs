@@ -21,7 +21,7 @@ use tracing::warn;
 use super::Context;
 use crate::media::mp4;
 use crate::media::prepare::prepare;
-use crate::media::store::Store;
+use crate::media::store::{Store, named};
 use crate::service::Failure;
 use crate::service::work::{beneath_work, read};
 use max_core::limits::{PICTURE_BYTES, PICTURES_PER_RUN, VIDEO_BYTES, VIDEO_SECONDS};
@@ -99,17 +99,18 @@ async fn image(
         ));
     };
     let copy = prepared.copy.unwrap_or(bytes);
-    let part = Part::Media {
-        media: MediaRef::Blob(keep(&store, copy).await?),
+    let part = |sha256| Part::Media {
+        media: MediaRef::Blob(sha256),
     };
-    // One shown already takes no room.
-    if pictures >= PICTURES_PER_RUN && !so_far.contains(&part) {
-        return Err(Failure::new(
-            "too_many",
-            format!("one call shows at most {PICTURES_PER_RUN} pictures"),
-        ));
-    }
-    Ok(part)
+    let room = pictures < PICTURES_PER_RUN;
+    kept(&store, copy, room, so_far, part)
+        .await?
+        .ok_or_else(|| {
+            Failure::new(
+                "too_many",
+                format!("one call shows at most {PICTURES_PER_RUN} pictures"),
+            )
+        })
 }
 
 /// The MP4 at `path`, which video.js made for the model, if the model
@@ -141,10 +142,6 @@ async fn video(
     let seconds = u32::try_from(length.round() as u64)
         .unwrap_or(u32::MAX)
         .max(1);
-    let part = Part::Video {
-        media: MediaRef::Blob(keep(&store, bytes).await?),
-        seconds,
-    };
     let watched: u32 = so_far
         .iter()
         .map(|part| match part {
@@ -152,16 +149,20 @@ async fn video(
             _ => 0,
         })
         .sum();
-    if watched.saturating_add(seconds) > VIDEO_SECONDS && !so_far.contains(&part) {
-        return Err(Failure::new(
+    let part = |sha256| Part::Video {
+        media: MediaRef::Blob(sha256),
+        seconds,
+    };
+    let room = watched.saturating_add(seconds) <= VIDEO_SECONDS;
+    kept(&store, bytes, room, so_far, part).await?.ok_or_else(|| {
+        Failure::new(
             "too_long",
             format!(
                 "one call shows at most {} minutes of video, and this is {seconds} seconds after {watched} shown already: cut a piece with start and end",
                 VIDEO_SECONDS / 60
             ),
-        ));
-    }
-    Ok(part)
+        )
+    })
 }
 
 /// The file at `path` in the call's /work, at most `largest` bytes, and
@@ -187,12 +188,27 @@ async fn read_work(
     Ok((Arc::clone(store), bytes))
 }
 
-/// Stores `bytes`: their SHA-256.
-async fn keep(store: &Store, bytes: Vec<u8>) -> Result<String, Failure> {
-    store.put(bytes).await.map_err(|error| {
+/// What `bytes` are shown as: `part` of their name in the store, where
+/// they are kept if there is `room` for them. Without room nothing is
+/// stored, and they are shown only if they are among `so_far`: one shown
+/// already takes no room, and the store has it.
+async fn kept(
+    store: &Store,
+    bytes: Vec<u8>,
+    room: bool,
+    so_far: &[Part],
+    part: impl FnOnce(String) -> Part,
+) -> Result<Option<Part>, Failure> {
+    if !room {
+        let (sha256, _) = named(bytes).await.map_err(|_| internal())?;
+        let part = part(sha256);
+        return Ok(so_far.contains(&part).then_some(part));
+    }
+    let sha256 = store.put(bytes).await.map_err(|error| {
         warn!(%error, "couldn't store what a call showed");
         internal()
-    })
+    })?;
+    Ok(Some(part(sha256)))
 }
 
 fn internal() -> Failure {
