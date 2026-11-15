@@ -25,6 +25,7 @@ use max_core::ids::ConversationId;
 use reqwest::Url;
 use reqwest::redirect::Policy;
 use rustix::fs::{FlockOperation, flock};
+use tokio::task::spawn_blocking;
 use tokio::time::timeout;
 use tracing::{info, warn};
 
@@ -102,12 +103,18 @@ impl Apis {
     }
 
     /// Counts one more call of `api`, named `name`, if its hour has room.
-    fn take(&self, name: &str, api: &Api) -> bool {
+    async fn take(&self, name: &str, api: &Api) -> bool {
         let Some(per_hour) = api.per_hour else {
             return true;
         };
         if let Some(dir) = &self.counted {
-            match counted(&dir.join(name), per_hour, SystemTime::now()) {
+            let file = dir.join(name);
+            // The file's lock waits for the other forwarders: not on the
+            // runtime's threads.
+            let counted = spawn_blocking(move || counted(&file, per_hour, SystemTime::now()))
+                .await
+                .unwrap_or_else(|error| Err(io::Error::other(error)));
+            match counted {
                 Ok(room) => return room,
                 // Counted here alone, then: an API isn't lost for a file.
                 Err(error) => {
@@ -141,8 +148,8 @@ pub fn prompt(configured: &BTreeMap<String, config::Api>) -> String {
 
 /// Counts one more call at `now` in `file`, if the hour has room: a line
 /// a call of the last hour, the second it went. The file is locked while
-/// it is read and written, so that the forwarders count as one; a few
-/// file operations, done where they are asked for.
+/// it is read and written, so that the forwarders count as one: a few
+/// file operations, after a wait for whichever of them has the lock.
 fn counted(file: &Path, per_hour: u32, now: SystemTime) -> io::Result<bool> {
     if let Some(dir) = file.parent() {
         std::fs::create_dir_all(dir)?;
@@ -329,7 +336,7 @@ async fn call(
             &format!("{name} doesn't allow {method} {below}"),
         );
     }
-    if !forward.apis.take(name, api) {
+    if !forward.apis.take(name, api).await {
         info!(%conversation, api = name, %method, path = %below, "an API's calls ran out for the hour");
         let per_hour = api.per_hour.unwrap_or_default();
         return refuse(

@@ -150,7 +150,9 @@ impl Machine {
         }
     }
 
-    /// What it ran is the collector's again: a VM that has ended.
+    /// What it ran is the collector's again: a VM that has ended. A few
+    /// unlinks, done before this returns: left for later, they could take
+    /// the link of the boot that comes next.
     pub fn unroot(&self) {
         for root in self.roots() {
             let _ = std::fs::remove_file(root);

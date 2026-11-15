@@ -185,15 +185,15 @@ async fn a_call_goes_on_with_the_key_and_comes_back_as_it_is() {
 
 /// An API's hour is every chat's together: the VMs' forwarders, a
 /// process each, count its calls in one file.
-#[test]
-fn forwarders_count_an_apis_calls_together() {
+#[tokio::test]
+async fn forwarders_count_an_apis_calls_together() {
     let dir = std::env::temp_dir().join(format!("max-api-count-{:016x}", rand::random::<u64>()));
     let configured = BTreeMap::from([("mail".to_owned(), mail("https://mail.example"))]);
     let one = Apis::load(&configured).unwrap().counted_in(dir.clone());
     let other = Apis::load(&configured).unwrap().counted_in(dir.clone());
-    let take = |apis: &Apis| apis.take("mail", &apis.table["mail"]);
-    assert!(take(&one) && take(&other) && take(&one));
-    assert!(!take(&other) && !take(&one));
+    let take = async |apis: &Apis| apis.take("mail", &apis.table["mail"]).await;
+    assert!(take(&one).await && take(&other).await && take(&one).await);
+    assert!(!take(&other).await && !take(&one).await);
     // A call an hour old makes room for one more, and no more.
     let file = dir.join("mail");
     let now = SystemTime::now();
@@ -209,7 +209,8 @@ fn forwarders_count_an_apis_calls_together() {
     let alone = Apis::load(&configured)
         .unwrap()
         .counted_in("/proc/nowhere".into());
-    assert!(take(&alone) && take(&alone) && take(&alone) && !take(&alone));
+    assert!(take(&alone).await && take(&alone).await && take(&alone).await);
+    assert!(!take(&alone).await);
     std::fs::remove_dir_all(dir).unwrap();
 }
 
