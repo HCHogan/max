@@ -25,7 +25,4 @@ The design, in reading order:
 10. [commands.md](design/commands.md), [identity.md](design/identity.md), [config.md](design/config.md)
 11. [qq.md](design/qq.md), [media.md](design/media.md)
 
-[rust-rewrite.md](rust-rewrite.md) was the single design document until
-2026-11-15. It now only maps its old sections to where they are, for the
-comments in code that still name them. How to keep these files is in
-[AGENTS.md](../AGENTS.md#documentation).
+How to keep these files is in [AGENTS.md](../AGENTS.md#documentation).

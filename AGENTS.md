@@ -165,10 +165,13 @@ each kind in its place:
   file, not scattered through it.
 - **`docs/research/`** is what was looked at; **`docs/archive/`** finished
   history (v1, go-live, the import). Neither is kept up to date.
-- **`docs/rust-rewrite.md`** only maps old section names to their places,
-  for comments in code that still name them. New comments name the design
-  file (`See "Memory" in docs/design/context.md`). Never edit a migration
-  to update such a comment: sqlx checks an applied migration's checksum.
+- **`docs/rust-rewrite.md` is gone.** It was the single design document
+  until 2026-11-15, and many comments in code, Nix files and migrations still
+  name its sections (`See "Memory" in docs/rust-rewrite.md`). Where each
+  section went is the table in `git show cee72765:docs/rust-rewrite.md`.
+  When you touch such a comment, make it name the design file
+  (`See "Memory" in docs/design/context.md`). Never edit a migration to
+  update one: sqlx checks an applied migration's checksum.
   Changing a comment in a guest file (`nix/guest.nix`, the scripts and JS
   under `nix/`) changes the guest image, so leave those for a commit that
   changes the guest anyway.
