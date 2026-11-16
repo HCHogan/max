@@ -19,7 +19,7 @@ mod web_search;
 pub(crate) mod work;
 
 pub use forward::{api, router as agents};
-pub use http::{Calling, router, serve};
+pub use http::{Calling, Waited, router, serve};
 pub use mute_member::MuteMember;
 
 #[cfg(test)]
@@ -122,15 +122,10 @@ impl Failure {
         }
     }
 
-    /// Max is stopping, and the call wasn't begun. Its caller isn't
-    /// shown this: the service answers as the guest does once max is
-    /// gone, and the caller makes the call again when Max is back.
-    pub fn away() -> Self {
-        Self::new("away", "Max is restarting")
-    }
-
-    pub fn is_away(&self) -> bool {
-        self.code == "away"
+    /// Max stopped with the call in its hands: in the middle of it, or,
+    /// seldom, in the moment before it would have begun it.
+    pub fn closed() -> Self {
+        Self::new("closed", "Max stopped before it was done")
     }
 }
 

@@ -831,6 +831,11 @@ async fn serve(config: Config) -> Result<()> {
         () = failed.cancelled() => {}
     }
     info!("stopping");
+    // First, no more is taken from the VMs: what they ask from here on
+    // waits at the socket for the next max.
+    if let Some(vms) = &shared.vms {
+        vms.stop_listening();
+    }
     intake.close(INTAKE_GRACE).await;
     // With intake closed, the table stops every conversation.
     conversations

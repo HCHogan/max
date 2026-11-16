@@ -7,8 +7,10 @@
 # ffmpeg made, calls max's service with maxx from a command, and keeps a
 # unit in
 # /work/.max/systemd, which the next boot starts again, and wakes Max with
-# maxx wake. A VM outlives max, and so does its forwarder: a model's
-# answer that streams while max restarts comes whole. Then a VM on the
+# maxx wake. A VM outlives max, and so does its forwarder: what the guest
+# asks of max while max restarts waits at max's socket, which is
+# systemd's, and a model's answer that streams while max is stopped comes
+# whole. Then a VM on the
 # operations network reaches a stand-in for the tailnet through its
 # namespace, where an ordinary VM can't, its ip rule having outlived
 # networkd.
@@ -24,7 +26,7 @@ let
   # /etc/max-image).
   probe = pkgs.writeText "probe.sh" ''
     while true; do
-      code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' -H 'content-type: application/json' \
+      code=$(curl -s -m 60 -o /dev/null -w '%{http_code}' -H 'content-type: application/json' \
         -d '{"units":1}' http://127.0.0.1:7777/units || true)
       echo "$(cat /proc/sys/kernel/random/boot_id) $code $(cat /etc/max-image 2> /dev/null || echo first)" >> /work/probe.log
       sleep 1
@@ -227,13 +229,34 @@ pkgs.testers.runNixOSTest {
     machine.succeed("readlink /nix/var/nix/gcroots/per-user/maxx/7 | grep -q max-guest.json")
     # Its forwarder is a unit beside it, where the guest reaches the
     # host: what is max's it passes on, and the models' calls it carries
-    # itself. A program in the VM asks the agents' model for an answer
-    # that takes eight seconds to come.
+    # itself.
     machine.succeed("systemctl is-active maxx-forward@7.service")
+    # max restarts, as at a deploy. The socket the forwarders reach it at
+    # is systemd's, which goes on listening: what the unit asks meanwhile
+    # waits there, and the max that comes attaches to the VM and answers.
+    # Nothing in the guest hears of it: every answer is a 200, in the same
+    # boot of the same VM.
+    machine.succeed("systemctl is-active maxx.socket")
+    before = machine.succeed("systemctl show -P MainPID maxx.service").strip()
+    asked = int(machine.succeed(f"wc -l < {work}/probe.log"))
+    machine.succeed("systemctl restart maxx.service")
+    machine.wait_until_succeeds(
+        "journalctl -u maxx.service -o cat | grep -q 'attached to a VM that runs'", timeout=120
+    )
+    machine.wait_until_succeeds(f"test $(wc -l < {work}/probe.log) -gt {asked + 3}", timeout=120)
+    assert machine.succeed("systemctl show -P MainPID maxx.service").strip() != before
+    since = machine.succeed(f"tail -n +{asked + 1} {work}/probe.log").splitlines()
+    assert all(line.split()[1] == "200" for line in since), since
+    assert machine.succeed("systemctl show -P MainPID maxx-vm@7.service").strip() == pid
+    assert machine.succeed(f"{last} | cut -d' ' -f1").strip() == boot
+    # A program in the VM asks the agents' model for an answer that takes
+    # eight seconds to come.
     machine.succeed("maxx-ssh 7 'systemd-run --collect --unit=asks /bin/sh /work/asks.sh' < /dev/null")
     machine.wait_until_succeeds(f"grep -q 'piece 0' {work}/answer.txt", timeout=30)
-    # While max is away the guest is told so, and the VM runs on.
-    machine.succeed("systemctl stop maxx.service")
+    # Stopped with its socket, max isn't there to wait for: the guest is
+    # told it can't be reached, and the VM runs on. (With the socket left,
+    # the next thing the unit asked would start max again.)
+    machine.succeed("systemctl stop maxx.socket maxx.service")
     machine.wait_until_succeeds(f"{last} | grep -q ' 503 first$'", timeout=60)
     machine.succeed("systemctl is-active maxx-vm@7.service")
     # The forwarder runs on too: it says what the models are with max
@@ -242,12 +265,10 @@ pkgs.testers.runNixOSTest {
     machine.wait_until_succeeds(f"grep -q 'DONE' {work}/answer.txt", timeout=60)
     answer = machine.succeed(f"cat {work}/answer.txt")
     assert answer.count("piece ") == 8, answer
-    # The max that comes back attaches to it: the guest reaches it at the
-    # socket bound again, in the same boot of the same VM.
+    # The max that comes back, its socket with it, attaches to the VM
+    # again.
     machine.succeed("systemctl start maxx.service")
-    machine.wait_until_succeeds(
-        "journalctl -u maxx.service -o cat | grep -q 'attached to a VM that runs'", timeout=120
-    )
+    machine.succeed("systemctl is-active maxx.socket")
     machine.wait_until_succeeds(f"{last} | grep -q ' 200 first$'", timeout=120)
     assert machine.succeed("systemctl show -P MainPID maxx-vm@7.service").strip() == pid
     assert machine.succeed(f"{last} | cut -d' ' -f1").strip() == boot
@@ -290,7 +311,7 @@ pkgs.testers.runNixOSTest {
     assert machine.succeed("machinectl show maxx-7 -p Leader --value").strip() == pid
     # A VM whose guest keeps another contract is restarted at once.
     machine.succeed(
-        "systemctl stop maxx.service",
+        "systemctl stop maxx.socket maxx.service",
         "sed -i 's/\"contract\":[0-9]*/\"contract\":0/' /var/lib/maxx/vm/7/boot.json",
         "systemctl start maxx.service",
     )
@@ -301,7 +322,7 @@ pkgs.testers.runNixOSTest {
     assert machine.succeed("systemctl show -P MainPID maxx-vm@7.service").strip() != pid
     # Without its unit the VM isn't kept, and a stopped one's root goes.
     machine.succeed(
-        "systemctl stop maxx.service",
+        "systemctl stop maxx.socket maxx.service",
         f"rm -rf {work}/.max/systemd",
         "systemctl stop maxx-vm@7.service",
         "systemctl start maxx.service",

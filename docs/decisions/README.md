@@ -28,6 +28,7 @@ Why Max is built the way it is: one file for each decision that was a real trade
 - [The VMs run without a broker or root](vms-without-a-broker.md)
 - [What runs in a VM is systemd's to keep](lifetimes-to-systemd.md)
 - [What leaves the host process](what-leaves-the-host.md)
+- [max's socket is systemd's](max-socket-is-systemds.md)
 - [A forwarder keeps no count](forwarder-keeps-no-count.md)
 - [Idle guests drop their caches; the VMs' sizes stay](idle-guests-drop-caches.md)
 - [The derived-data workers share conventions, not a framework](no-worker-framework.md)

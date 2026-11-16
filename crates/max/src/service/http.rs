@@ -19,9 +19,12 @@ use axum::http::request::Parts;
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
+use axum::serve::Listener;
 use max_core::ids::ConversationId;
+use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use serde::Serialize;
 use serde_json::{Map, Value, json};
+use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{Semaphore, oneshot};
 use tokio::time::timeout;
@@ -55,12 +58,52 @@ pub fn router(calls: UnboundedSender<Signal>, host: axum::Router) -> axum::Route
         .merge(host)
 }
 
+/// The socket the VMs' forwarders reach max at, which takes no connection
+/// whose other end is gone. The socket waits through a restart of max
+/// (`maxx.socket`, nix/module.nix), so a call made meanwhile is there when
+/// max is back, with its request to read, even if its caller has left
+/// since: its turn was cut off, or its unit stopped. The forwarder closed
+/// that connection when its caller went, and the kernel says so of it
+/// before anything is read: it is dropped, and the call never begun. One
+/// that hangs up later is dropped as any call is whose caller closes.
+pub struct Waited(pub UnixListener);
+
+impl Listener for Waited {
+    type Io = UnixStream;
+    type Addr = tokio::net::unix::SocketAddr;
+
+    async fn accept(&mut self) -> (UnixStream, Self::Addr) {
+        loop {
+            let (stream, address) = Listener::accept(&mut self.0).await;
+            if !hung_up(&stream) {
+                return (stream, address);
+            }
+        }
+    }
+
+    fn local_addr(&self) -> std::io::Result<Self::Addr> {
+        self.0.local_addr()
+    }
+}
+
+/// Whether the other end of `stream` is gone, as it stands now.
+fn hung_up(stream: &UnixStream) -> bool {
+    // Asked for what there is to read, since not every system says of a
+    // connection it is asked nothing about that it has hung up.
+    let mut asked = [PollFd::new(stream, PollFlags::IN)];
+    let at_once = Timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    poll(&mut asked, Some(&at_once)).is_ok() && asked[0].revents().contains(PollFlags::HUP)
+}
+
 /// Serves `app` to the VMs on `listener` until `stop`. The VMs'
 /// forwarders reach it at a unix socket; tests' are TCP, which Node's
 /// fetch reaches.
 pub async fn serve<L>(listener: L, app: axum::Router, stop: CancellationToken)
 where
-    L: axum::serve::Listener,
+    L: Listener,
     L::Addr: std::fmt::Debug,
 {
     if let Err(error) = axum::serve(listener, app)
@@ -133,15 +176,8 @@ async fn call(
         );
         return answer(StatusCode::BAD_REQUEST, &outcome(Err(wrong)));
     };
-    match handler.call(conversation, &name, Value::Object(args)).await {
-        // With nothing done, Max stopping: as the guest answers once max
-        // is gone, 503 with `max-away`, so that the caller asks again
-        // when Max is back (nix/client.js).
-        Err(failure) if failure.is_away() => {
-            (StatusCode::SERVICE_UNAVAILABLE, [("max-away", "1")]).into_response()
-        }
-        done => answer(StatusCode::OK, &outcome(done)),
-    }
+    let done = handler.call(conversation, &name, Value::Object(args)).await;
+    answer(StatusCode::OK, &outcome(done))
 }
 
 /// A call's outcome, as its caller reads it.
@@ -157,8 +193,8 @@ fn outcome(done: Result<Value, Failure>) -> Value {
 impl Handler {
     /// Has the conversation's actor run the call: its result. The actor
     /// stops it when this stops waiting, as when the caller closes its
-    /// connection. One that comes as Max stops isn't begun, and is away;
-    /// one Max stopped in the middle of isn't, since it may have acted.
+    /// connection. One Max stopped with it in its hands is `closed`: it
+    /// may have acted.
     async fn call(
         &self,
         conversation: ConversationId,
@@ -179,10 +215,8 @@ impl Handler {
                 args,
                 reply,
             };
-            self.calls.send(call).map_err(|_| Failure::away())?;
-            result
-                .await
-                .unwrap_or_else(|_| Err(Failure::new("closed", "Max stopped before it was done")))
+            self.calls.send(call).map_err(|_| Failure::closed())?;
+            result.await.unwrap_or_else(|_| Err(Failure::closed()))
         };
         // The actor holds the call to the conversation's own call time;
         // this is for one that never reaches the actor.
@@ -228,7 +262,6 @@ mod tests {
     use std::time::Duration;
 
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::{UnixListener, UnixStream};
 
     use super::*;
 
@@ -288,6 +321,49 @@ mod tests {
             assert!(reply.contains(r#""code":"bad_request""#), "{reply}");
         }
         assert!(called.try_recv().is_err(), "nobody's call was begun");
+
+        scope.close(Duration::from_secs(5)).await;
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A call waits at the socket while max restarts. One whose caller
+    /// gave up meanwhile is still there to read when max is back, and
+    /// isn't begun; one whose caller waits is.
+    #[tokio::test]
+    async fn a_call_whose_caller_left_while_it_waited_isnt_begun() {
+        let dir = sockets("left");
+        let socket = dir.join("mine.sock");
+        let _ = std::fs::remove_file(&socket);
+        let listener = UnixListener::bind(&socket).unwrap();
+        let request = |text: &str| {
+            let body = json!({ "text": text }).to_string();
+            format!(
+                "POST /tools/say HTTP/1.1\r\nHost: max\r\nmax-conversation: 1\r\n\
+                 Content-Length: {}\r\n\r\n{body}",
+                body.len()
+            )
+        };
+        // Nobody takes connections yet: both wait, and the first one's
+        // caller goes.
+        let mut left = UnixStream::connect(&socket).await.unwrap();
+        left.write_all(request("走了").as_bytes()).await.unwrap();
+        drop(left);
+        let mut waits = UnixStream::connect(&socket).await.unwrap();
+        waits.write_all(request("还在").as_bytes()).await.unwrap();
+
+        let (calls, mut called) = tokio::sync::mpsc::unbounded_channel();
+        let mut scope = Scope::new();
+        let app = router(calls, axum::Router::new());
+        scope.spawn(move |stop| serve(Waited(listener), app, stop));
+        let Some(Signal::Call { args, reply, .. }) = called.recv().await else {
+            panic!("no call came");
+        };
+        assert_eq!(args, json!({ "text": "还在" }));
+        let _ = reply.send(Ok(json!({})));
+        let mut answer = vec![0; 1024];
+        let read = waits.read(&mut answer).await.unwrap();
+        assert!(answer[..read].starts_with(b"HTTP/1.1 200 OK"));
+        assert!(called.try_recv().is_err(), "the call nobody waits for");
 
         scope.close(Duration::from_secs(5)).await;
         let _ = std::fs::remove_dir_all(dir);

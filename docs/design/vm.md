@@ -108,13 +108,24 @@ is in [decisions/lifetimes-to-systemd.md](../decisions/lifetimes-to-systemd.md).
   since the host's weekly collection would otherwise take a replaced image
   from under a running guest. The links go when max stops the VM, and those
   of VMs that ended without max (a host restart) when max next starts.
-- **While max is away**: the forwarder answers 503 with `max-away` when
-  nothing listens at max's socket, so a caller knows nothing of its request
-  was read, and `client.js` calls again, for up to 3 minutes. max says the
-  same while it stops: once the table has told the actors to stop, a call
-  from a VM is begun by nobody and answered 503 `max-away`, for the next max
-  to take. A call that was running when max stopped fails as `closed`: it
-  may have acted.
+- **While max restarts**, what a guest asks of it waits. The socket the
+  forwarders reach max at is systemd's (`maxx.socket`), which listens
+  whether max runs or not: a request made meanwhile waits there, and the max
+  that comes answers it. Nothing in a guest asks twice. As max begins to
+  stop it takes no more from the socket (`Vms::stop_listening`), so nothing
+  new comes to a max that won't begin it. A call that was running when max
+  stopped fails as `closed`: it may have acted.
+- **A call whose caller left while it waited isn't begun.** A turn cut off
+  by the restart takes its program with it, and the request that program
+  had waiting is still at the socket, whole. The forwarder closed that
+  connection when its caller went, and max asks of each connection it
+  takes, before reading anything, whether its other end has hung up
+  (`service::Waited`): one that has is dropped.
+- **Stopped for good**, max is stopped with its socket: `systemctl stop
+  maxx.socket maxx.service`, or the target. Then nothing listens, and a
+  forwarder answers a guest 503 with a failed call, `unreachable`. With
+  max's unit alone stopped the socket still listens, and the next thing a
+  guest asks starts max again.
 - **Stopping**: only max asking systemd stops a VM (idle, evicted, dead, on
   an older image and quiet, unusable at attach), or `systemctl stop
   maxx.target`, or vm-check, which stops its own (`Vms::shut`). A stop is
@@ -298,12 +309,18 @@ push` in the middle. Why this and not more is in
   beside the VMs' directories. A forwarder is one VM's, and names its
   conversation to max in a header, `max-conversation`, in place of whatever
   the guest wrote under that name (`service::Calling`). Only max's user
-  reaches the socket, so nothing in a VM speaks for another's.
-- **While max is away** the forwarder answers 503 with `max-away`, and the
-  guest's client asks again. A request max had and didn't answer is a failed
-  call, `closed`, which may have acted. A request the guest drops is dropped
-  at max, which cancels the call. Each request is a connection of its own to
-  max, since one kept from before a restart would fail a call max never saw.
+  reaches the socket, so nothing in a VM speaks for another's. The socket
+  is a unit of systemd's, which gives it to max as max's standard input
+  (`StandardInput=socket`; `vm::given`); under vm-check and in a terminal
+  max binds it itself. A deploy restarts max in one step
+  (`stopIfChanged = false`) and leaves the socket; why it is so is in
+  [decisions/max-socket-is-systemds.md](../decisions/max-socket-is-systemds.md).
+- **A forwarder waits with its guest**: while max restarts its request sits
+  at the socket, for as long as the guest's caller waits. A request max had
+  and didn't answer is a failed call, `closed`, which may have acted. A
+  request the guest drops is dropped at max, which cancels the call. Each
+  request is a connection of its own to max, since one kept from before a
+  restart would fail a call max never saw.
 - **Its configuration is a link**, `forward.config` in the VM's directory,
   to the file max was started with. max makes it at boot and again each
   time it attaches, and the forwarder looks every two seconds: a link made

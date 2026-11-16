@@ -119,6 +119,9 @@ Rules:
 
 Shutdown order (`main.rs`):
 
+0. Take no more from the VMs: what they ask from here on waits at max's
+   socket, which systemd holds, for the next max. What was taken goes on
+   until its conversation stops.
 1. Stop intake, so no new messages come (5 seconds). QQ's gateway
    connection keeps its session id and sequence number for the next
    start's Resume; see [The official QQ bot](design/qq.md).

@@ -41,4 +41,10 @@
 # max.sock beside the VMs' directories, and a forwarder names its VM's
 # conversation in a header. A forwarder from before looks for max in its
 # own VM's directory, where nothing listens any more: its VM boots again.
-7
+#
+# 8 (2026-11-16): nothing says max is away. systemd listens at max.sock
+# for max, and what a guest asks while max restarts waits there; the
+# guest's client asks once, and max-host@ is one socat. A forwarder from
+# before would still answer 503 with max-away, which a guest's client no
+# longer reads.
+8

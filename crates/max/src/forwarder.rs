@@ -12,9 +12,10 @@
 //! to max: the tools, the timeline's rows, the units' count. max listens
 //! for every VM's forwarder at one socket, `max.sock` beside the VMs'
 //! directories, and each forwarder says which conversation's VM it
-//! speaks for, in a header a guest can't set. While max is away it says
-//! so, 503 with `max-away`, with nothing of the request passed on, and
-//! the guest's client asks again.
+//! speaks for, in a header a guest can't set. The socket is systemd's,
+//! which listens there whether max runs or not (nix/module.nix): what a
+//! guest asks while max restarts waits at it, and the max that comes
+//! answers. A forwarder waits with it, for as long as the guest does.
 //!
 //! Which configuration it reads is a link in the VM's directory,
 //! `forward.config`, which max makes when it boots the VM and makes
@@ -287,8 +288,8 @@ impl Max {
             .body(body);
         let answer = match sending.send().await {
             Ok(answer) => answer,
-            // Nothing listens: max is away, and has seen none of it.
-            Err(error) if error.is_connect() => return away(),
+            // Nothing listens: max is stopped, and has seen none of it.
+            Err(error) if error.is_connect() => return stopped(),
             Err(_) => return closed(),
         };
         let status = answer.status();
@@ -305,25 +306,32 @@ impl Max {
     }
 }
 
-/// As max says itself of a call that comes as it stops, and the guest
-/// while nothing listens on the host (nix/guest.nix): the caller asks
-/// again.
-fn away() -> Response {
-    (StatusCode::SERVICE_UNAVAILABLE, [("max-away", "1")]).into_response()
+/// Nothing listens where max does: it isn't restarting, which its socket
+/// waits through, but stopped, with its socket. A failed call, of which
+/// max saw nothing.
+fn stopped() -> Response {
+    failed(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "unreachable",
+        "max isn't running",
+    )
 }
 
 /// max went with the request in its hands: a call's outcome, as max
 /// gives one that it stopped in the middle of (service/http.rs).
 fn closed() -> Response {
-    let outcome = json!({
-        "ok": false,
-        "error": {
-            "code": "closed",
-            "message": "Max stopped before it was done; what acts in the chat may have taken effect: look at the records before trying again",
-        },
-    });
+    failed(
+        StatusCode::BAD_GATEWAY,
+        "closed",
+        "Max stopped before it was done; what acts in the chat may have taken effect: look at the records before trying again",
+    )
+}
+
+/// A call's outcome when it failed on the way to max.
+fn failed(status: StatusCode, code: &str, message: &str) -> Response {
+    let outcome = json!({ "ok": false, "error": { "code": code, "message": message } });
     let json = [(header::CONTENT_TYPE, "application/json")];
-    (StatusCode::BAD_GATEWAY, json, outcome.to_string()).into_response()
+    (status, json, outcome.to_string()).into_response()
 }
 
 #[cfg(test)]

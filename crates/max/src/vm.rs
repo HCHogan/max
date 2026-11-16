@@ -11,6 +11,7 @@ mod machine;
 pub mod ssh;
 
 use std::collections::{BTreeSet, HashMap};
+use std::os::fd::AsFd;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock};
@@ -25,6 +26,7 @@ use tokio::net::UnixListener;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot;
 use tokio::time::{Instant, MissedTickBehavior, interval, timeout};
+use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 pub use self::about::{About, Unit, taken};
@@ -74,12 +76,35 @@ pub fn work(dir: &Path, conversation: ConversationId) -> PathBuf {
 
 /// Listens where the VMs' forwarders pass on what their guests ask of
 /// max: `max.sock` in `dir`, beside the VMs' directories, one socket for
-/// them all (`crate::forwarder`). A socket an earlier max left there is
-/// replaced.
+/// them all (`crate::forwarder`). As a unit of systemd's the socket isn't
+/// max's to make: systemd listens there and gives max the socket
+/// ([`given`]), so what a guest asks while max restarts waits at it for
+/// the max that comes. Otherwise, as under vm-check or in a terminal, max
+/// binds it, in place of what an earlier one left.
 fn listen(dir: &Path) -> Result<UnixListener> {
+    if let Some(given) = given() {
+        return given.wrap_err("taking the socket systemd listens at");
+    }
     let socket = dir.join(forwarder::MAX);
     let _ = std::fs::remove_file(&socket);
     UnixListener::bind(&socket).wrap_err_with(|| format!("listening at {}", socket.display()))
+}
+
+/// The socket systemd listens at for this process, if it gave it one:
+/// `LISTEN_PID` and `LISTEN_FDS` say so, and with `StandardInput=socket`
+/// (`maxx.socket` and max's unit, nix/module.nix) it is the standard
+/// input, which takes no `unsafe` to have.
+fn given() -> Option<std::io::Result<UnixListener>> {
+    let ours = std::env::var("LISTEN_PID").is_ok_and(|pid| pid == std::process::id().to_string());
+    let one = std::env::var("LISTEN_FDS").is_ok_and(|sockets| sockets == "1");
+    (ours && one).then(|| {
+        let socket = std::io::stdin().as_fd().try_clone_to_owned()?;
+        let listener = std::os::unix::net::UnixListener::from(socket);
+        // Not one, if the unit's standard input is something else.
+        listener.local_addr()?;
+        listener.set_nonblocking(true)?;
+        UnixListener::from_std(listener)
+    })
 }
 
 /// What the VMs' own route asks of the service, and what its tasks tell
@@ -115,6 +140,8 @@ pub struct Vms {
     idle: Duration,
     /// The groups on the operations network.
     operating: Arc<BTreeSet<ConversationId>>,
+    /// Ends max's service to the VMs.
+    listening: CancellationToken,
 }
 
 enum Request {
@@ -166,11 +193,23 @@ impl Vms {
         let (internal, internal_rx) = mpsc::unbounded_channel();
         let host = host::router(internal.clone());
         let calls = signals.clone();
-        scope.spawn(move |stop| {
-            // The timeline's streams end with the service, which waits
-            // for them.
-            let host = host.merge(events::router(calls.clone(), stop.clone()));
-            service::serve(listener, service::router(calls, host), stop)
+        // The service's own end, which `stop_listening` brings before
+        // the scope's: no more is taken, and the timeline's streams
+        // end, while the calls it has go on.
+        let listening = CancellationToken::new();
+        let ends = listening.clone();
+        scope.spawn(move |stop| async move {
+            let host = host.merge(events::router(calls.clone(), ends.clone()));
+            let app = service::router(calls, host);
+            let serving = service::serve(service::Waited(listener), app, ends.clone());
+            tokio::pin!(serving);
+            tokio::select! {
+                () = &mut serving => {}
+                () = stop.cancelled() => {
+                    ends.cancel();
+                    serving.await;
+                }
+            }
         });
         let (requests, rx) = mpsc::unbounded_channel();
         scope.spawn(move |_| run(config, guest, signals, rx, (internal, internal_rx)));
@@ -179,7 +218,15 @@ impl Vms {
             apis,
             idle,
             operating,
+            listening,
         })
+    }
+
+    /// Takes no more of what the VMs ask, as max begins to stop. What it
+    /// has taken goes on, until its conversation stops; what comes from
+    /// here on waits at the socket systemd holds, for the max that comes.
+    pub fn stop_listening(&self) {
+        self.listening.cancel();
     }
 
     /// Whether the conversation's VM is on the operations network.

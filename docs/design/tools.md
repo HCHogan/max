@@ -205,8 +205,10 @@ one caller, is in
   and guides; `POST /tools/<name>`, its body the arguments as a JSON object,
   calls one. The answer is the call's outcome, `{"ok": true, "value": …}` or
   `{"ok": false, "error": {"code", "message"}}`, both with status 200;
-  arguments that aren't a JSON object get 400 in the same shape; max away or
-  stopping gets 503 with `max-away`. Closing the connection cancels the call,
+  arguments that aren't a JSON object get 400 in the same shape. A call made
+  while max restarts waits on the host and is answered by the max that comes
+  (see [A VM outlives max](vm.md#a-vm-outlives-max)); the guest's client
+  asks once. Closing the connection cancels the call,
   and `max.cancel` simply aborts the fetch.
 - **One caller**: a call is the VM's. It goes to the conversation's actor
   (`Signal::Call`, `Conversation::program_call`), which runs it in `side`

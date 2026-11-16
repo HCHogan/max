@@ -4,7 +4,7 @@
 // what comes back: {ok: true, value} or {ok: false, error: {code,
 // message}}; GET /tools lists them, with their schemas. A call is the
 // VM's: nothing says which program made it. See "The guest's calls" in
-// docs/rust-rewrite.md.
+// docs/design/tools.md.
 "use strict";
 
 // Where max is, for everything in the guest (guest.nix's max-host).
@@ -15,11 +15,6 @@ const QUIET = 90_000;
 // How long to wait before opening it again, at first and at most.
 const RETRY = 1_000;
 const MOST_RETRY = 30_000;
-// While max restarts, the guest's forwarder answers for it: 503 with
-// max-away, and nothing of the request read (guest.nix's max-host@). A
-// call is made again, with those waits, until max is back or this long
-// has passed. The VM, and what runs in it, outlives max.
-const AWAY = 180_000;
 
 // Waits ms, or until signal aborts, and leaves nothing behind: a listener
 // left on a signal at every retry piled up.
@@ -36,10 +31,6 @@ function sleep(ms, signal) {
   });
 }
 
-// What one try of a call came to, besides an outcome.
-const away = Symbol("away");
-const aborted = Symbol("aborted");
-
 class ToolError extends Error {
   constructor(tool, error) {
     super(`${tool}: ${error.message} (${error.code})`);
@@ -50,34 +41,18 @@ class ToolError extends Error {
 
 // A client of max at url.
 function connect({ url = MAX } = {}) {
-  // What max answers a request with, as {ok: true, value}; asked again
-  // while max is away, and a failure when it can't be reached or what
-  // comes back isn't JSON.
+  // What max answers a request with, as {ok: true, value}; a failure
+  // when it can't be reached or what comes back isn't JSON. It is asked
+  // once: while max restarts the request waits on the host, at max's
+  // socket, and the max that comes answers it. The VM, and what runs in
+  // it, outlives max.
   async function ask(method, path, body, signal) {
-    const cancelled = { ok: false, error: { code: "cancelled", message: "the call was cancelled; what acts in the chat may have taken effect: look at the records before trying again" } };
-    const asked = Date.now();
-    let wait = RETRY;
-    for (;;) {
-      const outcome = await once(method, path, body, signal);
-      if (outcome !== away) return outcome === aborted ? cancelled : outcome;
-      if (Date.now() - asked + wait > AWAY) {
-        return { ok: false, error: { code: "unreachable", message: `can't reach max: it has been away for ${Math.round((Date.now() - asked) / 1000)} seconds` } };
-      }
-      await sleep(wait, signal);
-      if (signal?.aborted) return cancelled;
-      wait = Math.min(wait * 2, MOST_RETRY);
-    }
-  }
-
-  // One try: the answer, or `away` when max isn't there to take it.
-  async function once(method, path, body, signal) {
     try {
       const response = await fetch(new URL(path, url), {
         method,
         signal,
         ...(body === undefined ? {} : { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }),
       });
-      if (response.status === 503 && response.headers.get("max-away")) return away;
       const text = await response.text();
       try {
         return { ok: true, value: JSON.parse(text) };
@@ -86,7 +61,9 @@ function connect({ url = MAX } = {}) {
       }
     } catch (error) {
       // As the host says when it cancels a call.
-      if (error.name === "AbortError") return aborted;
+      if (error.name === "AbortError") {
+        return { ok: false, error: { code: "cancelled", message: "the call was cancelled; what acts in the chat may have taken effect: look at the records before trying again" } };
+      }
       return { ok: false, error: { code: "unreachable", message: `can't reach max: ${error.message}` } };
     }
   }

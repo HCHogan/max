@@ -291,25 +291,16 @@ in
     listenStreams = [ "127.0.0.1:7777" ];
     socketConfig.Accept = true;
   };
-  # With nothing listening at the host's end the connection would only
-  # close: a caller couldn't tell that from a call max took and didn't
-  # answer. So the port is tried first, and when nothing is there the
-  # caller is told so, 503 with `max-away`: nothing of its request was
-  # read, and it may ask again (client.js does). The VM's forwarder
-  # listens for as long as the VM runs, and says the same itself while
-  # max restarts; before 2026-11-14 max listened there, and this was
-  # what a guest heard at every deploy.
+  # The VM's forwarder listens there for as long as the VM runs, and a
+  # restart of max is the host's to wait through: what is asked meanwhile
+  # waits at max's socket (module.nix). A connection nothing takes at the
+  # host's end only closes, and its caller can't reach max.
   systemd.services."max-host@" = {
     # A switch to a new image leaves the calls in flight.
     restartIfChanged = false;
     unitConfig.DefaultDependencies = false;
     serviceConfig = {
-      ExecStart = pkgs.writeShellScript "max-host" ''
-        if ${pkgs.socat}/bin/socat -u OPEN:/dev/null VSOCK-CONNECT:2:7777 2> /dev/null; then
-          exec ${pkgs.socat}/bin/socat STDIO VSOCK-CONNECT:2:7777
-        fi
-        printf 'HTTP/1.1 503 Service Unavailable\r\nmax-away: 1\r\ncontent-length: 0\r\nconnection: close\r\n\r\n'
-      '';
+      ExecStart = "${pkgs.socat}/bin/socat STDIO VSOCK-CONNECT:2:7777";
       StandardInput = "socket";
       StandardError = "journal";
     };

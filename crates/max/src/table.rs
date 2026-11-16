@@ -89,19 +89,20 @@ impl Table {
         for actor in self.actors.values() {
             let _ = actor.send(Event::Stop);
         }
-        // Nothing new starts from here. A call that comes from a VM is
-        // answered as the guest answers once max is gone: Max is away,
-        // and its caller makes it again when the next max is up.
+        // Nothing new starts from here. max took no more from the VMs
+        // once it began to stop (`Vms::stop_listening`): what they ask
+        // waits at the socket for the next max. A call taken in the moment
+        // before is told Max stopped.
         let mut stopped = pin!(self.scope.close(grace));
         loop {
             tokio::select! {
                 () = &mut stopped => break,
-                Some(signal) = signals.recv() => away(signal),
+                Some(signal) = signals.recv() => unbegun(signal),
             }
         }
         signals.close();
         while let Ok(signal) = signals.try_recv() {
-            away(signal);
+            unbegun(signal);
         }
         info!("every conversation has stopped");
     }
@@ -329,11 +330,11 @@ impl Table {
     }
 }
 
-/// What came for a conversation as Max stops: a call is told Max is away,
+/// What came for a conversation as Max stops: a call is told Max stopped,
 /// and the rest is dropped, as it is once max is gone.
-fn away(signal: Signal) {
+fn unbegun(signal: Signal) {
     if let Signal::Call { reply, .. } = signal {
-        let _ = reply.send(Err(service::Failure::away()));
+        let _ = reply.send(Err(service::Failure::closed()));
     }
 }
 

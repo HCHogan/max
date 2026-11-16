@@ -96,9 +96,11 @@ image = { version = "0.25.10", default-features = false, features = ["png", "jpe
 base64 = "0.23"
 # Opening a file in a group's /work on the host one component at a time
 # with openat and O_NOFOLLOW: the guest writes /work, symlinks included,
-# and must not make max read anything outside it. 1.1 is in the tree
-# already, through insta's tempfile.
-rustix = { version = "1.1", features = ["fs"] }
+# and must not make max read anything outside it. And asking a connection
+# from a VM's forwarder, before anything of it is read, whether its other
+# end has hung up (poll). 1.1 is in the tree already, through insta's
+# tempfile.
+rustix = { version = "1.1", features = ["event", "fs"] }
 
 # Tests only.
 insta = "1.49"

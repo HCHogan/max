@@ -55,12 +55,10 @@ let
     http.createServer((req, res) => {
       let body = "";
       req.on("data", chunk => (body += chunk));
-      req.on("end", () => {
-        // As the guest's forwarder answers while max restarts.
-        if (fs.existsSync("/run/away")) {
-          res.writeHead(503, { "max-away": "1", "content-length": "0" });
-          return res.end();
-        }
+      req.on("end", async () => {
+        // While max restarts, what is asked waits at its socket on the
+        // host, and the max that comes answers.
+        while (fs.existsSync("/run/away")) await new Promise(resolve => setTimeout(resolve, 200));
         // The models: what max says of them, and their calls.
         if (req.url === "/llm" && fs.existsSync("/run/no-model")) return res.writeHead(404).end();
         if (req.url === "/llm") {
@@ -378,7 +376,7 @@ pkgs.testers.runNixOSTest {
         machine.succeed("sleep 2")
         assert len(wakes()) == 3, wakes()
 
-    with subtest("a call made while max restarts is made again until it is back"):
+    with subtest("a call made while max restarts waits until it is back"):
         machine.succeed("touch /run/away")
         machine.succeed("(maxx wake --text 回来了吗 > /run/away.out 2>&1; echo $? > /run/away.status) > /dev/null 2>&1 &")
         machine.succeed("sleep 4")

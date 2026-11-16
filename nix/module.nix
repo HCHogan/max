@@ -482,18 +482,57 @@ in
         "postgresql.target"
       ]
       ++ lib.optional vm "${name}-taps.service"
+      ++ lib.optional vm "${name}.socket"
       ++ lib.optional operations "${name}-ops-network.service";
       wants = [ "network-online.target" ] ++ lib.optional vm "${name}-taps.service";
-      requires = [ "postgresql.target" ];
-      serviceConfig = serviceConfig // {
-        ExecStart = "${max} run --config ${configFile}";
-        Restart = "on-failure";
-        RestartSec = 5;
-        # SIGTERM goes to max alone, which stops what it started in order;
-        # whatever is left after it exits is killed with the cgroup. The
-        # VMs aren't in it: they are units of their own, and stay.
-        KillMode = "mixed";
-        TimeoutStopSec = 60;
+      requires = [ "postgresql.target" ] ++ lib.optional vm "${name}.socket";
+      # A deploy restarts max in one step, with its socket, below, left
+      # as it is. Stopped first and started after, as a changed unit is
+      # otherwise, a unit that has a socket has the socket stopped with
+      # it, and is left for the socket to start: what the VMs asked
+      # meanwhile would be refused, and max wouldn't run until one asked.
+      stopIfChanged = false;
+      serviceConfig =
+        serviceConfig
+        // {
+          ExecStart = "${max} run --config ${configFile}";
+          Restart = "on-failure";
+          RestartSec = 5;
+          # SIGTERM goes to max alone, which stops what it started in order;
+          # whatever is left after it exits is killed with the cgroup. The
+          # VMs aren't in it: they are units of their own, and stay.
+          KillMode = "mixed";
+          TimeoutStopSec = 60;
+        }
+        // lib.optionalAttrs vm {
+          # The socket, below, is max's standard input: max takes it from
+          # there (`given` in crates/max/src/vm.rs).
+          StandardInput = "socket";
+          StandardOutput = "journal";
+          StandardError = "journal";
+        };
+    };
+
+    # Where the VMs' forwarders reach max: systemd listens there, whether
+    # max runs or not, and max is given the socket when it starts. What a
+    # guest asks while max restarts, as at every deploy, waits at it, and
+    # the max that comes answers; nothing in a guest asks twice. It is the
+    # target's as max is: `systemctl stop ${name}.target` stops both. With
+    # max's unit alone stopped the socket still listens, and the next
+    # thing a guest asks starts max again; to keep max down, stop
+    # ${name}.socket too.
+    systemd.sockets.${name} = lib.mkIf vm {
+      description = "Where the VMs' forwarders reach max (${name})";
+      wantedBy = [ "${name}.target" ];
+      partOf = [ "${name}.target" ];
+      listenStreams = [ "${vmDir}/max.sock" ];
+      socketConfig = {
+        SocketUser = name;
+        SocketGroup = name;
+        SocketMode = "0600";
+        # On a host max has never run on, its state directory isn't there
+        # yet: max's unit takes it over when it starts.
+        DirectoryMode = "0700";
       };
     };
 
