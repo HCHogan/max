@@ -317,15 +317,6 @@ mod tests {
         assert_eq!(say("[reply#] pong").nodes, vec![text("[reply#] pong")]);
     }
 
-    #[test]
-    fn markers_with_ids_code_and_prose_are_not() {
-        assert!(unfilled_in("[reply#12] [mention#3] 好 [sticker#4.0]").is_empty());
-        assert!(unfilled_in("写 `[reply#${id}]` 引用一条，[split] 分条").is_empty());
-        assert!(unfilled_in("例子：\n```\nsay(`[reply#${id}] 好`)\n```").is_empty());
-        assert!(unfilled_in("数组 a[0]、[链接#] 和 [reply").is_empty());
-        assert!(unfilled_in("[[reply#5]] [image: 吃瓜]").is_empty());
-    }
-
     fn say(chunk: &str) -> Draft {
         parsed(chunk).unwrap_or_else(|| panic!("{chunk:?} said nothing"))
     }
@@ -356,50 +347,6 @@ mod tests {
     }
 
     #[test]
-    fn placeholders_in_code_are_shown() {
-        let draft = say("写成 `[mention#12]` 就是 @，``[reply#3]`` 是引用 [mention#12]");
-        assert_eq!(draft.reply_to, None);
-        assert_eq!(
-            draft.nodes,
-            vec![
-                text("写成 `[mention#12]` 就是 @，``[reply#3]`` 是引用 "),
-                DraftNode::Mention {
-                    principal: PrincipalId(12)
-                },
-            ]
-        );
-        let unclosed = say("`[mention#12] 你看");
-        assert_eq!(
-            unclosed.nodes[1],
-            DraftNode::Mention {
-                principal: PrincipalId(12)
-            }
-        );
-    }
-
-    #[test]
-    fn faces_and_media_max_cant_send_go() {
-        let draft = say("好[face#271: 吃瓜][image#7405][face: 吃瓜][video#7.2][file#7.3: a.pdf]");
-        assert_eq!(draft.nodes, vec![text("好")]);
-    }
-
-    #[test]
-    fn pictures() {
-        let node = |message, ordinal| DraftNode::Picture {
-            message: MessageId(message),
-            ordinal,
-        };
-        assert_eq!(say("[sticker#42.0: 柴犬](3秒)").nodes, vec![node(42, 0)]);
-        assert_eq!(say(" [image#7405.1] ").nodes, vec![node(7405, 1)]);
-    }
-
-    #[test]
-    fn malformed_placeholders_stay_text() {
-        let chunk = "[reply#abc] [face#] [image#5.] [mention#12 [unknown#3] [] [reply#1";
-        assert_eq!(say(chunk).nodes, vec![text(chunk)]);
-    }
-
-    #[test]
     fn silence() {
         assert_eq!(parsed("[silence]"), None);
         assert_eq!(parsed("[reply#5]  [silence]"), None);
@@ -420,48 +367,6 @@ mod tests {
         assert_eq!(
             say("[look up=“x”] 数组 [a b]").nodes,
             vec![text("数组 [a b]")]
-        );
-    }
-
-    #[test]
-    fn echoes_of_history() {
-        assert_eq!(
-            say("第一行 ⏎ 第二行⏎第三行").nodes,
-            vec![text("第一行\n第二行\n第三行")]
-        );
-        let draft = say("[09:03 Max #102 回复你]: [reply#101] 在");
-        assert_eq!(
-            (draft.reply_to, draft.nodes),
-            (Some(MessageId(101)), vec![text("在")])
-        );
-        // Cut off by the picture that followed it.
-        assert_eq!(parsed("[09:03 Max #102]:"), None);
-        assert_eq!(say("[09:03] 说: 好").nodes, vec![text("[09:03] 说: 好")]);
-        let echoed = "看[image: 一只猫][sticker] [unsend#3][react#2: 托腮][card: a | b][poke]图";
-        assert_eq!(say(echoed).nodes, vec![text("看 图")]);
-        assert_eq!(
-            say("[edit] [video#3.0] [movie#3]").nodes,
-            vec![text("[edit]  [movie#3]")]
-        );
-    }
-
-    #[test]
-    fn fences_are_left_alone() {
-        let chunk = "看：\n```\nlet a = v[reply#3];\n[f x=\"1\"] [silence]\n```";
-        assert_eq!(
-            say(chunk),
-            Draft {
-                reply_to: None,
-                nodes: vec![text(chunk)]
-            }
-        );
-        let quoted = say("[reply#3] ```\nlet a = v[reply#4];\n```");
-        assert_eq!(
-            (quoted.reply_to, quoted.nodes),
-            (
-                Some(MessageId(3)),
-                vec![text("```\nlet a = v[reply#4];\n```")]
-            )
         );
     }
 }

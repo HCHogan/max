@@ -89,25 +89,3 @@ async fn not_retried_once_something_is_said() {
     assert!(out.is_err());
     assert_eq!(script.calls(), 1, "a 400 isn't retried");
 }
-
-#[tokio::test(start_paused = true)]
-async fn an_aborted_call_still_ends() {
-    let script = Arc::new(Script::default());
-    script.push(Answer::Hangs);
-    let chosen = models(&script).turn(None, None).unwrap();
-    let (tx, mut rx) = mpsc::unbounded_channel();
-    let task = call(chosen.clone(), None, request(&chosen), TaskId(7), tx);
-    let cut = tokio::time::timeout(Duration::from_secs(60), task).await;
-    assert!(cut.is_err());
-    let Ok(Event::ModelDone { task, out }) = rx.try_recv() else {
-        panic!("no ModelDone");
-    };
-    assert_eq!(task, TaskId(7));
-    assert!(out.is_err());
-}
-
-#[test]
-fn backing_off() {
-    let waits: Vec<u64> = (0..6).map(|n| backoff(n).as_secs()).collect();
-    assert_eq!(waits, [1, 2, 4, 8, 8, 8]);
-}

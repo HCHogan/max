@@ -387,9 +387,7 @@ tool.
   `/work/.max/systemd` and runs `maxx units apply`; the nested test runs it
   twice, checking the unit is active before the second boot's apply and both
   boots are recorded, that `maxx units apply` says the VM stays up, and that
-  `maxx wake` reached `vm-check`. The table's test: a group whose actor isn't
-  running is woken by `maxx wake`, Max answers, and `[VM]` reaches the same
-  actor. The slots and the startup scan have pure tests.
+  `maxx wake` reached `vm-check`.
 
 ### Programs call tools
 
@@ -428,11 +426,9 @@ caps, is in
 - **The prompt**: what needs no judgement from Max, a program says itself
   with `maxx say`, written as replies are, marked `程序发的`; pictures and files
   go with `maxx send-image` and `send-file`.
-- **Tests**: the runner tests list every tool through `maxx` (`say`, `file`,
-  `mute_member` and `ask` among them, not `show` or `video`) and see calls
-  arrive as `Signal::Call`; the actor tests have `say` send two messages and
-  return the ids only after the receipts, with `raw` marked and the next core
-  seeing `程序发的`; vm-check's background command runs `maxx wake`, and
+- **Tests**: the actor's test has `say` send two messages and return the
+  ids only after the receipts, with `raw` marked and the next core seeing
+  `程序发的`; vm-check's background command runs `maxx wake`, and
   `maxx units apply` reports through `/units`.
 
 ### Following the chat: maxx events
@@ -495,7 +491,7 @@ are.
   and a message's `nodes` the core's. What the projection reads is what a
   program reads. A field that goes or changes meaning is a change to the
   contract with the guests; one more isn't. The tool's schema names a row's
-  own fields, and a test holds it to what is written.
+  own fields.
 - **`people`** maps each identity among the rows' senders and those they
   mention to the person's number.
 - It isn't part of `history`, whose arguments are declared in the prompt for

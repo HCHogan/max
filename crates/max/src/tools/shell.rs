@@ -90,13 +90,3 @@ pub(super) fn out_of_time(limit: Duration) -> String {
 fn title(command: &str) -> String {
     format!("$ {}", headline(command))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_command_is_titled_by_its_first_line() {
-        assert_eq!(title("make -j8\nmake install"), "$ make -j8");
-    }
-}

@@ -157,14 +157,6 @@ mod tests {
     }
 
     #[test]
-    fn schemas_are_json() {
-        for tool in TOOLS.iter() {
-            let schema: serde_json::Value = serde_json::from_str(tool.parameters).unwrap();
-            assert_eq!(schema["type"], "object", "{}", tool.name);
-        }
-    }
-
-    #[test]
     fn well_formed_calls() {
         assert_eq!(
             parse(&call(

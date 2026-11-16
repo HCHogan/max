@@ -97,31 +97,3 @@ fn fitted(words: &str, single: u32) -> Cow<'_, str> {
         .map_or(words.len(), |(at, _)| at);
     format!("{}…（太长，只有开头）", &words[..end]).into()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_long_wake_shows_its_beginning() {
-        let long = "长".repeat(EXCERPT_CHARS * 3);
-        let text = Notice::Woken {
-            text: &long,
-            count: 1,
-        }
-        .text(2000);
-        assert!(text.ends_with("长…（太长，只有开头）"), "{text}");
-        let (excerpt, _) = text.split_once('…').unwrap();
-        assert_eq!(
-            excerpt.chars().filter(|c| *c == '长').count(),
-            EXCERPT_CHARS
-        );
-    }
-
-    #[test]
-    fn the_first_wake_is_shown_as_it_is_and_the_rest_counted() {
-        let woken = |text, count| Notice::Woken { text, count }.text(25_000);
-        assert_eq!(woken("CI 挂了 2 个\n", 1), "[max-wake] CI 挂了 2 个");
-        assert_eq!(woken("又挂了", 37), "[max-wake] （这一小时第 37 次）又挂了");
-    }
-}

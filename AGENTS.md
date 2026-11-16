@@ -131,14 +131,21 @@ the design might want has a stable alternative.
 ## Testing
 
 - All tests run with cargo-nextest.
-- Pure logic is tested with a fake provider and a fake platform; timeouts
-  and graces with tokio's `start_paused` (the actor's tests use real time;
-  see [Testing](docs/design/actor.md#testing)).
-- Cancellation: the actor's tests insert `/kill` between every two events,
-  and each I/O task is dropped once at every poll point (see
-  [Cancellation safety](docs/design/lifetimes.md#cancellation-safety));
-  normal-path tests assert that nothing was killed because its connection
-  dropped, which catches a missed `close`.
+- Tests keep to the critical path: what a mistake in wouldn't show by
+  itself and would cost the most. That is the core's and intent's state
+  machines, what the segmenter sends to the chat, what a request shows the
+  model, the two protocols against recorded responses, the ledger's rows
+  read back as written, one pass through the actor for each way a turn
+  starts and ends, a program's call through the runner, and the checks that
+  keep a guest in its `/work`, an API call under its base and a call with
+  its own VM. The rest has none: a tool's own rules, the commands' wording,
+  the workers, the VM service, the configuration's parsing. A change brings
+  a test when it is of the first kind, not as a matter of course; why is in
+  [docs/decisions/2026-11-16-tests-on-the-critical-path.md](docs/decisions/2026-11-16-tests-on-the-critical-path.md).
+- The core and intent are tested without tokio or a fake provider. The
+  actor is tested with a real database, a scripted model and a sender that
+  only records, in real time; timeouts and graces elsewhere with tokio's
+  `start_paused` (see [Testing](docs/design/actor.md#testing)).
 - Database tests use `#[sqlx::test]`, a temporary database each. Locally
   they use the dev shell's Postgres (`devenv up`, port 5434, role and
   database `max`); the flake's nextest check starts its own, on TCP only.

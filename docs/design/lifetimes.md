@@ -108,19 +108,10 @@ Only cancel-safe branches go in a `select!` loop:
 Invariants aren't changed while a lock is held across an `await`; clippy's
 `await_holding_lock` catches some cases.
 
-Tests come in two layers, both with tokio's `start_paused`, so the results
-are deterministic:
-
-1. **The actor**: run a script with a fake provider, fake tools and a fake
-   sender, and record the N events the actor handles. Then run it N more
-   times, inserting `/kill` after the k-th event in the k-th run, and once
-   more the same way for a stop. Each run checks that what the fake sender
-   received is exactly Max's messages that were entered, that old events
-   arriving after the insertion are all dropped, and that no command
-   leaked.
-2. **Tasks**: drop the task once at each poll point, and check that
-   exactly one completion event was sent, that the fake connection got no
-   half frame, and that nothing leaked.
+No test tries every `await`: these rules are kept by review. `/kill` and
+a stop that outlasts its grace each have one test through the actor, and
+`Scope`'s close and drop have their own (see
+[Testing](actor.md#testing)).
 
 ## Timeouts
 

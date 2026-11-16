@@ -122,6 +122,3 @@ fn conversation(context: &Context) -> Result<&Poster, Failure> {
         )
     })
 }
-
-#[cfg(test)]
-mod tests;

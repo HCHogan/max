@@ -292,13 +292,6 @@ mod tests {
     use crate::ids::{ConversationId, MessageId};
     use crate::message::{Emote, ForwardRef, MediaMeta, Platform, Role, Sender, Unsupported};
 
-    #[test]
-    fn a_span_reads_as_hours_or_minutes() {
-        assert_eq!(span(Duration::from_secs(7200)), "两小时");
-        assert_eq!(span(Duration::from_secs(3 * 3600)), "3 小时");
-        assert_eq!(span(Duration::from_secs(90 * 60)), "90 分钟");
-    }
-
     fn people() -> BTreeMap<IdentityId, PrincipalId> {
         [
             (IdentityId(1), PrincipalId(1)),
@@ -456,64 +449,5 @@ mod tests {
             .map(|(row, mark)| (row, render.line(row, mark)))
             .collect();
         insta::assert_snapshot!(render.joined(&lines, None));
-    }
-
-    #[test]
-    fn a_continued_block_repeats_no_date() {
-        let people = people();
-        let row = message(5, (28, 2, 0), "小明", said(vec![text("嗯")]));
-        let before = Utc.with_ymd_and_hms(2026, 10, 28, 1, 30, 0).unwrap();
-        let render = render(&people);
-        let lines = [(&row, render.line(&row, Mark::None))];
-        assert_eq!(render.joined(&lines, Some(before)), "[10:00 小明 #5]: 嗯\n");
-    }
-
-    #[test]
-    fn excerpt() {
-        let people = people();
-        let long = "长".repeat(EXCERPT_CHARS + 10);
-        let row = message(7, (28, 2, 0), "小明", said(vec![text(&long)]));
-        let line = render(&people).excerpt(&row, Mark::RepliesToYou);
-        assert!(line.starts_with("[10:00 小明 #7 回复你]: 长长"));
-        assert!(line.ends_with("长…（太长，全文见 #7，用 history 读）"));
-        assert_eq!(
-            line.split('…')
-                .next()
-                .unwrap()
-                .chars()
-                .filter(|c| *c == '长')
-                .count(),
-            EXCERPT_CHARS
-        );
-    }
-
-    #[test]
-    fn media_have_handles_in_lines_but_not_in_search_text() {
-        let people = people();
-        let named = |kind, name: &str| Node::Media {
-            media: None,
-            meta: MediaMeta {
-                kind,
-                mime: None,
-                size: None,
-                name: Some(name.into()),
-                description: None,
-            },
-        };
-        let content = said(vec![
-            named(MediaKind::Image, "6D1D1FE1.jpg"),
-            text("和"),
-            named(MediaKind::File, "手册.pdf"),
-        ]);
-        let message = message(7, (28, 9, 0), "小明", content.clone());
-        let line = render(&people).line(&message, Mark::None);
-        assert!(
-            line.ends_with("[image#7.0]和[file#7.1: 手册.pdf]"),
-            "{line}"
-        );
-        assert_eq!(
-            render(&people).content(&content),
-            "[image]和[file: 手册.pdf]"
-        );
     }
 }

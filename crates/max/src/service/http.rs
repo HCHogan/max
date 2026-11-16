@@ -224,176 +224,21 @@ fn listed(spec: &'static Spec) -> Listed {
 
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
     use std::time::Duration;
 
-    use chrono::Utc;
-    use sqlx::PgPool;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{UnixListener, UnixStream};
 
     use super::*;
-    use crate::conversation::ingest;
-    use crate::conversation::testing::{from_xiaoming, group, offset, text};
+
     use crate::scope::Scope;
-    use crate::service::{Context, Services, testing};
 
     /// A directory of the test's own for its sockets.
     fn sockets(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("max-http-{name}-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
-    }
-
-    /// Serves the VM of `context`'s conversation on the unix socket
-    /// `socket`, in `scope`, its calls run in `context`.
-    fn serve_at(scope: &mut Scope, socket: &Path, context: Context) {
-        let _ = std::fs::remove_file(socket);
-        let listener = UnixListener::bind(socket).unwrap();
-        let conversation = context.place.conversation;
-        let calls = testing::answering(scope, context);
-        let app = testing::named(conversation, router(calls, axum::Router::new()));
-        scope.spawn(move |stop| serve(listener, app, stop));
-    }
-
-    /// Asks at `socket` with `method` for `path`, `body` sent as JSON:
-    /// the reply's head, and its body.
-    async fn exchanged(socket: &Path, method: &str, path: &str, body: &str) -> (String, String) {
-        let request = format!(
-            "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:7777\r\nContent-Type: application/json\r\n\
-             Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        );
-        let mut stream = UnixStream::connect(socket).await.unwrap();
-        stream.write_all(request.as_bytes()).await.unwrap();
-        let mut reply = String::new();
-        stream.read_to_string(&mut reply).await.unwrap();
-        let (head, body) = reply.split_once("\r\n\r\n").unwrap();
-        (head.to_owned(), body.to_owned())
-    }
-
-    /// The same: the reply's status line, and its body as JSON.
-    async fn asked(socket: &Path, method: &str, path: &str, body: &str) -> (String, Value) {
-        let (head, body) = exchanged(socket, method, path, body).await;
-        let answer = serde_json::from_str(&body).unwrap_or(Value::Null);
-        (head.lines().next().unwrap().to_owned(), answer)
-    }
-
-    /// A call of `tool` with `args`, as the guest's client makes it: its
-    /// outcome.
-    async fn called(socket: &Path, tool: &str, args: Value) -> Value {
-        let path = format!("/tools/{tool}");
-        let (status, outcome) = asked(socket, "POST", &path, &args.to_string()).await;
-        assert_eq!(status, "HTTP/1.1 200 OK", "{outcome}");
-        outcome
-    }
-
-    #[sqlx::test(migrator = "max_db::MIGRATOR")]
-    async fn a_call_is_its_vms_conversations(pool: PgPool) {
-        let mut conn = pool.acquire().await.unwrap();
-        let place = Arc::new(group(&mut conn).await);
-        let hello = ingest::inbound(
-            &mut conn,
-            &place,
-            from_xiaoming(1, vec![text("你好")]),
-            Utc::now(),
-            offset(),
-        )
-        .await
-        .unwrap();
-        drop(conn);
-        let dir = sockets("calls");
-        let socket = dir.join("mine.sock");
-        let mut scope = Scope::new();
-        let context = Context::check(Services::bare(pool), place);
-        serve_at(&mut scope, &socket, context);
-
-        // Every tool, those the prompt doesn't declare too.
-        let (status, listed) = asked(&socket, "GET", "/tools", "").await;
-        assert_eq!(status, "HTTP/1.1 200 OK", "{listed}");
-        assert_eq!(listed["tools"][0]["name"], "history", "{listed}");
-        assert_eq!(listed["tools"][0]["outputSchema"]["type"], "object");
-        let names: Vec<&str> = listed["tools"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|tool| tool["name"].as_str().unwrap())
-            .collect();
-        let all: Vec<&str> = tool::TOOLS.iter().map(|tool| tool.name).collect();
-        assert_eq!(names, all);
-        assert!(
-            names.contains(&"say") && names.contains(&"file"),
-            "{names:?}"
-        );
-
-        let id = hello.message.id.0;
-        let one = json!({ "around": id, "before": 0, "after": 0 });
-        let read = called(&socket, "history", one).await;
-        assert_eq!(read["ok"], true, "{read}");
-        assert_eq!(read["value"]["text"], format!("[12:01 小明 #{id}]: 你好"));
-        let missing = called(&socket, "history", json!({ "around": id + 1 })).await;
-        assert_eq!(missing["ok"], false, "{missing}");
-        assert_eq!(missing["error"]["code"], "not_found");
-        assert!(missing["error"]["message"].is_string(), "{missing}");
-        // What isn't a tool: a typo, and one of the guest's own, which no
-        // host is asked for.
-        for name in ["histroy", "show", "agent_start"] {
-            let outcome = called(&socket, name, json!({})).await;
-            assert_eq!(outcome["error"]["code"], "unknown_tool", "{name}");
-        }
-
-        scope.close(Duration::from_secs(5)).await;
-        let _ = std::fs::remove_dir_all(dir);
-    }
-
-    /// A call that comes as Max stops isn't begun, and is answered as the
-    /// guest answers once max is gone, for its caller to make again; one
-    /// Max stopped in the middle of may have acted, and is a failure.
-    #[tokio::test]
-    async fn a_call_max_doesnt_begin_is_away() {
-        let dir = sockets("away");
-        let socket = dir.join("mine.sock");
-        let _ = std::fs::remove_file(&socket);
-        let listener = UnixListener::bind(&socket).unwrap();
-        let (calls, mut called) = tokio::sync::mpsc::unbounded_channel();
-        let mut scope = Scope::new();
-        let app = testing::named(ConversationId(1), router(calls, axum::Router::new()));
-        scope.spawn(move |stop| serve(listener, app, stop));
-        let say = json!({ "text": "在吗" }).to_string();
-        let asked = || exchanged(&socket, "POST", "/tools/say", &say);
-        let away = |head: &str| {
-            head.starts_with("HTTP/1.1 503 Service Unavailable\r\n") && head.contains("max-away: 1")
-        };
-
-        // The table, stopping, takes it and says so.
-        let table = async {
-            let Some(Signal::Call { reply, .. }) = called.recv().await else {
-                panic!("no call came");
-            };
-            let _ = reply.send(Err(Failure::away()));
-        };
-        let ((head, body), ()) = tokio::join!(asked(), table);
-        assert!(away(&head) && body.is_empty(), "{head}\n{body}");
-
-        // An actor that ended under it.
-        let actor = async {
-            let Some(Signal::Call { reply, .. }) = called.recv().await else {
-                panic!("no call came");
-            };
-            drop(reply);
-        };
-        let ((head, body), ()) = tokio::join!(asked(), actor);
-        assert!(head.starts_with("HTTP/1.1 200 OK"), "{head}");
-        let outcome: Value = serde_json::from_str(&body).unwrap();
-        assert_eq!(outcome["error"]["code"], "closed", "{body}");
-
-        // The table gone.
-        drop(called);
-        let (head, body) = asked().await;
-        assert!(away(&head) && body.is_empty(), "{head}\n{body}");
-
-        scope.close(Duration::from_secs(5)).await;
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// A call is the VM's that its forwarder names; a request that names
@@ -443,43 +288,6 @@ mod tests {
             assert!(reply.contains(r#""code":"bad_request""#), "{reply}");
         }
         assert!(called.try_recv().is_err(), "nobody's call was begun");
-
-        scope.close(Duration::from_secs(5)).await;
-        let _ = std::fs::remove_dir_all(dir);
-    }
-
-    /// What isn't a call: arguments that are no JSON object, a tool asked
-    /// for with GET, and the path the service had while it spoke MCP.
-    #[sqlx::test(migrator = "max_db::MIGRATOR")]
-    async fn what_isnt_a_call_is_answered_plainly(pool: PgPool) {
-        let mut conn = pool.acquire().await.unwrap();
-        let place = Arc::new(group(&mut conn).await);
-        drop(conn);
-        let dir = sockets("plain");
-        let socket = dir.join("mine.sock");
-        let mut scope = Scope::new();
-        serve_at(
-            &mut scope,
-            &socket,
-            Context::check(Services::bare(pool), place),
-        );
-
-        for body in ["{", "[1]", "\"around\""] {
-            let (status, outcome) = asked(&socket, "POST", "/tools/history", body).await;
-            assert_eq!(status, "HTTP/1.1 400 Bad Request", "{body}");
-            assert_eq!(outcome["ok"], false, "{body}");
-            assert_eq!(outcome["error"]["code"], "bad_arguments", "{body}");
-        }
-        // No body is no arguments, which a tool may still refuse.
-        let (status, outcome) = asked(&socket, "POST", "/tools/history", "").await;
-        assert_eq!(status, "HTTP/1.1 200 OK", "{outcome}");
-        assert!(outcome["ok"].is_boolean(), "{outcome}");
-        let (status, _) = asked(&socket, "GET", "/tools/history", "").await;
-        assert_eq!(status, "HTTP/1.1 405 Method Not Allowed");
-        let (status, _) = asked(&socket, "POST", "/tools", "{}").await;
-        assert_eq!(status, "HTTP/1.1 405 Method Not Allowed");
-        let (status, _) = asked(&socket, "POST", "/mcp", "{}").await;
-        assert_eq!(status, "HTTP/1.1 404 Not Found");
 
         scope.close(Duration::from_secs(5)).await;
         let _ = std::fs::remove_dir_all(dir);

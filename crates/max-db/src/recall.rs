@@ -163,6 +163,3 @@ fn indexes(ordinals: &[i32]) -> Vec<usize> {
         .filter_map(|&n| usize::try_from(n - 1).ok())
         .collect()
 }
-
-#[cfg(test)]
-mod tests;

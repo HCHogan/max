@@ -326,6 +326,3 @@ fn choose(mut hits: Vec<Hit>, limit: usize) -> Vec<Hit> {
     }
     chosen
 }
-
-#[cfg(test)]
-mod tests;

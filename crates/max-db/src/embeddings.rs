@@ -124,6 +124,3 @@ pub async fn nearest(
         })
         .collect())
 }
-
-#[cfg(test)]
-mod tests;

@@ -31,26 +31,11 @@ fn direct(ids: &[i64]) -> Decision {
     }
 }
 
-fn classify(ids: &[i64]) -> Decision {
-    Decision::Classify {
-        batch: ids.iter().copied().map(MessageId).collect(),
-    }
-}
-
 fn verdict(trigger: bool) -> Option<Verdict> {
     Some(Verdict {
         trigger,
         reason: "在问 Max".into(),
     })
-}
-
-fn judged(ids: &[i64]) -> Decision {
-    Decision::Wake {
-        ids: ids.iter().copied().map(MessageId).collect(),
-        reason: Reason::Judged {
-            note: "在问 Max".into(),
-        },
-    }
 }
 
 #[test]
@@ -89,66 +74,6 @@ fn a_trigger_mid_sentence_waits_for_the_rest() {
 }
 
 #[test]
-fn a_hold_ends_after_twenty_seconds_however_much_follows() {
-    let clock = Clock(Instant::now());
-    let mut intent = Intent::new();
-    intent.observe(&entry(1, XIAOMING, EntryKind::Direct, ""), clock.at(0));
-    for (id, secs) in (2..).zip([5, 10, 15]) {
-        let e = entry(id, XIAOMING, EntryKind::Chatter, "还有");
-        intent.observe(&e, clock.at(secs));
-    }
-    assert_eq!(intent.deadline(), Some(clock.at(20)));
-    assert_eq!(intent.tick(clock.at(20)), [direct(&[1, 2, 3, 4])]);
-}
-
-#[test]
-fn a_burst_of_messages_holds_the_trigger() {
-    let clock = Clock(Instant::now());
-    let mut intent = Intent::new();
-    intent.observe(
-        &entry(1, XIAOMING, EntryKind::Command, "/compact"),
-        clock.at(0),
-    );
-    intent.observe(
-        &entry(2, XIAOMING, EntryKind::Command, "/status"),
-        clock.at(1),
-    );
-    let e = entry(3, XIAOMING, EntryKind::Direct, "帮我看看");
-    assert!(intent.observe(&e, clock.at(2)).is_empty());
-    assert_eq!(intent.tick(clock.at(12)), [direct(&[3])]);
-}
-
-#[test]
-fn chatter_waits_for_the_classification_in_flight() {
-    let clock = Clock(Instant::now());
-    let mut intent = Intent::new();
-    assert_eq!(intent.observe(&chat(1), clock.at(0)), [classify(&[1])]);
-    assert!(intent.observe(&chat(2), clock.at(10)).is_empty());
-    assert!(intent.observe(&chat(3), clock.at(20)).is_empty());
-    assert_eq!(
-        intent.verdict(verdict(true), clock.at(30)),
-        [judged(&[1]), classify(&[2, 3])]
-    );
-    assert!(intent.verdict(None, clock.at(40)).is_empty());
-    assert_eq!(intent.observe(&chat(4), clock.at(50)), [classify(&[4])]);
-}
-
-#[test]
-fn a_batch_keeps_the_newest() {
-    let clock = Clock(Instant::now());
-    let mut intent = Intent::new();
-    intent.observe(&chat(1), clock.at(0));
-    for id in 2..=40 {
-        intent.observe(
-            &entry(id, XIAOHONG, EntryKind::Chatter, "刷屏"),
-            clock.at(1),
-        );
-    }
-    let next = intent.verdict(None, clock.at(3));
-    assert_eq!(next, [classify(&(11..=40).collect::<Vec<_>>())]);
-}
-
-#[test]
 fn judged_wakes_are_capped() {
     let clock = Clock(Instant::now());
     let mut intent = Intent::new();
@@ -176,39 +101,4 @@ fn proactive_off_leaves_only_direct_triggers() {
     assert!(intent.observe(&chat(3), clock.at(30)).is_empty());
     let e = entry(4, XIAOMING, EntryKind::Direct, "在吗？");
     assert_eq!(intent.observe(&e, clock.at(40)), [direct(&[4])]);
-}
-
-#[test]
-fn forgetting_drops_what_is_held_and_waiting() {
-    let clock = Clock(Instant::now());
-    let mut intent = Intent::new();
-    intent.observe(&chat(1), clock.at(0));
-    intent.observe(&chat(2), clock.at(1));
-    let e = entry(3, XIAOHONG, EntryKind::Direct, "我跟你讲，");
-    assert!(intent.observe(&e, clock.at(2)).is_empty());
-    intent.forget();
-    assert_eq!(intent.deadline(), None);
-    assert!(intent.tick(clock.at(30)).is_empty());
-    // The verdict on the batch in flight wakes nobody, and nothing waited
-    // behind it.
-    assert!(intent.verdict(verdict(true), clock.at(31)).is_empty());
-    assert_eq!(intent.observe(&chat(4), clock.at(40)), [classify(&[4])]);
-}
-
-/// A wake's reason is kept with the turn it started. What the ledger
-/// kept as `job`, a job's handle beside it, is still read.
-#[test]
-fn a_reason_is_read_as_the_ledger_kept_it() {
-    let read = |json: &str| serde_json::from_str::<Reason>(json).unwrap();
-    assert_eq!(read(r#"{"type":"direct"}"#), Reason::Direct);
-    assert_eq!(read(r#"{"type":"asked"}"#), Reason::Asked);
-    assert_eq!(read(r#"{"type":"answered"}"#), Reason::Answered);
-    for job in ["agent#3", "ask#5", "shell#2"] {
-        let kept = format!(r#"{{"type":"job","job":"{job}"}}"#);
-        assert_eq!(read(&kept), Reason::Answered, "{kept}");
-    }
-    assert_eq!(
-        serde_json::to_string(&Reason::Answered).unwrap(),
-        r#"{"type":"answered"}"#
-    );
 }

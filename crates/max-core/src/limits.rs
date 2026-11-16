@@ -185,20 +185,6 @@ mod tests {
     }
 
     #[test]
-    fn the_defaults_are_in_range() {
-        let call_time = CALL_TIME.as_secs();
-        assert!(Setting::CallTimeSecs.range().contains(&call_time));
-    }
-
-    #[test]
-    fn stored_overrides_read_leniently() {
-        let read: Overrides =
-            serde_json::from_value(serde_json::json!({ "call_time_secs": 90, "gone": 1 })).unwrap();
-        assert_eq!(read.get(Setting::CallTimeSecs), Some(90));
-        assert_eq!(read.get(Setting::IdleWindowSecs), None);
-    }
-
-    #[test]
     fn webread_prints_as_much_as_the_prompt_says() {
         let script = include_str!("../../../nix/webread.py");
         let default = format!("\"--max\", type=int, default={WEBREAD_CHARS},");

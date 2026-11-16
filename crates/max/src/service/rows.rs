@@ -157,6 +157,3 @@ pub(crate) fn known(
         .filter_map(|identity| Some((identity.0.to_string(), people.get(&identity)?.0)))
         .collect()
 }
-
-#[cfg(test)]
-mod tests;

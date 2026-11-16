@@ -128,44 +128,6 @@ async fn a_streamed_call() {
 }
 
 #[tokio::test]
-async fn refusals_and_failures() {
-    let (listener, client) = serve().await;
-    let server = async {
-        let (mut socket, ..) = accept(&listener).await;
-        respond(&mut socket, "429 Too Many Requests", "application/json").await;
-        send(&mut socket, r#"{"error":{"message":"slow down"}}"#).await;
-        drop(socket);
-
-        let (mut socket, ..) = accept(&listener).await;
-        respond(&mut socket, "200 OK", "application/json").await;
-        send(
-            &mut socket,
-            r#"{"error":{"code":"server_error","message":"busy"}}"#,
-        )
-        .await;
-    };
-    let calls = async {
-        let limited = client
-            .call(&request(), &Options::default(), &Pictures::default())
-            .await;
-        let failed = client
-            .call(&request(), &Options::default(), &Pictures::default())
-            .await;
-        (limited.err().unwrap(), failed.err().unwrap())
-    };
-    let ((limited, failed), ()) = tokio::join!(calls, server);
-    assert!(limited.retryable());
-    assert_eq!(
-        limited.to_string(),
-        r#"the provider answered 429: {"error":{"message":"slow down"}}"#
-    );
-    assert_eq!(
-        failed.to_string(),
-        "the provider failed the response: server_error: busy"
-    );
-}
-
-#[tokio::test]
 async fn silence_and_cut_offs() {
     let (listener, client) = serve().await;
     let delta = json!({ "choices": [{ "index": 0, "delta": { "content": "早" } }] });

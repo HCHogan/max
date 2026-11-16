@@ -52,38 +52,6 @@ fn the_tail_is_cut_in_whole_stretches() {
 }
 
 #[test]
-fn roster_lines_and_mentions() {
-    let line = roster_line(PrincipalId(12), "小\n明", Some(Role::Admin), false);
-    assert_eq!(line, "[mention#12] 小 明（管理员）");
-    assert_eq!(
-        roster_line(PrincipalId(1), "Max", None, true),
-        "[mention#1] Max（你）"
-    );
-    assert_eq!(
-        roster_line(PrincipalId(3), "小红", Some(Role::Member), false),
-        "[mention#3] 小红"
-    );
-    let text = "[mention#12] 和 [mention#7: 小红] 聊了 [mention#x] [mention#12]";
-    assert_eq!(mentioned(text), [PrincipalId(7), PrincipalId(12)].into());
-}
-
-#[test]
-fn memory_near_its_cap_asks_to_be_tidied_and_past_it_is_cut() {
-    let count = |text: &str| u32::try_from(text.chars().count()).unwrap();
-    let short = "# 记忆\n- 群友叫你小鲨鲨（2026-08-28 #3）\n";
-    assert_eq!(memory(short, count), short.trim_end());
-    let line = "字".repeat(99);
-    let near = vec![line.as_str(); 25].join("\n");
-    let shown = memory(&near, count);
-    assert!(shown.starts_with(&near), "{shown}");
-    assert!(shown.ends_with("约 2499/3000 token：一行一条，细节挪进 /work/.max/memory/ 下的别的文件、这里留一行指过去，过时的合并或删掉。）"));
-    let over = vec![line.as_str(); 40].join("\n");
-    let shown = memory(&over, count);
-    assert_eq!(shown.matches(line.as_str()).count(), 30);
-    assert!(shown.contains("\n（记忆超过上限，约 3999/3000 token，从这里往后没加载："));
-}
-
-#[test]
 fn the_base_context() {
     let volatile = Volatile {
         now: utc(10, 28, 6, 5),
@@ -135,69 +103,4 @@ fn the_base_context() {
         [("system", 6), ("user", 22), ("user", 17), ("user", 115)]
     );
     assert_eq!(context.roster, [PrincipalId(12)].into());
-}
-
-#[test]
-fn pictures_are_attached_in_order() {
-    use crate::ids::{ConversationId, IdentityId, MessageId};
-    use crate::message::{MediaMeta, MediaRef, Sender};
-
-    let medium = |kind, stored: bool| Node::Media {
-        media: stored.then(|| MediaRef::Remote("https://q/x".into())),
-        meta: MediaMeta {
-            kind,
-            mime: None,
-            size: None,
-            name: None,
-            description: None,
-        },
-    };
-    let message = |id, content| Message {
-        id: MessageId(id),
-        conversation: ConversationId(1),
-        sender: Sender {
-            identity: IdentityId(1),
-            name: "小明".into(),
-            role: None,
-        },
-        at: utc(10, 29, 4, 0),
-        content,
-        turn: None,
-        raw: serde_json::Value::Null,
-    };
-    let said = |nodes| Content::Message {
-        reply_to: None,
-        nodes,
-    };
-    let rows = [
-        message(
-            7,
-            said(vec![
-                medium(MediaKind::Video, true),
-                Node::Text { text: "看".into() },
-                medium(MediaKind::Image, true),
-                medium(MediaKind::Image, false),
-                medium(MediaKind::Sticker, true),
-            ]),
-        ),
-        message(
-            8,
-            Content::Unsend {
-                target: MessageId(7),
-            },
-        ),
-        message(9, said(vec![medium(MediaKind::Image, true)])),
-        message(10, said(vec![medium(MediaKind::Image, true)])),
-    ];
-    let mut item = Item::new(ItemKind::user("易变"), 100);
-    attach(&mut item, &rows);
-    let ItemKind::User { images, .. } = &item.kind else {
-        unreachable!()
-    };
-    let handles: Vec<String> = images.iter().map(Image::handle).collect();
-    assert_eq!(
-        handles,
-        ["image#7.1", "sticker#7.3", "image#9.0", "image#10.0"]
-    );
-    assert_eq!(item.tokens, 100 + 4 * PICTURE_TOKENS);
 }

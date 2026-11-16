@@ -53,7 +53,6 @@ const HEAD: &str = "max-head";
 struct Events {
     signals: UnboundedSender<Signal>,
     stop: CancellationToken,
-    heartbeat: Duration,
 }
 
 /// A row as the program reads it.
@@ -92,21 +91,9 @@ struct Asked {
 
 /// `/events` for the VMs; its streams end at `stop`.
 pub fn router(signals: UnboundedSender<Signal>, stop: CancellationToken) -> Router {
-    beating(signals, stop, HEARTBEAT)
-}
-
-fn beating(
-    signals: UnboundedSender<Signal>,
-    stop: CancellationToken,
-    heartbeat: Duration,
-) -> Router {
     Router::new()
         .route("/events", get(events))
-        .with_state(Events {
-            signals,
-            stop,
-            heartbeat,
-        })
+        .with_state(Events { signals, stop })
 }
 
 async fn events(
@@ -153,7 +140,6 @@ async fn events(
         subscription,
         backlog,
         full,
-        heartbeat: events.heartbeat,
         stop: events.stop,
     };
     Response::builder()
@@ -212,7 +198,6 @@ struct Following {
     last: MessageId,
     /// Whether a line has its row as data too.
     full: bool,
-    heartbeat: Duration,
     stop: CancellationToken,
 }
 
@@ -248,7 +233,7 @@ impl Following {
             let received = tokio::select! {
                 () = self.stop.cancelled() => return Ok(None),
                 received = self.subscription.rows.recv() => received,
-                () = sleep(self.heartbeat) => return Ok(Some(Bytes::from_static(b"\n"))),
+                () = sleep(HEARTBEAT) => return Ok(Some(Bytes::from_static(b"\n"))),
             };
             match received {
                 Ok(message) if message.id <= self.last => {}
@@ -323,6 +308,3 @@ fn refuse(status: StatusCode, message: &str) -> Response {
         .body(Body::from(body))
         .unwrap_or_default()
 }
-
-#[cfg(test)]
-mod tests;

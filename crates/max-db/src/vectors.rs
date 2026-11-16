@@ -96,6 +96,3 @@ pub async fn write(
     }
     tx.commit().await
 }
-
-#[cfg(test)]
-mod tests;

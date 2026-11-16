@@ -172,7 +172,7 @@ fn arguments<T: DeserializeOwned>(tool: &str, args: Value) -> Result<T, Failure>
 
 /// What stands in for the conversations' actors, where a test has none.
 #[cfg(test)]
-pub mod testing {
+pub(crate) mod testing {
     use axum::Router;
     use axum::extract::Request;
     use axum::http::HeaderValue;

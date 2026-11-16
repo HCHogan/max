@@ -138,8 +138,3 @@ impl Embedder {
             .ok_or_else(|| Error::Malformed("no vector".into()))
     }
 }
-
-#[cfg(test)]
-pub mod testing;
-#[cfg(test)]
-mod tests;

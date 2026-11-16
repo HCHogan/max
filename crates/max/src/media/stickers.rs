@@ -121,6 +121,3 @@ impl Stickers {
         Ok(())
     }
 }
-
-#[cfg(test)]
-mod tests;

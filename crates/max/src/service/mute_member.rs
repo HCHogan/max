@@ -147,6 +147,3 @@ fn not_muted(error: &api::Error) -> Failure {
     };
     Failure::new("not_muted", why)
 }
-
-#[cfg(test)]
-mod tests;

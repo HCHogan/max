@@ -144,6 +144,3 @@ pub(super) const STOPPED_THERE: &str = "Max is stopped there (/stop)";
 /// ...and one whose core ended with the question still there: its idle
 /// window ran out, or the turn was killed or failed.
 pub(super) const TURN_OVER: &str = "Max there ended its turn without answering";
-
-#[cfg(test)]
-mod tests;

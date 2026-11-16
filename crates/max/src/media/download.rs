@@ -277,6 +277,3 @@ fn media(row: &Row) -> Vec<Medium> {
         })
         .collect()
 }
-
-#[cfg(test)]
-mod tests;

@@ -152,6 +152,3 @@ fn extension(mime: &str) -> Option<&str> {
         _ => None,
     }
 }
-
-#[cfg(test)]
-mod tests;

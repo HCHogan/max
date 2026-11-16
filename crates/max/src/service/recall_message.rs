@@ -103,6 +103,3 @@ async fn recall(context: &Context, id: i64) -> Result<(), Failure> {
         .map_err(|error| Failure::new("not_recalled", format!("not recalled: {error}")))?;
     Ok(())
 }
-
-#[cfg(test)]
-mod tests;

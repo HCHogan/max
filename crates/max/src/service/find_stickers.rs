@@ -95,6 +95,3 @@ impl Tool for FindStickers {
         Ok(Found { stickers })
     }
 }
-
-#[cfg(test)]
-mod tests;

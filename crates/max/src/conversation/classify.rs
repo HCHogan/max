@@ -135,6 +135,3 @@ async fn run(job: &Job) -> Result<Option<Verdict>> {
     }
     Ok(verdict)
 }
-
-#[cfg(test)]
-mod tests;

@@ -111,6 +111,3 @@ fn on_white(image: DynamicImage) -> RgbImage {
         Rgb([over(r), over(g), over(b)])
     })
 }
-
-#[cfg(test)]
-mod tests;

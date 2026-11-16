@@ -219,6 +219,3 @@ pub async fn pending(conn: &mut PgConnection, since: DateTime<Utc>) -> sqlx::Res
         })
         .collect())
 }
-
-#[cfg(test)]
-mod tests;

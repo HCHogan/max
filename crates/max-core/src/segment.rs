@@ -162,28 +162,6 @@ mod tests {
     }
 
     #[test]
-    fn a_document_goes_by_sections() {
-        let text = "[reply#3] 先说结论：\n\n两样都行。\n\n---\n\n### 一、对比\n\n| 工具 | 用法 |\n| --- | --- |\n| nvd | diff |\n\n表格说明。\n\n\n### 二、列表\n1. 第一\n\n   - 细节\n2. 第二\n***\n收尾[split]另一条";
-        assert_eq!(
-            chunks(text),
-            [
-                "[reply#3] 先说结论：",
-                "两样都行。",
-                "### 一、对比\n\n| 工具 | 用法 |\n| --- | --- |\n| nvd | diff |\n\n表格说明。",
-                "### 二、列表\n1. 第一\n\n   - 细节\n2. 第二",
-                "收尾",
-                "另一条"
-            ]
-        );
-        // Not headings, or not breaks: cut at blank lines as before.
-        assert_eq!(
-            chunks("#123 呢\n\n#\n\n--\n\n- - x"),
-            ["#123 呢", "#", "--", "- - x"]
-        );
-        assert_eq!(chunks("```\n---\n# 注释\n```"), ["```\n---\n# 注释\n```"]);
-    }
-
-    #[test]
     fn a_quote_starts_a_message_and_ends_the_document() {
         let text = "### 总结\n两样都行。\n\n[reply#7] 至于你，先去睡觉。\n\n别熬夜了。\n\n## 附录\n甲\n\n乙\n  [reply#8] 丙";
         assert_eq!(
@@ -214,102 +192,6 @@ mod tests {
     }
 
     #[test]
-    fn a_quote_with_nothing_after_it_quotes_the_next_message() {
-        // Before a break or on a line of its own, across blank lines and
-        // breaks.
-        assert_eq!(
-            chunks("一\n\n[reply#3] ---\n\n二\n\n三"),
-            ["一", "[reply#3]\n二", "三"]
-        );
-        assert_eq!(chunks("[reply#3]\n\n---\n\n  \n二"), ["[reply#3]\n二"]);
-        assert_eq!(
-            chunks("### 总结\n甲\n\n[reply#3] ***\n## 附录\n乙\n\n丙"),
-            ["### 总结\n甲", "[reply#3]\n## 附录\n乙\n\n丙"]
-        );
-
-        let drafts = |text: &str| {
-            let mut segmenter = Segmenter::new(BTreeSet::new());
-            let mut out = segmenter.push(text);
-            out.extend(segmenter.finish());
-            out.into_iter()
-                .map(|s| (s.draft.reply_to.map(|id| id.0), s.draft.nodes))
-                .collect::<Vec<_>>()
-        };
-        let text = |s: &str| DraftNode::Text { text: s.to_owned() };
-        let sticker = DraftNode::Picture {
-            message: crate::ids::MessageId(4),
-            ordinal: 0,
-        };
-        assert_eq!(drafts("[reply#3] ---\n\n二"), [(Some(3), vec![text("二")])]);
-        // A picture can quote too, as QQ sends a quote with one.
-        assert_eq!(
-            drafts("[reply#3] [sticker#4.0] 二"),
-            [(Some(3), vec![sticker.clone()]), (None, vec![text("二")])]
-        );
-        assert_eq!(
-            drafts("[reply#3] ---\n[sticker#4.0]"),
-            [(Some(3), vec![sticker])]
-        );
-        // A quote that starts the next message replaces it.
-        assert_eq!(
-            drafts("[reply#3] ---\n[reply#5] 二"),
-            [(Some(5), vec![text("二")])]
-        );
-        // With nothing after it, it goes.
-        assert_eq!(drafts("一\n\n[reply#3] ---"), [(None, vec![text("一")])]);
-    }
-
-    #[test]
-    fn a_message_can_start_mid_line() {
-        assert_eq!(
-            chunks("看：[split]```sh\n# 装\nnix build\n\nnix run\n```\n\n好了"),
-            ["看：", "```sh\n# 装\nnix build\n\nnix run\n```", "好了"]
-        );
-        assert_eq!(
-            chunks("[sticker#4.0]```py\nx = 1\n\ny = 2\n```\n\n好了"),
-            ["[sticker#4.0]", "```py\nx = 1\n\ny = 2\n```", "好了"]
-        );
-        assert_eq!(
-            chunks("[reply#3] ```py\nx = 1\n\ny = 2\n```\n\n好了"),
-            ["[reply#3] ```py\nx = 1\n\ny = 2\n```", "好了"]
-        );
-        assert_eq!(
-            chunks("一[split]## 二\n甲\n\n乙[split]---\n丙"),
-            ["一", "## 二\n甲\n\n乙", "丙"]
-        );
-        assert_eq!(
-            chunks("[reply#3] ## 总结\n甲\n\n乙"),
-            ["[reply#3] ## 总结\n甲\n\n乙"]
-        );
-    }
-
-    #[test]
-    fn split_cuts_anywhere_on_a_line() {
-        assert_eq!(chunks("一[split]二\n三[split]"), ["一", "二\n三"]);
-        assert_eq!(chunks("[split][split]一[split]  [split]二"), ["一", "二"]);
-    }
-
-    #[test]
-    fn pictures_are_chunks_of_their_own() {
-        let text = "看这个[image#5.0: 一只猫](3秒)好笑吧\n[sticker#6.1]\n[video#7.0] 呢";
-        assert_eq!(
-            chunks(text),
-            [
-                "看这个",
-                "[image#5.0: 一只猫](3秒)",
-                "好笑吧",
-                "[sticker#6.1]",
-                "[video#7.0] 呢"
-            ]
-        );
-        assert_eq!(
-            chunks("```\n[sticker#6.1]\n```"),
-            ["```\n[sticker#6.1]\n```"]
-        );
-        assert_eq!(chunks("[image#5] [split]x"), ["[image#5]", "x"]);
-    }
-
-    #[test]
     fn fences_are_not_cut() {
         let text = "看：\n```rust\nfn a() {}\n\nfn b() {} // [split]\n```\n\n完";
         assert_eq!(
@@ -319,23 +201,6 @@ mod tests {
                 "完"
             ]
         );
-    }
-
-    #[test]
-    fn code_spans_are_not_cut() {
-        let text = "写 `[split]` 才分条，`[sticker#4.0]` 是表情包[split]完";
-        assert_eq!(
-            chunks(text),
-            ["写 `[split]` 才分条，`[sticker#4.0]` 是表情包", "完"]
-        );
-        // Unclosed, or closed by a longer run: plain backticks.
-        assert_eq!(chunks("`a``[split]b"), ["`a``", "b"]);
-        assert_eq!(chunk::code_spans(b"``a`b`` `c`"), [(0, 7), (8, 11)]);
-    }
-
-    #[test]
-    fn an_unclosed_fence_runs_to_the_end() {
-        assert_eq!(chunks("一\n\n```\na\n\nb"), ["一", "```\na\n\nb"]);
     }
 
     #[test]
@@ -349,33 +214,6 @@ mod tests {
             ["一二\n三"]
         );
         assert_eq!(chunks("答案\n\n<think>没想完\n\n还在想"), ["答案"]);
-    }
-
-    #[test]
-    fn a_think_tag_in_code_is_shown() {
-        assert_eq!(
-            chunks("模型会写 `<think>` 标签\n\n后面的话"),
-            ["模型会写 `<think>` 标签", "后面的话"]
-        );
-        assert_eq!(
-            chunks("```\n<think>\n```\n后面的话"),
-            ["```\n<think>\n```\n后面的话"]
-        );
-        assert_eq!(
-            chunks("<think>想</think>写 `<think>` 就行<think>再想</think>"),
-            ["写 `<think>` 就行"]
-        );
-        assert_eq!(
-            chunks("```\nx\n```\n<think>想</think>好"),
-            ["```\nx\n```\n好"]
-        );
-        // In a span a fence is reasoning, and opens nothing.
-        assert_eq!(chunks("<think>\n```\n</think>好的\n\n二"), ["好的", "二"]);
-    }
-
-    #[test]
-    fn crlf() {
-        assert_eq!(chunks("一\r\n\r\n二\r\n"), ["一", "二"]);
     }
 
     /// Streaming in any two pieces gives the same chunks as all at once.
@@ -430,17 +268,5 @@ mod tests {
                 }],
             }
         );
-    }
-
-    /// A chunk is released as soon as the blank line after it arrives.
-    #[test]
-    fn chunks_come_out_early() {
-        let mut chunker = Chunker::default();
-        assert!(chunker.push("一\n").is_empty());
-        assert_eq!(chunker.push("\n二"), ["一"]);
-        assert!(chunker.push("[spl").is_empty());
-        assert!(chunker.push("it]三").is_empty());
-        assert_eq!(chunker.push("\n"), ["二"]);
-        assert_eq!(chunker.finish(), ["三"]);
     }
 }

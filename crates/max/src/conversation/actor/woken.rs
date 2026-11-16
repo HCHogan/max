@@ -77,22 +77,3 @@ impl Conversation {
         Budgets::for_window(window.unwrap_or(0)).single
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_wake_says_how_many_the_hour_has_had() {
-        let start = Instant::now();
-        let at = |minutes: u64| start + Duration::from_secs(minutes * 60);
-        let mut woken = Woken::default();
-        for (minute, count) in (0..10).zip(1..) {
-            assert_eq!(woken.count(at(minute)), count);
-        }
-        assert_eq!(woken.summary(at(30)).as_deref(), Some("10 this hour"));
-        // The first went out of the hour.
-        assert_eq!(woken.count(at(60)), 10);
-        assert_eq!(woken.summary(at(200)), None);
-    }
-}

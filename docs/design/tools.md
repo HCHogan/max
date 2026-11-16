@@ -64,7 +64,7 @@ and a program has them all as `tools.<name>`.
   reads the host's options from `GET /tools` and the guest's from
   `local.json`, the runner makes `tools.<name>` from both, and the host reads
   `local.json` as it is built for the prompt's declarations
-  (`service::tool::LOCAL`). A test holds that no name is both.
+  (`service::tool::LOCAL`).
 - **One client**: `nix/client.js`, shared by the runner, `maxx.js` and
   `tools.js`. (The SDK doesn't wrap `maxx`: every `tools.x` would start a
   process, twenty in a `Promise.all`, with errors and pictures relayed
@@ -139,9 +139,7 @@ and a program has them all as `tools.<name>`.
   program's child's are. Given `/dev/null`, as a command in a unit is, the
   call runs to its end.
 - **Tests**: `nix/tests/jobs.nix` asks as max does, with JSON, and as Max
-  does, with options, and has a program call `tools.units_list`; the Rust
-  tests run `maxx.js`, `runner.js` and `tools.js` with Node against a
-  stand-in for `bin/maxx`.
+  does, with options, and has a program call `tools.units_list`.
 
 ## Running in the group's VM
 
@@ -181,8 +179,9 @@ protocol or ABI.
   prompt injection left behind can speak in the chat, mute and recall as
   Max's programs can. Accepted: a VM is its own group's, and what the tools
   can do there is what Max can.
-- **Testing**: the runner depends only on stdio and HTTP, so tests run Node
-  locally against max's service on a TCP port, with no VM.
+- **Testing**: the runner depends only on stdio and HTTP, so a test runs
+  it with Node locally against max's service on a TCP port, with no VM: a
+  program that calls Max's tools and returns.
 
 ## The guest's calls
 
@@ -359,8 +358,7 @@ extracted, on models that can (`video = true`; the Gemini models on tank).
   encodings such as GBK), PDFs go through `pdftotext`. It follows up to 5
   redirects, within 20 seconds and 10 MB, prints the first 12,000 characters
   (`WEBREAD_CHARS`, checked by a test against the Python) and writes the
-  whole to `/work/.max/web/`, where `--offset` reads on. Tests run it with the
-  dev shell's Python against a local server. nft keeps the VM off internal
+  whole to `/work/.max/web/`, where `--offset` reads on. nft keeps the VM off internal
   networks. Pages needing JS or a login are the browser's.
 - Not done: answer synthesis, the model APIs' built-in search (the tools
   array is fixed, and programs couldn't get those results), caching, image

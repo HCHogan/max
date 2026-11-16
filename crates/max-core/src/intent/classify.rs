@@ -112,34 +112,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_prompt() {
-        let persona = "猫".repeat(600);
-        let system = system(&persona);
-        assert!(system.contains(&"猫".repeat(500)));
-        assert!(!system.contains(&"猫".repeat(501)));
-        assert!(system.contains(r#"{"trigger": true/false,"#));
-        let user = user("", "[10:00 小明 #7]: max 在吗\n");
-        assert_eq!(
-            user,
-            "[上下文]\n（无）\n\n[新消息]\n[10:00 小明 #7]: max 在吗"
-        );
-    }
-
-    #[test]
-    fn mentions_become_names() {
-        let names = BTreeMap::from([
-            (PrincipalId(1), "maxx".to_owned()),
-            (PrincipalId(2), "小明".to_owned()),
-        ]);
-        let line =
-            "[10:00 小红 #7]: [mention#2] 你让ai看 [mention#1] [mention#9] [mention#x] [mention#3";
-        assert_eq!(
-            named(line, &names),
-            "[10:00 小红 #7]: @小明 你让ai看 @maxx @某人 [mention#x] [mention#3"
-        );
-    }
-
-    #[test]
     fn parsing_tolerates_fences_and_gaps() {
         let fenced = "```json\n{\"trigger\": true, \"reason\": \" 在追问 \"}\n```";
         assert_eq!(

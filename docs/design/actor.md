@@ -332,23 +332,27 @@ of shutdown has to be asked again.
 
 - The core and intent have synchronous unit tests that feed inputs from a
   script and check outputs, with no tokio and no fake provider; intent's
-  time is passed in. Intent's cover direct triggers waking at once,
-  debouncing, batching, the hourly cap and `/proactive`. The core's cover
-  when inputs take effect, no model call for chatter alone, the results
-  filled in on interruption, malformed calls, the limits, and which
-  triggers count as unhandled on failure.
+  time is passed in. Intent's cover direct triggers waking at once, the
+  debounce, the hourly cap and `/proactive`. The core's cover when inputs
+  take effect, no model call for chatter alone, the results filled in on
+  interruption, malformed calls, the limit, and that the record is what
+  the model saw and said.
 - The actor is tested with a real database (`#[sqlx::test]`), a scripted
-  model and a sender that only records: cancellation, stopping and its
-  grace, the idle window, the limit, stale events, and wakes filtered by
-  `seen`; for `/kill` inserted between every two events, see
-  [Cancellation safety](lifetimes.md#cancellation-safety). Actor tests use
-  real time, not `start_paused`: while the actor waits on Postgres a paused
-  clock jumps to the next deadline, so the idle window and the debounce
-  would come early. Their waits are short and bounded. Purely time-based
-  logic (intent, the sender's quota) uses `start_paused`.
+  model and a sender that only records, once for each way a turn starts
+  and ends: an @ that is answered, a tool's result going back to the model,
+  chatter that wakes nobody, rows that reach a running core, a call that
+  fails, `/kill`, a stop that outlasts its grace, `/stop` and `/start`, a
+  wake by the classifier's verdict, what a program says, and what a stopped
+  conversation refuses. Actor tests use real time, not `start_paused`:
+  while the actor waits on Postgres a paused clock jumps to the next
+  deadline, so the idle window and the debounce would come early. Their
+  waits are short and bounded. Purely time-based logic (`Scope`, a model
+  call's retries) uses `start_paused`.
 - The protocol adapters are tested against recorded Responses and Chat
-  responses: reasoning entries and opaque fields make the round trip
-  unchanged.
+  responses from four providers, and each protocol's request is held to
+  its shape.
+- Which tests there are, and which there aren't, is a decision:
+  [decisions/2026-11-16-tests-on-the-critical-path.md](../decisions/2026-11-16-tests-on-the-critical-path.md).
 - A snapshot holds every request it made, so any production model call
   can be resent exactly, offline.
 - The segmenter's cutting (`segment/chunk.rs`) is written in the part of

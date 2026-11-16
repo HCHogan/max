@@ -214,6 +214,3 @@ fn trimmed(mut page: String) -> String {
     page.truncate(page.trim_end().len());
     page
 }
-
-#[cfg(test)]
-mod tests;

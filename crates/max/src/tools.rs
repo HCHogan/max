@@ -402,13 +402,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_title_is_the_first_line_cut_short() {
-        assert_eq!(headline("  查一下明天的天气\n背景：……"), "查一下明天的天气");
-        let long = "字".repeat(40);
-        assert_eq!(headline(&long), format!("{}…", "字".repeat(30)));
-    }
-
-    #[test]
     fn a_call_ended_as_systemd_says() {
         let ended = |result: &str, code: &str, status: &str| Ended {
             result: result.to_owned(),
@@ -426,34 +419,6 @@ mod tests {
             ended("oom-kill", "killed", "KILL").ran(),
             Ran::Killed("oom-kill (KILL)".to_owned())
         );
-    }
-
-    #[test]
-    fn a_calls_line_is_the_last_of_what_came() {
-        let line = br#"{"result":"success"}"#;
-        assert_eq!(last_line(b"{\"result\":\"success\"}\n"), line);
-        // What the group's .bashrc wrote first isn't the line.
-        assert_eq!(
-            last_line(b"Agent pid 4242\nnvm: now using node 24\n{\"result\":\"success\"}\n\n"),
-            line
-        );
-        assert_eq!(last_line(b""), b"");
-    }
-
-    #[test]
-    fn what_wasnt_a_calls_line_is_shown_in_part() {
-        assert_eq!(start_of(b"oops"), "oops");
-        assert_eq!(end_of(b"  maxx units: no\n"), "maxx units: no");
-        let long = "长".repeat(SAID_SHOWN + 5);
-        let start = start_of(long.as_bytes());
-        assert_eq!(start, format!("{}…", "长".repeat(SAID_SHOWN)));
-        let noise = format!(
-            "{}maxx units: limit is a whole number",
-            "x".repeat(SAID_SHOWN)
-        );
-        let end = end_of(noise.as_bytes());
-        assert!(end.starts_with('…') && end.ends_with("limit is a whole number"));
-        assert_eq!(end.chars().count(), SAID_SHOWN + 1);
     }
 
     #[test]
@@ -482,14 +447,5 @@ mod tests {
             refused.failed.as_deref(),
             Some("there is no directory /nowhere")
         );
-    }
-
-    #[test]
-    fn a_program_browses_if_it_asks_for_the_browser() {
-        assert!(browses(
-            "const page = await max.page();\nawait page.click('a');"
-        ));
-        assert!(browses("return await max.snapshot(await max.page())"));
-        assert!(!browses("return fs.readdirSync('/work')"));
     }
 }

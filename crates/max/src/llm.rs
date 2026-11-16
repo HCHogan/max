@@ -101,16 +101,6 @@ pub struct Upstreams {
 }
 
 impl Upstreams {
-    /// One model and no other.
-    pub fn only(upstream: Upstream, effort: Option<&str>) -> Self {
-        let default = Arc::new(upstream);
-        Self {
-            all: BTreeMap::from([(default.reference(), Arc::clone(&default))]),
-            default,
-            effort: effort.map(str::to_owned),
-        }
-    }
-
     /// The model a call names: the agents' own for no name, and for one
     /// that isn't configured, so that a program which knows nothing of
     /// the names here can call a model all the same.
@@ -354,7 +344,7 @@ pub async fn record(pool: &PgPool, call: &usage::Call<'_>) {
 }
 
 #[cfg(test)]
-pub mod testing {
+pub(crate) mod testing {
     //! A provider that answers from a script, in the Chat protocol.
 
     use std::collections::VecDeque;
@@ -506,59 +496,5 @@ pub mod testing {
     pub fn models(script: &Arc<Script>) -> Models {
         let script = Arc::clone(script);
         Models::with_callers(&config(), move |_, _| Ok(script.clone() as Arc<dyn Caller>)).unwrap()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use max_core::item::Protocol;
-
-    use super::testing::{Script, models};
-    use super::*;
-
-    #[test]
-    fn choices_fall_back_to_the_defaults() {
-        let models = models(&Arc::new(Script::default()));
-        let chosen = models.turn(None, None).unwrap();
-        assert_eq!(chosen.reference(), "test/big");
-        assert_eq!(chosen.options.effort.as_deref(), Some("high"));
-        assert_eq!((chosen.window, chosen.max_output), (100_000, Some(8000)));
-        assert_eq!(chosen.tag.protocol, Protocol::Chat);
-        let chosen = models.turn(Some("test/small"), Some("low")).unwrap();
-        assert_eq!(chosen.reference(), "test/small");
-        assert_eq!(chosen.options.effort.as_deref(), Some("low"));
-        assert_eq!(models.intent().unwrap().options.effort, None);
-        assert!(models.turn(Some("test/nope"), None).is_err());
-        assert!(models.turn(Some("big"), None).is_err());
-        assert_eq!(models.references(), ["test/big", "test/small", "test/wide"]);
-    }
-
-    /// What runs in a VM may call any configured model, and calls the
-    /// agents' own unless it names another.
-    #[test]
-    fn a_vm_calls_any_model_and_the_agents_own_by_default() {
-        let script = Arc::new(Script::default());
-        let mut llm = testing::config();
-        // No model for the agents, no model to call.
-        let none = Models::with_callers(&llm, |_, _| Ok(script.clone() as Arc<dyn Caller>));
-        assert!(none.unwrap().job().is_none());
-
-        llm.job = Some(config::Selection {
-            model: "test/small".into(),
-            effort: Some("low".into()),
-        });
-        let models = Models::with_callers(&llm, |_, _| Ok(script.clone() as Arc<dyn Caller>));
-        let upstreams = models.unwrap().job().unwrap().unwrap();
-        assert_eq!(upstreams.default.reference(), "test/small");
-        assert_eq!(upstreams.effort.as_deref(), Some("low"));
-        let names: Vec<_> = upstreams.all.keys().collect();
-        assert_eq!(names, ["test/big", "test/small", "test/wide"]);
-        let named = |name| upstreams.named(name).reference();
-        assert_eq!(named(Some("test/wide")), "test/wide");
-        assert_eq!(upstreams.named(Some("test/big")).max_output, Some(8000));
-        // No name, the id without its provider, or a stranger's.
-        for name in [None, Some("big"), Some("gpt-4o")] {
-            assert_eq!(named(name), "test/small");
-        }
     }
 }

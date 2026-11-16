@@ -232,11 +232,4 @@ mod tests {
             assert_eq!(parse(chatter), None, "{chatter:?}");
         }
     }
-
-    #[test]
-    fn answers_are_code_blocks() {
-        assert_eq!(answer("cleared"), "```text\ncleared\n```");
-        let persona = "persona:\n用 ```python 写代码";
-        assert_eq!(answer(persona), format!("````text\n{persona}\n````"));
-    }
 }

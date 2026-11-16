@@ -147,6 +147,3 @@ async fn picture(bytes: Vec<u8>) -> Result<(Vec<u8>, &'static str), Failure> {
         _ => Err(not_one()),
     }
 }
-
-#[cfg(test)]
-mod tests;

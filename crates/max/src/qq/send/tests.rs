@@ -1,13 +1,11 @@
 use std::sync::Arc;
 
-use max_core::message::{Draft, DraftNode, MediaKind, MediaMeta, Message as Row};
+use max_core::message::{Draft, DraftNode, Message as Row};
 use max_db::ledger::Delivery;
-use max_db::media::{self, Blob};
 
 use super::*;
 use crate::conversation::testing::{from_xiaoming, group, offset, text};
 use crate::conversation::{Place, ingest};
-use crate::inbound::InNode;
 
 /// Records what it is asked to send or recall, and answers both from one
 /// script: Ok gives a message an id and a ref_idx, `Err(LOST)` an answer
@@ -144,17 +142,6 @@ impl Setup {
         }
     }
 
-    /// Max takes back `target`.
-    async fn unsend(&self, target: MessageId) -> Outgoing {
-        let mut conn = self.pool.acquire().await.unwrap();
-        let unsend = ingest::unsend(&mut conn, &self.place, target, None, Utc::now(), offset());
-        Outgoing {
-            place: Arc::clone(&self.place),
-            message: Arc::new(unsend.await.unwrap().unwrap()),
-            receipt: None,
-        }
-    }
-
     async fn send_all(&self, outgoing: Vec<Outgoing>) {
         let (tx, rx) = mpsc::unbounded_channel();
         for outgoing in outgoing {
@@ -232,35 +219,6 @@ async fn markdown_with_a_mention_and_a_quote(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn plain_text_when_markdown_is_refused(pool: PgPool) {
-    let s = Setup::new(pool).await;
-    s.api
-        .answers
-        .lock()
-        .unwrap()
-        .extend([Err(40054010), Ok(())]);
-    let first = s.say(said("一")).await;
-    let message = first.message.clone();
-    s.api.answers.lock().unwrap().extend([Err(1), Err(2)]);
-    let second = s.say(said("二")).await;
-    let failed = second.message.clone();
-    s.send_all(vec![first, second]).await;
-    let sent = s.sent();
-    let bodies: Vec<_> = sent.iter().map(|(_, m)| &m.body).collect();
-    assert_eq!(
-        bodies,
-        [
-            &Body::Markdown("一".into()),
-            &Body::Text("一".into()),
-            &Body::Markdown("二".into()),
-            &Body::Text("二".into()),
-        ]
-    );
-    assert_eq!(s.delivery(&message).await.0, Delivery::Sent);
-    assert_eq!(s.delivery(&failed).await, (Delivery::Failed, None, None));
-}
-
 /// QQ's answer lost: the message may be in the group, so it isn't sent
 /// again as plain text, and nobody says it failed.
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
@@ -279,219 +237,4 @@ async fn a_lost_answer_is_neither_resent_nor_failed(pool: PgPool) {
     assert_eq!(s.delivery(&message).await, (Delivery::Unknown, None, None));
     let told = told.await.unwrap().unwrap_err();
     assert!(told.starts_with("QQ never answered"), "{told}");
-}
-
-#[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn a_sticker_is_uploaded_once(pool: PgPool) {
-    let s = Setup::new(pool).await;
-    // 小明 sent a sticker, and it was downloaded.
-    let mut conn = s.pool.acquire().await.unwrap();
-    let sticker = InNode::Node(Node::Media {
-        media: Some(MediaRef::Remote("https://q.example/s".into())),
-        meta: MediaMeta {
-            kind: MediaKind::Sticker,
-            mime: None,
-            size: None,
-            name: None,
-            description: None,
-        },
-    });
-    let inbound = from_xiaoming(0, vec![sticker]);
-    let row = ingest::inbound(&mut conn, &s.place, inbound, Utc::now(), offset())
-        .await
-        .unwrap()
-        .message
-        .id;
-    let bytes = b"GIF89a".to_vec();
-    let sha256 = s.store.put(bytes.clone()).await.unwrap();
-    let blob = Blob {
-        sha256,
-        mime: Some("image/gif".into()),
-        size: 6,
-        width: None,
-        height: None,
-        model_sha256: None,
-    };
-    media::record(&mut conn, row, 0, &blob, Utc::now())
-        .await
-        .unwrap();
-    drop(conn);
-
-    let again = || Draft {
-        reply_to: None,
-        nodes: vec![DraftNode::Picture {
-            message: row,
-            ordinal: 0,
-        }],
-    };
-    // QQ refuses the second: the third uploads it again.
-    s.api
-        .answers
-        .lock()
-        .unwrap()
-        .extend([Ok(()), Err(40034028), Ok(())]);
-    // The first two wait to hear how it went.
-    let mut first = s.say(again()).await;
-    let message = first.message.clone();
-    let (receipt, sent) = tokio::sync::oneshot::channel();
-    first.receipt = Some(receipt);
-    let mut second = s.say(again()).await;
-    let (receipt, refused) = tokio::sync::oneshot::channel();
-    second.receipt = Some(receipt);
-    let outgoing = vec![first, second, s.say(again()).await];
-    s.send_all(outgoing).await;
-    assert_eq!(sent.await.unwrap(), Ok(message.id));
-    assert!(refused.await.unwrap().unwrap_err().contains("refused"));
-    let bodies: Vec<Body> = s.sent().into_iter().map(|(_, m)| m.body).collect();
-    let media = |file_info: &str| Body::Media {
-        file_info: file_info.into(),
-        caption: None,
-    };
-    assert_eq!(bodies, [media("FI1"), media("FI1"), media("FI2")]);
-    assert_eq!(
-        *s.api.uploaded.lock().unwrap(),
-        [(None, bytes.clone()), (None, bytes)]
-    );
-    assert_eq!(s.delivery(&message).await.0, Delivery::Sent);
-}
-
-#[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn a_file_goes_alone_under_its_name(pool: PgPool) {
-    let s = Setup::new(pool).await;
-    let bytes = b"%PDF-1.4".to_vec();
-    let sha256 = s.store.put(bytes.clone()).await.unwrap();
-    let blob = Blob {
-        sha256: sha256.clone(),
-        mime: None,
-        size: 8,
-        width: None,
-        height: None,
-        model_sha256: None,
-    };
-    let mut conn = s.pool.acquire().await.unwrap();
-    media::remember(&mut conn, &blob, Utc::now()).await.unwrap();
-    drop(conn);
-    let file = |name: &str| Draft {
-        reply_to: None,
-        nodes: vec![
-            DraftNode::File {
-                sha256: sha256.clone(),
-                name: name.into(),
-                size: 8,
-            },
-            DraftNode::Text {
-                text: "不在文件消息里".into(),
-            },
-        ],
-    };
-    // The same bytes under another name are uploaded again.
-    let first = s.say(file("报告.pdf")).await;
-    let message = first.message.clone();
-    let outgoing = vec![
-        first,
-        s.say(file("报告.pdf")).await,
-        s.say(file("副本.pdf")).await,
-    ];
-    s.send_all(outgoing).await;
-    let bodies: Vec<Body> = s.sent().into_iter().map(|(_, m)| m.body).collect();
-    let media = |file_info: &str| Body::Media {
-        file_info: file_info.into(),
-        caption: None,
-    };
-    assert_eq!(bodies, [media("FI1"), media("FI1"), media("FI2")]);
-    let named = |name: &str| (Some(name.to_owned()), bytes.clone());
-    assert_eq!(
-        *s.api.uploaded.lock().unwrap(),
-        [named("报告.pdf"), named("副本.pdf")]
-    );
-    assert_eq!(s.delivery(&message).await.0, Delivery::Sent);
-}
-
-#[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn an_unsend_recalls_what_its_message_went_out_or_came_in_as(pool: PgPool) {
-    let s = Setup::new(pool).await;
-    let heard = s.hear(0).await;
-    let first = s.say(said("一")).await;
-    let mine = first.message.id;
-    let second = s.say(said("二")).await;
-    let not_sent = second.message.id;
-    // Max takes back what it said, which goes out first; what it said
-    // that didn't go out; and 小明's, twice, which QQ refuses the second
-    // time.
-    let mut outgoing = vec![first, second];
-    for target in [mine, not_sent, heard.id, heard.id] {
-        outgoing.push(s.unsend(target).await);
-    }
-    let unsends: Vec<Row> = outgoing[2..].iter().map(|o| (*o.message).clone()).collect();
-    let (receipt, refusal) = tokio::sync::oneshot::channel();
-    outgoing[5].receipt = Some(receipt);
-    s.api
-        .answers
-        .lock()
-        .unwrap()
-        .extend([Ok(()), Err(1), Err(2), Ok(()), Ok(()), Err(40062003)]);
-    s.send_all(outgoing).await;
-
-    let group = || "Group(\"GROUP1\")".to_owned();
-    assert_eq!(
-        *s.api.recalled.lock().unwrap(),
-        [
-            (group(), "SENT1".to_owned()),
-            (group(), "MSG0".to_owned()),
-            (group(), "MSG0".to_owned())
-        ]
-    );
-    // Recalled: sent, with no id of its own.
-    assert_eq!(s.delivery(&unsends[0]).await, (Delivery::Sent, None, None));
-    assert_eq!(s.delivery(&unsends[1]).await.0, Delivery::Failed);
-    assert_eq!(s.delivery(&unsends[2]).await.0, Delivery::Sent);
-    assert_eq!(s.delivery(&unsends[3]).await.0, Delivery::Failed);
-    assert!(
-        refusal
-            .await
-            .unwrap()
-            .unwrap_err()
-            .contains("the group's admin")
-    );
-}
-
-#[tokio::test(start_paused = true)]
-async fn proactive_messages_wait_for_the_rate() {
-    let pool = sqlx::postgres::PgPoolOptions::new()
-        .connect_lazy("postgres://unused")
-        .unwrap();
-    let shared = Shared {
-        api: Arc::new(Recorder::default()),
-        pool,
-        store: None,
-        sent: Mutex::default(),
-        uploads: Mutex::default(),
-    };
-    let start = Instant::now();
-    for _ in 0..CHAT_RATE {
-        shared.proactive("group:A").await;
-    }
-    assert_eq!(start.elapsed(), Duration::ZERO);
-    for _ in 0..CHAT_RATE {
-        shared.proactive("group:B").await;
-        shared.proactive("group:C").await;
-    }
-    assert_eq!(start.elapsed(), Duration::ZERO);
-    shared.proactive("group:D").await;
-    assert_eq!(start.elapsed(), MINUTE, "the bot's rate");
-    let start = Instant::now();
-    shared.proactive("group:A").await;
-    assert_eq!(start.elapsed(), Duration::ZERO);
-    for _ in 0..CHAT_RATE - 1 {
-        shared.proactive("group:A").await;
-    }
-    shared.proactive("group:A").await;
-    assert_eq!(start.elapsed(), MINUTE, "a chat's rate");
-}
-
-#[test]
-fn latex_brackets_become_dollars() {
-    let mut out = String::from("前：");
-    push_markdown(&mut out, r"\[x\] 和 \\[y 和 \ 和 末尾\");
-    assert_eq!(out, r"前：$$x$$ 和 \$$y 和 \ 和 末尾\");
 }

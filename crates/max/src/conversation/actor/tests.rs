@@ -5,22 +5,17 @@
 use std::time::Duration;
 
 use max_core::ids::ConversationId;
-use max_core::item::{Image, ItemKind};
-use max_core::limits::Setting;
+use max_core::item::ItemKind;
 use max_core::message::{Content, Node};
 use max_core::run::Outcome;
 use max_db::PgPool;
-use max_db::links::Peer;
-use max_db::platform::ConversationKind::{self, Direct, Group};
 use tokio::sync::{mpsc, oneshot};
 
 use super::*;
 use crate::command;
-use crate::conversation::testing::{
-    from_xiaohong, from_xiaoming, group, private, privately, shared, text,
-};
-use crate::conversation::{Configured, Heard, Question};
-use crate::inbound::{InNode, Quote};
+use crate::conversation::Heard;
+use crate::conversation::testing::{from_xiaohong, from_xiaoming, group, shared, text};
+use crate::inbound::InNode;
 use crate::llm::testing::{Answer, Script};
 
 const PATIENCE: Duration = Duration::from_secs(5);
@@ -30,62 +25,30 @@ struct Harness {
     script: Arc<Script>,
     mailbox: UnboundedSender<Event>,
     outbound: UnboundedReceiver<Outgoing>,
-    /// What the actor sends other conversations' actors, through the
-    /// table.
-    signals: UnboundedReceiver<Signal>,
     done: Option<oneshot::Receiver<()>>,
     _scope: Scope,
 }
 
 impl Harness {
     async fn new(pool: PgPool, idle_window_secs: u64) -> Self {
-        Self::with_owner(pool, idle_window_secs, false).await
-    }
-
-    /// With 小明 as Max's owner, if `xiaoming_owns`.
-    async fn with_owner(pool: PgPool, idle_window_secs: u64, xiaoming_owns: bool) -> Self {
-        Self::start(
-            pool,
-            Group,
-            idle_window_secs,
-            xiaoming_owns,
-            true,
-            None,
-            |_| {},
-        )
-        .await
+        Self::start(pool, idle_window_secs, false, true).await
     }
 
     /// Without proactive replies: chatter starts no classifier call that
     /// races the core's calls for the script's answers.
     async fn unprompted(pool: PgPool, idle_window_secs: u64) -> Self {
-        Self::start(pool, Group, idle_window_secs, false, false, None, |_| {}).await
+        Self::start(pool, idle_window_secs, false, false).await
     }
 
-    /// In 小明's private chat with Max.
-    async fn private(pool: PgPool) -> Self {
-        Self::start(pool, Direct, 300, false, true, None, |_| {}).await
-    }
-
-    /// With the VMs' directory at `vm_dir`, where the memory file is.
-    async fn with_vm_dir(pool: PgPool, vm_dir: PathBuf) -> Self {
-        Self::start(pool, Group, 300, false, false, Some(vm_dir), |_| {}).await
-    }
-
+    /// In a group, with 小明 as Max's owner if `xiaoming_owns`.
     async fn start(
         pool: PgPool,
-        kind: ConversationKind,
         idle_window_secs: u64,
         xiaoming_owns: bool,
         proactive: bool,
-        vm_dir: Option<PathBuf>,
-        prepare: impl FnOnce(&mut Conversation),
     ) -> Self {
         let mut conn = pool.acquire().await.unwrap();
-        let place = Arc::new(match kind {
-            Group => group(&mut conn).await,
-            Direct => private(&mut conn).await,
-        });
+        let place = Arc::new(group(&mut conn).await);
         if !proactive {
             let settings = Settings {
                 proactive,
@@ -104,16 +67,12 @@ impl Harness {
             owners.insert(xiaoming.principal);
         }
         let script = Arc::new(Script::default());
-        let (mut shared, outbound) = shared(&pool, &script, idle_window_secs, owners);
-        shared.vm_dir = vm_dir;
-        let (signals, heard) = mpsc::unbounded_channel();
-        shared.signals = signals;
+        let (shared, outbound) = shared(&pool, &script, idle_window_secs, owners);
         let mut scope = Scope::new();
         let (mailbox, rx) = mpsc::unbounded_channel();
-        let mut actor = Conversation::new(Arc::new(shared), place, mailbox.clone())
+        let actor = Conversation::new(Arc::new(shared), place, mailbox.clone())
             .await
             .unwrap();
-        prepare(&mut actor);
         let (done_tx, done) = oneshot::channel();
         scope.spawn(move |_| async move {
             actor.run(rx).await.unwrap();
@@ -124,7 +83,6 @@ impl Harness {
             script,
             mailbox,
             outbound,
-            signals: heard,
             done: Some(done),
             _scope: scope,
         }
@@ -197,15 +155,6 @@ impl Harness {
             other => panic!("{other:?}"),
         }
     }
-
-    /// The pictures in the last item of the n-th request, by handle.
-    fn request_pictures(&self, n: usize) -> Vec<String> {
-        let requests = self.script.requests.lock().unwrap();
-        match &requests[n].items.last().unwrap().kind {
-            ItemKind::User { images, .. } => images.iter().map(Image::handle).collect(),
-            other => panic!("{other:?}"),
-        }
-    }
 }
 
 /// An @ of Max, which a command in a group needs.
@@ -217,25 +166,6 @@ fn me() -> InNode {
 
 fn at_max(n: u32, said: &str) -> Inbound {
     from_xiaoming(n, vec![me(), text(said)])
-}
-
-/// The usage of a model call that can't be recorded: the turn goes on,
-/// and so does the conversation.
-#[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn an_unrecorded_usage_holds_nothing_up(pool: PgPool) {
-    sqlx::query("alter table llm_usage add constraint never check (false) not valid")
-        .execute(&pool)
-        .await
-        .unwrap();
-    let mut h = Harness::new(pool, 300).await;
-    h.script.push(Answer::says("在的"));
-    h.send(at_max(0, " 在吗"));
-    assert_eq!(h.said().await.1, "在的");
-    h.script.push(Answer::says("还在"));
-    h.send(at_max(1, " 还在吗"));
-    assert_eq!(h.said().await.1, "还在");
-    h.stop().await;
-    assert_eq!(h.count("select count(*) from llm_usage").await, 0);
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
@@ -342,97 +272,6 @@ async fn calls_reach(h: &Harness, n: usize) {
     }
 }
 
-/// A picture from before the core started is in its tail by its caption
-/// only: a row that quotes it while the core runs brings the picture.
-#[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn a_row_brings_the_picture_it_quotes(pool: PgPool) {
-    use max_core::message::{MediaKind, MediaMeta, MediaRef};
-
-    let mut h = Harness::unprompted(pool, 300).await;
-    h.script.push(Answer::says("嗯"));
-    h.script.push(Answer::says("一只猫"));
-    let picture = InNode::Node(Node::Media {
-        media: Some(MediaRef::Remote("https://q.example/cat".into())),
-        meta: MediaMeta {
-            kind: MediaKind::Image,
-            mime: None,
-            size: None,
-            name: None,
-            description: None,
-        },
-    });
-    h.send(from_xiaohong(0, vec![picture]));
-    h.send(at_max(1, " 在吗"));
-    assert_eq!(h.said().await.1, "嗯");
-    assert!(h.request_pictures(0).is_empty());
-    let mut ask = at_max(2, " 这是什么");
-    ask.quote = Some(Quote {
-        quote_id: Some("IDX0".into()),
-        ..Quote::default()
-    });
-    h.send(ask);
-    assert_eq!(h.said().await.1, "一只猫");
-    let picture = h
-        .count("select id from messages where native_id = 'MSG0'")
-        .await;
-    assert_eq!(h.request_pictures(1), [format!("image#{picture}.0")]);
-    h.stop().await;
-}
-
-/// Someone who @s Max and finishes the sentence in the next message gets
-/// one answer to both: the call that hasn't said anything starts over.
-#[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn the_rest_of_a_sentence_starts_the_call_over(pool: PgPool) {
-    let mut h = Harness::unprompted(pool, 300).await;
-    h.script.push(Answer::Hangs);
-    h.script.push(Answer::says("给 nix 用就选这个"));
-    h.send(at_max(0, " 推荐用哪个？"));
-    calls_reach(&h, 1).await;
-    // Other people's rows, and his to someone else, wait for the next call.
-    h.send(from_xiaohong(1, vec![text("插一句")]));
-    let mention = InNode::Mention {
-        user: "XIAOHONG".into(),
-        display: "小红".into(),
-    };
-    h.send(from_xiaoming(2, vec![mention, text(" 你也看看")]));
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    assert_eq!(h.script.calls(), 1);
-    h.send(from_xiaoming(3, vec![text("如果我要给nix用的话")]));
-    assert_eq!(h.said().await.1, "给 nix 用就选这个");
-    let tail = h.request_tail(1);
-    assert!(tail.starts_with("[新消息]\n"), "{tail}");
-    assert!(tail.contains("插一句"), "{tail}");
-    assert!(tail.ends_with("如果我要给nix用的话"), "{tail}");
-    h.stop().await;
-    assert_eq!(h.turns().await.len(), 1);
-}
-
-/// A call starts over at most three times before one finishes, and not for
-/// someone who has been answered since.
-#[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn a_call_starts_over_only_so_often(pool: PgPool) {
-    let mut h = Harness::unprompted(pool, 300).await;
-    h.script.push(Answer::says("先说一句"));
-    h.script.push(Answer::Hangs);
-    for _ in 0..4 {
-        h.script.push(Answer::Hangs);
-    }
-    h.send(at_max(0, " 在吗"));
-    assert_eq!(h.said().await.1, "先说一句");
-    h.send(from_xiaohong(1, vec![me(), text(" 再问一个")]));
-    calls_reach(&h, 2).await;
-    // 小明 has been answered: his next words start nothing over.
-    h.send(from_xiaoming(2, vec![text("好")]));
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    assert_eq!(h.script.calls(), 2);
-    for n in 0..4 {
-        h.send(from_xiaohong(3 + n, vec![text("还有")]));
-        tokio::time::sleep(Duration::from_millis(300)).await;
-    }
-    assert_eq!(h.script.calls(), 5, "one call and three over");
-    h.stop().await;
-}
-
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
 async fn a_failed_call_says_so(pool: PgPool) {
     let mut h = Harness::new(pool, 300).await;
@@ -460,74 +299,6 @@ async fn a_failed_call_says_so(pool: PgPool) {
             reason: FailReason::Model { .. }
         })
     ));
-}
-
-/// Without a VM service, `/status` shows what the host's side of /work
-/// says: how much it takes, and Max's units by name.
-#[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn status_shows_what_work_takes_and_its_units(pool: PgPool) {
-    let dir = std::env::temp_dir().join(format!("max-status-{:016x}", rand::random::<u64>()));
-    let mut h = Harness::with_vm_dir(pool, dir.clone()).await;
-    let conversation: i64 = sqlx::query_scalar("select max(id) from conversations")
-        .fetch_one(&h.pool)
-        .await
-        .unwrap();
-    let units = vm::work(&dir, ConversationId(conversation)).join(".max/systemd");
-    std::fs::create_dir_all(&units).unwrap();
-    for unit in ["web.service", "poll.timer", "notes.txt"] {
-        std::fs::write(units.join(unit), "[Unit]\n").unwrap();
-    }
-    h.send(from_xiaoming(0, vec![me(), text("/status")]));
-    let status = h.said().await.1;
-    let shown = status.split_once("\nmodel     ").unwrap().0;
-    let (work, units) = shown.split_once("\nunits     ").unwrap();
-    let taken = work.strip_prefix("```text\nmaxx dev\n/work     ");
-    assert!(
-        taken.is_some_and(|taken| taken.ends_with(['B', 'K'])),
-        "{status}"
-    );
-    assert_eq!(units, "poll.timer\n          web.service", "{status}");
-    h.stop().await;
-    std::fs::remove_dir_all(dir).unwrap();
-}
-
-#[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn a_core_is_shown_the_memory_file(pool: PgPool) {
-    let dir = std::env::temp_dir().join(format!("max-memory-{:016x}", rand::random::<u64>()));
-    let mut h = Harness::with_vm_dir(pool, dir.clone()).await;
-    let conversation: i64 = sqlx::query_scalar("select max(id) from conversations")
-        .fetch_one(&h.pool)
-        .await
-        .unwrap();
-    let memory = vm::work(&dir, ConversationId(conversation)).join(".max");
-    std::fs::create_dir_all(&memory).unwrap();
-    let text = "# 记忆\n\n## 群里\n- 群友叫你小鲨鲨（2026-08-28 #3）\n";
-    std::fs::write(memory.join("memory.md"), text).unwrap();
-    h.script.push(Answer::says("在"));
-    h.send(at_max(0, " 小鲨鲨？"));
-    h.said().await;
-    let volatile = h.request_tail(0);
-    let _ = std::fs::remove_dir_all(&dir);
-    assert!(
-        volatile.contains(&format!("\n[记忆]\n{text}\n[新消息]\n")),
-        "{volatile}"
-    );
-    h.stop().await;
-}
-
-#[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn an_idle_core_ends_on_its_own(pool: PgPool) {
-    let mut h = Harness::new(pool, 1).await;
-    h.script.push(Answer::says("好"));
-    h.send(at_max(0, " 在吗"));
-    h.said().await;
-    let deadline = Instant::now() + PATIENCE;
-    while h.turns().await[0].1.is_none() {
-        assert!(Instant::now() < deadline, "the core didn't end");
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    assert_eq!(h.turns().await[0].1, Some(Outcome::Answered));
-    h.stop().await;
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
@@ -571,164 +342,6 @@ async fn a_judged_wake_starts_a_core(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn commands_answer_and_never_wake(pool: PgPool) {
-    let mut h = Harness::new(pool, 300).await;
-    h.send(from_xiaoming(0, vec![me(), text("/status")]));
-    let (answer, status) = h.said().await;
-    // No VMs here, and so nothing of one.
-    assert!(
-        status.starts_with(
-            "```text\nmaxx dev\nmodel     test/big · high\nproactive on\ncore      idle\n24h       none\n7d        none\nuptime    "
-        ),
-        "{status}"
-    );
-    assert!(status.ends_with("\n```"), "{status}");
-    let Content::Message { reply_to, .. } = answer.content else {
-        unreachable!()
-    };
-    assert_eq!(reply_to, None, "an answer doesn't quote the command");
-
-    // Its model calls, one of them on a model with no price, and the
-    // tokens they used in the last day and week.
-    sqlx::query(
-        "insert into llm_usage
-             (conversation_id, purpose, provider, model, input, cached, output, reasoning, at)
-         select id, 'turn', 'test', model, input, cached, output, 0, now() - ago
-         from conversations, (values
-             ('big', 10000000, 8000000, 100000, interval '1 hour'),
-             ('small', 1000, 0, 10, interval '3 days'),
-             ('big', 5, 0, 5, interval '8 days')
-         ) as calls (model, input, cached, output, ago)",
-    )
-    .execute(&h.pool)
-    .await
-    .unwrap();
-    h.send(from_xiaoming(20, vec![me(), text("/status")]));
-    let status = h.said().await.1;
-    assert!(
-        status.contains(
-            "\n24h       in 10.0M · out 100k · cache 80.0% · $1.70\n\
-             7d        in 10.0M · out 100k · cache 80.0% · ≥ $1.70\n"
-        ),
-        "{status}"
-    );
-
-    h.send(from_xiaoming(1, vec![me(), text("/model test/small")]));
-    assert_eq!(
-        h.said().await.1,
-        command::answer("refused: Max's owners only")
-    );
-    h.send(from_xiaoming(2, vec![me(), text("/clear --all")]));
-    assert_eq!(
-        h.said().await.1,
-        command::answer("refused: the group owner and admins only")
-    );
-    // 小红 is an admin.
-    h.send(from_xiaohong(3, vec![me(), text("/clear --all")]));
-    assert_eq!(
-        h.said().await.1,
-        command::answer(
-            "cleared: earlier messages are out of the context; @maxx /unclear brings them back"
-        )
-    );
-    let cleared = h
-        .count("select cleared_upto from conversation_settings")
-        .await;
-    assert!(cleared > 0);
-
-    h.send(from_xiaoming(4, vec![me(), text("/unclear")]));
-    assert_eq!(
-        h.said().await.1,
-        command::answer("refused: the group owner and admins only")
-    );
-    h.send(from_xiaohong(5, vec![me(), text("/unclear")]));
-    assert_eq!(
-        h.said().await.1,
-        command::answer("uncleared: the messages before the clear are back in the context")
-    );
-    h.send(from_xiaohong(6, vec![me(), text("/unclear")]));
-    assert_eq!(h.said().await.1, command::answer("skipped: never cleared"));
-    h.stop().await;
-    assert_eq!(h.script.calls(), 0);
-    assert!(h.turns().await.is_empty());
-    let cleared = h
-        .count("select count(cleared_upto) from conversation_settings")
-        .await;
-    assert_eq!(cleared, 0);
-}
-
-#[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn an_owner_changes_settings(pool: PgPool) {
-    let mut h = Harness::with_owner(pool, 300, true).await;
-    h.send(from_xiaoming(0, vec![me(), text("/model test/nope")]));
-    let answer = h.said().await.1;
-    assert!(answer.contains("\nerror: no such model"), "{answer}");
-    h.send(from_xiaoming(1, vec![me(), text("/model test/wide")]));
-    assert_eq!(
-        h.said().await.1,
-        command::answer("switched to test/wide; takes effect from the next reply")
-    );
-    h.send(from_xiaoming(2, vec![me(), text("/proactive off")]));
-    assert_eq!(
-        h.said().await.1,
-        command::answer("proactive off: Max replies only when @-ed or replied to")
-    );
-    h.script.push(Answer::says("嗯"));
-    // From 小红: 小明's burst of commands would hold his @ as unfinished.
-    let mention = InNode::MentionMe {
-        display: "maxx".into(),
-    };
-    h.send(from_xiaohong(3, vec![mention, text(" 在吗")]));
-    h.said().await;
-    // The turn that answered goes on as it started.
-    h.send(from_xiaoming(4, vec![me(), text("/effort high")]));
-    assert_eq!(
-        h.said().await.1,
-        command::answer(
-            "effort set to high; takes effect when the running turn ends, after 5 minutes idle"
-        )
-    );
-    h.stop().await;
-    let proactive = h
-        .count("select count(*) from conversation_settings where not proactive")
-        .await;
-    assert_eq!(proactive, 1);
-    let requests = h.script.requests.lock().unwrap();
-    assert_eq!(requests[0].model.model, "wide");
-    // Max sees the answers as the host's, not its own words.
-    let shown: String = requests[0]
-        .items
-        .iter()
-        .filter_map(|item| match &item.kind {
-            ItemKind::User { text, .. } => Some(text.as_str()),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(shown.matches(" 系统发的]: ").count(), 3, "{shown}");
-}
-
-#[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn a_private_chat_is_its_persons_to_command(pool: PgPool) {
-    let mut h = Harness::private(pool).await;
-    h.send(privately(from_xiaoming(0, vec![text("/model test/wide")])));
-    assert_eq!(
-        h.said().await.1,
-        command::answer("switched to test/wide; takes effect from the next reply")
-    );
-    h.send(privately(from_xiaoming(1, vec![text("/clear --all")])));
-    let cleared = h.said().await.1;
-    assert!(cleared.contains("\ncleared: "), "{cleared}");
-    // Binding a group is the owners' alone.
-    h.send(privately(from_xiaoming(2, vec![text("/bind")])));
-    assert_eq!(
-        h.said().await.1,
-        command::answer("refused: Max's owners only")
-    );
-    h.stop().await;
-    assert_eq!(h.script.calls(), 0);
-}
-
-#[sqlx::test(migrator = "max_db::MIGRATOR")]
 async fn kill_stops_the_core_quietly(pool: PgPool) {
     let mut h = Harness::new(pool, 300).await;
     h.script.push(Answer::Hangs);
@@ -750,71 +363,6 @@ async fn kill_stops_the_core_quietly(pool: PgPool) {
     assert!(h.outbound.try_recv().is_err(), "/kill isn't answered");
 }
 
-#[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn a_post_hears_how_its_sending_went(pool: PgPool) {
-    let mut h = Harness::unprompted(pool, 300).await;
-    let say = |nodes: Vec<DraftNode>| {
-        let draft = Draft {
-            reply_to: None,
-            nodes,
-        };
-        post(Act::Say(draft))
-    };
-    let (chart, sent) = say(vec![DraftNode::Text {
-        text: "每日活跃".into(),
-    }]);
-    h.mailbox.send(Event::Post(chart)).unwrap();
-    let outgoing = tokio::time::timeout(PATIENCE, h.outbound.recv())
-        .await
-        .unwrap()
-        .unwrap();
-    let id = outgoing.message.id;
-    // What the sender does once QQ has answered.
-    outgoing.receipt.unwrap().send(Ok(id)).unwrap();
-    assert_eq!(sent.await.unwrap(), Ok(id));
-
-    // Nothing to send: told at once, and nothing goes to the sender.
-    let (empty, sent) = say(Vec::new());
-    h.mailbox.send(Event::Post(empty)).unwrap();
-    assert!(sent.await.unwrap().is_err());
-    h.stop().await;
-    assert!(h.outbound.try_recv().is_err());
-}
-
-#[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn a_queued_post_hears_its_row_before_it_is_sent(pool: PgPool) {
-    let mut h = Harness::unprompted(pool, 300).await;
-    let queue = |nodes: Vec<DraftNode>| {
-        let draft = Draft {
-            reply_to: None,
-            nodes,
-        };
-        post(Act::Queue(draft))
-    };
-    let (file, committed) = queue(vec![DraftNode::Text {
-        text: "录像.mp4".into(),
-    }]);
-    h.mailbox.send(Event::Post(file)).unwrap();
-    let id = tokio::time::timeout(PATIENCE, committed)
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
-    // The sender has it to send, and nobody to tell.
-    let outgoing = tokio::time::timeout(PATIENCE, h.outbound.recv())
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(outgoing.message.id, id);
-    assert!(outgoing.receipt.is_none());
-
-    let (empty, committed) = queue(Vec::new());
-    h.mailbox.send(Event::Post(empty)).unwrap();
-    assert!(committed.await.unwrap().is_err());
-    h.stop().await;
-    assert!(h.outbound.try_recv().is_err());
-}
-
 /// A post that waits to hear how it went.
 fn post(act: Act) -> (Post, oneshot::Receiver<Result<MessageId, String>>) {
     let (receipt, sent) = oneshot::channel();
@@ -823,127 +371,6 @@ fn post(act: Act) -> (Post, oneshot::Receiver<Result<MessageId, String>>) {
         receipt: Some(receipt),
     };
     (post, sent)
-}
-
-#[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn a_post_takes_back_a_message(pool: PgPool) {
-    let mut h = Harness::unprompted(pool, 300).await;
-    h.send(from_xiaoming(0, vec![text("加群领红包")]));
-    // No such message: told at once. By then 小明's is committed.
-    let (nothing, refused) = post(Act::Unsend(MessageId(i64::MAX)));
-    h.mailbox.send(Event::Post(nothing)).unwrap();
-    assert!(refused.await.unwrap().is_err());
-    let target = sqlx::query_scalar("select id from messages where native_id = 'MSG0'")
-        .fetch_one(&h.pool)
-        .await
-        .map(MessageId)
-        .unwrap();
-
-    let (unsend, sent) = post(Act::Unsend(target));
-    h.mailbox.send(Event::Post(unsend)).unwrap();
-    let outgoing = tokio::time::timeout(PATIENCE, h.outbound.recv())
-        .await
-        .unwrap()
-        .unwrap();
-    let row = outgoing.message;
-    assert_eq!(row.content, Content::Unsend { target });
-    assert_eq!(row.sender.name, "maxx");
-    outgoing.receipt.unwrap().send(Ok(row.id)).unwrap();
-    assert_eq!(sent.await.unwrap(), Ok(row.id));
-
-    // An unsend is no message to take back.
-    let (again, refused) = post(Act::Unsend(row.id));
-    h.mailbox.send(Event::Post(again)).unwrap();
-    assert!(refused.await.unwrap().is_err());
-    h.stop().await;
-    assert!(h.outbound.try_recv().is_err());
-}
-
-/// A program's call ends once nobody waits for its result, as when the
-/// service has given up on it; but a `say` goes out whole, as Max's own
-/// reply does. Here the first message's receipt never comes.
-#[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn a_program_call_nobody_waits_for_ends(pool: PgPool) {
-    let mut h = Harness::new(pool, 300).await;
-    let (reply, result) = oneshot::channel();
-    let call = Event::Call {
-        tool: "say".into(),
-        args: serde_json::json!({ "text": "早[split]CI 全绿" }),
-        reply,
-    };
-    h.mailbox.send(call).unwrap();
-    let mut result = Some(result);
-    let mut receipts = Vec::new();
-    for said in ["早", "CI 全绿"] {
-        let outgoing = tokio::time::timeout(PATIENCE, h.outbound.recv())
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            outgoing.message.content,
-            Content::Message {
-                reply_to: None,
-                nodes: vec![Node::Text { text: said.into() }],
-            }
-        );
-        receipts.push(outgoing.receipt.unwrap());
-        // Given up on once the first message is out.
-        result.take();
-    }
-    // The `say` no longer waits for the receipts.
-    for mut receipt in receipts {
-        tokio::time::timeout(PATIENCE, receipt.closed())
-            .await
-            .expect("the call went on");
-    }
-    h.stop().await;
-}
-
-/// A marker whose id a program didn't fill in stops its say; in code, it
-/// is an example, and goes out.
-#[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn a_program_says_nothing_with_an_unfilled_id(pool: PgPool) {
-    let mut h = Harness::new(pool, 300).await;
-    let (reply, refused) = oneshot::channel();
-    let call = Event::Call {
-        tool: "say".into(),
-        args: serde_json::json!({ "text": "[reply#${id}] 构建好了" }),
-        reply,
-    };
-    h.mailbox.send(call).unwrap();
-    let refused = tokio::time::timeout(PATIENCE, refused).await.unwrap();
-    assert_eq!(refused.unwrap().unwrap_err().code, "unfilled");
-    assert!(h.outbound.try_recv().is_err());
-
-    let example = "回复写成 `[reply#${id}]`";
-    let (reply, result) = oneshot::channel();
-    let call = Event::Call {
-        tool: "say".into(),
-        args: serde_json::json!({ "text": example }),
-        reply,
-    };
-    h.mailbox.send(call).unwrap();
-    let outgoing = tokio::time::timeout(PATIENCE, h.outbound.recv())
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        outgoing.message.content,
-        Content::Message {
-            reply_to: None,
-            nodes: vec![Node::Text {
-                text: example.into()
-            }],
-        }
-    );
-    outgoing
-        .receipt
-        .unwrap()
-        .send(Ok(outgoing.message.id))
-        .unwrap();
-    let said = tokio::time::timeout(PATIENCE, result).await.unwrap();
-    assert!(said.unwrap().is_ok());
-    h.stop().await;
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
@@ -997,36 +424,9 @@ async fn a_program_says_things_marked_as_its_own(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn a_program_follows_the_rows_as_they_are_committed(pool: PgPool) {
-    let mut h = Harness::new(pool, 300).await;
-    h.script.push(Answer::says("早"));
-    h.send(from_xiaoming(0, vec![me(), text(" 在吗")]));
-    let (said, _) = h.said().await;
-    let (reply, subscribed) = oneshot::channel();
-    h.mailbox.send(Event::Subscribe(reply)).unwrap();
-    let mut subscription = tokio::time::timeout(PATIENCE, subscribed)
-        .await
-        .unwrap()
-        .unwrap();
-    // The rows up to the head are in the database; those after come.
-    assert_eq!(subscription.head, said.id);
-    h.script.push(Answer::says("在"));
-    h.send(from_xiaoming(1, vec![me(), text(" 真在吗")]));
-    let (answer, _) = h.said().await;
-    let asked = subscription.rows.recv().await.unwrap();
-    assert_eq!(asked.sender.name, "小明");
-    let answered = subscription.rows.recv().await.unwrap();
-    assert_eq!(answered.id, answer.id);
-    assert!(asked.id > said.id && asked.id < answer.id);
-    // The actor stopped: the stream ends.
-    h.stop().await;
-    assert!(subscription.rows.recv().await.is_err());
-}
-
-#[sqlx::test(migrator = "max_db::MIGRATOR")]
 async fn stop_ends_the_turn_and_nothing_starts_until_start(pool: PgPool) {
     // 小明 owns Max here, and no classifier call races the core's.
-    let mut h = Harness::start(pool, Group, 300, true, false, None, |_| {}).await;
+    let mut h = Harness::start(pool, 300, true, false).await;
     h.script.push(Answer::Hangs);
     h.send(at_max(0, " 写篇长文"));
     calls_reach(&h, 1).await;
@@ -1098,284 +498,6 @@ async fn stop_ends_the_turn_and_nothing_starts_until_start(pool: PgPool) {
     assert_eq!(h.turns().await.len(), 2);
     let stopped = "select count(*) from conversation_settings where stopped";
     assert_eq!(h.count(stopped).await, 0);
-}
-
-/// A stopped conversation's next actor, as after a restart, is stopped
-/// too. Intent didn't see what came meanwhile: the classifier's first
-/// call is on what comes after `/start`.
-#[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn a_stop_outlasts_a_restart(pool: PgPool) {
-    let mut h = Harness::new(pool.clone(), 300).await;
-    h.send(from_xiaohong(0, vec![me(), text("/stop")]));
-    h.said().await;
-    h.stop().await;
-    let mut h = Harness::new(pool, 300).await;
-    h.script
-        .push(Answer::says(r#"{"trigger": false, "reason": "闲聊"}"#));
-    h.send(at_max(1, " 在吗"));
-    h.send(from_xiaoming(2, vec![text("今天吃什么")]));
-    h.send(from_xiaohong(3, vec![me(), text("/start")]));
-    assert_eq!(
-        h.said().await.1,
-        command::answer("started: Max replies again")
-    );
-    h.send(from_xiaohong(4, vec![text("明天呢")]));
-    calls_reach(&h, 1).await;
-    h.stop().await;
-    assert!(h.turns().await.is_empty());
-    let requests = h.script.requests.lock().unwrap();
-    assert_eq!(requests.len(), 1);
-    let shown: String = requests[0]
-        .items
-        .iter()
-        .filter_map(|item| match &item.kind {
-            ItemKind::User { text, .. } => Some(text.as_str()),
-            _ => None,
-        })
-        .collect();
-    assert!(shown.contains("明天呢"), "{shown}");
-}
-
-/// Only the group owner and admins stop Max, and in a private chat its
-/// person.
-#[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn who_stops_max(pool: PgPool) {
-    let mut h = Harness::new(pool.clone(), 300).await;
-    h.send(from_xiaoming(0, vec![me(), text("/stop")]));
-    assert_eq!(
-        h.said().await.1,
-        command::answer("refused: the group owner and admins only")
-    );
-    h.stop().await;
-    let mut h = Harness::private(pool).await;
-    h.send(privately(from_xiaoming(1, vec![text("/stop")])));
-    let answer = h.said().await.1;
-    assert!(answer.contains("Max won't reply until /start"), "{answer}");
-    h.stop().await;
-}
-
-/// Max's `config`, as its tool asks: what each limit is now, or why not.
-async fn configure(
-    h: &Harness,
-    changes: Vec<(Setting, Option<u64>)>,
-) -> Result<Vec<Configured>, String> {
-    h.poster().configure(changes).await
-}
-
-#[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn max_sets_the_idle_window_of_the_running_turn(pool: PgPool) {
-    let mut h = Harness::new(pool, 300).await;
-    h.script.push(Answer::says("好"));
-    h.send(at_max(0, " 在吗"));
-    h.said().await;
-    assert_eq!(h.turns().await[0].1, None, "the turn goes on");
-
-    // Below what the tool allows, so the test is short: the actor
-    // trusts the command and the tool to keep to the ranges.
-    let configured = configure(&h, vec![(Setting::IdleWindowSecs, Some(1))])
-        .await
-        .unwrap();
-    let idle = configured
-        .iter()
-        .find(|one| one.setting == Setting::IdleWindowSecs);
-    assert_eq!(idle.map(|one| (one.value, one.default)), Some((1, 300)));
-    let deadline = Instant::now() + PATIENCE;
-    while h.turns().await[0].1.is_none() {
-        assert!(Instant::now() < deadline, "the core didn't end");
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    assert_eq!(h.turns().await[0].1, Some(Outcome::Answered));
-    h.stop().await;
-    let saved = h
-        .count("select (overrides->>'idle_window_secs')::bigint from conversation_settings")
-        .await;
-    assert_eq!(saved, 1);
-}
-
-#[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn admins_config_the_limits_and_everyone_sees_them(pool: PgPool) {
-    let mut h = Harness::new(pool, 300).await;
-    h.send(from_xiaoming(0, vec![me(), text("/config")]));
-    assert_eq!(
-        h.said().await.1,
-        command::answer(
-            "this conversation's limits\n\
-             idle_window_secs  300\n\
-             call_time_secs    60"
-        )
-    );
-    h.send(from_xiaoming(
-        1,
-        vec![me(), text("/config call_time_secs 120")],
-    ));
-    assert_eq!(
-        h.said().await.1,
-        command::answer("refused: the group owner and admins only")
-    );
-    // 小红 is an admin.
-    let mut n = 2;
-    let mut config = |h: &Harness, argument: &str| {
-        h.send(from_xiaohong(
-            n,
-            vec![me(), text(&format!("/config {argument}"))],
-        ));
-        n += 1;
-    };
-    for (argument, answer) in [
-        (
-            "call_time_secs 120",
-            "call_time_secs set to 120; takes effect from Max's next program or command",
-        ),
-        (
-            "call_time_secs 5",
-            "error: call_time_secs takes a number from 10 to 600, or default",
-        ),
-        (
-            "call_time_secs soon",
-            "error: call_time_secs takes a number from 10 to 600, or default",
-        ),
-        (
-            "job_time_secs 60",
-            "error: no such setting; there are idle_window_secs, call_time_secs",
-        ),
-        (
-            "idle_window_secs 1800",
-            "idle_window_secs set to 1800; takes effect now",
-        ),
-        ("call_time_secs", "call_time_secs    120 (default 60)"),
-    ] {
-        config(&h, argument);
-        assert_eq!(h.said().await.1, command::answer(answer), "{argument}");
-    }
-    h.send(from_xiaoming(9, vec![me(), text("/status")]));
-    let status = h.said().await.1;
-    assert!(
-        status.contains("\nconfig    idle_window_secs 1800 · call_time_secs 120\n"),
-        "{status}"
-    );
-    config(&h, "idle_window_secs default");
-    assert_eq!(
-        h.said().await.1,
-        command::answer("idle_window_secs back to the default, 300; takes effect now")
-    );
-    h.stop().await;
-    assert_eq!(h.script.calls(), 0);
-    let saved = h
-        .count("select (overrides->>'call_time_secs')::bigint from conversation_settings")
-        .await;
-    assert_eq!(saved, 120);
-    let idle = h
-        .count("select count(overrides->'idle_window_secs') from conversation_settings")
-        .await;
-    assert_eq!(idle, 0);
-}
-
-#[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn a_program_call_ends_at_the_conversations_call_time(pool: PgPool) {
-    let mut h = Harness::start(pool, Group, 300, false, true, None, |actor| {
-        actor.settings.overrides.set(Setting::CallTimeSecs, Some(1));
-    })
-    .await;
-    let (reply, result) = oneshot::channel();
-    let call = Event::Call {
-        tool: "say".into(),
-        args: serde_json::json!({ "text": "早" }),
-        reply,
-    };
-    h.mailbox.send(call).unwrap();
-    // The sender holds the receipt, so the `say` waits on it.
-    let _held = tokio::time::timeout(PATIENCE, h.outbound.recv())
-        .await
-        .unwrap()
-        .unwrap();
-    let failed = tokio::time::timeout(PATIENCE, result)
-        .await
-        .expect("the call went on")
-        .unwrap()
-        .unwrap_err();
-    assert_eq!(failed.code, "timeout");
-    assert!(
-        failed.message.starts_with("not done in 1 seconds"),
-        "{}",
-        failed.message
-    );
-    h.stop().await;
-}
-
-/// What Max in conversation 7 asks Max here, conversation 9 as it names
-/// it.
-fn question(text: &str) -> Event {
-    let question = Question {
-        from: Peer {
-            conversation: ConversationId(7),
-            title: Some("hank".into()),
-        },
-        to: Peer {
-            conversation: ConversationId(9),
-            title: Some("示波器群".into()),
-        },
-        text: text.to_owned(),
-    };
-    Event::Heard(Heard::Asked(question))
-}
-
-/// Max calls `answer` for question `to`.
-async fn answer(h: &Harness, to: u32, text: &str) -> Result<String, String> {
-    h.poster().answer(to, text.to_owned()).await
-}
-
-#[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn a_question_is_answered_to_who_asked_or_ends_with_the_turn(pool: PgPool) {
-    // An idle window too short to outlast the second question.
-    let mut h = Harness::unprompted(pool, 1).await;
-    h.send(from_xiaoming(0, vec![text("明天有活动")]));
-    h.script.push(Answer::says("八点吧"));
-    h.mailbox.send(question("明天的活动\n几点开始？")).unwrap();
-    assert_eq!(h.said().await.1, "八点吧");
-    assert_eq!(answer(&h, 1, "八点").await, Ok("c#7 hank".to_owned()));
-    // The answer goes back to who asked, with the question: nothing
-    // there kept it.
-    let Some(Signal::Heard {
-        conversation,
-        heard: Heard::Answered(answered),
-    }) = h.signals.recv().await
-    else {
-        panic!("no answer went back");
-    };
-    assert_eq!(conversation, ConversationId(7));
-    assert_eq!(answered.by.to_string(), "c#9 示波器群");
-    assert_eq!(answered.question, "明天的活动\n几点开始？");
-    assert_eq!(answered.said, Ok("八点".to_owned()));
-    // Once.
-    let again = answer(&h, 1, "九点").await.unwrap_err();
-    assert!(again.starts_with("there is no ask#1 to answer"), "{again}");
-
-    // One Max doesn't answer: its turn ends when the idle window runs
-    // out, and who asked hears that it wasn't answered.
-    h.script.push(Answer::says("谁知道地点？"));
-    h.mailbox.send(question("在哪儿？")).unwrap();
-    assert_eq!(h.said().await.1, "谁知道地点？");
-    let ended = tokio::time::timeout(PATIENCE, h.signals.recv()).await;
-    let Some(Signal::Heard {
-        heard: Heard::Answered(unanswered),
-        ..
-    }) = ended.expect("the turn didn't end")
-    else {
-        panic!("who asked heard nothing");
-    };
-    assert_eq!(unanswered.question, "在哪儿？");
-    let why = "Max there ended its turn without answering".to_owned();
-    assert_eq!(unanswered.said, Err(why));
-    // Someone here knows, later: the core that hears them never saw the
-    // question, and there is nothing left to answer.
-    h.script.push(Answer::says("好的"));
-    h.send(from_xiaohong(1, vec![me(), text("在三楼")]));
-    assert_eq!(h.said().await.1, "好的");
-    let shown = h.request_tail(2);
-    assert!(!shown.contains("ask#2"), "{shown}");
-    let late = answer(&h, 2, "三楼").await.unwrap_err();
-    assert!(late.contains("an earlier turn"), "{late}");
-    h.stop().await;
 }
 
 /// What goes on after `/stop` and as Max shuts down: by what an event

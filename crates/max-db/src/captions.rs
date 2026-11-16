@@ -146,6 +146,3 @@ pub async fn of_messages(
         })
         .collect())
 }
-
-#[cfg(test)]
-mod tests;

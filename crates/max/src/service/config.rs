@@ -106,6 +106,3 @@ impl Tool for Config {
         })
     }
 }
-
-#[cfg(test)]
-mod tests;

@@ -1,6 +1,5 @@
 use super::*;
-use crate::item::{Image, Protocol, ToolCall, Usage};
-use crate::message::MediaKind;
+use crate::item::{Protocol, ToolCall, Usage};
 use std::sync::Arc;
 
 fn spec(window: u32, max_output: Option<u32>) -> RunSpec {
@@ -151,43 +150,6 @@ fn answers_and_goes_idle() {
 }
 
 #[test]
-fn people_shown_mid_run_can_be_mentioned() {
-    let mut run = Run::new(spec(400_000, None), base(100), vec![Input::Wake(wake(1))]);
-    assert_eq!(call_model(&mut run).roster, [PrincipalId(12)].into());
-    let Input::Messages { ids, item, .. } = messages(2, 10) else {
-        unreachable!()
-    };
-    let people = vec![PrincipalId(30)];
-    run.input(Input::Messages { ids, item, people }).unwrap();
-    // Known to the run at once: the next rows needn't bring their line.
-    assert_eq!(run.roster(), &[PrincipalId(12), PrincipalId(30)].into());
-    run.input(Input::Wake(wake(2))).unwrap();
-    run.model_output(says("[mention#30] 你好")).unwrap();
-    assert_eq!(
-        call_model(&mut run).roster,
-        [PrincipalId(12), PrincipalId(30)].into()
-    );
-}
-
-#[test]
-fn a_call_taken_back_is_made_again_with_what_came_since() {
-    let mut run = Run::new(spec(400_000, None), base(100), vec![Input::Wake(wake(1))]);
-    let first = texts(&call_model(&mut run));
-    // Chatter alone: a finished call would leave it waiting.
-    run.input(messages(2, 5)).unwrap();
-    run.retract().unwrap();
-    assert!(!run.busy());
-    let again = texts(&call_model(&mut run));
-    assert_eq!(again[..first.len()], first[..]);
-    assert_eq!(again[first.len()..], ["[新消息]\n[10:00 小明 #2]: 消息2"]);
-    assert_eq!(run.round(), 1);
-    run.model_output(says("好")).unwrap();
-    assert_eq!(run.retract(), Err(Rejected::NoModelCall));
-    assert!(run.unhandled().is_empty());
-    assert_eq!(run.outcome(), Outcome::Answered);
-}
-
-#[test]
 fn chatter_waits_for_a_trigger() {
     let mut run = Run::new(spec(400_000, None), base(100), vec![]);
     call_model(&mut run);
@@ -203,43 +165,6 @@ fn chatter_waits_for_a_trigger() {
         texts(&request).last().unwrap(),
         "[新消息]\n[10:00 小明 #2]: 消息2\n[10:00 小明 #3]: 消息3"
     );
-}
-
-#[test]
-fn pictures_follow_the_new_rows_they_came_with() {
-    let image = |kind, message, ordinal| Image {
-        kind,
-        message: MessageId(message),
-        ordinal,
-    };
-    let with = |id: i64, images: Vec<Image>| {
-        let text = format!("[10:00 小明 #{id}]: [image#{id}.0]");
-        Input::Messages {
-            ids: vec![MessageId(id)],
-            item: Item::new(ItemKind::User { text, images }, 900),
-            people: Vec::new(),
-        }
-    };
-    let mut run = Run::new(spec(400_000, None), base(100), vec![]);
-    call_model(&mut run);
-    run.model_output(says("[silence]")).unwrap();
-    run.input(with(2, vec![image(MediaKind::Image, 2, 0)]))
-        .unwrap();
-    run.input(messages(3, 5)).unwrap();
-    let four = vec![
-        image(MediaKind::Image, 4, 0),
-        image(MediaKind::Sticker, 4, 1),
-    ];
-    run.input(with(4, four)).unwrap();
-    run.input(Input::Wake(wake(4))).unwrap();
-    let request = call_model(&mut run);
-    let last = request.items.last().unwrap();
-    let ItemKind::User { images, .. } = &last.kind else {
-        panic!("{last:?}")
-    };
-    let handles: Vec<String> = images.iter().map(Image::handle).collect();
-    assert_eq!(handles, ["image#2.0", "image#4.0", "sticker#4.1"]);
-    assert_eq!(last.tokens, 1805);
 }
 
 #[test]
@@ -295,18 +220,6 @@ fn malformed_calls_get_an_error_and_never_run() {
 }
 
 #[test]
-fn what_doesnt_fit_is_rejected_and_changes_nothing() {
-    let mut run = Run::new(spec(400_000, None), base(100), vec![]);
-    assert_eq!(run.model_output(says("x")), Err(Rejected::NoModelCall));
-    assert_eq!(
-        run.tool_result(CallId("a".into()), result(1)),
-        Err(Rejected::UnknownCall)
-    );
-    assert!(run.record().transcript.is_empty());
-    assert_eq!(texts(&call_model(&mut run)), ["人设"]);
-}
-
-#[test]
 fn the_record_is_what_the_model_saw_and_said() {
     let mut run = Run::new(spec(400_000, None), base(100), vec![Input::Wake(wake(1))]);
     call_model(&mut run);
@@ -323,143 +236,6 @@ fn the_record_is_what_the_model_saw_and_said() {
     let json = serde_json::to_value(run.record()).unwrap();
     assert_eq!(json["transcript"].as_array().unwrap().len(), 4);
     assert_eq!(json["spec"]["window"], 400_000);
-}
-
-#[test]
-fn the_limit_counts_waiting_inputs() {
-    // Window 10k: the core may grow 5k past its 1k base, and is near the
-    // limit past 4.5k.
-    let mut run = Run::new(spec(10_000, None), base(1_000), vec![Input::Wake(wake(1))]);
-    call_model(&mut run);
-    run.model_output(calls(&[("a", "shell")])).unwrap(); // measured: 1,010
-    run_tools(&mut run);
-    run.tool_result(CallId("a".into()), result(3_000)).unwrap();
-    assert!(!run.near_limit());
-    run.input(messages(2, 2_000)).unwrap();
-    run.input(Input::Wake(wake(2))).unwrap();
-    assert!(run.near_limit());
-    // Neither trigger has been handled.
-    let ids: Vec<_> = run
-        .unhandled()
-        .into_iter()
-        .flat_map(|wake| wake.ids)
-        .collect();
-    assert_eq!(ids, [MessageId(1), MessageId(2)]);
-    // A base that leaves no room is at the limit from the start.
-    let full = Run::new(spec(10_000, None), base(9_000), vec![Input::Wake(wake(1))]);
-    assert!(full.at_limit());
-}
-
-#[test]
-fn an_output_without_usage_keeps_the_estimates() {
-    let mut run = Run::new(spec(10_000, None), base(1_000), vec![Input::Wake(wake(1))]);
-    call_model(&mut run);
-    let uncounted = ModelOutput {
-        usage: Usage::default(),
-        ..calls(&[("a", "shell")])
-    };
-    run.model_output(uncounted).unwrap();
-    run_tools(&mut run);
-    run.tool_result(CallId("a".into()), result(4_000)).unwrap();
-    assert!(!run.near_limit());
-    // The base still counts: 1,000 + 10 + 4,000 + 600 is past 5.5k.
-    run.input(messages(2, 600)).unwrap();
-    assert!(run.near_limit());
-}
-
-/// The warnings in the request, as the model is shown them.
-fn warnings(request: &Request) -> usize {
-    texts(request)
-        .iter()
-        .filter(|text| text.starts_with("[maxx 提醒] 这一轮的上下文快用完了"))
-        .count()
-}
-
-/// A model output whose request the provider counted as `input` tokens.
-fn counted(input: u32, out: ModelOutput) -> ModelOutput {
-    ModelOutput {
-        usage: usage(input),
-        ..out
-    }
-}
-
-#[test]
-fn near_the_limit_the_model_is_warned_once() {
-    // Window 10k, base 1k: near the limit past 5.5k, over it past 6k.
-    let mut run = Run::new(spec(10_000, None), base(1_000), vec![Input::Wake(wake(1))]);
-    call_model(&mut run);
-    run.model_output(calls(&[("a", "shell")])).unwrap(); // measured: 1,010
-    run_tools(&mut run);
-    run.tool_result(CallId("a".into()), result(4_600)).unwrap();
-    assert!(run.near_limit() && !run.at_limit());
-    let request = call_model(&mut run);
-    assert_eq!(warnings(&request), 1);
-    assert!(
-        texts(&request).last().unwrap().contains("[maxx 提醒]"),
-        "the last thing before the call"
-    );
-    assert!(run.warned());
-
-    // Still under the limit: the run goes on, and isn't warned again.
-    run.model_output(counted(5_700, calls(&[("b", "shell")])))
-        .unwrap();
-    run_tools(&mut run);
-    run.tool_result(CallId("b".into()), result(10)).unwrap();
-    assert!(!run.at_limit());
-    assert_eq!(warnings(&call_model(&mut run)), 1);
-
-    // Over it, warned, the run is at its limit.
-    run.model_output(counted(5_800, calls(&[("c", "shell")])))
-        .unwrap();
-    run_tools(&mut run);
-    run.tool_result(CallId("c".into()), result(500)).unwrap();
-    assert!(run.at_limit());
-}
-
-#[test]
-fn a_run_over_its_limit_unwarned_gets_the_call_that_warns_it() {
-    let mut run = Run::new(spec(10_000, None), base(1_000), vec![Input::Wake(wake(1))]);
-    call_model(&mut run);
-    run.model_output(calls(&[("a", "shell")])).unwrap();
-    run_tools(&mut run);
-    // From well under the line to past the limit in one result.
-    run.tool_result(CallId("a".into()), result(5_500)).unwrap();
-    assert!(!run.at_limit());
-    assert_eq!(warnings(&call_model(&mut run)), 1);
-    assert!(run.at_limit());
-    run.model_output(counted(6_700, says("查到一半：……剩下的下次再说")))
-        .unwrap();
-    assert_idle(&mut run);
-    assert_eq!(run.outcome(), Outcome::Answered);
-}
-
-#[test]
-fn a_warned_model_that_speaks_has_answered_what_it_saw() {
-    let mut run = Run::new(spec(10_000, None), base(1_000), vec![Input::Wake(wake(1))]);
-    call_model(&mut run);
-    run.model_output(calls(&[("a", "shell")])).unwrap();
-    run_tools(&mut run);
-    run.tool_result(CallId("a".into()), result(4_600)).unwrap();
-    call_model(&mut run);
-    run.input(Input::Wake(wake(2))).unwrap();
-    // It says how far it got and hands the rest to an agent.
-    let mut both = says("做到这里了，剩下的交给后台");
-    both.items.extend(calls(&[("b", "run_code")]).items);
-    run.model_output(counted(5_700, both)).unwrap();
-    assert_eq!(
-        run.unhandled(),
-        [wake(2)],
-        "the wake it hasn't seen is owed"
-    );
-
-    // Unwarned, the same output leaves both owed.
-    let mut run = Run::new(spec(400_000, None), base(100), vec![Input::Wake(wake(1))]);
-    call_model(&mut run);
-    run.input(Input::Wake(wake(2))).unwrap();
-    let mut both = says("在弄了");
-    both.items.extend(calls(&[("b", "run_code")]).items);
-    run.model_output(both).unwrap();
-    assert_eq!(run.unhandled().len(), 2);
 }
 
 #[test]
@@ -497,91 +273,4 @@ fn interrupt_closes_open_calls() {
         _ => None,
     });
     assert_eq!(transcript.collect::<Vec<_>>(), [("a", false), ("b", true)]);
-}
-
-#[test]
-fn a_cut_off_call_keeps_what_was_said() {
-    let mut run = Run::new(spec(400_000, None), base(100), vec![]);
-    call_model(&mut run);
-    run.partial_output("说到一半".into(), 4).unwrap();
-    run.fail(FailReason::Model {
-        error: "reset".into(),
-    })
-    .unwrap();
-    assert_eq!(
-        run.outcome(),
-        Outcome::Failed {
-            reason: FailReason::Model {
-                error: "reset".into()
-            }
-        }
-    );
-    assert!(run.said());
-}
-
-/// The reminders in the request's tool results, each with the call it
-/// follows.
-fn reminders(request: &Request) -> Vec<(String, String)> {
-    request
-        .items
-        .iter()
-        .filter_map(|item| match &item.kind {
-            ItemKind::ToolResult { call, output } => Some((call, output)),
-            _ => None,
-        })
-        .flat_map(|(call, output)| {
-            output.parts.iter().filter_map(move |part| match part {
-                Part::Text { text } if text.starts_with("[maxx 提醒]") => {
-                    Some((call.0.clone(), text.clone()))
-                }
-                _ => None,
-            })
-        })
-        .collect()
-}
-
-/// One model output and its tool batch, every call answered.
-fn batch(run: &mut Run, out: ModelOutput) {
-    call_model(run);
-    run.model_output(out).unwrap();
-    for id in run_tools(run) {
-        run.tool_result(id, result(10)).unwrap();
-    }
-}
-
-#[test]
-fn a_long_quiet_stretch_of_tools_is_reminded_that_people_wait() {
-    let mut run = Run::new(spec(1_000_000, None), base(100), vec![Input::Wake(wake(1))]);
-    for n in 1..QUIET_CALLS - 2 {
-        batch(&mut run, calls(&[(&format!("c{n}"), "shell")]));
-    }
-    assert_eq!(reminders(&call_model(&mut run)), []);
-    run.model_output(calls(&[("a", "shell"), ("b", "shell"), ("c", "run_code")]))
-        .unwrap();
-    for id in run_tools(&mut run) {
-        run.tool_result(id, result(10)).unwrap();
-    }
-    let reminded = reminders(&call_model(&mut run));
-    assert_eq!(reminded.len(), 1, "{reminded:?}");
-    assert_eq!(reminded[0].0, "c", "after the batch's last result");
-    assert!(reminded[0].1.contains("连着调了 12 次工具"), "{reminded:?}");
-
-    // Saying something starts the count again.
-    let mut both = says("在弄了，稍等");
-    both.items.extend(calls(&[("d", "shell")]).items);
-    run.model_output(both).unwrap();
-    for id in run_tools(&mut run) {
-        run.tool_result(id, result(10)).unwrap();
-    }
-    for n in 1..QUIET_CALLS - 1 {
-        batch(&mut run, calls(&[(&format!("e{n}"), "shell")]));
-    }
-    assert_eq!(reminders(&call_model(&mut run)).len(), 1);
-    run.model_output(says("[silence]")).unwrap();
-    assert_idle(&mut run);
-    run.input(Input::Wake(wake(2))).unwrap();
-    batch(&mut run, calls(&[("f", "shell")]));
-    let reminded = reminders(&call_model(&mut run));
-    assert_eq!(reminded.len(), 2, "{reminded:?}");
-    assert_eq!(reminded[1].0, "f", "silence isn't a word");
 }

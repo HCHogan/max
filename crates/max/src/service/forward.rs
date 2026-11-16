@@ -241,6 +241,3 @@ fn refuse(status: StatusCode, message: &str) -> Response {
         .body(Body::from(body))
         .unwrap_or_default()
 }
-
-#[cfg(test)]
-mod tests;

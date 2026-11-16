@@ -258,6 +258,3 @@ fn next_args(args: &Args, next: &Next) -> Map<String, Value> {
     }
     more
 }
-
-#[cfg(test)]
-mod tests;

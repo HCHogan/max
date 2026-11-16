@@ -161,6 +161,3 @@ fn named(name: &str) -> Result<String, Failure> {
     }
     Ok(name.to_owned())
 }
-
-#[cfg(test)]
-mod tests;

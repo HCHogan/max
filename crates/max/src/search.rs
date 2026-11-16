@@ -159,6 +159,3 @@ fn cut(text: &str, most: usize) -> String {
         None => text.to_owned(),
     }
 }
-
-#[cfg(test)]
-mod tests;

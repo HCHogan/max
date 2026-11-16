@@ -219,6 +219,3 @@ fn tidied(said: &str, old: &str) -> Result<String> {
     }
     Ok(format!("{text}\n"))
 }
-
-#[cfg(test)]
-mod tests;

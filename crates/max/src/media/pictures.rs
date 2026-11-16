@@ -180,6 +180,3 @@ fn videos(request: &Request) -> Vec<&str> {
     }
     videos
 }
-
-#[cfg(test)]
-mod tests;

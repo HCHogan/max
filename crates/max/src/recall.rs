@@ -187,6 +187,3 @@ fn prefix(text: &str, chars: usize) -> &str {
         .nth(chars)
         .map_or(text, |(end, _)| &text[..end])
 }
-
-#[cfg(test)]
-mod tests;

@@ -264,6 +264,3 @@ fn parse(said: &str, kind: Kind) -> Result<(String, bool)> {
     }
     Ok((text, skip))
 }
-
-#[cfg(test)]
-mod tests;

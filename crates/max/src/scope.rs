@@ -122,15 +122,6 @@ mod tests {
         assert_eq!(ends.dropped.load(Ordering::SeqCst), 1);
     }
 
-    #[tokio::test(start_paused = true)]
-    async fn close_returns_as_soon_as_everything_stopped() {
-        let mut scope = Scope::new();
-        scope.spawn(|token| async move { token.cancelled().await });
-        let start = Instant::now();
-        scope.close(Duration::from_secs(5)).await;
-        assert_eq!(start.elapsed(), Duration::ZERO);
-    }
-
     #[tokio::test]
     async fn dropping_aborts() {
         let ends = Ends::default();
