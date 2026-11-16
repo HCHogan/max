@@ -62,9 +62,20 @@ Only declarative configuration applied at boot needs root, all in NixOS:
   arrive at `notify.vsock_7777`, where the VM's forwarder listens (see
   [A VM's forwarder](#a-vms-forwarder) and
   [The guest's calls](tools.md#the-guests-calls)).
+- **A guest that resets ends its VM.** The guest's command line has
+  `reboot=t panic=-1`, so a reboot and a kernel panic both reset the
+  machine, and cloud-hypervisor boots a guest that resets again in the same
+  process. That can't work here: each virtiofsd serves the one connection it
+  was given and ends with it. So the launcher kills cloud-hypervisor when a
+  virtiofsd ends, and the unit ends at once, as failed. To max it is a VM
+  that stopped by itself (see [A VM outlives max](#a-vm-outlives-max)): a
+  call that needs it boots it again, and a kept one comes back at a sweep.
+  What ran in the guest is gone; `/work` and the store's image stay. Why
+  not a reboot in place is in
+  [decisions/a-guest-reset-ends-its-vm.md](../decisions/a-guest-reset-ends-its-vm.md).
 - A VM that failed to boot, or stopped by itself, twice within 30 minutes
   (`FAILING`) boots once without Max's units, since one of them may be what
-  stops it.
+  stops it. A reboot Max runs itself counts as any other.
 
 ## A VM outlives max
 

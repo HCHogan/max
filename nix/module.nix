@@ -200,15 +200,32 @@ let
       # to max.
       uid=$(stat -c %u "$dir")
       gid=$(stat -c %g "$dir")
-      ${lib.getExe pkgs.virtiofsd} --socket-path="$dir/store.sock" \
-        --shared-dir=/nix/store --readonly --cache=always \
-        > virtiofsd-store.log 2>&1 &
-      ${lib.getExe pkgs.virtiofsd} --socket-path="$dir/work.sock" \
+      # A virtiofsd, which takes the VM with it when it ends. It serves
+      # the one connection cloud-hypervisor makes and ends with that, and
+      # nothing starts another. A guest that resets, by a reboot or a
+      # panic (its command line has `reboot=t panic=-1`), is booted again
+      # by cloud-hypervisor in the same process, over new connections
+      # that nothing would answer: it waits a minute for them, a unit that
+      # runs with no guest in it, and takes no SIGTERM meanwhile. Killed
+      # instead, it leaves a unit that has ended, which max boots again
+      # when the VM is next needed. $$ is this script, and so
+      # cloud-hypervisor once the script has become it.
+      share() {
+        local log=$1
+        shift
+        ${lib.getExe pkgs.virtiofsd} "$@" > "$log" 2>&1 || true
+        if kill -0 $$ 2> /dev/null; then
+          echo "virtiofsd ended ($log) under a VM that ran: the guest reset, or virtiofsd failed, and the VM ends with it" >&2
+          kill -KILL $$
+        fi
+      }
+      share virtiofsd-store.log --socket-path="$dir/store.sock" \
+        --shared-dir=/nix/store --readonly --cache=always &
+      share virtiofsd-work.log --socket-path="$dir/work.sock" \
         --shared-dir="$dir/work" \
         --translate-uid="map:0:$uid:1" --translate-gid="map:0:$gid:1" \
         --translate-uid="squash-guest:1:$uid:4294967294" \
-        --translate-gid="squash-guest:1:$gid:4294967294" \
-        > virtiofsd-work.log 2>&1 &
+        --translate-gid="squash-guest:1:$gid:4294967294" &
       for socket in store.sock work.sock; do
         for _ in $(seq 250); do
           [ -e "$socket" ] && break

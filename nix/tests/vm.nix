@@ -310,9 +310,16 @@ pkgs.testers.runNixOSTest {
     assert "stale=false" in machine.succeed(
         "journalctl -u maxx.service -o cat | grep \"a VM's guest is switched\""
     )
-    # A VM that ends by itself under max is found so at the next sweep,
-    # without a wait on its socket, and boots again, being kept.
-    machine.succeed("systemctl kill --signal=KILL maxx-vm@7.service")
+    # The guest reboots itself; its kernel's panic is the same reset to
+    # the host. cloud-hypervisor would boot it again in place, with no
+    # virtiofsd left to serve it, so the launcher ends the VM at once. max
+    # finds the unit ended at its next sweep, without a wait on its
+    # socket, and boots the VM again, being kept.
+    machine.execute("timeout 30 maxx-ssh 7 'systemctl reboot' < /dev/null")
+    machine.wait_until_succeeds(
+        "journalctl -u maxx-vm@7.service -o cat | grep -q 'virtiofsd ended'", timeout=60
+    )
+    machine.wait_until_fails("systemctl is-active maxx-vm@7.service", timeout=10)
     machine.wait_until_succeeds(
         "journalctl -u maxx.service -o cat | grep -q 'a VM that ran has ended by itself'", timeout=120
     )
