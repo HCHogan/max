@@ -5,7 +5,7 @@
 # the stop and the report. pi's model calls go to max at 127.0.0.1:7777,
 # which adds the provider's key; the agent calls Max's tools with maxx,
 # as any program in the VM does. See "Background agents" in
-# docs/rust-rewrite.md.
+# docs/design/jobs.md.
 
 export LC_ALL=C.UTF-8
 
@@ -15,6 +15,7 @@ dir=/run/max/jobs/$unit
 # The unit's, removed when it stops.
 conf=${RUNTIME_DIRECTORY:?max-pi runs with a RuntimeDirectory}
 workdir=$(cat "$dir/workdir")
+title=$(cat "$dir/title")
 # What maxx agent start chose of what max says of the models: its api
 # ("openai-completions" or "openai-responses"), the name max calls it by,
 # window, max_output and effort (or null).
@@ -84,6 +85,10 @@ args=(
   # files (AGENTS.md or CLAUDE.md in cwd and its parents) still load.
   --no-approve
   --session-dir /work/.max/jobs
+  # Named after the unit, as its report is, and titled as Max titled the
+  # agent: a session says whose it was and what it was for.
+  --session-id "$unit"
+  --name "$title"
   --provider max
   --model "$(field .model)"
   --append-system-prompt "$conf/agent-system.md"

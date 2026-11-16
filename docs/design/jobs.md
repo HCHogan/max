@@ -96,6 +96,11 @@ of it.
   long as max doesn't take it. A wake is `Reason::Program`: input to the
   running core or a new one, and what to say of it in the chat is Max's to
   decide.
+- **Sessions**: pi keeps the agent's conversation beside its report, in
+  `/work/.max/jobs/<time>_<unit>.jsonl`: `max-pi.sh` names the session after
+  the unit (`--session-id`) and gives it the agent's title (`--name`, a
+  `session_info` entry), so the session says whose it was and what it was for
+  after `/run` is gone, and whether or not a report was written.
 - **Stopping**: `systemctl stop max-agent-3`, or `/kill` and `/stop`, which
   have the guest stop everything that was started (`maxx units stop-all`).
   pi exits at once on SIGTERM with nothing written, so the unit's

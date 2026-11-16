@@ -3,8 +3,9 @@
 // from the inbox at a turn's end go in before the next model call,
 // SIGUSR2 aborts a tool under way and the report is still written, what
 // comes while the plugin holds an agent about to settle reaches the model,
-// the task arrives as written, and the agent's system text, with its
-// notes, is appended to pi's. Project context files load even with
+// the task arrives as written, the agent's system text, with its notes,
+// is appended to pi's, and its session is named after its unit and
+// titled as Max titled it. Project context files load even with
 // --no-approve, but the project's .pi/ stays untrusted. See
 // scripts/check-pi-job.
 "use strict";
@@ -98,6 +99,14 @@ function notesName(cwd) {
   return `${name}.md`;
 }
 
+// The entries of a session pi wrote.
+const entries = file =>
+  fs
+    .readFileSync(file, "utf8")
+    .split("\n")
+    .filter(line => line.trim())
+    .map(line => JSON.parse(line));
+
 // Once `ready` holds, and `ms` more.
 function after(ready, ms, then) {
   const looking = setInterval(() => {
@@ -188,8 +197,10 @@ async function agent(scenario) {
       return null;
     }
   };
+  const sessions = fs.readdirSync(path.join(dir, "sessions")).filter(name => name.endsWith(".jsonl"));
   const ran = {
-    seen, status, out, err, cwd,
+    seen, status, out, err, cwd, sessions,
+    titles: sessions.flatMap(name => entries(path.join(dir, "sessions", name)).filter(entry => entry.type === "session_info").map(entry => entry.name)),
     took: Date.now() - started,
     report: read(path.join(dir, "sessions", `${UNIT}.md`)),
     error: read(path.join(jobs, "error")),
@@ -267,6 +278,8 @@ const checks = {
       assert.ok(!system.includes(UNTRUSTED), "project system prompts stay untrusted");
       assert.ok(!system.includes(SIBLING), "other projects' context files don't load");
       assert.deepEqual(ran.seen.strangers, [], "calls of anything but the model");
+      assert.deepEqual(ran.sessions.map(name => name.replace(/^[^_]*_/, "")), [`${UNIT}.jsonl`], "one session, named after the unit");
+      assert.deepEqual(ran.titles, ["试试"], "titled as Max titled the agent");
       const asked = [MODEL, EFFORT[scenario] ?? null];
       assert.deepEqual(ran.seen.asked, ran.seen.asked.map(() => asked), "the model by max's name for it, asked to think as told");
       // pi exits only once nothing is left to wait for: else this is 60
