@@ -1,6 +1,6 @@
 # Research: the nested VM test on a Mac
 
-Tried on 2026-11-12 and 13 at the owner's request, as the link to tank is often unstable. The outcome: the nested test stays on bare metal (tank, or another x86_64 Linux machine); see [VMs](../design/vm.md#testing).
+Tried on 2026-11-12 and 13, as the link to tank is often unstable. The outcome: the nested test stays on bare metal (tank, or another x86_64 Linux machine); see [VMs](../design/vm.md#testing).
 
 It runs, but too slowly to pass, so the flake has no Mac variant. The Linux builder cannot host it: the virtual EL2 that Apple provides lacks VHE, so the builder's KVM can only run in nVHE mode, the kernel rejects `kvm-arm.mode=nested`, and the test machine there has no KVM. What does work is the test driver on macOS with the aarch64-linux test machine under QEMU 11.1 or later (the deploy's pin has 10.2), which gives the machine EL2 through HVF on an M3 or later. That took three things:
   - Apple's vGIC. nixpkgs starts a test machine on macOS with `gic-version=2`; QEMU then emulates the GIC and the EL2 physical timer itself, the machine's clock jumps (from 1 s to 735 s) and it hangs in the initrd. Adding `-machine gic-version=3,virtualization=on,kernel-irqchip=on` to `virtualisation.qemu.options` (QEMU merges it into nixpkgs' `-machine`, the later key winning) uses Apple's GICv3 instead: the machine is up in about 13 seconds, with KVM.

@@ -8,7 +8,7 @@
 3. ~~Whether v1 includes tools~~: decided (2026-10-27): it does; see [Tools and codemode](../design/tools.md). Intent classification is also in v1; see [Intent](../design/intent.md).
 4. ~~The design of the new schema, and the mapping for importing from the old database~~: decided (2026-10-27); see [Schema](../design/ledger.md#schema).
 5. ~~Whether the NixOS module's interface stays unchanged~~: decided (2026-10-27): it does not; see [Configuration](../design/config.md).
-6. ~~Whether Matrix encrypted rooms are supported~~: decided (2026-10-27): they are; on 2026-10-29 Matrix as a whole was deferred; see [Matrix](../decisions/2026-10-29-matrix-deferred.md).
+6. ~~Whether Matrix encrypted rooms are supported~~: decided (2026-10-27): they are; on 2026-10-29 Matrix as a whole was deferred; see [Matrix](../decisions/matrix-deferred.md).
 7. ~~The v1 test environment~~: decided (2026-10-27): a parallel `maxx` set of services; see [Test environment](go-live.md#test-environment).
 8. ~~The Rust toolchain version and edition~~: decided (2026-10-27): stable with a pinned version, edition 2024; see [Toolchain](../../AGENTS.md#toolchain).
 9. ~~The size limit for each commit~~: decided (2026-10-27); see [Reviewability constraints](../../AGENTS.md#reviewability).

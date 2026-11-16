@@ -1,10 +1,11 @@
 # GitHub through keyed APIs, not host tools
 
-2026-11-03, the owner. GitHub came on 2026-10-31, at the owner's request:
 Max opens PRs with its own account when asked, and revises, closes and
-answers them itself. The design is in [GitHub](../design/tools.md#github).
+answers them itself. It reaches GitHub through the host's keyed APIs, not
+through tools of the host's own. The design is in
+[GitHub](../design/tools.md#github).
 
-## How it was (2026-10-31 to 2026-11-03)
+## Before: two host tools
 
 - **`github_push`**: the guest made a bundle; the host created an empty bare
   repository, shallow-fetched the prerequisite commits, took the bundle with

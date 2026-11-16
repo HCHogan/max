@@ -1,8 +1,8 @@
 # The browser is a resident Chromium
 
-2026-10-29, the owner, the evening of the day the browser was first built
-as a camoufox started fresh for each run. The design is in
-[The browser](../design/tools.md#the-browser).
+The browser in a group's VM is a Chromium that stays up between programs,
+not a camoufox started fresh for each run, as it was first built. The
+design is in [The browser](../design/tools.md#the-browser).
 
 ## Context
 
@@ -37,12 +37,12 @@ Weaker anti-fingerprinting than camoufox; checks such as Cloudflare's block
 it more readily. If that happens often, a resident service such as
 camofox-browser can run in the VM.
 
-## Also
+## Not packaged: opencli
 
-opencli (2026-11-03, removed the same day): [opencli](https://github.com/jackwener/opencli)
-turns some 150 websites into commands. It was packaged into the guest (the
-npm package, a lock file, a wrapper giving each command its own tab, a
-passing nested test), then the owner reconsidered: tools of this kind offer
-convenience rather than primitives, their adaptations to sites go stale
-quickly, and Max can install one when needed rather than Max's maintainers
-pinning and updating it. The prompt keeps one sentence about it.
+[opencli](https://github.com/jackwener/opencli) turns some 150 websites
+into commands. It was packaged into the guest (the npm package, a lock
+file, a wrapper giving each command its own tab, a passing nested test) and
+taken out again: tools of this kind offer convenience rather than
+primitives, their adaptations to sites go stale quickly, and Max can
+install one when needed rather than Max's maintainers pinning and updating
+it. The prompt keeps one sentence about it.

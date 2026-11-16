@@ -1,10 +1,9 @@
-# The first round of cuts
+# Rare cases fail plainly
 
-2026-10-29, at the owner's request, the day the Rust version first ran
-in the test group (step 7 of
-[archive/v1-implementation-order.md](../archive/v1-implementation-order.md)).
-Each cut removed machinery for something rare, where the cost of not
-having it is that someone asks again.
+Where something is rare and the cost of not handling it is that someone
+asks again, Max has no machinery for it: a turn cut off by a restart isn't
+resumed, a core at its limit isn't handed over, and intent has few rules.
+These were cut together when the Rust version first ran in a group.
 
 ## Restarts interrupt a turn instead of resuming it
 
@@ -41,9 +40,9 @@ big for a core started none and recorded `InputTooLarge`.
 Now: the run fails with `ContextExhausted` and the unhandled direct
 triggers get a one-line reply ("At the limit" in
 [The core](../design/core.md#what-the-core-decides)); the next trigger
-projects afresh. At the time not one turn had reached the limit. (The
-nearly-full warning came later, on 2026-11-01, so that a run near the end
-reports what it found before it stops.)
+projects afresh. At the time not one turn had reached the limit. (A run
+near its limit is warned, so that it reports what it found before it
+stops.)
 
 ## Intent keeps only the debounce, the small model and a cap
 
@@ -62,12 +61,11 @@ Removed from [Intent](../design/intent.md):
 
 The plan was to see how well the small model judges alone, and to add
 rules back only if needed. The "follow-up to Max" situation went from the
-prompt the same day: whenever the 4B model saw Max had just spoken, it
+prompt too: whenever the 4B model saw Max had just spoken, it
 called whatever came next a follow-up, and verdict wakes chained one after
 another.
 
-## Also that day
+## See also
 
-- Max stopped sending QQ face emoticons, which the official API can't
-  send; see [features removed](2026-10-28-features-removed.md).
-- Matrix was deferred: [2026-10-29-matrix-deferred.md](2026-10-29-matrix-deferred.md).
+- [Features deliberately removed](features-removed.md).
+- [Matrix is deferred](matrix-deferred.md).

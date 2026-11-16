@@ -1,6 +1,7 @@
 # No matching people by avatar
 
-2026-11-06, the owner. Replaced `/link`, itself removed on 2026-10-29.
+People from the old groups are not joined to their new accounts
+automatically, neither by a command nor by comparing avatars.
 
 ## Context
 
@@ -10,12 +11,13 @@ old member to their new accounts, or they would count as new people.
 
 ## What was tried
 
-- **`/link <QQ number>`** (2026-10-29, removed the same day): verified by
-  avatar, it linked the sender's account to an old number's person. Avatars
-  are public, and that day someone switched to another person's avatar and
-  was linked as them. The command and the reminders urging people to link
-  were removed, and its 18 links cleared.
-- **Matching by avatar** (2026-10-29 to 2026-11-06): in groups that
+- **`/link <QQ number>`**: verified by avatar, it linked the sender's
+  account to an old number's person. Avatars are public, and within a day
+  someone switched to another person's avatar and was linked as them. The
+  command and the reminders urging people to link were removed, and its 18
+  links cleared. (Today's `/link` is another command, which links
+  conversations.)
+- **Matching by avatar**, which ran for a week: in groups that
   continue an old group, maxx compared each account's avatar with those of
   the old numbers that had spoken there, and merged it when exactly one
   matched and no other account competed for that number.
@@ -26,14 +28,14 @@ old member to their new accounts, or they would count as new people.
     same: two pictures of one person differed by 0.03%, different people's
     by 36 to 60%. Accounts without an avatar, and openids that don't exist,
     all return one default picture (1,512 bytes), which never matched.
-  - An account resembling the owner's or Max's old number wasn't linked
+  - An account resembling an owner's or Max's old number wasn't linked
     and was logged as likely impersonation; two accounts resembling one
     number, or a number already taken in the group, linked neither. Each
     account was compared once, recorded in `avatar_checks`, with old
     numbers' fingerprints in `legacy_avatars`, refetched after 7 days.
   - The risk stayed: anyone can change their avatar, and one switched to an
-    absent old member's would be linked as them. The owner accepted it,
-    with the logs as the safeguard, until deciding against it.
+    absent old member's would be linked as them. The logs were the only
+    safeguard.
 
 ## Decision
 
@@ -48,5 +50,5 @@ then, were left as they are. The code is in commit `12d420cb` and earlier.
 ## Cost
 
 People from old groups are new people in the new groups. Linking one is
-the owner's, by editing `principals.merged_into` in the database; users'
+done by hand, by editing `principals.merged_into` in the database; users'
 own claims aren't trusted.

@@ -141,7 +141,7 @@ the design might want has a stable alternative.
   its own VM. The rest has none: a tool's own rules, the commands' wording,
   the workers, the VM service, the configuration's parsing. A change brings
   a test when it is of the first kind, not as a matter of course; why is in
-  [docs/decisions/2026-11-16-tests-on-the-critical-path.md](docs/decisions/2026-11-16-tests-on-the-critical-path.md).
+  [docs/decisions/tests-on-the-critical-path.md](docs/decisions/tests-on-the-critical-path.md).
 - The core and intent are tested without tokio or a fake provider. The
   actor is tested with a real database, a scripted model and a sender that
   only records, in real time; timeouts and graces elsewhere with tokio's
@@ -164,11 +164,16 @@ each kind in its place:
   dates and no "until", "previously" or "changed on". When you change how
   something works, change its description in the same commit. A short "why"
   belongs there; the story of how it got so doesn't.
-- **`docs/decisions/` says why**, one decision a file, named
-  `YYYY-MM-DD-what.md`: its context, the decision, why, and its cost. Write
-  one for a genuine trade-off, or when a design is replaced, and link it
-  from the design. A decision that a later one replaces stays, with a line
-  pointing to the new one; don't edit history to match the present.
+- **`docs/decisions/` says why**, one decision a file, named for what it
+  decides (`own-llm-client.md`) and listed by subject in
+  [docs/decisions/README.md](docs/decisions/README.md). It reads as any
+  project's design note does: a line or two on what was decided, then
+  Context, Decision, Why and Cost, with the alternatives that were looked
+  at. It gives the reasons, not who decided or on which day, and what
+  happened on the way only where that is a reason. Write one for a genuine
+  trade-off, or when a design is replaced; link it from the design and add
+  it to the index. A decision that a later one replaces stays, with a line
+  pointing to the new one.
 - **Open questions** go in an "Open" section at the end of their design
   file, not scattered through it.
 - **`docs/research/`** is what was looked at; **`docs/archive/`** finished

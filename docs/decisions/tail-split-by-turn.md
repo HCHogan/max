@@ -1,13 +1,14 @@
 # The tail is split into messages by turn
 
-2026-10-31. The rule is in
+The raw tail of a context is one message for each turn, not one message
+that grows, so that a provider's cache can match it. The rule is in
 [Rules for a stable prefix](../design/context.md#rules-for-a-stable-prefix).
 
 ## Context
 
 The raw tail was one user message that kept growing, and a turn's first
-model call almost never hit Gemini's cache. On 2026-10-30 this was put
-down to Gemini's cache expiring too quickly, which was wrong: with a byte
+model call almost never hit Gemini's cache. This was first put down to
+Gemini's cache expiring too quickly, which was wrong: with a byte
 for byte identical prefix there was no hit even with turns less than two
 minutes apart.
 

@@ -1,11 +1,12 @@
 # The agent loop is written in-house, sans-I/O
 
-2026-10-26.
+Max's agent loop is its own code, a state machine that does no I/O, rather
+than a framework's.
 
 ## Context
 
 Max needs an agent loop: call the model, run its tool calls, feed the
-results back, take new messages in between. In October 2026 rig,
+results back, take new messages in between. rig,
 yoagent, adk-rust, autoagents, swiftide-agents, aisdk and genai were
 evaluated, and so was pi-agent (a third-party Rust port; pi's own
 repository doesn't contain it).

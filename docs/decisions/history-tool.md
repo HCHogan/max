@@ -1,12 +1,12 @@
 # One tool for recall, on trigrams and half-precision vectors
 
-2026-10-30, the owner; built 2026-10-29 as two tools. The design is in
-[Recall](../design/context.md#recall).
+Max recalls with one tool, `history`, which searches when given a query and
+reads without one. The design is in [Recall](../design/context.md#recall).
 
 ## Context
 
-On 2026-10-29 `context_search` (literal and semantic search) and
-`context_read` (several read modes) were built. A request like "what
+Recall was first built as two tools, `context_search` (literal and semantic
+search) and `context_read` (several read modes). A request like "what
 Xiaoming said the day before yesterday" then meant first choosing a tool
 and assembling its arguments, though both apply the same filters (who,
 when) and differ only in whether there is a query. The Haskell version also
@@ -15,8 +15,8 @@ had one entry point for recall; memory isn't searched.
 ## Decisions
 
 - **One tool, `history`**: with a query it searches, without it reads.
-- **Stickers are searched too** (the owner: "永远是全部能搜"), though their
-  captions describe what a sticker is and when to use it.
+- **Stickers are searched too**: everything can always be searched, though
+  a sticker's caption describes what it is and when to use it.
 - **`/clear --all` doesn't limit it**, as in the Haskell version: the
   watermark governs only what the context shows.
 - **`lower(text) like`**, not `ilike`, which was more than three times
@@ -25,7 +25,7 @@ had one entry point for recall; memory isn't searched.
 
 ## Measurements
 
-- Search, without indexes, read-only on tank's `maxx` (2026-10-29): on the
+- Search, without indexes, read-only on tank's `maxx`: on the
   largest conversation, 62,000 rows, about 85 ms for 1 term, 97 ms for 2,
   145 ms for 8; summaries (848 in one conversation) 36 ms for 2 terms and
   61 ms for 8.

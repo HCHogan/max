@@ -1,6 +1,7 @@
 # The derived-data workers share conventions, not a framework
 
-2026-10-29, the owner.
+The workers that derive data (download, captions, embeddings, recall
+vectors) each run a loop of their own and share only a list of conventions.
 
 ## Context
 
@@ -9,8 +10,7 @@ by `Throttle`, `Debounce` or `Urgent`.
 
 ## Decision
 
-Take the driver apart the same day and move scheduling back into each
-worker. What the workers share is the list of conventions in
+Take the driver apart and move scheduling back into each worker. What the workers share is the list of conventions in
 [The three roles](../architecture.md#the-three-roles): an exclusive output
 table, reentrant units, notification plus a scan for gaps, and each
 worker's own loop and constants.

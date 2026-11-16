@@ -3,7 +3,7 @@
 What a turn's model sees: the raw tail of the chat plus a memory file Max
 keeps itself, carried in every turn; anything older the model searches for
 with `history`. There are no summaries
-([decisions/2026-11-02-no-summaries.md](../decisions/2026-11-02-no-summaries.md)).
+([decisions/no-summaries.md](../decisions/no-summaries.md)).
 Tool output lives only in one turn's transcript; the next turn is projected
 afresh from the ledger, so tool output never piles up across turns.
 
@@ -99,7 +99,7 @@ messages are split.
   previous turn's first call is all there, unchanged, with one more piece
   at the end. Gemini's cache, after a few minutes, matches only whole
   messages before a request's last one, which is why; the measurements are
-  in [decisions/2026-10-31-tail-split-by-turn.md](../decisions/2026-10-31-tail-split-by-turn.md).
+  in [decisions/tail-split-by-turn.md](../decisions/tail-split-by-turn.md).
   - A turn's tail is everything before its snapshot position except the
     rows that woke it. Someone speaking after the waking row (in the
     seconds of debounce and classification) puts a piece on each side of
@@ -188,7 +188,7 @@ Every command and who may run it is in [Permissions](identity.md#permissions).
 
 Memory is a file Max writes itself and carries in every turn; why not
 extracted entries is in
-[decisions/2026-10-30-memory-is-a-file.md](../decisions/2026-10-30-memory-is-a-file.md).
+[decisions/memory-is-a-file.md](../decisions/memory-is-a-file.md).
 
 - **The file**: `/work/.max/memory.md` in the conversation's VM, on the
   host `<vm.dir>/<conversation id>/work/.max/memory.md`. Max edits it with
@@ -260,7 +260,7 @@ One tool, `history` (`max/src/service/history.rs`), searches and reads the
 conversation's records: searching and reading apply the same filters (who,
 when) and differ only in whether there is a query. Measurements behind its
 choices are in
-[decisions/2026-10-30-history-tool.md](../decisions/2026-10-30-history-tool.md).
+[decisions/history-tool.md](../decisions/history-tool.md).
 
 - **Scope**: this conversation only.
   - Search looks at rows of kind chat, not commands or events, and not

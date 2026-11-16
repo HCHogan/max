@@ -1,6 +1,7 @@
 # The LLM client is written in-house
 
-2026-10-29. Replaces async-openai 0.42.2.
+Max talks to model providers with a client of its own, in place of
+async-openai 0.42.2.
 
 ## Context
 

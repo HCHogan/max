@@ -5,7 +5,7 @@ individually verified; the bot is named maxx), with the protocol in
 [qqbot](https://github.com/HCHogan/qqbot) and the mapping to Max's types in
 `crates/max/src/qq`. Why not NapCat and OneBot, and how sending settled on
 what it is, is in
-[decisions/2026-10-28-official-qq-bot.md](../decisions/2026-10-28-official-qq-bot.md).
+[decisions/official-qq-bot.md](../decisions/official-qq-bot.md).
 "Tested" below means tried in the test group; the rest is from QQ's
 documentation.
 

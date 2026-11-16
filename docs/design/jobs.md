@@ -4,7 +4,7 @@ What runs apart from a turn: background agents, background commands and
 resident programs, all units of the guest's systemd that max keeps no
 state about, and questions between conversations, which live only as long
 as the turn that read them. Why lifetimes are the guest's is in
-[decisions/2026-11-12-lifetimes-to-systemd.md](../decisions/2026-11-12-lifetimes-to-systemd.md).
+[decisions/lifetimes-to-systemd.md](../decisions/lifetimes-to-systemd.md).
 
 ## Background agents
 
@@ -60,7 +60,7 @@ of it.
   call on and its answer back without reading what it used, and `/status`
   shows what Max's own calls used. What the agents spend is in the
   provider's records, for all the groups together; why is in
-  [decisions/2026-11-16-a-forwarder-keeps-no-count.md](../decisions/2026-11-16-a-forwarder-keeps-no-count.md).
+  [decisions/forwarder-keeps-no-count.md](../decisions/forwarder-keeps-no-count.md).
 - **Tools**: an agent is a program, which calls every tool with `maxx` from
   its shell (`maxx history`, `maxx web-search`, `webread`), with no tools of
   its own on the host. It could speak in the chat too; its system text tells
@@ -111,7 +111,7 @@ of it.
   its model and effort, the agents' default unless `--model` and `--effort`
   say otherwise, whatever the earlier ran on. Its system text is built anew,
   with the notes as they are now. Why a fork and a new number is in
-  [decisions/2026-11-16-resume-by-fork.md](../decisions/2026-11-16-resume-by-fork.md).
+  [decisions/resume-by-fork.md](../decisions/resume-by-fork.md).
 - **Stopping**: `systemctl stop max-agent-3`, or `/kill` and `/stop`, which
   have the guest stop everything that was started (`maxx units stop-all`).
   pi exits at once on SIGTERM with nothing written, so the unit's
@@ -301,7 +301,7 @@ minutes, a listener that stays connected) isn't built kind by kind. Max
 writes ordinary systemd units in its VM: a `.timer` is cron, a `.path`
 watches files, `Restart=` handles crashes. Why this rather than a monitor
 with kinds is in
-[decisions/2026-11-01-resident-programs.md](../decisions/2026-11-01-resident-programs.md).
+[decisions/resident-programs.md](../decisions/resident-programs.md).
 
 ### Units follow /work
 
@@ -394,7 +394,7 @@ tool.
 Programs use the same tools as Max (see [maxx](tools.md#maxx-one-command-for-everything-in-the-vm)):
 a call is the VM's, whatever made it. Why programs have every tool, and no
 caps, is in
-[decisions/2026-11-05-no-limits-for-programs.md](../decisions/2026-11-05-no-limits-for-programs.md).
+[decisions/no-limits-for-programs.md](../decisions/no-limits-for-programs.md).
 
 - **Every tool**, plus `say` and `wake`, which the prompt doesn't declare
   (`service/program.rs`). Only `show` and `video` fail outside a call, as
@@ -537,7 +537,7 @@ nothing else, never the other conversation's context, memory or files.
 Conversations are otherwise isolated (`history`, the VM and `/work` are each
 one conversation's; only the sticker library is shared). The reasoning behind
 edges and their direction is in
-[decisions/2026-11-10-asking-another-conversation.md](../decisions/2026-11-10-asking-another-conversation.md).
+[decisions/asking-another-conversation.md](../decisions/asking-another-conversation.md).
 
 - **Permission is an edge between conversations**, not a person's: below a
   conversation nothing could be enforced, since its members share one VM as

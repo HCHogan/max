@@ -17,7 +17,7 @@ resident units run.
 
 1. Rewrite Max in Rust, as a replacement for the Haskell version: its
    features, data and deployment carry over, except features removed on
-   purpose ([decisions/2026-10-28-features-removed.md](decisions/2026-10-28-features-removed.md)).
+   purpose ([decisions/features-removed.md](decisions/features-removed.md)).
 2. Every line of code must be possible for a person to review in full. A
    slower pace and a smaller feature set are preferable to adding large
    amounts of code at once.
@@ -44,7 +44,7 @@ Non-goals:
 | Command line, configuration | clap (derive), toml | 4.6 / 1.1 | One source: the TOML file; see [Configuration](design/config.md). |
 | Database | sqlx (postgres, runtime-tokio, macros, migrate, chrono, json), Postgres with the pgvector extension | 0.9.0 | SQL is checked at compile time; the `.sqlx` offline metadata is committed; migrations use sqlx's own mechanism. No TLS: the database is local. Vectors go in as `float4[]` cast to `vector`, so there is no pgvector crate. |
 | Time | chrono | 0.4 | sqlx 0.9 doesn't support jiff. |
-| LLM | in-house, on reqwest and sse-stream | 0.13 / 0.2.6 | Only in `max-llm`. Small structs for the dozen or so fields that are read; everything else stays raw JSON and is passed through. sse-stream only splits the byte stream into events. Why not a client library: [decisions/2026-10-29-own-llm-client.md](decisions/2026-10-29-own-llm-client.md). |
+| LLM | in-house, on reqwest and sse-stream | 0.13 / 0.2.6 | Only in `max-llm`. Small structs for the dozen or so fields that are read; everything else stays raw JSON and is passed through. sse-stream only splits the byte stream into events. Why not a client library: [decisions/own-llm-client.md](decisions/own-llm-client.md). |
 | HTTP server | axum | 0.8.9 | max's service to the VMs; see [The guest's calls](design/tools.md#the-guests-calls). |
 | The official QQ bot | [qqbot](https://github.com/HCHogan/qqbot), in-house: tokio-tungstenite (rustls) for the gateway, reqwest for REST | by commit | Official SDKs exist only for Go, Python and Node; see [The official QQ bot](design/qq.md). |
 | Agent loop | in-house, sans-I/O | — | See [The core](design/core.md). |
@@ -152,7 +152,7 @@ The tasks fall into three kinds, by what they produce:
    writes a table of its own, of which it is the only writer. It never
    touches the ledger or the turn records, and its results are read only
    during projection. They share conventions, not a framework (why:
-   [decisions/2026-10-29-no-worker-framework.md](decisions/2026-10-29-no-worker-framework.md)):
+   [decisions/no-worker-framework.md](decisions/no-worker-framework.md)):
    - **Exclusive output.** The worker is the only writer of its table.
    - **Reentrant units.** A unit first checks the output table and skips
      what is done. Whether a unit is done is known only from the

@@ -1,7 +1,7 @@
 # Memory is a file Max writes itself
 
-2026-10-30, proposed by the owner. The design is in
-[Memory](../design/context.md#memory).
+Each conversation's memory is one Markdown file that Max writes itself and
+every turn carries. The design is in [Memory](../design/context.md#memory).
 
 ## Context
 
@@ -11,10 +11,10 @@
   permanent, such as what people call Max, wasn't recorded. Of 101 dated
   commitments, 88 had expired unattended. Injection picked the 12 most
   recently changed, which had nothing to do with importance.
-- maxx went live with no memory. On 2026-10-30 people called Max "小鲨鲨"
-  and it didn't know the name; only when told "不记得了" did it search, and
+- maxx went live with no memory. People called Max "小鲨鲨" and it didn't
+  know the name; only when told "不记得了" did it search, and
   it found the answer at once.
-- [MemoryTax](https://arxiv.org/html/2610.29823) (2026-10): with a strong
+- [MemoryTax](https://arxiv.org/html/2610.29823): with a strong
   enough model, keeping raw records and letting the model search works
   better and costs less than pre-extracted memory (Mem0, Zep). Max has the
   raw records and the search (the ledger and `history`). But the paper's
@@ -32,15 +32,15 @@ categories or expiry. The Haskell version's memories were moved into an
 initial file per group by hand, by a sub-agent, dropping everything of no
 use.
 
-## Adjustments since
+## What was learned in use
 
-- **Append, don't insert** (2026-10-30): on go-live day Max wrote to the
-  file once in 90 turns. It had been asked to insert entries by section and
+- **Append, don't insert**: on its first day Max wrote to the file once in
+  90 turns. It had been asked to insert entries by section and
   person, which is laborious with `shell`, and a prompt line ("每多跑一次
   run_code 群友就多等一轮") made it reluctant to make an extra call. It now
   appends one line with `echo`, and the dreamer places it.
-- **The dreamer** (2026-10-30): the model only ever added and never tidied.
-- **Record first, then reply** (2026-10-31): the prompt had asked Max to put
+- **The dreamer**: the model only ever added and never tidied.
+- **Record first, then reply**: the prompt had asked Max to put
   the reply and the recording command in one output, reply first, and write
   `[silence]` after recording; it never did. Its only write that day came
   when someone asked it to delete an entry, and asked whether it had

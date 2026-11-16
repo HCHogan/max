@@ -14,10 +14,10 @@ Features are listed by the entries of [features.md](https://github.com/HCHogan/m
 | Sandbox isolation | Partial | The runtime environment of codemode; v1 needs start on demand, idle shutdown, command execution and `/work` |
 | Attachment fan-out and QQ best-effort recovery | — |  |
 | Persistence | Partial | The ledger and turn records; for the new schema, see [Schema](../design/ledger.md#schema) |
-| Canonical multi-platform conversations | Partial | The [Message format](../design/ledger.md#message-format) does not branch by platform; v1 has only QQ. Matrix and mirroring are deferred; see [Matrix](../decisions/2026-10-29-matrix-deferred.md) |
+| Canonical multi-platform conversations | Partial | The [Message format](../design/ledger.md#message-format) does not branch by platform; v1 has only QQ. Matrix and mirroring are deferred; see [Matrix](../decisions/matrix-deferred.md) |
 | Triggering | ✓ | Triggered by mentions (@) and replies; private chats by allowlist |
 | Proactive triggering | ✓ | [Intent](../design/intent.md), made part of v1 on 2026-10-27. Simplified on 2026-10-29: only debouncing, small-model classification and the hourly cap remain; the Haskell version's gates, three verdict categories and topic cooldown were all removed |
-| Inbound message hooks | — | Not implemented for now; see [Features deliberately removed](../decisions/2026-10-28-features-removed.md) |
+| Inbound message hooks | — | Not implemented for now; see [Features deliberately removed](../decisions/features-removed.md) |
 | QQ group allowlist | ✓ | Replaced by `/bind`: the platform itself lets only the bot's creator add it to groups, and unbound groups are not served; see [The official QQ bot](../design/qq.md) |
 | Private chats | ✓ | Replaced by an allowlist: a private chat triggers only for people on the list; see step 2 of [Processing flow](../design/actor.md#processing-flow). The Haskell version replied to every private chat |
 | Agent loop | ✓ | Processing and failure reactions are no longer attached; on failure, a one-sentence reply is sent; see [What the group sees](../design/actor.md#what-the-group-sees) |

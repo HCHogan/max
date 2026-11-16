@@ -277,7 +277,7 @@ A restart loses the running turn and nothing in the VM: background
 commands, agents and resident programs are units of the guest's and run
 on (see [Jobs](jobs.md)). Turns are interrupted rather than suspended and
 resumed; why is in
-[decisions/2026-10-29-first-round-of-cuts.md](../decisions/2026-10-29-first-round-of-cuts.md).
+[decisions/rare-cases-fail-plainly.md](../decisions/rare-cases-fail-plainly.md).
 
 - **A normal restart (a deploy, SIGTERM)**: the actor gets `Stop` and
   notes when the grace runs out (20 seconds). An idle core ends at once.
@@ -352,7 +352,7 @@ of shutdown has to be asked again.
   responses from four providers, and each protocol's request is held to
   its shape.
 - Which tests there are, and which there aren't, is a decision:
-  [decisions/2026-11-16-tests-on-the-critical-path.md](../decisions/2026-11-16-tests-on-the-critical-path.md).
+  [decisions/tests-on-the-critical-path.md](../decisions/tests-on-the-critical-path.md).
 - A snapshot holds every request it made, so any production model call
   can be resent exactly, offline.
 - The segmenter's cutting (`segment/chunk.rs`) is written in the part of

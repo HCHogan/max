@@ -6,7 +6,7 @@ rules, the debounce and the small model's classification are in one place.
 What is left is deliberately small: a debounce for messages that look
 unfinished, the small model, and an hourly cap; why the Haskell version's
 gates and signals went is in
-[decisions/2026-10-29-first-round-of-cuts.md](../decisions/2026-10-29-first-round-of-cuts.md).
+[decisions/rare-cases-fail-plainly.md](../decisions/rare-cases-fail-plainly.md).
 
 Like [the core](core.md), intent is a pure state machine in `max-core`
 (`intent.rs`), a field of the conversation actor:

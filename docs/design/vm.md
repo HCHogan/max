@@ -5,7 +5,7 @@ background agents and resident units run, with `/work` as Max's home. A VM
 is a unit of the host's systemd, `maxx-vm@<conversation>.service`, which max
 starts and stops and which outlives max. Nothing at run time needs root;
 why and how that was verified is in
-[decisions/2026-10-27-vms-without-a-broker.md](../decisions/2026-10-27-vms-without-a-broker.md).
+[decisions/vms-without-a-broker.md](../decisions/vms-without-a-broker.md).
 The VM service is `crates/max/src/vm.rs`, a VM's machine `vm/machine.rs`, the
 host's side `nix/module.nix` and the guest `nix/guest.nix`.
 
@@ -70,7 +70,7 @@ Only declarative configuration applied at boot needs root, all in NixOS:
 
 The VM's unit isn't part of `maxx.service`: stopping or crashing max leaves
 it, and `restartIfChanged = false` keeps a deploy from restarting it. Why
-is in [decisions/2026-11-12-lifetimes-to-systemd.md](../decisions/2026-11-12-lifetimes-to-systemd.md).
+is in [decisions/lifetimes-to-systemd.md](../decisions/lifetimes-to-systemd.md).
 
 - **Attaching**: when max starts, it lists the active `maxx-vm@` units and
   attaches to each (`Service::attach`): it reads `boot.json`, takes the
@@ -166,7 +166,7 @@ is in [decisions/2026-11-12-lifetimes-to-systemd.md](../decisions/2026-11-12-lif
   allocated on use, and shrinking a limit only forces the guest to drop its
   cache, which dropping it directly does without an API socket. Why these
   sizes stay is in
-  [decisions/2026-11-03-idle-guests-drop-caches.md](../decisions/2026-11-03-idle-guests-drop-caches.md).
+  [decisions/idle-guests-drop-caches.md](../decisions/idle-guests-drop-caches.md).
 - **The store share's descriptors**: the store's virtiofsd keeps an
   `O_PATH` descriptor open for every store file the guest has looked up,
   until the guest's kernel forgets it, which with enough memory it never
@@ -281,7 +281,7 @@ the Haskell version's `nix/operations.nix`, on cloud-hypervisor taps.
 The models' calls and the keyed APIs are answered by a process that
 outlives max, so a deploy doesn't cut an agent's model call or a `git
 push` in the middle. Why this and not more is in
-[decisions/2026-11-14-what-leaves-the-host.md](../decisions/2026-11-14-what-leaves-the-host.md).
+[decisions/what-leaves-the-host.md](../decisions/what-leaves-the-host.md).
 
 - **A unit for each VM**, `<name>-forward@<conversation>`, running `max
   forward --dir <the VM's directory>`, bound to the VM's unit, which wants
@@ -327,7 +327,7 @@ push` in the middle. Why this and not more is in
 - **A forwarder records nothing**: it has no connection to the database,
   a model call's usage isn't read on its way back, and what it counts of
   an API is gone with the process; see
-  [decisions/2026-11-16-a-forwarder-keeps-no-count.md](../decisions/2026-11-16-a-forwarder-keeps-no-count.md).
+  [decisions/forwarder-keeps-no-count.md](../decisions/forwarder-keeps-no-count.md).
 - **vm-check** gives its VM's forwarder a configuration of its own, with a
   provider for the agents that counts what it is asked.
 - A forwarder's code is as old as its VM's boot; only what it reads follows

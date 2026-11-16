@@ -1,7 +1,8 @@
 # Keyed APIs are forwarded by the host
 
-2026-11-02, the owner, prompted by wanting Max to send email. The design
-is in [Host-keyed APIs](../design/tools.md#host-keyed-apis).
+Programs in a VM call services that need a key, such as one that sends
+email, through the host, which adds the key. The design is in
+[Host-keyed APIs](../design/tools.md#host-keyed-apis).
 
 ## Context
 
@@ -9,7 +10,7 @@ A host tool for every service that needs a key, as for GitHub and web
 search, is too heavy. The key must still never enter the VM: group members
 can have Max run anything there and read whatever it holds.
 
-## What exists
+## Alternatives considered
 
 - **Terminating HTTPS at the egress** and swapping placeholders the VM sends
   for the real key: [iron-proxy](https://github.com/ironsh/iron-proxy) (Go,
@@ -26,9 +27,9 @@ can have Max run anything there and read whatever it holds.
 A proxy in tokenizer's manner, beside the background agents' `/llm`, on the
 channel the VM already has to the host: `http://127.0.0.1:7777/api/<name>/…`,
 with each API's `base_url`, where its key goes, which methods and paths it
-allows and an hourly count in the configuration. No extra service to run.
-Since 2026-11-14 it is the VM's forwarder that answers
-([what leaves the host](2026-11-14-what-leaves-the-host.md)).
+allows and an hourly count in the configuration. No extra service to run:
+the VM's forwarder answers it
+([what leaves the host](what-leaves-the-host.md)).
 
 ## Cost
 

@@ -190,7 +190,7 @@ guest's one client: `run_code`'s runner, `maxx`, and programs of Max's own
 that require the tools. The guest's own tools ask the host nothing. The
 history of this channel, from MCP to plain HTTP and from per-run sessions to
 one caller, is in
-[decisions/2026-11-14-plain-http-for-the-guest.md](../decisions/2026-11-14-plain-http-for-the-guest.md).
+[decisions/plain-http-for-the-guest.md](../decisions/plain-http-for-the-guest.md).
 
 - **The channel**: with cloud-hypervisor's hybrid vsock, a guest connecting
   to a port on the host lands on the UNIX socket `<vsock socket>_<port>`.
@@ -369,7 +369,7 @@ extracted, on models that can (`video = true`; the Gemini models on tank).
 A Chromium resident in the group's VM, which programs drive with Playwright
 over CDP, so a page the model looked at is still there for the next
 `run_code` to click. Why Chromium and not camoufox is in
-[decisions/2026-10-29-resident-chromium.md](../decisions/2026-10-29-resident-chromium.md).
+[decisions/resident-chromium.md](../decisions/resident-chromium.md).
 
 - **The service**: `max-browser.service` runs nixpkgs' Chromium with
   `--headless=new`, CDP on 127.0.0.1:9222 only, as root with Chromium's own
@@ -427,7 +427,7 @@ over CDP, so a page the model looked at is still there for the next
 
 The host forwards HTTP requests for the VM and adds a key on the way, so
 the key never enters the VM, without a host tool per service. Why this shape
-is in [decisions/2026-11-02-host-keyed-apis.md](../decisions/2026-11-02-host-keyed-apis.md).
+is in [decisions/host-keyed-apis.md](../decisions/host-keyed-apis.md).
 
 - **Use**: a program requests `http://127.0.0.1:7777/api/<name>/<path>`; the
   VM's forwarder appends the path to the configured `base_url`, inserts the
@@ -488,7 +488,7 @@ Max has its own GitHub account, a machine account the owner created
 forwarding address, which Max doesn't touch. When someone asks for a PR, Max
 forks, clones, pushes, opens it, and later revises it, closes it and answers
 comments, with git and the REST API through two keyed APIs. Why not host
-tools is in [decisions/2026-11-03-github-through-keyed-apis.md](../decisions/2026-11-03-github-through-keyed-apis.md).
+tools is in [decisions/github-through-keyed-apis.md](../decisions/github-through-keyed-apis.md).
 
 - **The token stays on the host**: whatever is in the VM (environment,
   `~/.config/gh`, a browser login) group members can have read out. It is a

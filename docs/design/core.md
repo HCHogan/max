@@ -7,7 +7,7 @@ spawn, read the clock or touch the network. The conversation actor feeds
 it messages, tool results and model output, and asks it what to do next
 (see [The conversation actor](actor.md)). It is written in-house rather
 than taken from an agent framework; why is in
-[decisions/2026-10-26-own-agent-loop.md](../decisions/2026-10-26-own-agent-loop.md).
+[decisions/own-agent-loop.md](../decisions/own-agent-loop.md).
 
 ## Interface
 

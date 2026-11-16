@@ -12,7 +12,7 @@ The Rust version keeps the three judgements of the Haskell version's
   `/bind` merges the owner's own accounts. Any other link, or fixing a
   wrong one, is the owner editing the database. Identity is never inferred
   from names or avatars
-  ([decisions/2026-11-06-no-avatar-matching.md](../decisions/2026-11-06-no-avatar-matching.md)),
+  ([decisions/no-avatar-matching.md](../decisions/no-avatar-matching.md)),
   and users' own claims aren't trusted.
 - **A merge is an alias, not a rewrite.** `principals.merged_into` points to
   the principal kept, and the merged row stays as a tombstone. Reads use

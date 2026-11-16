@@ -97,7 +97,7 @@ As in Codex, pi and Hermes, three layers:
    GPT-5.6) is at least 30 minutes, renewed on every read; Anthropic's 5
    minutes, or an hour as an option; Gemini publishes none, and keeps only
    whole messages after a few minutes (see
-   [decisions/2026-10-31-tail-split-by-turn.md](../decisions/2026-10-31-tail-split-by-turn.md));
+   [decisions/tail-split-by-turn.md](../decisions/tail-split-by-turn.md));
    DeepSeek's lasts hours to days; local vLLM and SGLang are limited only
    by GPU memory.
 2. **Model: what it is.** A model sits under its provider, and its table

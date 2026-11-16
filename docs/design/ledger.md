@@ -121,7 +121,7 @@ enum DraftNode {
   downgrading the lowering at send time; see [Entries](#entries).
 
 Mirroring between chats is deferred with Matrix
-([decisions/2026-10-29-matrix-deferred.md](../decisions/2026-10-29-matrix-deferred.md)).
+([decisions/matrix-deferred.md](../decisions/matrix-deferred.md)).
 It would add a capability table (for each endpoint and node kind: native,
 text or dropped) and downgrade records. The raw payloads, the text
 fallbacks, `deliveries` (one row per endpoint) and the dropping of echoes
@@ -416,10 +416,10 @@ read and migrations undoing one another.
 
 Tables kept with their rows but no longer read or written:
 `summaries`, `summary_runs` and `summary_embeddings`, from the historian
-([decisions/2026-11-02-no-summaries.md](../decisions/2026-11-02-no-summaries.md)),
+([decisions/no-summaries.md](../decisions/no-summaries.md)),
 and `llm_usage` rows of purpose `historian`. `llm_usage` rows of purpose
 `job`, a background agent's calls, are no longer written
-([decisions/2026-11-16-a-forwarder-keeps-no-count.md](../decisions/2026-11-16-a-forwarder-keeps-no-count.md));
+([decisions/forwarder-keeps-no-count.md](../decisions/forwarder-keeps-no-count.md));
 `/status` sums those its window still holds.
 
 ## Import
