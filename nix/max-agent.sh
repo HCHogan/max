@@ -2,14 +2,15 @@
 # task (max-pi.sh) for hours, while Max goes on in the chat: `maxx agent`'s
 # start, models, steer and ask, which bin/maxx runs with their arguments
 # as a JSON object (maxx.nix, local.json). max, the host, keeps nothing
-# of an agent. See "Background agents" in docs/rust-rewrite.md.
+# of an agent. See "Background agents" in docs/design/jobs.md.
 #
-#   maxx agent start {task, title, workdir, model, effort}
+#   maxx agent start {task, title, workdir, model, effort, resume}
 #       Starts an agent on the task and says its name, max-agent-N. Its
 #       report comes back to Max when it ends. It runs on the agents' own
 #       model, or on the one named, and thinks as hard as effort says,
 #       one of pi's --thinking: the provider is asked for just that, and
-#       may refuse it.
+#       may refuse it. With resume, an earlier agent's name, it goes on
+#       from that one's conversation, which pi kept.
 #   maxx agent models {}
 #       The models an agent can run on, each with its window.
 #   maxx agent steer {name, text}
@@ -88,9 +89,9 @@ models() {
 }
 
 start() {
-  local task="" title="" workdir="" model="" effort=""
+  local task="" title="" workdir="" model="" effort="" resume=""
   local given
-  given=$(fields "$1" task title workdir model effort) || exit $?
+  given=$(fields "$1" task title workdir model effort resume) || exit $?
   eval "$given"
   # pi's levels: it takes any other word for medium, and says so where
   # nobody reads it.
@@ -99,6 +100,25 @@ start() {
     *) fail "effort is one of off, minimal, low, medium, high, xhigh and max, not $effort" ;;
   esac
   [ -n "${task//[[:space:]]/}" ] || fail "there is no task: maxx agent start --title … --task - <<'EOF' … EOF"
+  # The conversation of an earlier agent, to go on from: its session,
+  # which max-pi named after its unit, and whose directory and title the
+  # new one keeps unless it is given others. pi copies it into the new
+  # one's, so the earlier stays as it was.
+  local session=""
+  if [ -n "$resume" ]; then
+    [[ $resume =~ ^max-agent-[0-9]+$ ]] || fail "resume takes an earlier agent's name, max-agent-N, not $resume"
+    if systemctl is-active --quiet "$resume.service"; then
+      fail "$resume is still running: tell it more with maxx agent steer $resume"
+    fi
+    local sessions=("$kept"/*_"$resume".jsonl)
+    session=${sessions[-1]}
+    [ -f "$session" ] || fail "there is no conversation of $resume to go on from"
+    # A line pi was killed in the middle of is no JSON: it is skipped.
+    [ -n "$workdir" ] || workdir=$(head -n 1 "$session" | jq -rR 'fromjson? | .cwd // empty')
+    if [ -z "${title//[[:space:]]/}" ]; then
+      title=$(jq -rR 'fromjson? | select(.type == "session_info") | .name' "$session" | tail -n 1)
+    fi
+  fi
   case "$workdir" in
     "") workdir=/work ;;
     /*) ;;
@@ -136,6 +156,9 @@ start() {
   printf '%s\n' "$task" > "$dir/task"
   echo "$workdir" > "$dir/workdir"
   printf '%s\n' "$chosen" > "$dir/model.json"
+  if [ -n "$session" ]; then
+    printf '%s\n' "$session" > "$dir/resume"
+  fi
   if [ -z "${title//[[:space:]]/}" ]; then
     # The task's first line, cut short.
     title=$(sed -n '/[^[:space:]]/{s/^[[:space:]]*//;p;q}' <<< "$task")
@@ -143,7 +166,9 @@ start() {
   fi
   maxx units agent --unit "$unit" --limit "$limit" --title "$title" --workdir "$workdir" -- "$(command -v max-pi)" "$unit"
   exec 9>&-
-  jq -nc --arg name "$unit" --arg said "$unit started in $workdir on $model, for at most $((limit / 3600)) hours. When it ends, its report comes back to you as [$unit 完成]: don't wait for it. To tell it more, maxx agent steer $unit with the words after it; to stop it, systemctl stop $unit." \
+  local from=,
+  [ -z "$resume" ] || from=", continuing $resume's conversation,"
+  jq -nc --arg name "$unit" --arg said "$unit started in $workdir on $model$from for at most $((limit / 3600)) hours. When it ends, its report comes back to you as [$unit 完成]: don't wait for it. To tell it more, maxx agent steer $unit with the words after it; to stop it, systemctl stop $unit." \
     '{name: $name, said: $said}'
 }
 

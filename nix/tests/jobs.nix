@@ -4,7 +4,8 @@
 # and what becomes of each when it is stopped, when max is away, and when
 # its caller is; a call of maxx's made while max restarts, which is made
 # again; a background agent (nix/max-agent.sh), pi itself against a
-# model that says what the test has it say; and a unit that
+# model that says what the test has it say, and one that goes on from
+# another's conversation; and a unit that
 # /work/.max/systemd keeps (nix/max-units.sh). The machine has the
 # guest's jobs without a VM's shares; a fake max at 127.0.0.1:7777 keeps
 # what wakes it and answers for the agents' model.
@@ -458,6 +459,38 @@ pkgs.testers.runNixOSTest {
         assert "effort is one of off, minimal, low, medium, high, xhigh and max, not hard" in refused, refused
         assert machine.succeed("cat /work/.max/jobs/.count").strip() == "4"
 
+    with subtest("an agent goes on from an ended one's conversation, which is left as it was"):
+        # pi keeps an agent's session under its unit's name.
+        earlier = machine.succeed("ls /work/.max/jobs/*_max-agent-1.jsonl").strip()
+        kept = machine.succeed(f"sha256sum {earlier}")
+        said = json.loads(machine.succeed("maxx agent start --resume max-agent-1 --task - <<< '再查一下大后天'"))
+        # In the earlier one's directory, under its title.
+        assert said["said"].startswith("max-agent-5 started in /work/proj on test/m, continuing max-agent-1's conversation, for at most 6 hours."), said
+        notice = woken(9)
+        assert notice.startswith("[max-agent-5 完成] 试试\n"), notice
+        # All the earlier one was told, then the new task.
+        heard = json.loads(machine.succeed("tail -n 1 /run/llm-heard"))
+        assert "查一下明天的天气" in heard[0] and "顺便看后天" in "".join(heard) and "再查一下大后天" in heard[-1], heard
+        header = json.loads(machine.succeed("head -n 1 /work/.max/jobs/*_max-agent-5.jsonl"))
+        assert header["parentSession"] == earlier and header["cwd"] == "/work/proj", header
+        assert machine.succeed(f"sha256sum {earlier}") == kept
+        # One that runs is told more with steer, and what has no
+        # conversation, or isn't an agent's name, starts nothing.
+        calls = int(machine.succeed("wc -l < /run/llm-heard"))
+        machine.succeed("maxx agent start --title 久 --task 这个要查很久")
+        refused = machine.fail("maxx agent start --resume max-agent-6 --task 接着 2>&1")
+        assert "max-agent-6 is still running: tell it more with maxx agent steer max-agent-6" in refused, refused
+        # Stopped once its plugin is there to take the signal, it wakes nobody.
+        machine.wait_until_succeeds(f"test $(wc -l < /run/llm-heard) -gt {calls}", timeout=120)
+        machine.succeed("systemctl stop max-agent-6.service")
+        machine.wait_until_fails("test -e /run/max/jobs/max-agent-6", timeout=60)
+        refused = machine.fail(maxx("agent start", task="接着", resume="max-agent-9") + " 2>&1")
+        assert "there is no conversation of max-agent-9 to go on from" in refused, refused
+        refused = machine.fail("maxx agent start --resume ../max-agent-1 --task 接着 2>&1")
+        assert "resume takes an earlier agent's name, max-agent-N, not ../max-agent-1" in refused, refused
+        assert machine.succeed("cat /work/.max/jobs/.count").strip() == "6"
+        assert len(wakes()) == 9, wakes()
+
     with subtest("without a model for them there are no agents"):
         machine.succeed("touch /run/no-model")
         refused = machine.fail("maxx agent start --task 查一下 2>&1")
@@ -471,13 +504,13 @@ pkgs.testers.runNixOSTest {
     with subtest("a background command that removes its own directory is still told of"):
         machine.succeed("mkdir -p /work/tmp/gone")
         start("gone", "echo going; cd / && rm -rf /work/tmp/gone", limit=60, title="$ rm", workdir="/work/tmp/gone")
-        notice = woken(9)
+        notice = woken(10)
         assert notice.startswith("[max-job-gone 完成] $ rm\nexit status 0, ran for "), notice
         machine.wait_until_fails("test -e /run/max/jobs/max-job-gone")
 
     with subtest("a background command that ends itself with SIGTERM is told of, as nobody asked"):
         start("self", "echo bye; kill -TERM $$", limit=60, title="$ kill")
-        notice = woken(10)
+        notice = woken(11)
         assert notice.startswith("[max-job-self 完成] $ kill\nended by SIGTERM, after "), notice
 
     with subtest("one name is one unit's, and a text in braces is a command"):
@@ -528,6 +561,6 @@ pkgs.testers.runNixOSTest {
         assert applied["removed"] == ["keep.service"] and applied["skipped"] == [], applied
         machine.fail("systemctl is-active keep.service")
         machine.succeed("sleep 2")
-        assert len(wakes()) == 10, wakes()
+        assert len(wakes()) == 11, wakes()
   '';
 }

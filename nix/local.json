@@ -46,7 +46,7 @@
     "run": "agent",
     "turn": true,
     "description": "Starts a background agent on a task: maxx agent start --title <line> --workdir <dir> --task - <<'EOF' … EOF",
-    "guide": "Starts a background agent on task, a unit of the VM's that works on it for hours while you go on talking. title is a line for the list and its report; workdir is where it works, /work by default, and one that isn't absolute is under /work; model is one of agent_models', and effort how hard it thinks: off, minimal, low, medium, high, xhigh or max. Returns at once: name is the agent's, max-agent-N, and said what becomes of it.",
+    "guide": "Starts a background agent on task, a unit of the VM's that works on it for hours while you go on talking. title is a line for the list and its report; workdir is where it works, /work by default, and one that isn't absolute is under /work; model is one of agent_models', and effort how hard it thinks: off, minimal, low, medium, high, xhigh or max. resume names an agent that has ended, whose conversation the new one goes on from, with all it read and did: task then says only what is new, and the directory and title are that agent's unless given. Returns at once: name is the agent's, max-agent-N, and said what becomes of it.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -54,7 +54,8 @@
         "title": { "type": "string", "description": "a line for the list and the report; the task's first line without it" },
         "workdir": { "type": "string", "description": "the directory it works in, /work by default" },
         "model": { "type": "string", "description": "one of agent models'; the default without it" },
-        "effort": { "type": "string", "description": "off, minimal, low, medium, high, xhigh or max" }
+        "effort": { "type": "string", "description": "off, minimal, low, medium, high, xhigh or max" },
+        "resume": { "type": "string", "description": "an ended agent's name, max-agent-N, whose conversation it goes on from" }
       },
       "required": ["task"]
     },

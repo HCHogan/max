@@ -63,8 +63,8 @@ show(args: { path: string }): Promise<{ path: string }>;
 /** Shows yourself a piece of video, picture and sound, after the result of this run_code or shell. path is a video file in the VM; start and end are seconds, or a time such as '1:30'. seconds is how long the piece is. */
 video(args: { path: string; start?: number | string; end?: number | string }): Promise<{ seconds?: number }>;
 
-/** Starts a background agent on task, a unit of the VM's that works on it for hours while you go on talking. title is a line for the list and its report; workdir is where it works, /work by default, and one that isn't absolute is under /work; model is one of agent_models', and effort how hard it thinks: off, minimal, low, medium, high, xhigh or max. Returns at once: name is the agent's, max-agent-N, and said what becomes of it. */
-agent_start(args: { task: string; title?: string; workdir?: string; model?: string; effort?: string }): Promise<{ name: string; said: string }>;
+/** Starts a background agent on task, a unit of the VM's that works on it for hours while you go on talking. title is a line for the list and its report; workdir is where it works, /work by default, and one that isn't absolute is under /work; model is one of agent_models', and effort how hard it thinks: off, minimal, low, medium, high, xhigh or max. resume names an agent that has ended, whose conversation the new one goes on from, with all it read and did: task then says only what is new, and the directory and title are that agent's unless given. Returns at once: name is the agent's, max-agent-N, and said what becomes of it. */
+agent_start(args: { task: string; title?: string; workdir?: string; model?: string; effort?: string; resume?: string }): Promise<{ name: string; said: string }>;
 
 /** Tells a running agent more: a change of direction, more to go on, or the answer to what it asked. name is the agent's, max-agent-N; it reads text at the end of the step it is in. */
 agent_steer(args: { name: string; text: string }): Promise<{ said: string }>;

@@ -20,8 +20,9 @@ of it.
   `RuntimeDirectory`. The unit runs `max-pi <unit>` (`nix/max-pi.sh`), which
   execs `pi --print --no-approve` with the plugin `nix/max-agent.ts`. What
   an agent is, is in its directory, `/run/max/jobs/<unit>/`: `task`,
-  `workdir`, `model.json`, `title`, `limit`, `started`, the steers in
-  `inbox/`, and the markers `asked`, `stopped` and `error`. The count of
+  `workdir`, `model.json`, `title`, `limit`, `started`, `resume` for one
+  that goes on from another, the steers in `inbox/`, and the markers
+  `asked`, `stopped` and `error`. The count of
   those that run and the next number are taken under one lock held until the
   unit has started. The number comes from `/work/.max/jobs/.count`, so it
   goes on across restarts of max and boots of the VM.
@@ -101,6 +102,22 @@ of it.
   the unit (`--session-id`) and gives it the agent's title (`--name`, a
   `session_info` entry), so the session says whose it was and what it was for
   after `/run` is gone, and whether or not a report was written.
+- **Going on from an ended agent**: `maxx agent start --resume max-agent-3`
+  starts a new agent, with its own number, whose conversation is all of
+  max-agent-3's and then its task: work to go on with, redo or ask about,
+  without retelling what the earlier one read and did. `max-agent.sh` takes
+  the newest `*_max-agent-3.jsonl`; it refuses an agent whose unit runs,
+  which is steered instead, and one without such a session. The new agent
+  keeps the session's directory (its `cwd`) and title unless it is given
+  others. The session's path goes into `resume`, and `max-pi.sh` gives pi
+  `--fork` with it, beside `--session-id`: pi copies it into the new
+  agent's session, whose header names it (`parentSession`), and leaves it as
+  it was, so one agent can be taken up twice. Otherwise the new one is an
+  agent like any other: its limits, report and wake are its own, and so are
+  its model and effort, the agents' default unless `--model` and `--effort`
+  say otherwise, whatever the earlier ran on. Its system text is built anew,
+  with the notes as they are now. Why a fork and a new number is in
+  [decisions/2026-11-16-resume-by-fork.md](../decisions/2026-11-16-resume-by-fork.md).
 - **Stopping**: `systemctl stop max-agent-3`, or `/kill` and `/stop`, which
   have the guest stop everything that was started (`maxx units stop-all`).
   pi exits at once on SIGTERM with nothing written, so the unit's
@@ -118,7 +135,8 @@ of it.
   files); Max says in the chat that it has taken it on and about how long it
   will take, then starts the agent. What a few steps answer, it does itself.
   `agent_start`, `agent_steer` and `agent_models` are declared in the prompt
-  with their guides.
+  with their guides; the prompt says to take up an ended agent's work with
+  `--resume` rather than tell a new one all of it again.
 - **Project directories**: `--workdir` is `/work` by default, or an absolute
   guest path or one under `/work`, made if missing. The VM, not the
   directory, is the boundary. pi reads the directory's `AGENTS.md` or
@@ -164,13 +182,20 @@ Checked with pi 1.4.0 and 1.5.0:
 - pi retries a failed model call 3 times by default, about 14 seconds in all;
   `"retry": {"maxRetries": 8}` outlasts a restart of max, while the
   forwarder answers 503.
+- `--session-id` names a new session, and with `--fork` names the copy, which
+  is in the current directory whatever the earlier's was. The copy's model
+  and thinking are the command line's, not those the session had. Its system
+  prompt is built anew; pi sends the model the prompt as it is now, once, and
+  records in the session what changed (checked with 1.5.0, whose sessions
+  keep the prompt as system messages).
 
 pi comes from numtide's llm-agents.nix, pinned in the flake. Its extension
 API has no version, so `scripts/check-pi-job` runs after moving the pin or
 changing `max-agent.ts`, `max-pi.sh` or `agent-system.md`: the pinned pi with
-the real wrapper and plugin against a fake `/llm`, through six agents
+the real wrapper and plugin against a fake `/llm`, through seven agents
 (steers, a steer in the last turn, a stop by SIGUSR2, an answer that comes
-while it is held, a project with `AGENTS.md` and one with `CLAUDE.md`). What
+while it is held, a project with `AGENTS.md` and one with `CLAUDE.md`, and
+one that goes on from another's session on another model). What
 surrounds pi is in the NixOS test `checks.<system>.jobs`, and `max vm-check`
 starts one agent in a real VM against a provider of its own.
 
@@ -192,6 +217,10 @@ in files and a signal:
   the text; `error` holds why the last model call failed.
 - **Asking** is `maxx agent ask`, and holding for the answer is the harness's
   own; `asked` says a question is out.
+- **Going on** is `resume`, the path of the earlier agent's session, which
+  `maxx agent start` found by pi's naming. A harness with sessions of its own
+  needs `maxx agent start` to find those; one without starts from the task
+  alone.
 
 A harness that keeps none of it still runs as an agent: Max hears how it
 exited and that it left no report. Another harness needs a wrapper like

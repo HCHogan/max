@@ -98,6 +98,12 @@ effort=$(field '.effort // empty')
 if [[ -n $effort ]]; then
   args+=(--thinking "$effort")
 fi
+# An earlier agent's session, which maxx agent start --resume found: pi
+# copies it into this one's and goes on from its end, here, with the
+# task. The earlier stays as it was.
+if [[ -e $dir/resume ]]; then
+  args+=(--fork "$(cat "$dir/resume")")
+fi
 cd "$workdir"
 # The task goes in on stdin: as an argument, an @ at its start would name
 # a file to read.
