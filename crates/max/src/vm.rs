@@ -82,26 +82,28 @@ pub fn work(dir: &Path, conversation: ConversationId) -> PathBuf {
 /// the max that comes. Otherwise, as under vm-check or in a terminal, max
 /// binds it, in place of what an earlier one left.
 fn listen(dir: &Path) -> Result<UnixListener> {
-    if let Some(given) = given() {
+    let socket = dir.join(forwarder::MAX);
+    if let Some(given) = given(&socket) {
+        info!(socket = %socket.display(), "listening at the socket systemd gave max");
         return given.wrap_err("taking the socket systemd listens at");
     }
-    let socket = dir.join(forwarder::MAX);
     let _ = std::fs::remove_file(&socket);
+    info!(socket = %socket.display(), "listening at a socket of max's own");
     UnixListener::bind(&socket).wrap_err_with(|| format!("listening at {}", socket.display()))
 }
 
-/// The socket systemd listens at for this process, if it gave it one:
-/// `LISTEN_PID` and `LISTEN_FDS` say so, and with `StandardInput=socket`
-/// (`maxx.socket` and max's unit, nix/module.nix) it is the standard
-/// input, which takes no `unsafe` to have.
-fn given() -> Option<std::io::Result<UnixListener>> {
-    let ours = std::env::var("LISTEN_PID").is_ok_and(|pid| pid == std::process::id().to_string());
-    let one = std::env::var("LISTEN_FDS").is_ok_and(|sockets| sockets == "1");
-    (ours && one).then(|| {
-        let socket = std::io::stdin().as_fd().try_clone_to_owned()?;
-        let listener = std::os::unix::net::UnixListener::from(socket);
-        // Not one, if the unit's standard input is something else.
-        listener.local_addr()?;
+/// The socket systemd listens at for this process, if max runs as its
+/// unit: with `StandardInput=socket` (`maxx.socket` and max's unit,
+/// nix/module.nix) it is the standard input, which takes no `unsafe` to
+/// have. systemd names no socket it gives so, with no `LISTEN_FDS`: it is
+/// known by what it is, a Unix socket bound at `socket`. A terminal, or
+/// nothing, as under vm-check, isn't one.
+fn given(socket: &Path) -> Option<std::io::Result<UnixListener>> {
+    let input = std::io::stdin().as_fd().try_clone_to_owned().ok()?;
+    let listener = std::os::unix::net::UnixListener::from(input);
+    let bound = listener.local_addr().ok()?;
+    (bound.as_pathname() == Some(socket)).then(move || {
+        // systemd gives it blocking.
         listener.set_nonblocking(true)?;
         UnixListener::from_std(listener)
     })

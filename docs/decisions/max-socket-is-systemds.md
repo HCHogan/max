@@ -31,8 +31,9 @@ conversation in a header.
 
 - `maxx.socket` listens at `<vm.dir>/max.sock`, and max's unit takes it as
   its standard input (`StandardInput=socket`), which takes no `unsafe` to
-  turn into a listener. Without a socket given, as under vm-check or in a
-  terminal, max binds one itself.
+  turn into a listener. systemd sets no `LISTEN_FDS` for a socket it gives
+  so: max knows it by what it is, a Unix socket bound at that path. Without
+  a socket given, as under vm-check or in a terminal, max binds one itself.
 - A deploy restarts max in one step (`stopIfChanged = false`), which leaves
   the socket. NixOS otherwise stops a changed unit that has a socket
   together with its socket, and leaves the unit for the socket to start.

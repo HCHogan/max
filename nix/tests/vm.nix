@@ -237,6 +237,10 @@ pkgs.testers.runNixOSTest {
     # Nothing in the guest hears of it: every answer is a 200, in the same
     # boot of the same VM.
     machine.succeed("systemctl is-active maxx.socket")
+    # It is systemd's socket max listens at, and no other of max's own in
+    # its place.
+    machine.succeed("journalctl -u maxx.service -o cat | grep -q 'listening at the socket systemd gave max'")
+    assert machine.succeed("ss -xl | grep -c /var/lib/maxx/vm/max.sock").strip() == "1"
     before = machine.succeed("systemctl show -P MainPID maxx.service").strip()
     asked = int(machine.succeed(f"wc -l < {work}/probe.log"))
     machine.succeed("systemctl restart maxx.service")
@@ -249,6 +253,15 @@ pkgs.testers.runNixOSTest {
     assert all(line.split()[1] == "200" for line in since), since
     assert machine.succeed("systemctl show -P MainPID maxx-vm@7.service").strip() == pid
     assert machine.succeed(f"{last} | cut -d' ' -f1").strip() == boot
+    # Stopped alone, max is started by the next thing the unit asks, which
+    # waits at the socket for it: nothing but 200s again.
+    before = machine.succeed("systemctl show -P MainPID maxx.service").strip()
+    asked = int(machine.succeed(f"wc -l < {work}/probe.log"))
+    machine.succeed("systemctl stop maxx.service")
+    machine.wait_until_succeeds(f"test $(wc -l < {work}/probe.log) -gt {asked + 3}", timeout=120)
+    assert machine.succeed("systemctl show -P MainPID maxx.service").strip() not in ("0", before)
+    since = machine.succeed(f"tail -n +{asked + 1} {work}/probe.log").splitlines()
+    assert all(line.split()[1] == "200" for line in since), since
     # A program in the VM asks the agents' model for an answer that takes
     # eight seconds to come.
     machine.succeed("maxx-ssh 7 'systemd-run --collect --unit=asks /bin/sh /work/asks.sh' < /dev/null")
