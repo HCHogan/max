@@ -308,7 +308,7 @@ push` in the middle. Why this and not more is in
   same file. So a deploy's new models and keys reach running forwarders when
   the new max is back, with no restart. A new configuration is served by a
   new server on the same socket, and the old one ends when its calls do.
-  The forwarder reads only `[database]`, `[llm]`, `[api]` and `[log]`
+  The forwarder reads only `[llm]`, `[api]` and `[log]`
   (`config::Forwarded`), so what a newer max has elsewhere doesn't stop an
   older forwarder; a file whose `[llm]` or `[api]` it can't read is left,
   and it goes on with the last. Nothing secret is written into the VM's
@@ -321,8 +321,10 @@ push` in the middle. Why this and not more is in
   and logged.
 - **max keeps no API key**, only their lines in the system prompt. It reads
   the secrets and the models' keys once at startup and lets them go, so that
-  a missing one stops max at a deploy, not a forwarder when a VM boots. The
-  forwarder records a model call's usage.
+  a missing one stops max at a deploy, not a forwarder when a VM boots.
+- **A forwarder records nothing**: it has no connection to the database,
+  and a model call's usage isn't read on its way back; see
+  [decisions/2026-11-16-a-forwarder-keeps-no-count.md](../decisions/2026-11-16-a-forwarder-keeps-no-count.md).
 - **vm-check** gives its VM's forwarder a configuration of its own, with a
   provider for the agents that counts what it is asked.
 - A forwarder's code is as old as its VM's boot; only what it reads follows

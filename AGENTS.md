@@ -58,7 +58,7 @@ number.
 A VM's forwarder (`max forward`, a unit beside the VM's, see "A VM's
 forwarder" in docs/design/vm.md) outlives max as the VM does, and is as old as
 its VM's boot. It reads the configuration the newest max names it, and
-of that only `[database]`, `[llm]`, `[api]` and `[log]`
+of that only `[llm]`, `[api]` and `[log]`
 (`config::Forwarded`): a key added to those is one an older forwarder
 can't read, and it goes on with the configuration it had until its VM
 boots again. Raise the number too when the forwarders must be new at

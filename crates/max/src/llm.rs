@@ -342,7 +342,7 @@ impl Models {
 
 /// Records a model call's usage. What the call gave is used whether or
 /// not its record goes in: one that doesn't is logged and let be, for a
-/// turn, a job and work outside a turn alike.
+/// turn and work outside a turn alike.
 pub async fn record(pool: &PgPool, call: &usage::Call<'_>) {
     let recorded = async {
         let mut conn = pool.acquire().await?;

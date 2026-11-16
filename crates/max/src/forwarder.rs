@@ -38,7 +38,6 @@ use axum::response::{IntoResponse, Response};
 use color_eyre::eyre::{Result, WrapErr, eyre};
 use max_core::ids::ConversationId;
 use serde_json::json;
-use sqlx::PgPool;
 use tokio::net::UnixListener;
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
@@ -201,7 +200,7 @@ impl Serving {
     /// more connections, and ends once those it has are done: a call in
     /// flight goes on as it was made.
     fn serve(&mut self, config: &Forwarded, tasks: &mut Scope) -> Result<()> {
-        let app = self.app(config, tasks)?;
+        let app = self.app(config)?;
         let listener = UnixListener::from_std(self.listener.try_clone()?)?;
         let ended = CancellationToken::new();
         let (replaced, conversation) = (ended.clone(), self.conversation);
@@ -223,20 +222,12 @@ impl Serving {
 
     /// `/llm` and `/api` with `config`'s models, APIs and keys, which are
     /// read now; and the rest, passed on.
-    fn app(&self, config: &Forwarded, tasks: &mut Scope) -> Result<Router> {
+    fn app(&self, config: &Forwarded) -> Result<Router> {
         let conversation = self.conversation;
-        let agents = match llm::Models::new(&config.llm)?.job().transpose()? {
-            Some(upstreams) => {
-                // Not waited for: a call's usage is recorded when the
-                // call ends, whatever the database is doing now.
-                let pool = PgPool::connect_lazy(&config.database.url)?;
-                Some(service::Models::start(upstreams, pool, tasks))
-            }
-            None => None,
-        };
+        let agents = llm::Models::new(&config.llm)?.job().transpose()?;
         let apis = api::Apis::load(&config.api)?.counted_in(self.counted.clone());
         let max = self.max.clone();
-        Ok(service::agents(conversation, agents)
+        Ok(service::agents(agents.map(Arc::new))
             .merge(api::router(conversation, Arc::new(apis)))
             .fallback(move |request: Request| {
                 let max = max.clone();

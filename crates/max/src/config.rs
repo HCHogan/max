@@ -596,16 +596,15 @@ pub struct Slot {
     pub gateway: String,
 }
 
-/// What a VM's forwarder reads of the file (`crate::forwarder`): where a
-/// model call's usage is recorded, the models, and the APIs. A forwarder
-/// outlives max, so the file may be a newer max's: what it has besides
-/// these, in words this build doesn't know, is left unread, and only a
-/// change to these is one an older forwarder can't follow.
+/// What a VM's forwarder reads of the file (`crate::forwarder`): the
+/// models and the APIs. A forwarder outlives max, so the file may be a
+/// newer max's: what it has besides these, in words this build doesn't
+/// know, is left unread, and only a change to these is one an older
+/// forwarder can't follow.
 #[derive(Debug, Deserialize)]
 pub struct Forwarded {
     #[serde(default)]
     pub log: Log,
-    pub database: Database,
     pub llm: Llm,
     #[serde(default)]
     pub api: BTreeMap<String, Api>,

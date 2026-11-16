@@ -71,8 +71,9 @@ owners'. Without the rank the reply is `refused: Max's owners only` or
   (`config    idle_window_secs 1800 · call_time_secs 120`); the running turn
   (`t#N · how long · round N`, with its model if it differs from the next
   one's) or `idle`; how often the VM woke Max this hour; the context's
-  watermark after `/clear --all`; what this conversation's model calls used
-  in the last 24 hours and 7 days, a line each
+  watermark after `/clear --all`; what Max's own model calls for this
+  conversation used (not its background agents', which aren't counted) in
+  the last 24 hours and 7 days, a line each
   (`24h       in 34.2M · out 360k · cache 79.8% · $5.31`: input and output
   tokens, the share of input from the cache, and the cost at list prices;
   `none` without calls); and the uptime of maxx and of the host. The persona

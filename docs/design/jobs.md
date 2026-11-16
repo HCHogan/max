@@ -52,21 +52,15 @@ of it.
     takes a word it doesn't know for `medium`; and `max-pi` has pi send
     `xhigh` and `max` as they are, which it would otherwise send as `high`
     to a model it has no list for.
-  - **No sessions**: `/llm` takes any call on a VM's socket; the socket says
-    which conversation pays, and nothing knows which agent called. So
-    anything in the VM can spend on any configured model, which is accepted,
-    as the VM is the group's own and its programs could always start an
-    agent.
-- **Usage**: each model call is an `llm_usage` row of purpose `job`, no
-  turn, for the conversation whose VM made it. The forwarder
-  (`service/forward.rs`) feeds the answer to `max_llm::Meter` on its way
-  back, which reads the usage as max-llm reads Max's own, and hands it to one
-  recorder task (`service::Models::start`), with the provider and model the
-  call went to and the effort it asked for. A call that ends before the
-  provider counted anything records nothing; an answer that isn't streamed
-  is read once it has all come; a streamed Chat call that doesn't ask for
-  `stream_options.include_usage` records nothing, since the provider says
-  nothing of it.
+  - **No sessions**: `/llm` takes any call on a VM's socket, and nothing
+    knows which agent called. So anything in the VM can spend on any
+    configured model, which is accepted, as the VM is the group's own and
+    its programs could always start an agent.
+- **Usage** isn't recorded: the forwarder (`service/forward.rs`) passes a
+  call on and its answer back without reading what it used, and `/status`
+  shows what Max's own calls used. What the agents spend is in the
+  provider's records, for all the groups together; why is in
+  [decisions/2026-11-16-a-forwarder-keeps-no-count.md](../decisions/2026-11-16-a-forwarder-keeps-no-count.md).
 - **Tools**: an agent is a program, which calls every tool with `maxx` from
   its shell (`maxx history`, `maxx web-search`, `webread`), with no tools of
   its own on the host. It could speak in the chat too; its system text tells

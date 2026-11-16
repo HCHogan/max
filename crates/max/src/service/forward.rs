@@ -3,10 +3,7 @@
 //! they came but for the model id: the other fields are passed on as pi
 //! wrote them, not parsed. The answer streams back as it is, and is
 //! broken off if the provider keeps quiet as long as max-llm would wait:
-//! pi takes it for a failed call, and retries. On the way back it is read
-//! for what the call used and how long it took, which is recorded for the
-//! conversation; an answer that isn't streamed, as a program of Max's own
-//! may ask for, is read once it has all come.
+//! pi takes it for a failed call, and retries.
 //!
 //! A call names its model as the configuration does, `provider/model`,
 //! and any configured model can be named: Max starts an agent on the one
@@ -15,12 +12,12 @@
 //!
 //! Each VM's forwarder serves this, a process that outlives max as the
 //! VM does (`crate::forwarder`): a call isn't cut when max is deployed.
-//! Until 2026-11-14 max served it itself.
 //!
-//! Any call on a VM's socket is taken: the socket says which conversation
-//! pays, and nothing in the VM holds a key or a token. An agent is a unit
-//! of the guest's, which max keeps nothing of; `GET /llm` tells it what
-//! the models are. See "Background agents" in docs/rust-rewrite.md.
+//! Any call on a VM's socket is taken: nothing in the VM holds a key or
+//! a token, and nothing is counted of what it calls, which is the
+//! provider's to say. An agent is a unit of the guest's, which max keeps
+//! nothing of; `GET /llm` tells it what the models are. See "Background
+//! agents" in docs/design/jobs.md.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -32,23 +29,16 @@ use axum::extract::{DefaultBodyLimit, Path, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use chrono::Utc;
-use futures_util::{Stream, StreamExt};
-use max_core::ids::ConversationId;
-use max_core::item::{Protocol, Timing, Usage};
-use max_db::usage;
-use max_llm::Meter;
+use futures_util::Stream;
+use max_core::item::Protocol;
 use serde::de::{MapAccess, Visitor};
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::json;
 use serde_json::value::RawValue;
-use sqlx::PgPool;
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
-use tokio::time::{Instant, timeout};
+use tokio::time::timeout;
 
 use crate::llm::{Upstream, Upstreams};
-use crate::scope::Scope;
 
 pub mod api;
 
@@ -56,91 +46,25 @@ pub mod api;
 const LARGEST: usize = 64 << 20;
 const CONNECT: Duration = Duration::from_secs(10);
 
-/// The models the VMs call: where each one's calls go, and who is told
-/// what each call used.
-#[derive(Clone)]
-pub struct Models {
-    upstreams: Arc<Upstreams>,
-    used: UnboundedSender<(ConversationId, Called)>,
-}
-
-/// A model call from a VM, as it was read on its way back; told however
-/// the call ended.
-#[derive(Debug)]
-pub struct Called {
-    /// The model it went to.
-    pub upstream: Arc<Upstream>,
-    /// How hard the request asked it to think, if it said.
-    pub effort: Option<String>,
-    pub usage: Usage,
-    pub timing: Timing,
-}
-
-impl Models {
-    /// The models at `upstreams`. A task in `scope` records each call's
-    /// usage for the conversation whose VM made it.
-    pub fn start(upstreams: Upstreams, pool: PgPool, scope: &mut Scope) -> Self {
-        let (models, mut used) = Self::heard(upstreams);
-        scope.spawn(move |_| async move {
-            while let Some((conversation, called)) = used.recv().await {
-                // A call that failed before the provider counted anything.
-                if called.usage == Usage::default() {
-                    continue;
-                }
-                let call = usage::Call {
-                    conversation: Some(conversation),
-                    turn: None,
-                    purpose: usage::Purpose::Job,
-                    provider: &called.upstream.provider,
-                    model: &called.upstream.model,
-                    effort: called.effort.as_deref(),
-                    usage: called.usage,
-                    cost_micros: None,
-                    timing: Some(called.timing),
-                    at: Utc::now(),
-                };
-                crate::llm::record(&pool, &call).await;
-            }
-        });
-        models
-    }
-
-    /// The models at `upstreams`, and where what each call used is heard,
-    /// for whoever counts it: `start` records it.
-    pub fn heard(upstreams: Upstreams) -> (Self, UnboundedReceiver<(ConversationId, Called)>) {
-        let (used, heard) = unbounded_channel();
-        let models = Self {
-            upstreams: Arc::new(upstreams),
-            used,
-        };
-        (models, heard)
-    }
-}
-
 #[derive(Clone)]
 struct Forward {
-    conversation: ConversationId,
-    models: Option<Models>,
+    /// The models the VMs call, and where each one's calls go.
+    models: Option<Arc<Upstreams>>,
     client: reqwest::Client,
 }
 
-/// `/llm` and `/llm/…` for the VM of `conversation`: the `models` it may
-/// call, if the agents have one.
-pub fn router(conversation: ConversationId, models: Option<Models>) -> Router {
+/// `/llm` and `/llm/…` for a VM: the `models` it may call, if the agents
+/// have one.
+pub fn router(models: Option<Arc<Upstreams>>) -> Router {
     let client = reqwest::Client::builder()
         .connect_timeout(CONNECT)
         .build()
         .expect("a client with a connect timeout builds");
-    let forward = Forward {
-        conversation,
-        models,
-        client,
-    };
     Router::new()
         .route("/llm", get(about))
         .route("/llm/{*path}", post(call))
         .layer(DefaultBodyLimit::max(LARGEST))
-        .with_state(forward)
+        .with_state(Forward { models, client })
 }
 
 /// Why there is no model to call.
@@ -165,10 +89,9 @@ fn described(name: &str, upstream: &Upstream) -> serde_json::Value {
 /// The agents' own model, with its effort, and under `models` every one
 /// a call can name.
 async fn about(State(forward): State<Forward>) -> Response {
-    let Some(models) = &forward.models else {
+    let Some(upstreams) = &forward.models else {
         return refuse(StatusCode::NOT_FOUND, NONE);
     };
-    let upstreams = &models.upstreams;
     let mut about = described(&upstreams.default.reference(), &upstreams.default);
     about["effort"] = json!(upstreams.effort);
     about["models"] = upstreams
@@ -188,7 +111,7 @@ async fn call(State(forward): State<Forward>, Path(path): Path<String>, body: By
         return refuse(StatusCode::BAD_REQUEST, "the request isn't a JSON object");
     };
     let named: Option<String> = field(&fields, "model");
-    let upstream = Arc::clone(models.upstreams.named(named.as_deref()));
+    let upstream = models.named(named.as_deref());
     let endpoint = match upstream.protocol {
         Protocol::Chat => "chat/completions",
         Protocol::Responses => "responses",
@@ -200,10 +123,9 @@ async fn call(State(forward): State<Forward>, Path(path): Path<String>, body: By
             &format!("{name} is called at /llm/{endpoint}"),
         );
     }
-    let effort = effort(upstream.protocol, &fields);
     let id = serde_json::value::to_raw_value(&upstream.model).expect("a string is JSON");
     // One `model`, where the first was: of two, the provider might take
-    // the one max didn't read, and the call be recorded as another's.
+    // the one max didn't read, and the call go to another's model.
     let mut named = false;
     fields.retain_mut(|(name, value)| {
         if name != "model" {
@@ -224,17 +146,7 @@ async fn call(State(forward): State<Forward>, Path(path): Path<String>, body: By
         sending = sending.header(name, value);
     }
     let idle = upstream.idle;
-    // Told when dropped: here if no answer comes, or with the answer's
-    // body; and if the agent stops reading, as when its unit is stopped.
-    let mut metering = Metering::new(
-        Arc::clone(&upstream),
-        effort,
-        forward.conversation,
-        models.used.clone(),
-    );
-    let sent = timeout(idle, sending.send()).await;
-    metering.arrived();
-    let answer = match sent {
+    let answer = match timeout(idle, sending.send()).await {
         Ok(Ok(answer)) => answer,
         Ok(Err(error)) => {
             return refuse(
@@ -252,13 +164,7 @@ async fn call(State(forward): State<Forward>, Path(path): Path<String>, body: By
         response = response.header(header::CONTENT_TYPE, kind);
     }
     response
-        .body(Body::from_stream(chunks(answer, idle).map(move |chunk| {
-            metering.arrived();
-            if let Ok(chunk) = &chunk {
-                metering.read(chunk);
-            }
-            chunk
-        })))
+        .body(Body::from_stream(chunks(answer, idle)))
         .unwrap_or_else(|_| {
             refuse(
                 StatusCode::BAD_GATEWAY,
@@ -274,19 +180,6 @@ struct Fields<'a>(Vec<(String, &'a RawValue)>);
 fn field<T: for<'de> Deserialize<'de>>(fields: &[(String, &RawValue)], name: &str) -> Option<T> {
     let (_, value) = fields.iter().find(|(field, _)| field == name)?;
     serde_json::from_str(value.get()).ok()
-}
-
-/// How hard a request asks its model to think, where each protocol says
-/// it: read for the record, and passed on as it is.
-fn effort(protocol: Protocol, fields: &[(String, &RawValue)]) -> Option<String> {
-    #[derive(Deserialize)]
-    struct Reasoning {
-        effort: Option<String>,
-    }
-    match protocol {
-        Protocol::Chat => field(fields, "reasoning_effort"),
-        Protocol::Responses => field::<Reasoning>(fields, "reasoning")?.effort,
-    }
 }
 
 impl<'de> Deserialize<'de> for Fields<'de> {
@@ -337,76 +230,6 @@ fn chunks(answer: reqwest::Response, idle: Duration) -> impl Stream<Item = io::R
             }
         }
     })
-}
-
-/// A model call as it goes: what it says read by a [`Meter`], and its
-/// times, as max-llm keeps them for Max's own calls. Dropped, it tells
-/// what the call used: the answer ended, broke off, or pi stopped
-/// reading it.
-struct Metering {
-    upstream: Arc<Upstream>,
-    effort: Option<String>,
-    meter: Meter,
-    sent: Instant,
-    arrived: Instant,
-    first: Option<Duration>,
-    quiet: Duration,
-    conversation: ConversationId,
-    used: UnboundedSender<(ConversationId, Called)>,
-}
-
-impl Metering {
-    /// Starts the clock.
-    fn new(
-        upstream: Arc<Upstream>,
-        effort: Option<String>,
-        conversation: ConversationId,
-        used: UnboundedSender<(ConversationId, Called)>,
-    ) -> Self {
-        let now = Instant::now();
-        Self {
-            meter: Meter::new(upstream.protocol),
-            upstream,
-            effort,
-            sent: now,
-            arrived: now,
-            first: None,
-            quiet: Duration::ZERO,
-            conversation,
-            used,
-        }
-    }
-
-    /// Something came: the answer's head, a chunk, or an error.
-    fn arrived(&mut self) {
-        let now = Instant::now();
-        self.quiet = self.quiet.max(now - self.arrived);
-        self.arrived = now;
-    }
-
-    fn read(&mut self, chunk: &[u8]) {
-        self.meter.push(chunk);
-        if self.first.is_none() && self.meter.started() {
-            self.first = Some(self.arrived - self.sent);
-        }
-    }
-}
-
-impl Drop for Metering {
-    fn drop(&mut self) {
-        let called = Called {
-            upstream: Arc::clone(&self.upstream),
-            effort: self.effort.take(),
-            usage: self.meter.usage(),
-            timing: Timing {
-                first: self.first,
-                took: self.arrived - self.sent,
-                quiet: self.quiet,
-            },
-        };
-        // max is stopping: nobody is counting.
-        let _ = self.used.send((self.conversation, called));
-    }
 }
 
 /// An error as OpenAI's APIs put it, which pi shows the model.
