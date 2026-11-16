@@ -96,7 +96,7 @@ async fn a_call_goes_on_with_the_key_and_comes_back_as_it_is() {
         prompt(&configured),
         format!(
             "- mail ({base}): 发邮件。 Only POST /emails, GET /emails/*, GET /moved allowed. \
-             At most 3 calls an hour, all chats together."
+             At most 3 calls an hour from a chat."
         )
     );
     let vm = served(&mut scope, apis).await;
@@ -183,35 +183,22 @@ async fn a_call_goes_on_with_the_key_and_comes_back_as_it_is() {
     scope.close(Duration::from_secs(1)).await;
 }
 
-/// An API's hour is every chat's together: the VMs' forwarders, a
-/// process each, count its calls in one file.
-#[tokio::test]
-async fn forwarders_count_an_apis_calls_together() {
-    let dir = std::env::temp_dir().join(format!("max-api-count-{:016x}", rand::random::<u64>()));
+/// An API's hour is a VM's forwarder's own count: a call an hour old
+/// makes room for one more, and no more.
+#[test]
+fn a_call_an_hour_old_makes_room() {
     let configured = BTreeMap::from([("mail".to_owned(), mail("https://mail.example"))]);
-    let one = Apis::load(&configured).unwrap().counted_in(dir.clone());
-    let other = Apis::load(&configured).unwrap().counted_in(dir.clone());
-    let take = async |apis: &Apis| apis.take("mail", &apis.table["mail"]).await;
-    assert!(take(&one).await && take(&other).await && take(&one).await);
-    assert!(!take(&other).await && !take(&one).await);
-    // A call an hour old makes room for one more, and no more.
-    let file = dir.join("mail");
-    let now = SystemTime::now();
-    let ago = |secs: u64| {
-        let at = now.duration_since(UNIX_EPOCH).unwrap().as_secs() - secs;
-        format!("{at}\n")
-    };
-    std::fs::write(&file, [ago(3600), ago(3599), ago(10)].concat()).unwrap();
-    assert!(counted(&file, 3, now).unwrap());
-    assert!(!counted(&file, 3, now).unwrap());
-    assert_eq!(std::fs::read_to_string(&file).unwrap().lines().count(), 3);
-    // Without a file to count in, it counts here alone.
-    let alone = Apis::load(&configured)
-        .unwrap()
-        .counted_in("/proc/nowhere".into());
-    assert!(take(&alone).await && take(&alone).await && take(&alone).await);
-    assert!(!take(&alone).await);
-    std::fs::remove_dir_all(dir).unwrap();
+    let apis = Apis::load(&configured).unwrap();
+    let mail = &apis.table["mail"];
+    let start = Instant::now();
+    let at = |secs: u64| start + Duration::from_secs(secs);
+    assert!(mail.take(at(0)) && mail.take(at(1)) && mail.take(at(3590)));
+    assert!(!mail.take(at(3599)));
+    assert!(mail.take(at(3600)));
+    assert!(!mail.take(at(3600)));
+    // Another VM's forwarder counts its own.
+    let other = Apis::load(&configured).unwrap();
+    assert!(other.table["mail"].take(at(3600)));
 }
 
 #[test]

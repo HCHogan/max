@@ -3,15 +3,13 @@
 //! the key the host keeps, which never enters the VM. Only the calls the
 //! configuration allows go, at most so many an hour; the answer comes back
 //! as it is, a redirect too. Each VM has a forwarder of its own (see
-//! `crate::forwarder`), and an API's hour is all the chats' together: the
-//! forwarders count its calls in one file. See "Host-keyed APIs" in
-//! docs/rust-rewrite.md.
+//! `crate::forwarder`), which counts its own VM's calls and no other's: an
+//! API's hour is each chat's. See "Host-keyed APIs" in
+//! docs/design/tools.md.
 
 use std::collections::{BTreeMap, VecDeque};
-use std::io::{self, Read, Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use axum::Router;
 use axum::body::{Body, Bytes};
@@ -24,10 +22,8 @@ use color_eyre::eyre::{Result, WrapErr};
 use max_core::ids::ConversationId;
 use reqwest::Url;
 use reqwest::redirect::Policy;
-use rustix::fs::{FlockOperation, flock};
-use tokio::task::spawn_blocking;
 use tokio::time::timeout;
-use tracing::{info, warn};
+use tracing::info;
 
 use super::{CONNECT, LARGEST, chunks, refuse};
 use crate::config::{self, Rule};
@@ -65,9 +61,6 @@ const UNANSWERED: [HeaderName; 4] = [
 #[derive(Default)]
 pub struct Apis {
     table: BTreeMap<String, Api>,
-    /// Where each API's calls are counted with those of every other
-    /// process that counts there, a file an API; without it, here alone.
-    counted: Option<PathBuf>,
 }
 
 struct Api {
@@ -76,7 +69,7 @@ struct Api {
     query: Vec<(String, String)>,
     allow: Option<Vec<Rule>>,
     per_hour: Option<u32>,
-    /// When its calls went, in the last hour.
+    /// When this VM's calls went, in the last hour.
     sent: Mutex<VecDeque<Instant>>,
 }
 
@@ -88,41 +81,7 @@ impl Apis {
             let loaded = Api::load(api).wrap_err_with(|| format!("in api.{name}"))?;
             table.insert(name.clone(), loaded);
         }
-        Ok(Self {
-            table,
-            counted: None,
-        })
-    }
-
-    /// The same, their calls counted in `dir` with every other VM's
-    /// forwarder's.
-    #[must_use]
-    pub fn counted_in(mut self, dir: PathBuf) -> Self {
-        self.counted = Some(dir);
-        self
-    }
-
-    /// Counts one more call of `api`, named `name`, if its hour has room.
-    async fn take(&self, name: &str, api: &Api) -> bool {
-        let Some(per_hour) = api.per_hour else {
-            return true;
-        };
-        if let Some(dir) = &self.counted {
-            let file = dir.join(name);
-            // The file's lock waits for the other forwarders: not on the
-            // runtime's threads.
-            let counted = spawn_blocking(move || counted(&file, per_hour, SystemTime::now()))
-                .await
-                .unwrap_or_else(|error| Err(io::Error::other(error)));
-            match counted {
-                Ok(room) => return room,
-                // Counted here alone, then: an API isn't lost for a file.
-                Err(error) => {
-                    warn!(api = name, %error, "an API's calls can't be counted with the other VMs'");
-                }
-            }
-        }
-        api.take(Instant::now())
+        Ok(Self { table })
     }
 }
 
@@ -137,50 +96,11 @@ pub fn prompt(configured: &BTreeMap<String, config::Api>) -> String {
             line.push_str(&format!(" Only {} allowed.", allow.join(", ")));
         }
         if let Some(per_hour) = api.per_hour {
-            line.push_str(&format!(
-                " At most {per_hour} calls an hour, all chats together."
-            ));
+            line.push_str(&format!(" At most {per_hour} calls an hour from a chat."));
         }
         lines.push(line);
     }
     lines.join("\n")
-}
-
-/// Counts one more call at `now` in `file`, if the hour has room: a line
-/// a call of the last hour, the second it went. The file is locked while
-/// it is read and written, so that the forwarders count as one: a few
-/// file operations, after a wait for whichever of them has the lock.
-fn counted(file: &Path, per_hour: u32, now: SystemTime) -> io::Result<bool> {
-    if let Some(dir) = file.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let mut file = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(file)?;
-    // Until the file is closed.
-    flock(&file, FlockOperation::LockExclusive)?;
-    let mut written = String::new();
-    file.read_to_string(&mut written)?;
-    let now = now
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |now| now.as_secs());
-    let mut sent: Vec<u64> = written
-        .lines()
-        .filter_map(|at| at.parse().ok())
-        .filter(|&at| now.saturating_sub(at) < HOUR.as_secs())
-        .collect();
-    let room = sent.len() < per_hour as usize;
-    if room {
-        sent.push(now);
-    }
-    let written: String = sent.iter().map(|at| format!("{at}\n")).collect();
-    file.set_len(0)?;
-    file.seek(SeekFrom::Start(0))?;
-    file.write_all(written.as_bytes())?;
-    Ok(room)
 }
 
 impl Api {
@@ -257,7 +177,9 @@ impl Api {
             .is_none_or(|allow| allow.iter().any(|rule| rule.allows(method.as_str(), below)))
     }
 
-    /// Counts one more call at `now`, if the hour has room for it.
+    /// Counts one more call at `now`, if the hour has room for it. The
+    /// count is this process's, and starts over with it and with a
+    /// configuration read anew.
     fn take(&self, now: Instant) -> bool {
         let Some(per_hour) = self.per_hour else {
             return true;
@@ -336,7 +258,7 @@ async fn call(
             &format!("{name} doesn't allow {method} {below}"),
         );
     }
-    if !forward.apis.take(name, api).await {
+    if !api.take(Instant::now()) {
         info!(%conversation, api = name, %method, path = %below, "an API's calls ran out for the hour");
         let per_hour = api.per_hour.unwrap_or_default();
         return refuse(

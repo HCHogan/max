@@ -453,7 +453,7 @@ is in [decisions/2026-11-02-host-keyed-apis.md](../decisions/2026-11-02-host-key
     stores `base64(user:password)` and writes `Authorization = "Basic {secret}"`.
   - `allow` lists `METHOD path`, the method possibly `*`; a `*` segment
     matches one segment, a trailing `**` everything below. Without `allow`,
-    everything is allowed. `per_hour` counts across all groups (see
+    everything is allowed. `per_hour` is each chat's own (see
     [A VM's forwarder](vm.md#a-vms-forwarder)).
   - `about`, with the address, `allow` and `per_hour`, is a line of the system
     prompt per API; without a VM, left out.

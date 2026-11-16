@@ -139,16 +139,12 @@ pub async fn run(
         .wrap_err_with(|| format!("listening at {}", socket.display()))?;
     listener.set_nonblocking(true)?;
     let max = Max::at(&dir.join(MAX))?;
-    // Every API's calls are counted beside the VMs' directories, with
-    // the other VMs' forwarders'.
-    let counted = dir.parent().unwrap_or(dir).join("api");
 
     let mut tasks = Scope::new();
     let mut serving = Serving {
         conversation,
         listener,
         max,
-        counted,
         current: CancellationToken::new(),
     };
     serving.serve(&config, &mut tasks)?;
@@ -190,7 +186,6 @@ struct Serving {
     conversation: ConversationId,
     listener: StdListener,
     max: Max,
-    counted: PathBuf,
     /// Ends the server that reads the configuration before the newest.
     current: CancellationToken,
 }
@@ -225,7 +220,7 @@ impl Serving {
     fn app(&self, config: &Forwarded) -> Result<Router> {
         let conversation = self.conversation;
         let agents = llm::Models::new(&config.llm)?.job().transpose()?;
-        let apis = api::Apis::load(&config.api)?.counted_in(self.counted.clone());
+        let apis = api::Apis::load(&config.api)?;
         let max = self.max.clone();
         Ok(service::agents(agents.map(Arc::new))
             .merge(api::router(conversation, Arc::new(apis)))

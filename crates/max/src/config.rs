@@ -176,7 +176,7 @@ pub struct Api {
     pub query: BTreeMap<String, String>,
     /// The calls it allows, such as `POST /emails`; without it, any.
     pub allow: Option<Vec<Rule>>,
-    /// Calls an hour, from all the groups together.
+    /// Calls an hour, from each chat's VM.
     pub per_hour: Option<u32>,
     /// What the model reads about it: what it is for, where its docs are.
     pub about: String,

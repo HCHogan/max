@@ -541,8 +541,7 @@ in
         ExecStart = "${max} forward --dir ${vmDir}/%I";
         Restart = "on-failure";
         RestartSec = 2;
-        # Its socket in the VM's directory, and the APIs' counts beside
-        # the VMs' directories.
+        # Its socket, in the VM's directory.
         ReadWritePaths = [ vmDir ];
         TimeoutStopSec = 10;
       };

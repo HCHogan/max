@@ -314,16 +314,16 @@ push` in the middle. Why this and not more is in
   and it goes on with the last. Nothing secret is written into the VM's
   directory, which cloud-hypervisor may read: the file names the secrets'
   files, and the forwarder reads them.
-- **An API's hourly limit is every chat's together** (tank's Bungie key
-  allows 1,000 calls an hour): the forwarders count an API's calls in one
-  file under `<vm.dir>/api/`, locked while read and written, a line per call
-  of the last hour. A count that can't be kept there is kept in the process,
-  and logged.
+- **An API's hourly limit is each chat's**: a forwarder counts its own
+  VM's calls of the last hour, in memory, and shares nothing with another
+  VM's. The count starts over with the VM's boot, and when the forwarder
+  reads a configuration anew, as when max is back from a deploy.
 - **max keeps no API key**, only their lines in the system prompt. It reads
   the secrets and the models' keys once at startup and lets them go, so that
   a missing one stops max at a deploy, not a forwarder when a VM boots.
 - **A forwarder records nothing**: it has no connection to the database,
-  and a model call's usage isn't read on its way back; see
+  a model call's usage isn't read on its way back, and what it counts of
+  an API is gone with the process; see
   [decisions/2026-11-16-a-forwarder-keeps-no-count.md](../decisions/2026-11-16-a-forwarder-keeps-no-count.md).
 - **vm-check** gives its VM's forwarder a configuration of its own, with a
   provider for the agents that counts what it is asked.
