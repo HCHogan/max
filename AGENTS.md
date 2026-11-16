@@ -63,7 +63,8 @@ of that only `[llm]`, `[api]` and `[log]`
 can't read, and it goes on with the configuration it had until its VM
 boots again. Raise the number too when the forwarders must be new at
 once: with a change to what a forwarder and max say to each other
-(`max.sock`, the link `forward.config`, the routes passed on), or to
+(`max.sock` and the header that names the conversation, the link
+`forward.config`, the routes passed on), or to
 those parts of the configuration that the ones that run mustn't go on
 without. Its tests are `crates/max/src/forwarder/tests.rs` and the
 nested test.

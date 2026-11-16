@@ -9,10 +9,12 @@
 //! the APIs the host keeps the keys of, `/api` (service/forward.rs and
 //! forward/api.rs). An agent's model call, or a `git push` through
 //! `/api`, isn't cut when max is deployed. Everything else it passes on
-//! to max, which listens at `max.sock` beside it: the tools, the
-//! timeline's rows, the units' count. While max is away it says so, 503
-//! with `max-away`, with nothing of the request passed on, and the
-//! guest's client asks again.
+//! to max: the tools, the timeline's rows, the units' count. max listens
+//! for every VM's forwarder at one socket, `max.sock` beside the VMs'
+//! directories, and each forwarder says which conversation's VM it
+//! speaks for, in a header a guest can't set. While max is away it says
+//! so, 503 with `max-away`, with nothing of the request passed on, and
+//! the guest's client asks again.
 //!
 //! Which configuration it reads is a link in the VM's directory,
 //! `forward.config`, which max makes when it boots the VM and makes
@@ -21,7 +23,7 @@
 //! and keys reach a forwarder that runs when the new max is back,
 //! without a restart of its own. A configuration this build can't read,
 //! as a newer one may be, is left, and it goes on with the one it has.
-//! See "A VM's forwarder" in docs/rust-rewrite.md.
+//! See "A VM's forwarder" in docs/design/vm.md.
 
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::net::UnixListener as StdListener;
@@ -33,7 +35,7 @@ use axum::Router;
 use axum::body::Body;
 use axum::extract::Request;
 use axum::http::header::{self, HeaderName};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use color_eyre::eyre::{Result, WrapErr, eyre};
 use max_core::ids::ConversationId;
@@ -51,8 +53,12 @@ use crate::service::{self, api};
 /// Where the guest's calls arrive: the hybrid vsock's port 7777, as
 /// cloud-hypervisor names its socket.
 pub const SOCKET: &str = "notify.vsock_7777";
-/// Where max listens for what a forwarder passes on.
+/// Where max listens for what the forwarders pass on, beside the VMs'
+/// directories: one socket for them all.
 pub const MAX: &str = "max.sock";
+/// The header a forwarder names its VM's conversation to max with. What
+/// a guest sends under the name doesn't go on.
+pub const CONVERSATION: &str = "max-conversation";
 /// The link to the configuration a VM's forwarder reads.
 pub const CONFIG: &str = "forward.config";
 
@@ -138,7 +144,7 @@ pub async fn run(
     let listener = StdListener::bind(&socket)
         .wrap_err_with(|| format!("listening at {}", socket.display()))?;
     listener.set_nonblocking(true)?;
-    let max = Max::at(&dir.join(MAX))?;
+    let max = Max::at(&dir.parent().unwrap_or(dir).join(MAX), conversation)?;
 
     let mut tasks = Scope::new();
     let mut serving = Serving {
@@ -231,23 +237,28 @@ impl Serving {
     }
 }
 
-/// max, as a forwarder reaches it: its socket beside the forwarder's.
+/// max, as a VM's forwarder reaches it: its socket, and whose VM the
+/// forwarder speaks for.
 #[derive(Clone)]
 pub struct Max {
     client: reqwest::Client,
+    conversation: HeaderValue,
 }
 
 impl Max {
-    /// max at `socket`. Each request is a connection of its own: one
-    /// kept from before max restarted would fail a call that max never
-    /// saw, with no way to tell.
-    pub fn at(socket: &Path) -> Result<Self> {
+    /// max at `socket`, for the VM of `conversation`. Each request is a
+    /// connection of its own: one kept from before max restarted would
+    /// fail a call that max never saw, with no way to tell.
+    pub fn at(socket: &Path, conversation: ConversationId) -> Result<Self> {
         let client = reqwest::Client::builder()
             .unix_socket(socket)
             .pool_max_idle_per_host(0)
             .no_proxy()
             .build()?;
-        Ok(Self { client })
+        Ok(Self {
+            client,
+            conversation: HeaderValue::from(conversation.0),
+        })
     }
 
     /// Passes `request` on to max, and its answer back as it comes: a
@@ -267,6 +278,8 @@ impl Max {
         for hop in &HOP {
             headers.remove(hop);
         }
+        // Whatever the guest wrote there is replaced.
+        headers.insert(CONVERSATION, self.conversation.clone());
         let sending = self
             .client
             .request(parts.method, format!("http://max{whole}"))

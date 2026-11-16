@@ -18,11 +18,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use color_eyre::eyre::Result;
+use color_eyre::eyre::{Result, WrapErr};
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
 use max_core::ids::ConversationId;
 use serde::Deserialize;
+use tokio::net::UnixListener;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot;
 use tokio::time::{Instant, MissedTickBehavior, interval, timeout};
@@ -34,7 +35,7 @@ use self::ssh::{Closes, Command, Connection};
 use crate::config;
 use crate::conversation::{Heard, Signal};
 use crate::scope::Scope;
-use crate::service;
+use crate::{forwarder, service};
 
 /// How often idle and dead VMs are looked for, and kept ones that are
 /// down are started.
@@ -73,7 +74,18 @@ pub fn work(dir: &Path, conversation: ConversationId) -> PathBuf {
     dir.join(conversation.0.to_string()).join("work")
 }
 
-/// What a VM's own route asks of the service, and what its tasks tell it.
+/// Listens where the VMs' forwarders pass on what their guests ask of
+/// max: `max.sock` in `dir`, beside the VMs' directories, one socket for
+/// them all (`crate::forwarder`). A socket an earlier max left there is
+/// replaced.
+fn listen(dir: &Path) -> Result<UnixListener> {
+    let socket = dir.join(forwarder::MAX);
+    let _ = std::fs::remove_file(&socket);
+    UnixListener::bind(&socket).wrap_err_with(|| format!("listening at {}", socket.display()))
+}
+
+/// What the VMs' own route asks of the service, and what its tasks tell
+/// it.
 enum Internal {
     /// `maxx units apply` ran: the group has `count` units.
     Units {
@@ -150,8 +162,20 @@ impl Vms {
                 .map(|&id| ConversationId(id))
                 .collect(),
         );
+        // Where every VM's forwarder passes on what its guest asks of
+        // max: the tools, the timeline's rows, the units' count.
+        let listener = listen(&config.dir)?;
+        let (internal, internal_rx) = mpsc::unbounded_channel();
+        let host = host::router(internal.clone());
+        let calls = signals.clone();
+        scope.spawn(move |stop| {
+            // The timeline's streams end with the service, which waits
+            // for them.
+            let host = host.merge(events::router(calls.clone(), stop.clone()));
+            service::serve(listener, service::router(calls, host), stop)
+        });
         let (requests, rx) = mpsc::unbounded_channel();
-        scope.spawn(move |_| run(config, guest, signals, rx));
+        scope.spawn(move |_| run(config, guest, signals, rx, (internal, internal_rx)));
         Ok(Self {
             requests,
             apis,
@@ -307,9 +331,9 @@ struct Running {
     machine: Machine,
     connection: Arc<Connection>,
     closes: Closes,
-    /// The closer, which closes the channels of calls dropped early, the
-    /// task that asks the guest what runs, and max's service to the VM with
-    /// its port to the VM service: they end when max lets go of the VM.
+    /// The closer, which closes the channels of calls dropped early, and
+    /// the task that asks the guest what runs: they end when max lets go
+    /// of the VM.
     _tasks: Scope,
     work: Arc<PathBuf>,
     lent: Arc<()>,
@@ -387,9 +411,9 @@ async fn run(
     guest: Guest,
     signals: UnboundedSender<Signal>,
     mut requests: UnboundedReceiver<Request>,
+    (internal, mut internal_rx): (UnboundedSender<Internal>, UnboundedReceiver<Internal>),
 ) {
     let (booted, mut booted_rx) = mpsc::unbounded_channel();
-    let (internal, mut internal_rx) = mpsc::unbounded_channel();
     let dir = config.dir.clone();
     let mut service = Service {
         idle: idle(&config),
@@ -618,7 +642,6 @@ impl Service {
         };
         warn!(%conversation, "the connection to a VM is gone; attaching to it again");
         let (slot, units, stale) = (running.slot, running.units, running.stale);
-        // Its tasks end, and the service's socket is free to bind again.
         drop(running);
         // Whatever it was switched to stands: only the connection is new.
         let attached = Attached {
@@ -688,7 +711,6 @@ impl Service {
         let Booted {
             machine,
             connection,
-            listener,
         } = match result {
             Ok(booted) => booted,
             Err(unusable) => {
@@ -778,14 +800,6 @@ impl Service {
                 }
             });
         }
-        let host = host::router(conversation, self.internal.clone());
-        let signals = self.signals.clone();
-        tasks.spawn(move |stop| {
-            // The timeline's streams end with the service, which waits for them.
-            let calls = signals.clone();
-            let host = host.merge(events::router(conversation, signals, stop.clone()));
-            service::serve(listener, conversation, calls, host, stop)
-        });
         let mut running = Running {
             slot,
             machine,

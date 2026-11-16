@@ -44,16 +44,28 @@ fn vm() -> PathBuf {
     dir
 }
 
-/// A stand-in for max at `dir`'s socket: it says what it was asked, and
-/// streams two rows.
+/// Where max listens for the forwarder of the VM whose directory is
+/// `dir`: beside it.
+fn socket(dir: &Path) -> PathBuf {
+    dir.parent().unwrap().join(MAX)
+}
+
+/// A stand-in for max at its socket beside `dir`: it says what it was
+/// asked, and streams two rows.
 fn max(scope: &mut Scope, dir: &Path) {
-    let listener = UnixListener::bind(dir.join(MAX)).unwrap();
+    let listener = UnixListener::bind(socket(dir)).unwrap();
     let asked = |method: Method, uri: Uri, headers: HeaderMap, body: Bytes| async move {
         let kept = headers.get("x-kept").and_then(|kept| kept.to_str().ok());
+        let from: Vec<&str> = headers
+            .get_all(CONVERSATION)
+            .iter()
+            .filter_map(|from| from.to_str().ok())
+            .collect();
         let said = json!({
             "method": method.as_str(),
             "asked": uri.to_string(),
             "kept": kept,
+            "from": from,
             "host": headers.get("host").and_then(|host| host.to_str().ok()),
             "body": String::from_utf8_lossy(&body),
         });
@@ -155,12 +167,14 @@ async fn a_forwarder_carries_its_own_and_passes_the_rest_to_max() {
     assert_eq!(away.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(away.headers()["max-away"], "1");
 
-    // Once max is back it is passed on as it was asked, and the answer
-    // comes back as max gave it.
+    // Once max is back it is passed on as it was asked, named as this
+    // VM's whatever the guest says of itself, and the answer comes back
+    // as max gave it.
     max(&mut scope, &dir);
     let answer = guest
         .post("http://host/tools/say?now=1")
         .header("x-kept", "yes")
+        .header(CONVERSATION, "9")
         .body("{\"text\":\"好\"}")
         .send()
         .await
@@ -174,6 +188,7 @@ async fn a_forwarder_carries_its_own_and_passes_the_rest_to_max() {
             "method": "POST",
             "asked": "/tools/say?now=1",
             "kept": "yes",
+            "from": ["7"],
             "host": "max",
             "body": "{\"text\":\"好\"}",
         })
@@ -239,7 +254,7 @@ async fn a_forwarder_carries_its_own_and_passes_the_rest_to_max() {
 #[tokio::test]
 async fn a_call_ends_at_max_as_it_ends_at_the_guest() {
     let dir = vm();
-    let listener = UnixListener::bind(dir.join(MAX)).unwrap();
+    let listener = UnixListener::bind(socket(&dir)).unwrap();
     let (heard, mut hears) = tokio::sync::mpsc::unbounded_channel();
     let mut scope = Scope::new();
     scope.spawn(move |_| async move {
@@ -256,7 +271,7 @@ async fn a_call_ends_at_max_as_it_ends_at_the_guest() {
         let _ = second.shutdown().await;
         let _ = heard.send(if gone == 0 { "gone" } else { "more" });
     });
-    let max = Max::at(&dir.join(MAX)).unwrap();
+    let max = Max::at(&socket(&dir), ConversationId(7)).unwrap();
     let request = || {
         Request::builder()
             .method(Method::POST)

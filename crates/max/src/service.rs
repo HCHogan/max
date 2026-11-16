@@ -19,7 +19,7 @@ mod web_search;
 pub(crate) mod work;
 
 pub use forward::{api, router as agents};
-pub use http::serve;
+pub use http::{Calling, router, serve};
 pub use mute_member::MuteMember;
 
 #[cfg(test)]
@@ -173,11 +173,27 @@ fn arguments<T: DeserializeOwned>(tool: &str, args: Value) -> Result<T, Failure>
 /// What stands in for the conversations' actors, where a test has none.
 #[cfg(test)]
 pub mod testing {
+    use axum::Router;
+    use axum::extract::Request;
+    use axum::http::HeaderValue;
+    use axum::middleware::map_request;
+    use max_core::ids::ConversationId;
     use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 
     use super::{Context, call};
     use crate::conversation::Signal;
+    use crate::forwarder::CONVERSATION;
     use crate::scope::Scope;
+
+    /// `app` as the VM of `conversation` reaches it: every request named
+    /// as that VM's forwarder would name it, where a test has none.
+    pub fn named(conversation: ConversationId, app: Router) -> Router {
+        app.layer(map_request(move |mut request: Request| async move {
+            let named = HeaderValue::from(conversation.0);
+            request.headers_mut().insert(CONVERSATION, named);
+            request
+        }))
+    }
 
     /// Where a service's calls go, each run in `context` by a task of
     /// `scope`, as its conversation's actor would run it.

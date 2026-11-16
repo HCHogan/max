@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
+use max_core::ids::ConversationId;
 use max_core::message::{Draft, DraftNode};
 use serde_json::{Value, json};
 use sqlx::PgPool;
@@ -16,7 +17,7 @@ use super::*;
 use crate::conversation::Place;
 use crate::conversation::testing::{from_xiaoming, group, offset, text};
 use crate::scope::Scope;
-use crate::service::Services;
+use crate::service::{Services, testing};
 
 const PATIENCE: Duration = Duration::from_secs(5);
 const MAXX: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../nix/maxx.js");
@@ -28,12 +29,8 @@ async fn served(scope: &mut Scope) -> (String, UnboundedReceiver<Signal>) {
     let url = format!("http://{}/events", listener.local_addr().unwrap());
     let (signals, asked) = mpsc::unbounded_channel();
     scope.spawn(move |stop| async move {
-        let app = beating(
-            ConversationId(7),
-            signals,
-            stop.clone(),
-            Duration::from_millis(200),
-        );
+        let app = beating(signals, stop.clone(), Duration::from_millis(200));
+        let app = testing::named(ConversationId(7), app);
         let _ = axum::serve(listener, app)
             .with_graceful_shutdown(stop.cancelled_owned())
             .await;

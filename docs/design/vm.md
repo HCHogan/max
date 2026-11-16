@@ -37,8 +37,8 @@ Only declarative configuration applied at boot needs root, all in NixOS:
 
 - max picks a free slot (with none free, it stops the VM unused longest
   that is neither in use, busy nor kept on), prepares `work` and
-  `nix.img` under `<vm.dir>/<conversation id>/`, binds the service's socket
-  there, and writes three files: `boot.env`, which the unit reads (the tap,
+  `nix.img` under `<vm.dir>/<conversation id>/`, and writes three files:
+  `boot.env`, which the unit reads (the tap,
   the sizes, the kernel, the initrd and the command line); `boot.json`,
   which the next max reads (the slot, the guest's contract, the image,
   whether with Max's units); and `ssh.key`, the key made for this boot. Then
@@ -74,9 +74,7 @@ is in [decisions/2026-11-12-lifetimes-to-systemd.md](../decisions/2026-11-12-lif
 
 - **Attaching**: when max starts, it lists the active `maxx-vm@` units and
   attaches to each (`Service::attach`): it reads `boot.json`, takes the
-  VM's slot, binds the service's socket again (that one alone; the VM's own
-  sockets are the VM's) and logs in with the saved key within 10 seconds
-  (`ATTACH`). Its idle time counts from then. A VM max can't use is stopped,
+  VM's slot and logs in with the saved key within 10 seconds (`ATTACH`). Its idle time counts from then. A VM max can't use is stopped,
   and boots again when next needed (at once, if kept on): one without a
   record, one whose slot isn't free for it, one whose guest keeps another
   contract.
@@ -293,9 +291,14 @@ push` in the middle. Why this and not more is in
 - **The front door**: the forwarder listens where cloud-hypervisor connects
   when the guest connects to the host's port, `notify.vsock_7777` in the
   VM's directory. It answers `/llm` and `/api` itself (`service/forward.rs`,
-  `forward/api.rs`) and passes everything else to max at `max.sock` beside
-  it: the tools, `/events`, `/units`. So nothing in a group's `/work` that
-  names `127.0.0.1:7777`, a git remote among them, had to change.
+  `forward/api.rs`) and passes everything else to max: the tools,
+  `/events`, `/units`. So nothing in a group's `/work` that names
+  `127.0.0.1:7777`, a git remote among them, had to change.
+- **max listens for every forwarder at one socket**, `<vm.dir>/max.sock`,
+  beside the VMs' directories. A forwarder is one VM's, and names its
+  conversation to max in a header, `max-conversation`, in place of whatever
+  the guest wrote under that name (`service::Calling`). Only max's user
+  reaches the socket, so nothing in a VM speaks for another's.
 - **While max is away** the forwarder answers 503 with `max-away`, and the
   guest's client asks again. A request max had and didn't answer is a failed
   call, `closed`, which may have acted. A request the guest drops is dropped

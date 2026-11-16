@@ -1,7 +1,8 @@
-//! The VM service's own route on max's service to each group's VM: `maxx units apply`
-//! POSTs `{"units": 2}` to `/units` and gets `{"ok": true, "said": "…"}`
-//! back. Which group it comes from is the VM's own socket's to say, so
-//! there is no token. See "Resident programs" in docs/rust-rewrite.md.
+//! The VM service's own route on max's service to the groups' VMs: `maxx
+//! units apply` POSTs `{"units": 2}` to `/units` and gets `{"ok": true,
+//! "said": "…"}` back. Which group it comes from is the VM's forwarder's
+//! to say (`service::Calling`), so there is no token. See "Resident
+//! programs" in docs/design/jobs.md.
 
 use std::time::Duration;
 
@@ -18,6 +19,7 @@ use tokio::sync::oneshot;
 use tokio::time::timeout;
 
 use super::Internal;
+use crate::service::Calling;
 
 /// How long Max has to answer.
 const WAIT: Duration = Duration::from_secs(10);
@@ -43,37 +45,38 @@ impl Answer {
     }
 }
 
-#[derive(Clone)]
-struct Host {
-    conversation: ConversationId,
-    service: UnboundedSender<Internal>,
+pub fn router(service: UnboundedSender<Internal>) -> Router {
+    Router::new()
+        .route("/units", post(units))
+        .with_state(service)
 }
 
-pub fn router(conversation: ConversationId, service: UnboundedSender<Internal>) -> Router {
-    Router::new().route("/units", post(units)).with_state(Host {
-        conversation,
-        service,
-    })
-}
-
-async fn units(State(host): State<Host>, body: Bytes) -> impl IntoResponse {
-    let answer = answered(&host, &body).await;
+async fn units(
+    State(service): State<UnboundedSender<Internal>>,
+    Calling(conversation): Calling,
+    body: Bytes,
+) -> impl IntoResponse {
+    let answer = answered(&service, conversation, &body).await;
     let json = serde_json::to_string(&answer).expect("an answer is JSON");
     ([(header::CONTENT_TYPE, "application/json")], json)
 }
 
-async fn answered(host: &Host, body: &[u8]) -> Answer {
+async fn answered(
+    service: &UnboundedSender<Internal>,
+    conversation: ConversationId,
+    body: &[u8],
+) -> Answer {
     let units = match serde_json::from_slice::<Units>(body) {
         Ok(Units { units }) => units,
         Err(error) => return Answer::refused(format!("can't make out the request: {error}")),
     };
     let (reply, said) = oneshot::channel();
     let asked = Internal::Units {
-        conversation: host.conversation,
+        conversation,
         count: units,
         reply,
     };
-    if host.service.send(asked).is_err() {
+    if service.send(asked).is_err() {
         return Answer::refused("Max is stopping");
     }
     match timeout(WAIT, said).await {
@@ -87,13 +90,14 @@ async fn answered(host: &Host, body: &[u8]) -> Answer {
 mod tests {
     use super::*;
     use crate::scope::Scope;
+    use crate::service::testing;
 
     #[tokio::test]
     async fn the_units_are_answered_by_the_service() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}/units", listener.local_addr().unwrap());
         let (service, mut asked) = tokio::sync::mpsc::unbounded_channel();
-        let app = router(ConversationId(7), service);
+        let app = testing::named(ConversationId(7), router(service));
         let mut scope = Scope::new();
         scope.spawn(move |stop| async move {
             let _ = axum::serve(listener, app)

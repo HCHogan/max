@@ -5,7 +5,6 @@ use std::time::Duration;
 use axum::body::{Body, Bytes};
 use axum::routing::post;
 use futures_util::StreamExt;
-use max_core::ids::ConversationId;
 use max_core::item::Protocol;
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -14,7 +13,6 @@ use tokio::net::{TcpListener, UnixListener, UnixStream};
 use super::router;
 use crate::llm::{Upstream, Upstreams};
 use crate::scope::Scope;
-use crate::service::serve;
 
 /// What the provider was asked: the authorization, and the body.
 type Asked = Arc<Mutex<Vec<(Option<String>, String)>>>;
@@ -124,19 +122,20 @@ fn two(base_url: &str) -> Upstreams {
     upstreams
 }
 
-/// The service of a VM of conversation 7 at a socket in a directory of
-/// its own, with the `model`s it may call.
+/// `/llm` for a VM at a socket in a directory of its own, with the
+/// `model`s it may call.
 fn vm(scope: &mut Scope, name: &str, model: Option<Upstreams>) -> (PathBuf, PathBuf) {
-    let conversation = ConversationId(7);
     let dir = std::env::temp_dir().join(format!("max-forward-{name}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let socket = dir.join("mine.sock");
     let _ = std::fs::remove_file(&socket);
     let listener = UnixListener::bind(&socket).unwrap();
-    let host = router(model.map(Arc::new));
-    // Nothing calls a tool here.
-    let calls = tokio::sync::mpsc::unbounded_channel().0;
-    scope.spawn(move |stop| serve(listener, conversation, calls, host, stop));
+    let app = router(model.map(Arc::new));
+    scope.spawn(move |stop| async move {
+        let _ = axum::serve(listener, app)
+            .with_graceful_shutdown(stop.cancelled_owned())
+            .await;
+    });
     (dir, socket)
 }
 

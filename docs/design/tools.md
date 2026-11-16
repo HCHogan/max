@@ -196,8 +196,8 @@ one caller, is in
 - **The channel**: with cloud-hypervisor's hybrid vsock, a guest connecting
   to a port on the host lands on the UNIX socket `<vsock socket>_<port>`.
   The VM's forwarder listens at `notify.vsock_7777` and passes the tools'
-  calls on to max at `max.sock` (see [A VM's forwarder](vm.md#a-vms-forwarder));
-  which VM is calling is known from the socket's path. In the guest,
+  calls on to max (see [A VM's forwarder](vm.md#a-vms-forwarder)); which VM
+  is calling is what its forwarder says, which is that VM's alone. In the guest,
   `127.0.0.1:7777` is forwarded to that port by the socket-activated
   `max-host` (one socat per connection to vsock 2:7777), and every client is
   given `http://127.0.0.1:7777` (`MAXX_URL`). The host stays unreachable at

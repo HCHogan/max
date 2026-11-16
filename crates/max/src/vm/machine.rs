@@ -18,7 +18,6 @@ use russh::keys::{Algorithm, PrivateKey};
 use serde::{Deserialize, Serialize};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
-use tokio::net::UnixListener;
 use tokio::process::Command;
 use tokio::time::{Instant, sleep, timeout_at};
 use tracing::warn;
@@ -300,12 +299,10 @@ fn conversation(name: &str, prefix: &str) -> Option<ConversationId> {
     instance.parse().ok().map(ConversationId)
 }
 
-/// A VM max can use: its unit, the SSH connection, and where its programs
-/// call max's service.
+/// A VM max can use: its unit, and the SSH connection.
 pub struct Booted {
     pub machine: Machine,
     pub connection: Connection,
-    pub listener: UnixListener,
 }
 
 /// Boots `conversation`'s VM on `slot`, the slot `index`; without the
@@ -322,10 +319,8 @@ pub async fn boot(
     let dir = &machine.dir;
     fs::create_dir_all(dir.join("work")).await?;
     disk(config, &dir.join("nix.img")).await?;
-    // The VM's forwarder passes the guest's calls on to here, so it
-    // listens before the guest boots; and the forwarder, which starts
-    // with the VM's unit, is told which configuration to read.
-    let listener = listen(dir).await?;
+    // The VM's forwarder, which starts with the VM's unit, is told which
+    // configuration to read.
     forwarder::configure(dir, &config.configuration)
         .await
         .wrap_err("naming the configuration to the VM's forwarder")?;
@@ -394,7 +389,6 @@ pub async fn boot(
                 return Ok(Booted {
                     machine,
                     connection,
-                    listener,
                 });
             }
             Err(error) => error,
@@ -412,8 +406,7 @@ pub async fn boot(
     }
 }
 
-/// Attaches to `conversation`'s VM, which runs: binds the socket its
-/// programs reach max's service on again, and logs in with the key its
+/// Attaches to `conversation`'s VM, which runs: logs in with the key its
 /// boot left. None if its unit has ended: there is nothing to attach to,
 /// and its socket, which stays, would only be waited on.
 pub async fn attach(config: &config::Vm, conversation: ConversationId) -> Result<Option<Booted>> {
@@ -424,7 +417,6 @@ pub async fn attach(config: &config::Vm, conversation: ConversationId) -> Result
     let dir = &machine.dir;
     let key = fs::read(dir.join(KEY)).await.wrap_err("reading its key")?;
     let key = Arc::new(PrivateKey::from_openssh(key)?);
-    let listener = listen(dir).await?;
     // This max's configuration, for the forwarder that has run since
     // the VM booted: a deploy's models and keys reach it so.
     forwarder::configure(dir, &config.configuration)
@@ -439,7 +431,6 @@ pub async fn attach(config: &config::Vm, conversation: ConversationId) -> Result
     Ok(Some(Booted {
         machine,
         connection,
-        listener,
     }))
 }
 
@@ -496,18 +487,6 @@ async fn link(image: &Path, root: &Path) {
     if let Err(error) = fs::symlink(image, root).await {
         warn!(root = %root.display(), %error, "couldn't root a VM's image");
     }
-}
-
-/// Listens where the VM's forwarder passes on what the guest asks of max:
-/// `max.sock` in the VM's directory. The guest's own port,
-/// `notify.vsock_7777`, is the forwarder's, a unit that runs for as long
-/// as the VM does (`crate::forwarder`); max had it until 2026-11-14. Only
-/// this socket is replaced: the VM's own, which it made, are its to keep
-/// while it runs (on 2026-11-03 a second start replaced a running VM's).
-async fn listen(dir: &Path) -> Result<UnixListener> {
-    let socket = dir.join(forwarder::MAX);
-    let _ = fs::remove_file(&socket).await;
-    UnixListener::bind(&socket).wrap_err_with(|| format!("listening at {}", socket.display()))
 }
 
 /// Writes `bytes` to `path`, a file only max reads.
@@ -572,6 +551,8 @@ async fn disk(config: &config::Vm, image: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use tokio::net::UnixListener;
+
     use super::*;
 
     #[tokio::test]

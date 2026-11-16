@@ -36,4 +36,9 @@
 # is the forwarder's now, which answers /llm and /api itself and passes
 # the rest on to max. A VM an older max booted has none, and nothing
 # listens where its guest calls: it boots again.
-6
+#
+# 7 (2026-11-16): one socket. max listens for every VM's forwarder at
+# max.sock beside the VMs' directories, and a forwarder names its VM's
+# conversation in a header. A forwarder from before looks for max in its
+# own VM's directory, where nothing listens any more: its VM boots again.
+7

@@ -1,20 +1,21 @@
-//! Max's tools over HTTP, on a unix socket per VM: `GET /tools` lists
-//! them, with their schemas, and `POST /tools/<name>`, with the arguments
-//! as a JSON object, calls one. The answer is the call's outcome, `{"ok":
-//! true, "value": …}` or `{"ok": false, "error": {"code", "message"}}`;
-//! a call is cancelled by closing its connection, which drops it. A call
-//! is the VM's: the socket says which conversation it is, whose actor runs
-//! it, and nothing says which program in the VM made it. A turn's program,
-//! a background command, an agent and a unit of Max's own call alike, and
-//! have every tool. Until 2026-11-14 this was a slice of MCP, which
-//! nothing but the guest's own client spoke any more; see "The guest's
-//! calls" in docs/rust-rewrite.md.
+//! Max's tools over HTTP, on the unix socket the VMs' forwarders reach
+//! max at: `GET /tools` lists them, with their schemas, and `POST
+//! /tools/<name>`, with the arguments as a JSON object, calls one. The
+//! answer is the call's outcome, `{"ok": true, "value": …}` or `{"ok":
+//! false, "error": {"code", "message"}}`; a call is cancelled by closing
+//! its connection, which drops it. A call is the VM's: its forwarder says
+//! which conversation it is ([`Calling`]), whose actor runs it, and
+//! nothing says which program in the VM made it. A turn's program, a
+//! background command, an agent and a unit of Max's own call alike, and
+//! have every tool. See "The guest's calls" in docs/design/tools.md.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use axum::body::Bytes;
-use axum::extract::{Path, State};
+use axum::extract::{FromRequestParts, Path, State};
+use axum::http::request::Parts;
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -30,6 +31,7 @@ use tracing::warn;
 use super::Failure;
 use super::tool::{self, Spec};
 use crate::conversation::Signal;
+use crate::forwarder::CONVERSATION;
 use max_core::limits::{CALLS_AT_ONCE, Setting};
 
 /// What a call that didn't finish may still have done. Nothing is retried
@@ -38,45 +40,64 @@ use max_core::limits::{CALLS_AT_ONCE, Setting};
 const MAYBE_DONE: &str =
     "what acts in the chat may have taken effect: look at the records before trying again";
 
-/// Serves the VM of `conversation` on `listener` until `stop`: the tools,
-/// whose calls go to the conversation's actor through `calls`, and the VM
-/// service's own routes, `host`. A VM's listener is a unix socket; tests'
-/// are TCP, which Node's fetch reaches.
-pub async fn serve<L>(
-    listener: L,
-    conversation: ConversationId,
-    calls: UnboundedSender<Signal>,
-    host: axum::Router,
-    stop: CancellationToken,
-) where
-    L: axum::serve::Listener,
-    L::Addr: std::fmt::Debug,
-{
+/// max's service to the VMs: the tools, whose calls go to their
+/// conversations' actors through `calls`, and the VM service's own
+/// routes, `host`.
+pub fn router(calls: UnboundedSender<Signal>, host: axum::Router) -> axum::Router {
     let handler = Handler {
-        conversation,
         calls,
-        slots: Arc::new(Semaphore::new(CALLS_AT_ONCE)),
+        slots: Arc::default(),
     };
-    let app = axum::Router::new()
+    axum::Router::new()
         .route("/tools", get(list))
         .route("/tools/{name}", post(call))
         .with_state(handler)
-        .merge(host);
+        .merge(host)
+}
+
+/// Serves `app` to the VMs on `listener` until `stop`. The VMs'
+/// forwarders reach it at a unix socket; tests' are TCP, which Node's
+/// fetch reaches.
+pub async fn serve<L>(listener: L, app: axum::Router, stop: CancellationToken)
+where
+    L: axum::serve::Listener,
+    L::Addr: std::fmt::Debug,
+{
     if let Err(error) = axum::serve(listener, app)
         .with_graceful_shutdown(stop.cancelled_owned())
         .await
     {
-        warn!(%conversation, %error, "the service to a VM stopped");
+        warn!(%error, "the service to the VMs stopped");
+    }
+}
+
+/// The conversation whose VM a request comes from, as the VM's forwarder
+/// names it (`crate::forwarder`). Only the forwarders reach the socket,
+/// and what a guest writes under the name they replace, so nothing in a
+/// VM can speak for another's.
+pub struct Calling(pub ConversationId);
+
+impl<S: Sync> FromRequestParts<S> for Calling {
+    type Rejection = Response;
+
+    async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Response> {
+        let named = parts.headers.get(CONVERSATION);
+        let conversation = named.and_then(|named| named.to_str().ok()?.parse().ok());
+        conversation
+            .map(|conversation| Self(ConversationId(conversation)))
+            .ok_or_else(|| {
+                let unnamed = Failure::new("bad_request", "the request names no VM");
+                answer(StatusCode::BAD_REQUEST, &outcome(Err(unnamed)))
+            })
     }
 }
 
 #[derive(Clone)]
 struct Handler {
-    conversation: ConversationId,
     /// To the conversations' actors, through the table.
     calls: UnboundedSender<Signal>,
-    /// How many calls the VM makes at once; more wait their turn.
-    slots: Arc<Semaphore>,
+    /// How many calls a VM makes at once; more wait their turn.
+    slots: Arc<Mutex<HashMap<ConversationId, Arc<Semaphore>>>>,
 }
 
 /// Every tool, those the prompt doesn't declare too.
@@ -94,7 +115,12 @@ fn answer(status: StatusCode, body: &Value) -> Response {
 /// A call of the tool `name`, its arguments the body: a JSON object, or
 /// nothing for none. Its outcome is the answer, whichever way it went;
 /// what isn't a call is 400, with why as a failed call's.
-async fn call(State(handler): State<Handler>, Path(name): Path<String>, body: Bytes) -> Response {
+async fn call(
+    State(handler): State<Handler>,
+    Calling(conversation): Calling,
+    Path(name): Path<String>,
+    body: Bytes,
+) -> Response {
     let args = if body.is_empty() {
         Ok(Map::new())
     } else {
@@ -107,7 +133,7 @@ async fn call(State(handler): State<Handler>, Path(name): Path<String>, body: By
         );
         return answer(StatusCode::BAD_REQUEST, &outcome(Err(wrong)));
     };
-    match handler.call(&name, Value::Object(args)).await {
+    match handler.call(conversation, &name, Value::Object(args)).await {
         // With nothing done, Max stopping: as the guest answers once max
         // is gone, 503 with `max-away`, so that the caller asks again
         // when Max is back (nix/client.js).
@@ -133,12 +159,22 @@ impl Handler {
     /// stops it when this stops waiting, as when the caller closes its
     /// connection. One that comes as Max stops isn't begun, and is away;
     /// one Max stopped in the middle of isn't, since it may have acted.
-    async fn call(&self, tool: &str, args: Value) -> Result<Value, Failure> {
+    async fn call(
+        &self,
+        conversation: ConversationId,
+        tool: &str,
+        args: Value,
+    ) -> Result<Value, Failure> {
+        let slots = {
+            let mut slots = self.slots.lock().unwrap_or_else(PoisonError::into_inner);
+            let slots = slots.entry(conversation);
+            Arc::clone(slots.or_insert_with(|| Arc::new(Semaphore::new(CALLS_AT_ONCE))))
+        };
         let call = async {
-            let _slot = self.slots.acquire().await;
+            let _slot = slots.acquire().await;
             let (reply, result) = oneshot::channel();
             let call = Signal::Call {
-                conversation: self.conversation,
+                conversation,
                 tool: tool.to_owned(),
                 args,
                 reply,
@@ -216,7 +252,8 @@ mod tests {
         let listener = UnixListener::bind(socket).unwrap();
         let conversation = context.place.conversation;
         let calls = testing::answering(scope, context);
-        scope.spawn(move |stop| serve(listener, conversation, calls, axum::Router::new(), stop));
+        let app = testing::named(conversation, router(calls, axum::Router::new()));
+        scope.spawn(move |stop| serve(listener, app, stop));
     }
 
     /// Asks at `socket` with `method` for `path`, `body` sent as JSON:
@@ -320,8 +357,8 @@ mod tests {
         let listener = UnixListener::bind(&socket).unwrap();
         let (calls, mut called) = tokio::sync::mpsc::unbounded_channel();
         let mut scope = Scope::new();
-        let conversation = ConversationId(1);
-        scope.spawn(move |stop| serve(listener, conversation, calls, axum::Router::new(), stop));
+        let app = testing::named(ConversationId(1), router(calls, axum::Router::new()));
+        scope.spawn(move |stop| serve(listener, app, stop));
         let say = json!({ "text": "在吗" }).to_string();
         let asked = || exchanged(&socket, "POST", "/tools/say", &say);
         let away = |head: &str| {
@@ -354,6 +391,58 @@ mod tests {
         drop(called);
         let (head, body) = asked().await;
         assert!(away(&head) && body.is_empty(), "{head}\n{body}");
+
+        scope.close(Duration::from_secs(5)).await;
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A call is the VM's that its forwarder names; a request that names
+    /// none is nobody's.
+    #[tokio::test]
+    async fn a_call_is_the_vms_its_request_names() {
+        let dir = sockets("named");
+        let socket = dir.join("mine.sock");
+        let _ = std::fs::remove_file(&socket);
+        let listener = UnixListener::bind(&socket).unwrap();
+        let (calls, mut called) = tokio::sync::mpsc::unbounded_channel();
+        let mut scope = Scope::new();
+        let app = router(calls, axum::Router::new());
+        scope.spawn(move |stop| serve(listener, app, stop));
+        let asked = async |named: &str| {
+            let request = format!(
+                "POST /tools/say HTTP/1.1\r\nHost: max\r\n{named}Content-Length: 2\r\n\
+                 Connection: close\r\n\r\n{{}}"
+            );
+            let mut stream = UnixStream::connect(&socket).await.unwrap();
+            stream.write_all(request.as_bytes()).await.unwrap();
+            let mut reply = String::new();
+            stream.read_to_string(&mut reply).await.unwrap();
+            reply
+        };
+
+        let actor = async {
+            let Some(Signal::Call {
+                conversation,
+                reply,
+                ..
+            }) = called.recv().await
+            else {
+                panic!("no call came");
+            };
+            let _ = reply.send(Ok(json!({ "of": conversation.0 })));
+        };
+        let (reply, ()) = tokio::join!(asked("max-conversation: 9\r\n"), actor);
+        assert!(
+            reply.ends_with(r#"{"ok":true,"value":{"of":9}}"#),
+            "{reply}"
+        );
+
+        for unnamed in ["", "max-conversation: seven\r\n"] {
+            let reply = asked(unnamed).await;
+            assert!(reply.starts_with("HTTP/1.1 400 Bad Request"), "{reply}");
+            assert!(reply.contains(r#""code":"bad_request""#), "{reply}");
+        }
+        assert!(called.try_recv().is_err(), "nobody's call was begun");
 
         scope.close(Duration::from_secs(5)).await;
         let _ = std::fs::remove_dir_all(dir);

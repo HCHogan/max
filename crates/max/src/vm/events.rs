@@ -1,11 +1,11 @@
-//! `/events` on max's service to each group's VM: the group's timeline as it is
+//! `/events` on max's service to the groups' VMs: the group's timeline as it is
 //! committed, a JSON line a row, for the programs Max keeps in the VM,
 //! which read it with `maxx events`. `?after=<id>` first sends the rows
 //! after that one, the latest [`EVENTS_CAUGHT_UP`] of them, from the database. A
 //! line with nothing on it is the heartbeat. With `full=1` a line has the
 //! row as data too, as the `rows` tool gives it (service/rows.rs). Which
-//! group it is is the VM's own socket's to say, as for the programs'
-//! calls. See "Resident programs" in docs/rust-rewrite.md.
+//! group it is is the VM's forwarder's to say, as for the programs'
+//! calls. See "Resident programs" in docs/design/jobs.md.
 
 use std::borrow::Borrow;
 use std::collections::{BTreeMap, VecDeque};
@@ -20,7 +20,7 @@ use axum::response::Response;
 use axum::routing::get;
 use chrono::SecondsFormat;
 use futures_util::Stream;
-use max_core::ids::{ConversationId, MessageId};
+use max_core::ids::MessageId;
 use max_core::message::{Content, Message};
 use max_core::render::Render;
 use max_db::ledger;
@@ -35,7 +35,7 @@ use tracing::warn;
 
 use crate::conversation::Signal;
 use crate::conversation::{Subscription, ingest, project};
-use crate::service::rows;
+use crate::service::{Calling, rows};
 use max_core::limits::EVENTS_CAUGHT_UP;
 
 /// A stream with no row for this long sends the heartbeat, so that the
@@ -51,7 +51,6 @@ const HEAD: &str = "max-head";
 
 #[derive(Clone)]
 struct Events {
-    conversation: ConversationId,
     signals: UnboundedSender<Signal>,
     stop: CancellationToken,
     heartbeat: Duration,
@@ -91,17 +90,12 @@ struct Asked {
     full: bool,
 }
 
-/// `/events` for the VM of `conversation`; its streams end at `stop`.
-pub fn router(
-    conversation: ConversationId,
-    signals: UnboundedSender<Signal>,
-    stop: CancellationToken,
-) -> Router {
-    beating(conversation, signals, stop, HEARTBEAT)
+/// `/events` for the VMs; its streams end at `stop`.
+pub fn router(signals: UnboundedSender<Signal>, stop: CancellationToken) -> Router {
+    beating(signals, stop, HEARTBEAT)
 }
 
 fn beating(
-    conversation: ConversationId,
     signals: UnboundedSender<Signal>,
     stop: CancellationToken,
     heartbeat: Duration,
@@ -109,21 +103,23 @@ fn beating(
     Router::new()
         .route("/events", get(events))
         .with_state(Events {
-            conversation,
             signals,
             stop,
             heartbeat,
         })
 }
 
-async fn events(State(events): State<Events>, uri: Uri) -> Response {
+async fn events(
+    State(events): State<Events>,
+    Calling(conversation): Calling,
+    uri: Uri,
+) -> Response {
     let Some(Asked { after, full }) = asked(uri.query()) else {
         return refuse(
             StatusCode::BAD_REQUEST,
             "only after=<number> and full=1 are taken",
         );
     };
-    let conversation = events.conversation;
     let (reply, subscribed) = oneshot::channel();
     if events
         .signals
