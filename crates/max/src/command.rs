@@ -5,6 +5,8 @@
 //! The conversation actor runs them; they never reach a core. Their
 //! answers read like a log, in English, in a code block: see `answer`.
 
+use std::str::FromStr;
+
 use max_db::platform::ConversationKind;
 
 use crate::inbound::Inbound;
@@ -74,7 +76,7 @@ pub fn given(inbound: &Inbound) -> Option<Command> {
     if inbound.chat.kind == ConversationKind::Group && !inbound.mentions_me() {
         return None;
     }
-    parse(&inbound.plain_text())
+    inbound.plain_text().parse().ok()
 }
 
 /// The same, from what was read of the message already: whether it
@@ -83,7 +85,7 @@ pub fn in_text(kind: ConversationKind, mentions_me: bool, text: &str) -> Option<
     if kind == ConversationKind::Group && !mentions_me {
         return None;
     }
-    parse(text)
+    text.parse().ok()
 }
 
 /// How to give `command` in a conversation of `kind`: after an @ of Max,
@@ -95,61 +97,75 @@ pub fn how(kind: ConversationKind, me: &str, command: &str) -> String {
     }
 }
 
-/// None for anything else, such as `/nix/store`, `!help` or an unknown
-/// word: that is chatter, not a command.
-pub fn parse(text: &str) -> Option<Command> {
-    let rest = text.trim().strip_prefix(['/', '／'])?;
-    let (word, argument) = match rest.split_once(char::is_whitespace) {
-        Some((word, argument)) => (word, argument.trim()),
-        None => (rest, ""),
-    };
-    let argument = (!argument.is_empty()).then(|| argument.to_owned());
-    Some(match word.to_lowercase().as_str() {
-        "status" => Command::Status,
-        "kill" => Command::Kill,
-        "stop" => Command::Stop,
-        "start" => Command::Start,
-        "model" => Command::Model(argument),
-        "effort" => Command::Effort(argument),
-        "proactive" => Command::Proactive(match argument.as_deref() {
-            None => None,
-            Some("on" | "default") => Some(true),
-            Some("off") => Some(false),
-            Some(_) => return None,
-        }),
-        "persona" => Command::Persona(match argument {
-            None => Persona::Show,
-            Some(text) if ["clear", "reset", "default"].contains(&text.as_str()) => Persona::Reset,
-            Some(text) => Persona::Set(text),
-        }),
-        "clear" => Command::Clear {
-            all: argument.as_deref() == Some("--all"),
-        },
-        "unclear" => Command::Unclear,
-        "config" => {
-            let (name, value) = match argument.as_deref().map(|argument| {
-                argument
-                    .split_once(char::is_whitespace)
-                    .map_or((argument, ""), |(name, value)| (name, value.trim()))
-            }) {
-                None => (None, None),
-                Some((name, value)) => (
-                    Some(name.to_owned()),
-                    (!value.is_empty()).then(|| value.to_owned()),
-                ),
-            };
-            Command::Config { name, value }
-        }
-        "bind" => Command::Bind(argument),
-        "link" => Command::Link(argument),
-        "unlink" => Command::Unlink(argument),
-        _ => return None,
-    })
+/// Anything else, such as `/nix/store`, `!help` or an unknown word: that
+/// is chatter, not a command.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("not a command")]
+pub struct NotACommand;
+
+impl FromStr for Command {
+    type Err = NotACommand;
+
+    fn from_str(text: &str) -> Result<Self, NotACommand> {
+        let rest = text.trim().strip_prefix(['/', '／']).ok_or(NotACommand)?;
+        let (word, argument) = match rest.split_once(char::is_whitespace) {
+            Some((word, argument)) => (word, argument.trim()),
+            None => (rest, ""),
+        };
+        let argument = (!argument.is_empty()).then(|| argument.to_owned());
+        Ok(match word.to_lowercase().as_str() {
+            "status" => Command::Status,
+            "kill" => Command::Kill,
+            "stop" => Command::Stop,
+            "start" => Command::Start,
+            "model" => Command::Model(argument),
+            "effort" => Command::Effort(argument),
+            "proactive" => Command::Proactive(match argument.as_deref() {
+                None => None,
+                Some("on" | "default") => Some(true),
+                Some("off") => Some(false),
+                Some(_) => return Err(NotACommand),
+            }),
+            "persona" => Command::Persona(match argument {
+                None => Persona::Show,
+                Some(text) if ["clear", "reset", "default"].contains(&text.as_str()) => {
+                    Persona::Reset
+                }
+                Some(text) => Persona::Set(text),
+            }),
+            "clear" => Command::Clear {
+                all: argument.as_deref() == Some("--all"),
+            },
+            "unclear" => Command::Unclear,
+            "config" => {
+                let (name, value) = match argument.as_deref().map(|argument| {
+                    argument
+                        .split_once(char::is_whitespace)
+                        .map_or((argument, ""), |(name, value)| (name, value.trim()))
+                }) {
+                    None => (None, None),
+                    Some((name, value)) => (
+                        Some(name.to_owned()),
+                        (!value.is_empty()).then(|| value.to_owned()),
+                    ),
+                };
+                Command::Config { name, value }
+            }
+            "bind" => Command::Bind(argument),
+            "link" => Command::Link(argument),
+            "unlink" => Command::Unlink(argument),
+            _ => return Err(NotACommand),
+        })
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn parse(text: &str) -> Option<Command> {
+        text.parse().ok()
+    }
 
     #[test]
     fn commands_and_not() {
