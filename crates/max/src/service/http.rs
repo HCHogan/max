@@ -221,7 +221,7 @@ async fn call(
 fn outcome(done: Result<Value, Failure>) -> Value {
     match done {
         Ok(value) => json!({ "ok": true, "value": value }),
-        Err(Failure { code, message }) => {
+        Err(Failure { code, message, .. }) => {
             json!({ "ok": false, "error": { "code": code, "message": message } })
         }
     }

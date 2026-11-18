@@ -109,17 +109,38 @@ impl Context {
 }
 
 /// A call that failed, as the program sees it.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct Failure {
     pub code: &'static str,
     pub message: String,
+    /// What a failure of max's own came of. The program isn't told: it
+    /// is for the log.
+    cause: Option<sqlx::Error>,
 }
+
+/// As the program sees them: the same code and message.
+impl PartialEq for Failure {
+    fn eq(&self, other: &Self) -> bool {
+        (self.code, &self.message) == (other.code, &other.message)
+    }
+}
+
+impl Eq for Failure {}
 
 impl Failure {
     pub fn new(code: &'static str, message: impl Into<String>) -> Self {
         Self {
             code,
             message: message.into(),
+            cause: None,
+        }
+    }
+
+    /// Logs what the failure came of, if it is one of max's own, where
+    /// what ran `tool` is done with it.
+    pub(crate) fn log(&self, tool: &str) {
+        if let Some(error) = &self.cause {
+            warn!(tool, %error, "a Max tool's query failed");
         }
     }
 
@@ -132,8 +153,10 @@ impl Failure {
 
 impl From<sqlx::Error> for Failure {
     fn from(error: sqlx::Error) -> Self {
-        warn!(%error, "a Max tool's query failed");
-        Self::new("internal", "the database failed; try again later")
+        Self {
+            cause: Some(error),
+            ..Self::new("internal", "the database failed; try again later")
+        }
     }
 }
 
@@ -143,9 +166,13 @@ pub async fn call(name: &str, context: &Context, args: Value) -> Result<Value, F
     let Some(tool) = tool::find(name) else {
         return Err(unknown(name));
     };
-    tokio::time::timeout(context.call_time, tool.call(context, args))
+    let done = tokio::time::timeout(context.call_time, tool.call(context, args))
         .await
-        .unwrap_or_else(|_| Err(http::late(context.call_time)))
+        .unwrap_or_else(|_| Err(http::late(context.call_time)));
+    if let Err(failure) = &done {
+        failure.log(name);
+    }
+    done
 }
 
 /// What a caller is told of a name nothing answers to.
