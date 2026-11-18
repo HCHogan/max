@@ -60,10 +60,11 @@ pub(crate) async fn shown(context: &Context, work: &Path, left: &[Left]) -> Show
             // The same thing twice is shown once.
             Ok(part) if shown.parts.contains(&part) => {}
             Ok(part) => shown.parts.push(part),
-            Err(Failure { message, .. }) => {
+            Err(failure) => {
+                failure.log(kind);
                 shown
                     .refused
-                    .push(format!("{path} wasn't shown: {message}"));
+                    .push(format!("{path} wasn't shown: {}", failure.message));
             }
         }
     }
