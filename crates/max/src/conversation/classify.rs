@@ -51,7 +51,10 @@ pub async fn classify(job: Job, mailbox: UnboundedSender<Event>) {
     let report = Report::new(mailbox, || Event::Verdict(None));
     match run(&job).await {
         Ok(verdict) => report.send(Event::Verdict(verdict)),
-        Err(error) => warn!(conversation = %job.place.conversation, %error, "classifying failed"),
+        Err(error) => {
+            let error = format!("{error:#}");
+            warn!(conversation = %job.place.conversation, error, "classifying failed");
+        }
     }
 }
 

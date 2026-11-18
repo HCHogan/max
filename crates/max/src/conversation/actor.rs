@@ -33,6 +33,7 @@ use super::{
     Act, Event, Place, Post, Poster, Receipt, Signal, Subscription, TaskId, classify, model, tool,
 };
 use crate::bind::Binds;
+use crate::causes;
 use crate::code::Codes;
 use crate::command;
 use crate::config::Limits;
@@ -295,7 +296,7 @@ impl Conversation {
     async fn give_up(&mut self, error: &Report) {
         let core = self.core.take();
         self.refuse_questions(asking::TURN_OVER);
-        let why = chain(error);
+        let why = causes::chain(&**error);
         if let Err(error) = self.wind_up(core, &why).await {
             let conversation = self.place.conversation;
             warn!(%conversation, %error, "couldn't wind up after the error");
@@ -961,21 +962,6 @@ impl Conversation {
         }
         Some((id, at))
     }
-}
-
-/// `error` and its causes, `: ` between them, as `{:#}` has them; a
-/// cause its error already ends with is left out, as sqlx's database
-/// error ends with its source.
-fn chain(error: &Report) -> String {
-    let mut line = error.to_string();
-    for cause in error.chain().skip(1) {
-        let cause = cause.to_string();
-        if !line.ends_with(&cause) {
-            line.push_str(": ");
-            line.push_str(&cause);
-        }
-    }
-    line
 }
 
 /// What the host says when something fails, like a log, in a text code

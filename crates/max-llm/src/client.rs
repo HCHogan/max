@@ -100,7 +100,7 @@ impl Client {
             let text = timeout(idle, response.text())
                 .await
                 .map_err(|_| Error::Idle(idle))?
-                .map_err(|error| Error::Body(error.to_string()))?;
+                .map_err(|error| Error::Body(error.into()))?;
             if !status.is_success() {
                 return Err(Error::Status {
                     status: status.as_u16(),
@@ -111,7 +111,7 @@ impl Client {
             let body: serde_json::Value = serde_json::from_str(&text).map_err(Error::malformed)?;
             return Err(match body.get("error") {
                 Some(_) => Error::provider(&body),
-                None => Error::Malformed(format!("expected a stream, got {text:.200}")),
+                None => Error::malformed(format!("expected a stream, got {text:.200}")),
             });
         }
 
@@ -191,7 +191,7 @@ impl Call {
             self.arrived = now;
             match event {
                 None => return Ok(None),
-                Some(Err(error)) => return Err(self.broken(&error)),
+                Some(Err(error)) => return Err(self.broken(error)),
                 Some(Ok(sse)) => {
                     if let Some(data) = sse.data {
                         self.pending.extend(self.parser.event(&data)?);
@@ -223,11 +223,14 @@ impl Call {
         }
     }
 
-    fn broken(&self, error: &sse_stream::Error) -> Error {
+    fn broken(&self, error: sse_stream::Error) -> Error {
         match error {
-            sse_stream::Error::Body(body) => match body.downcast_ref::<Broken>() {
-                Some(Broken::Idle) => Error::Idle(self.idle),
-                _ => Error::Body(body.to_string()),
+            sse_stream::Error::Body(body) => match body.downcast::<Broken>() {
+                Ok(broken) => match *broken {
+                    Broken::Idle => Error::Idle(self.idle),
+                    Broken::Http(error) => Error::Body(error.into()),
+                },
+                Err(body) => Error::Body(body),
             },
             other => Error::malformed(other),
         }
