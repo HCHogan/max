@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::ids::{CallId, MessageId, PrincipalId};
 use crate::intent::Reason;
 use crate::item::{Item, ItemKind, ModelOutput, ModelTag, Part, ToolOutput};
-use crate::segment::Segmenter;
+use crate::segment;
 use crate::tools::{self, Call, TOOLS, ToolSpec};
 
 /// What a run is allowed: fixed for the turn.
@@ -271,7 +271,7 @@ impl Run {
 
     /// A model call or tool batch is in flight. The actor asks for the next
     /// step only when this is false.
-    pub fn busy(&self) -> bool {
+    pub fn is_busy(&self) -> bool {
         matches!(self.phase, Phase::Calling | Phase::Running(_))
     }
 
@@ -470,14 +470,14 @@ impl Run {
     }
 
     /// Whether the model has been warned that the run is near its limit.
-    pub fn warned(&self) -> bool {
+    pub fn is_warned(&self) -> bool {
         self.warned
     }
 
     /// The wakes the model hasn't finished with: seen by a model call that
     /// didn't reach an output without tool calls, or not seen yet.
-    pub fn unhandled(&self) -> Vec<Wake> {
-        self.unhandled.clone()
+    pub fn unhandled(&self) -> &[Wake] {
+        &self.unhandled
     }
 
     /// For a run that has ended or is idle.
@@ -494,7 +494,7 @@ impl Run {
 
     /// The core is waiting for nothing and has nothing to do: ending it now
     /// loses nothing.
-    pub fn idle(&self) -> bool {
+    pub fn is_idle(&self) -> bool {
         matches!(self.phase, Phase::Waiting)
     }
 
@@ -624,10 +624,7 @@ impl Run {
     /// Whether `text` from the model goes out: the segmenter turns it into
     /// a message or a reaction.
     fn speaks(&self, text: &str) -> bool {
-        let mut segmenter = Segmenter::new(self.roster.clone());
-        let mut segments = segmenter.push(text);
-        segments.extend(segmenter.finish());
-        !segments.is_empty()
+        segment::speaks(text, &self.roster)
     }
 }
 

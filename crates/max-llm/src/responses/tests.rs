@@ -163,8 +163,13 @@ fn ends_that_are_not_complete() {
         "type": "response.failed",
         "response": { "error": { "code": "server_error", "message": "try again" } },
     });
-    assert!(parser.event(&failed.to_string()).unwrap_err().retryable());
+    assert!(
+        parser
+            .event(&failed.to_string())
+            .unwrap_err()
+            .is_retryable()
+    );
     let error = json!({ "type": "error", "code": "invalid_request_error", "message": "bad" });
-    assert!(!parser.event(&error.to_string()).unwrap_err().retryable());
+    assert!(!parser.event(&error.to_string()).unwrap_err().is_retryable());
     assert!(matches!(parser.event("{"), Err(Error::Malformed(_))));
 }

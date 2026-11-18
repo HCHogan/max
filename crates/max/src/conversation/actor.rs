@@ -293,7 +293,7 @@ impl Conversation {
         let core = self.core.as_ref().and_then(|active| {
             if self.stopping.is_some() {
                 self.stopping
-            } else if active.run.idle() {
+            } else if active.run.is_idle() {
                 Some(active.idle_since + self.idle_window(active))
             } else {
                 None
@@ -560,7 +560,7 @@ impl Conversation {
         if let Some(active) = &self.core {
             if self.stopping.is_some_and(|deadline| now >= deadline) {
                 self.end(End::Stopped).await?;
-            } else if active.run.idle() && now >= active.idle_since + self.idle_window(active) {
+            } else if active.run.is_idle() && now >= active.idle_since + self.idle_window(active) {
                 self.end(End::Idle).await?;
             }
         }

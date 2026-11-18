@@ -39,7 +39,7 @@ pub enum Error {
 impl Error {
     /// A server error or a broken connection may go another way next
     /// time; an expired address or a file too large won't.
-    pub fn retryable(&self) -> bool {
+    pub fn is_retryable(&self) -> bool {
         match self {
             Self::TooLarge => false,
             Self::Status(status) => *status >= 500 || *status == 429,

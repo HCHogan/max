@@ -200,7 +200,7 @@ impl Download {
         }
         let (got, mime) = match self.receive(&medium.url).await {
             Ok(received) => received,
-            Err(Failed::Fetch(error)) if error.retryable() => return Err(eyre!("{error}")),
+            Err(Failed::Fetch(error)) if error.is_retryable() => return Err(eyre!("{error}")),
             // An address that expired, or a file too large: another try
             // won't do better.
             Err(Failed::Fetch(error)) => {

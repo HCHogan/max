@@ -53,7 +53,7 @@ pub enum Step {
 
 impl Run {
     pub fn new(spec: RunSpec, base: Context, first: Vec<Input>) -> Self;
-    pub fn busy(&self) -> bool;          // a model call or a tool is in flight; the actor asks for next_step only when it isn't
+    pub fn is_busy(&self) -> bool;       // a model call or a tool is in flight; the actor asks for next_step only when it isn't
     pub fn next_step(&mut self) -> Step; // starts a call or a batch; the phase changes with it
     pub fn model_output(&mut self, out: ModelOutput) -> Result<(), Rejected>;
     pub fn partial_output(&mut self, text: String, tokens: u32) -> Result<(), Rejected>; // a call cut off after `text` was said
@@ -65,9 +65,9 @@ impl Run {
     pub fn at_limit(&self) -> bool;
     pub fn near_limit(&self) -> bool;
     pub fn fill(&self) -> Fill;          // the context's tokens and their limit: what at_limit compares
-    pub fn warned(&self) -> bool;
-    pub fn unhandled(&self) -> Vec<Wake>;
-    pub fn idle(&self) -> bool;
+    pub fn is_warned(&self) -> bool;
+    pub fn unhandled(&self) -> &[Wake];
+    pub fn is_idle(&self) -> bool;
     pub fn outcome(&self) -> Outcome;    // Answered, Silent, Interrupted or Failed
     pub fn round(&self) -> u32;
     pub fn roster(&self) -> &BTreeSet<PrincipalId>;

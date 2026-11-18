@@ -140,11 +140,11 @@ fn the_limit() {
 fn answers_and_goes_idle() {
     let mut run = Run::new(spec(400_000, None), base(100), vec![Input::Wake(wake(1))]);
     assert_eq!(texts(&call_model(&mut run)), ["人设"]);
-    assert!(run.busy());
+    assert!(run.is_busy());
     assert_idle(&mut run);
     run.model_output(says("好")).unwrap();
     assert_idle(&mut run);
-    assert!(run.idle());
+    assert!(run.is_idle());
     assert!(run.unhandled().is_empty());
     assert_eq!(run.outcome(), Outcome::Answered);
 }
@@ -177,7 +177,7 @@ fn inputs_wait_for_the_tool_batch() {
     run.input(messages(2, 5)).unwrap();
     run.input(Input::Wake(wake(2))).unwrap();
     run.tool_result(CallId::new("b"), result(5)).unwrap();
-    assert!(run.busy());
+    assert!(run.is_busy());
     assert_idle(&mut run);
     run.tool_result(CallId::new("a"), result(5)).unwrap();
     let request = call_model(&mut run);
@@ -261,7 +261,7 @@ fn interrupt_closes_open_calls() {
     run_tools(&mut run);
     run.tool_result(CallId::new("a"), result(5)).unwrap();
     run.interrupt().unwrap();
-    assert!(!run.busy());
+    assert!(!run.is_busy());
     assert_idle(&mut run);
     assert_eq!(run.outcome(), Outcome::Interrupted);
     assert_eq!(run.input(messages(2, 5)), Err(Rejected::Ended));
