@@ -29,8 +29,26 @@ pub struct Blob {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Pending {
     pub message: MessageId,
-    /// The ordinals, kinds and addresses not downloaded yet.
-    pub remote: Vec<(u16, MediaKind, String)>,
+    /// Those not downloaded yet.
+    pub remote: Vec<Remote>,
+}
+
+/// A medium still at its address: which of its message's it is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Remote {
+    pub ordinal: u16,
+    pub kind: MediaKind,
+    pub url: String,
+}
+
+/// What a model call wants of a message's pictures.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ForModel {
+    /// When the message came in.
+    pub received: DateTime<Utc>,
+    /// The version made for the model of each picture downloaded so far,
+    /// by ordinal.
+    pub pictures: BTreeMap<u16, Sha256>,
 }
 
 /// Records that the `ordinal`-th media of `message` is `blob`. The media
@@ -160,12 +178,11 @@ pub async fn downloaded(
         .collect()
 }
 
-/// For each of `messages` there is: when it came in, and the version made
-/// for the model of each picture of it downloaded so far, by ordinal.
+/// Each of `messages` there is, with its pictures for the model.
 pub async fn for_model(
     conn: &mut PgConnection,
     messages: &[MessageId],
-) -> sqlx::Result<BTreeMap<MessageId, (DateTime<Utc>, BTreeMap<u16, Sha256>)>> {
+) -> sqlx::Result<BTreeMap<MessageId, ForModel>> {
     let ids: Vec<i64> = messages.iter().map(|id| id.get()).collect();
     let rows = sqlx::query!(
         r#"
@@ -182,11 +199,16 @@ pub async fn for_model(
     .await?;
     let mut found = BTreeMap::new();
     for row in rows {
-        let (_, pictures) = found
+        let message = found
             .entry(MessageId::new(row.id))
-            .or_insert_with(|| (row.received_at, BTreeMap::new()));
+            .or_insert_with(|| ForModel {
+                received: row.received_at,
+                pictures: BTreeMap::new(),
+            });
         if let (Some(ordinal), Some(sha256)) = (row.ordinal, row.model_sha256) {
-            pictures.insert(u16::try_from(ordinal).unwrap_or_default(), named(&sha256)?);
+            message
+                .pictures
+                .insert(u16::try_from(ordinal).unwrap_or_default(), named(&sha256)?);
         }
     }
     Ok(found)
@@ -213,8 +235,12 @@ pub async fn pending(conn: &mut PgConnection, since: DateTime<Utc>) -> sqlx::Res
         .filter_map(|row| {
             let remote: Vec<_> = media(&row.nodes.0)
                 .filter(|(n, _, _)| !row.done.contains(&i16::try_from(*n).unwrap_or(i16::MAX)))
-                .filter_map(|(n, media, meta)| match media {
-                    Some(MediaRef::Remote(url)) => Some((n, meta.kind, url.clone())),
+                .filter_map(|(ordinal, media, meta)| match media {
+                    Some(MediaRef::Remote(url)) => Some(Remote {
+                        ordinal,
+                        kind: meta.kind,
+                        url: url.clone(),
+                    }),
                     _ => None,
                 })
                 .collect();
