@@ -553,8 +553,10 @@ edges and their direction is in
   in B makes A→B. The side to be asked redeems the code, since it is the one
   exposed. Both directions take two links. `/unlink c#N` removes the edges
   between this conversation and that one, both ways, from either side. All
-  three are owners' only for now, since every question is a turn of the asked
-  conversation's model. The answers say which way an edge runs:
+  three are for the people a conversation belongs to: a group's owner, not its
+  administrators; the other party of a private chat; and Max's owners (see
+  [Who may run what](commands.md#who-may-run-what)). The answers say which way
+  an edge runs:
 
   | Command | Answer |
   | --- | --- |

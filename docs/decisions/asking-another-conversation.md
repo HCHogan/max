@@ -1,7 +1,7 @@
 # One conversation's Max can ask another's
 
 Max in one conversation can put a question to Max in another, over a link
-that an owner makes with `/link`. The design is in
+made with `/link` by the people the two conversations belong to. The design is in
 [Asking another conversation](../design/jobs.md#asking-another-conversation).
 
 ## Decisions
@@ -14,8 +14,13 @@ that an owner makes with `/link`. The design is in
   serves its own chat, with all its tools, and the host can't give it fewer.
   The asker's members see the code, so with the asked side redeeming it, a
   member can expose only a conversation where they may run `/link` themselves.
-- **Owners only, for now**: every question is a turn of the asked
-  conversation's model. To be widened after testing.
+- **A group's owner and the other party of a private chat may link**, as
+  well as Max's owners: they are the people a conversation belongs to. A
+  group's administrators may not: they keep order in the chat, and a link
+  exposes the whole conversation to another one. Max's owners alone was
+  looked at, since every question is a turn of the asked conversation's
+  model, which they pay for; but so is every message that wakes Max in a
+  group, and anyone may send one.
 - **No derived edges**: the first idea, that a person's private chat may ask
   every group the person is in, can't be derived on QQ, where a person's
   openid differs per group and in private chat.

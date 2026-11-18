@@ -100,8 +100,9 @@ write them too. The rules:
   command carries its sender's role at that moment, so the platform is
   never asked.
 - **Ranks** (`Rank` in `actor/commands.rs`), lowest first: anyone; the
-  group's owner and administrators (`Admin`); the other party of a private
-  chat (`ChatOwner`); Max's owners (`Owner`). What each command needs is in
+  group's owner and administrators (`Admin`); the group's owner
+  (`GroupOwner`); the other party of a private chat (`ChatOwner`); Max's
+  owners (`Owner`). What each command needs is in
   [Commands](commands.md#who-may-run-what).
 
 ## Open

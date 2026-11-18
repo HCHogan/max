@@ -39,13 +39,17 @@ enum Guest {
 }
 
 /// Who may run what. Commands that change one conversation are also its
-/// group's owner's and admins'; those that cost money are also the other
-/// person's in a private chat, which is theirs; binding a group, and
-/// linking two conversations, is only for Max's owners.
+/// group's owner's and admins'; linking it to another is its group
+/// owner's alone, since a link exposes the whole conversation; those that
+/// cost money are also the other person's in a private chat, which is
+/// theirs; binding a group is only for Max's owners.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Rank {
     Anyone,
+    /// The group's owner or an admin.
     Admin,
+    /// The group's owner.
+    GroupOwner,
     /// The other person in a private chat.
     ChatOwner,
     Owner,
@@ -57,13 +61,12 @@ impl Conversation {
             Rank::Owner
         } else if self.place.kind == ConversationKind::Direct {
             Rank::ChatOwner
-        } else if matches!(
-            committed.message.sender.role,
-            Some(Role::Owner | Role::Admin)
-        ) {
-            Rank::Admin
         } else {
-            Rank::Anyone
+            match committed.message.sender.role {
+                Some(Role::Owner) => Rank::GroupOwner,
+                Some(Role::Admin) => Rank::Admin,
+                _ => Rank::Anyone,
+            }
         };
         let needs = match &command {
             Command::Status => Rank::Anyone,
@@ -78,14 +81,15 @@ impl Conversation {
             | Command::Clear { .. }
             | Command::Unclear
             | Command::Config { .. } => Rank::Admin,
+            Command::Link(_) | Command::Unlink(_) => Rank::GroupOwner,
             Command::Model(_) | Command::Effort(_) | Command::Proactive(_) => Rank::ChatOwner,
-            Command::Bind(_) | Command::Link(_) | Command::Unlink(_) => Rank::Owner,
+            Command::Bind(_) => Rank::Owner,
         };
         if rank < needs {
-            let who = if needs >= Rank::ChatOwner {
-                "Max's owners"
-            } else {
-                "the group owner and admins"
+            let who = match needs {
+                Rank::Admin => "the group owner and admins",
+                Rank::GroupOwner => "the group owner",
+                Rank::Anyone | Rank::ChatOwner | Rank::Owner => "Max's owners",
             };
             return self.answer(&format!("refused: {who} only")).await;
         }

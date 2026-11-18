@@ -51,15 +51,18 @@ and replies are entered in the ledger like any other. The parser is
 | --- | --- |
 | Anyone | `/status`; `/model`, `/effort`, `/proactive` and `/persona` without arguments; `/model list`; `/config` without a value; `/clear` (which only asks to confirm) |
 | The group owner and administrators | `/kill`, `/stop`, `/start`, changing `/persona`, `/clear --all`, `/unclear`, setting with `/config` |
+| The group owner, or the other party of a private chat | `/link`, `/unlink` |
 | Max's owners, or the other party of a private chat | changing `/model`, `/effort`, `/proactive` |
-| Max's owners | `/bind`, `/link`, `/unlink` |
+| Max's owners | `/bind` |
 
 Each rank includes those above it. A private chat belongs to the other
 party, so they may change its model, effort and proactivity, which affect
-only that chat; `/bind`, `/link` and `/unlink` reach beyond it and stay the
-owners'. Without the rank the reply is `refused: Max's owners only` or
-`refused: the group owner and admins only`. The ranks themselves are in
-[Permissions](identity.md#permissions).
+only that chat, and link it to other conversations. A link exposes the
+whole conversation to another one, so in a group it is the owner's to
+make, not the administrators'. `/bind` brings a new group to Max and stays
+the owners'. Without the rank the reply is `refused: Max's owners only`,
+`refused: the group owner only` or `refused: the group owner and admins
+only`. The ranks themselves are in [Permissions](identity.md#permissions).
 
 ## The commands
 

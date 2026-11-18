@@ -1,6 +1,7 @@
 //! `/link` and `/unlink`: the edges along which Max in one conversation
-//! asks Max in another, made by Max's owners alone. See "Asking another
-//! conversation" in docs/rust-rewrite.md.
+//! asks Max in another, made by the people the two belong to: a group's
+//! owner, the other person in a private chat, and Max's owners. See
+//! "Asking another conversation" in docs/design/jobs.md.
 
 use max_db::links::{self, Peer};
 use max_db::platform::ConversationKind;
