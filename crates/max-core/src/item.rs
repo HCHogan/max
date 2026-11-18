@@ -11,7 +11,7 @@ use crate::ids::{CallId, MessageId};
 use crate::message::{MediaKind, MediaRef};
 
 /// One thing the model is shown or says, with what it costs.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Item {
     /// What it is.
     pub kind: ItemKind,
@@ -27,7 +27,7 @@ pub struct Item {
 }
 
 /// What an item is.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ItemKind {
     /// The system prompt.

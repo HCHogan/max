@@ -136,7 +136,7 @@ pub async fn unfinished(
          where ($1::bigint is null or conversation_id = $1)
            and not exists (select from turn_outcomes o where o.turn_id = t.id)
          order by id",
-        conversation.map(|conversation| conversation.get())
+        conversation.map(ConversationId::get)
     )
     .fetch_all(conn)
     .await?;
@@ -173,7 +173,7 @@ pub async fn tail_ends(
            where t.conversation_id = $1 and t.from_id > $2 and t.from_id <= $3
            order by t.id"#,
         conversation.get(),
-        after.map_or(0, |id| id.get()),
+        after.map_or(0, MessageId::get),
         upto.get()
     )
     .fetch_all(conn)

@@ -623,7 +623,7 @@ pub async fn save_settings(
         settings.effort,
         settings.persona,
         settings.proactive,
-        settings.cleared_upto.map(|id| id.get()),
+        settings.cleared_upto.map(MessageId::get),
         settings.stopped,
         Json(&settings.overrides) as _,
         at

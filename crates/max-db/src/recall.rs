@@ -91,8 +91,8 @@ pub async fn messages(
         "#,
         query.conversation.get(),
         query.patterns,
-        query.from.map(|id| id.get()),
-        query.until.map(|id| id.get()),
+        query.from.map(MessageId::get),
+        query.until.map(MessageId::get),
         query.limit,
         query.sender
     )
@@ -144,8 +144,8 @@ pub async fn near_messages(
         query.conversation.get(),
         model,
         vector as &[f32],
-        query.from.map(|id| id.get()),
-        query.until.map(|id| id.get()),
+        query.from.map(MessageId::get),
+        query.until.map(MessageId::get),
         query.limit,
         query.sender
     )

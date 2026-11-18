@@ -90,7 +90,7 @@ impl Tool for Rows {
                 .flat_map(|row| known(&row.message, &people))
                 .collect(),
             rows: rows.iter().map(data).collect(),
-            head: head.map_or(0, |id| id.get()),
+            head: head.map_or(0, MessageId::get),
         })
     }
 }

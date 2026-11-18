@@ -276,11 +276,11 @@ impl Request {
     /// Answers that it wasn't done, and why.
     pub fn refuse(self, why: Refused) {
         match self {
-            Request::Act { reply } => drop(reply.send(Err(why))),
-            Request::Configure { reply, .. } => drop(reply.send(Err(why))),
-            Request::Ask { reply, .. }
-            | Request::Answer { reply, .. }
-            | Request::Wake { reply, .. } => drop(reply.send(Err(why))),
+            Self::Act { reply } => drop(reply.send(Err(why))),
+            Self::Configure { reply, .. } => drop(reply.send(Err(why))),
+            Self::Ask { reply, .. } | Self::Answer { reply, .. } | Self::Wake { reply, .. } => {
+                drop(reply.send(Err(why)))
+            }
         }
     }
 }

@@ -91,14 +91,14 @@ fn columns(content: &Content, command: bool) -> Columns<'_> {
         kind: "event",
         event: Some(event),
         reply_to: None,
-        target: target.map(|id| id.get()),
+        target: target.map(MessageId::get),
         nodes,
     };
     match content {
         Content::Message { reply_to, nodes } => Columns {
             kind: if command { "command" } else { "chat" },
             event: None,
-            reply_to: reply_to.map(|id| id.get()),
+            reply_to: reply_to.map(MessageId::get),
             target: None,
             nodes,
         },
@@ -172,7 +172,7 @@ pub async fn insert(conn: &mut PgConnection, new: &NewMessage<'_>) -> sqlx::Resu
         Json(columns.nodes) as _,
         new.raw,
         new.text,
-        new.turn.map(|turn| turn.get()),
+        new.turn.map(TurnId::get),
         new.segment
     )
     .fetch_one(conn)
@@ -264,7 +264,7 @@ pub async fn rows(
         order by m.id
         "#,
         conversation.get(),
-        after.map_or(0, |id| id.get()),
+        after.map_or(0, MessageId::get),
         upto.get()
     )
     .fetch_all(&mut *conn)
@@ -500,7 +500,7 @@ pub async fn stretch(
     newest: bool,
     limit: i64,
 ) -> sqlx::Result<Vec<MessageId>> {
-    let (from, until) = (from.map(|id| id.get()), until.map(|id| id.get()));
+    let (from, until) = (from.map(MessageId::get), until.map(MessageId::get));
     let ids = if newest {
         sqlx::query_scalar!(
             "select id from messages

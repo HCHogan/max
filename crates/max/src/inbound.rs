@@ -9,7 +9,7 @@ use max_core::message::{Node, Platform, Role};
 use max_db::platform::ConversationKind;
 
 /// A message someone sent, as its platform's adapter read it.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Inbound {
     /// The platform it came on.
     pub platform: Platform,
@@ -66,7 +66,7 @@ pub struct Quote {
 
 /// A piece of an inbound message: a node, or a mention not yet tied to
 /// an account.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InNode {
     /// What needs no looking up.
     Node(Node),

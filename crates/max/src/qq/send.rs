@@ -53,15 +53,15 @@ pub trait Api: Send + Sync + 'static {
 
 impl Api for qqbot::Client {
     fn send<'a>(&'a self, chat: Chat<'a>, message: &'a Message) -> Answer<'a, Sent> {
-        Box::pin(qqbot::Client::send(self, chat, message))
+        Box::pin(Self::send(self, chat, message))
     }
 
     fn upload<'a>(&'a self, chat: Chat<'a>, media: Media<'a>) -> Answer<'a, Uploaded> {
-        Box::pin(qqbot::Client::upload(self, chat, media))
+        Box::pin(Self::upload(self, chat, media))
     }
 
     fn recall<'a>(&'a self, chat: Chat<'a>, message_id: &'a str) -> Answer<'a, ()> {
-        Box::pin(qqbot::Client::recall(self, chat, message_id))
+        Box::pin(Self::recall(self, chat, message_id))
     }
 }
 
@@ -314,7 +314,7 @@ impl Shared {
             // In case QQ forgot it early: the next one uploads it again.
             self.uploads
                 .lock()
-                .unwrap_or_else(|p| p.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .remove(&key);
             Unsent::from(&error)
         })
@@ -325,7 +325,10 @@ impl Shared {
     async fn upload(&self, chat: Chat<'_>, key: &Upload) -> Result<String, String> {
         let now = Instant::now();
         {
-            let mut uploads = self.uploads.lock().unwrap_or_else(|p| p.into_inner());
+            let mut uploads = self
+                .uploads
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             uploads.retain(|_, kept| kept.until.is_none_or(|until| now < until));
             if let Some(kept) = uploads.get(key) {
                 return Ok(kept.file_info.clone());
@@ -354,7 +357,10 @@ impl Shared {
             file_info: uploaded.file_info.clone(),
             until,
         };
-        let mut uploads = self.uploads.lock().unwrap_or_else(|p| p.into_inner());
+        let mut uploads = self
+            .uploads
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         uploads.insert(key.clone(), kept);
         Ok(uploaded.file_info)
     }
@@ -364,7 +370,10 @@ impl Shared {
         loop {
             let now = Instant::now();
             let wait = {
-                let mut sent = self.sent.lock().unwrap_or_else(|p| p.into_inner());
+                let mut sent = self
+                    .sent
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 let mut until = None;
                 let rates = [
                     (Rated::Bot, BOT_RATE),

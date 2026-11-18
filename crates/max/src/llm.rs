@@ -39,7 +39,7 @@ impl Caller for max_llm::Client {
         options: &'a Options,
         pictures: &'a Pictures,
     ) -> Pin<Box<dyn Future<Output = Result<Call, max_llm::Error>> + Send + 'a>> {
-        Box::pin(max_llm::Client::call(self, request, options, pictures))
+        Box::pin(Self::call(self, request, options, pictures))
     }
 }
 

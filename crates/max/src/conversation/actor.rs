@@ -471,7 +471,9 @@ impl Conversation {
         } else if let Some(command) = command {
             self.command(&committed, command).await?;
         } else {
-            let mark = committed.direct.map_or(Mark::None, |direct| direct.mark());
+            let mark = committed
+                .direct
+                .map_or(Mark::None, super::ingest::Direct::mark);
             self.feed(&[(&committed.message, mark)]).await?;
             self.follow_up(&committed).await?;
         }
