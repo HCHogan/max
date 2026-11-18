@@ -23,9 +23,10 @@ use crate::qq;
 const LONGEST: i64 = 30 * DAY;
 const DAY: i64 = 24 * 3600;
 
+#[derive(Debug)]
 pub struct MuteMember;
 
-#[derive(Deserialize, JsonSchema)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Args {
     #[schemars(description = "the number in [mention#number]")]
@@ -37,7 +38,7 @@ pub struct Args {
     seconds: i64,
 }
 
-#[derive(Serialize, JsonSchema)]
+#[derive(Debug, Serialize, JsonSchema)]
 pub struct Muted {
     member: i64,
     /// None when lifted.

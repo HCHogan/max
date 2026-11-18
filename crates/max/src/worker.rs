@@ -3,6 +3,7 @@
 //! see "Derived-data workers" under "The three roles" in docs/rust-rewrite.md.
 
 use std::collections::HashSet;
+use std::fmt;
 use std::hash::Hash;
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -24,6 +25,13 @@ type Mailbox = Box<dyn Fn(Row) + Send + Sync>;
 /// skipped.
 #[derive(Default)]
 pub struct Rows(Vec<Mailbox>);
+
+/// By how many workers take rows.
+impl fmt::Debug for Rows {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("Rows").field(&self.0.len()).finish()
+    }
+}
 
 impl Rows {
     /// A mailbox that gets every row, as a `T`.
@@ -53,6 +61,7 @@ impl Rows {
 /// meanwhile isn't started twice. A unit is among them for as long as its
 /// [`Claim`] lives: a task that ends, one that panics and one that is
 /// aborted let go of it alike.
+#[derive(Debug)]
 pub struct Busy<K>(Arc<Mutex<HashSet<K>>>);
 
 impl<K> Default for Busy<K> {
@@ -73,6 +82,7 @@ impl<K: Clone + Eq + Hash> Busy<K> {
 }
 
 /// A unit in flight: dropping it lets the unit be started again.
+#[derive(Debug)]
 pub struct Claim<K: Eq + Hash> {
     busy: Arc<Mutex<HashSet<K>>>,
     key: K,

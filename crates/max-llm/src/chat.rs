@@ -62,6 +62,16 @@ pub struct Body<'a> {
     tool_choice: Option<&'static str>,
 }
 
+/// By its model: the messages hold the pictures' bytes.
+impl fmt::Debug for Body<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Body")
+            .field("model", &self.model)
+            .field("messages", &self.messages.len())
+            .finish_non_exhaustive()
+    }
+}
+
 #[derive(Serialize)]
 struct StreamOptions {
     include_usage: bool,

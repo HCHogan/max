@@ -3,6 +3,7 @@
 //! in memory: a restart forgets them.
 
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -11,6 +12,14 @@ const VALID: Duration = Duration::from_secs(600);
 /// The codes out, and what each is for.
 pub struct Codes<T> {
     codes: Mutex<HashMap<String, Issued<T>>>,
+}
+
+/// By how many are out: a code is for whoever says it.
+impl<T> fmt::Debug for Codes<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let out = self.codes.lock().map_or(0, |codes| codes.len());
+        f.debug_struct("Codes").field("out", &out).finish()
+    }
 }
 
 /// A code's meaning: what it is for, and when it was issued.

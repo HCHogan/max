@@ -25,6 +25,15 @@ pub struct Search {
     slots: Semaphore,
 }
 
+/// Without the key.
+impl fmt::Debug for Search {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Search")
+            .field("url", &self.url)
+            .finish_non_exhaustive()
+    }
+}
+
 /// A result, as the program gets it.
 #[derive(Debug, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct Found {

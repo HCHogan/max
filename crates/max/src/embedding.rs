@@ -2,6 +2,7 @@
 //! `/v1/embeddings`, such as Ollama's with bge-m3. The sticker library's
 //! vectors and `find_stickers`' queries come from here. See "Sending images".
 
+use std::fmt;
 use std::time::Duration;
 
 use max_db::embeddings::DIMENSIONS;
@@ -17,6 +18,16 @@ pub struct Embedder {
     key: Option<String>,
     /// Sent with each request, and kept with each vector.
     pub model: String,
+}
+
+/// Without the key.
+impl fmt::Debug for Embedder {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Embedder")
+            .field("url", &self.url)
+            .field("model", &self.model)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]

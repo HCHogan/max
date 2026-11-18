@@ -28,6 +28,7 @@ const WAIT: Duration = Duration::from_secs(10);
 /// Between looks while waiting.
 const POLL: Duration = Duration::from_millis(250);
 
+#[derive(Debug)]
 pub struct Pictures {
     pub pool: PgPool,
     pub store: Arc<Store>,

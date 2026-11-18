@@ -29,6 +29,7 @@ const RETRIES: [Duration; 2] = [Duration::from_secs(10), Duration::from_secs(60)
 /// up on, and after a change of model all of them.
 const RESCAN: Duration = Duration::from_secs(3600);
 
+#[derive(Debug)]
 pub struct Stickers {
     pub pool: PgPool,
     pub embedder: Arc<Embedder>,

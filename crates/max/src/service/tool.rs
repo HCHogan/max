@@ -60,6 +60,7 @@ pub trait Tool: 'static {
 
 /// A tool with its types gone: what max's service lists and calls, and
 /// what the system prompt declares.
+#[derive(Debug)]
 pub struct Spec {
     pub name: &'static str,
     pub description: &'static str,
@@ -102,7 +103,7 @@ pub static TOOLS: LazyLock<Vec<Spec>> = LazyLock::new(|| {
 /// and a program call in the VM without the host, which the guest's
 /// systemd or its runner does. Here for the system prompt alone, which
 /// declares them with the host's.
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 pub struct Local {
     pub name: String,
     /// Whether the system prompt declares it, as [`Tool::TURN`] says of

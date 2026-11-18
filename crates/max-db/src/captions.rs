@@ -36,6 +36,7 @@ max_core::names!(Kind, "caption kind", {
     Sticker => "sticker",
 });
 
+#[derive(Debug)]
 pub struct Caption<'a> {
     pub sha256: &'a Sha256,
     pub kind: Kind,

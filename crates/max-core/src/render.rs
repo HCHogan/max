@@ -90,6 +90,7 @@ pub enum Mark {
     Host,
 }
 
+#[derive(Debug)]
 pub struct Render<'a, P> {
     pub people: &'a P,
     /// Local time, for HH:MM and dates.

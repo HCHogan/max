@@ -43,6 +43,7 @@ impl fmt::Debug for Provider {
     }
 }
 
+#[derive(Debug)]
 pub struct Client {
     http: reqwest::Client,
     provider: Provider,
@@ -145,6 +146,16 @@ pub struct Call {
     arrived: Instant,
     first: Option<Duration>,
     quiet: Duration,
+}
+
+/// As far as it has come; not the stream it reads.
+impl fmt::Debug for Call {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Call")
+            .field("parser", &self.parser)
+            .field("timing", &self.timing())
+            .finish_non_exhaustive()
+    }
 }
 
 impl Call {

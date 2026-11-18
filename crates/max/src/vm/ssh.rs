@@ -22,6 +22,7 @@ const STDERR_KEPT: usize = 1024;
 /// The most of a control command's answer kept.
 const ANSWER_KEPT: usize = 64 << 10;
 
+#[derive(Debug)]
 pub struct Client;
 
 impl client::Handler for Client {
@@ -75,6 +76,7 @@ pub type Closes = UnboundedSender<Channel<Msg>>;
 /// unit when its input ends. The input stays open for as long as this is
 /// held; dropped before the call has ended, as when the turn is killed,
 /// its channel goes to the VM's closer, since closing one has to wait.
+#[derive(Debug)]
 pub struct Command {
     /// None once the call is over.
     channel: Option<Channel<Msg>>,

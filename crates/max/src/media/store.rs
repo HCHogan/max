@@ -12,6 +12,7 @@ use sha2::Digest;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 
+#[derive(Debug)]
 pub struct Store {
     objects: PathBuf,
     tmp: PathBuf,
@@ -93,6 +94,7 @@ impl Store {
 
 /// A file being written into the store. One dropped before it's
 /// finished is removed, and so is one whose bytes were there already.
+#[derive(Debug)]
 pub struct Partial<'a> {
     store: &'a Store,
     file: fs::File,
