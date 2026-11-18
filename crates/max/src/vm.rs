@@ -186,7 +186,7 @@ pub enum NoVm {
 pub struct Vm {
     connection: Arc<Connection>,
     closes: Closes,
-    work: Arc<PathBuf>,
+    work: Arc<Path>,
     _lent: Arc<()>,
 }
 
@@ -361,7 +361,7 @@ impl Vm {
     }
 
     /// The host's side of the guest's /work.
-    pub fn work(&self) -> &std::path::Path {
+    pub fn work(&self) -> &Path {
         &self.work
     }
 }
@@ -415,7 +415,7 @@ struct Running {
     /// the task that asks the guest what runs: they end when max lets go
     /// of the VM.
     _tasks: Scope,
-    work: Arc<PathBuf>,
+    work: Arc<Path>,
     lent: Arc<()>,
     idle_since: Instant,
     /// When the guest last said something of Max's runs in it.
@@ -884,7 +884,7 @@ impl Service {
             connection,
             closes,
             _tasks: tasks,
-            work: Arc::new(work(&self.config.dir, conversation)),
+            work: work(&self.config.dir, conversation).into(),
             lent: Arc::new(()),
             idle_since: Instant::now(),
             busy: None,
