@@ -5,15 +5,18 @@
 
 use chrono::{DateTime, Utc};
 use max_core::ids::MessageId;
+use max_core::message::Sha256;
 use sqlx::PgConnection;
+
+use crate::named;
 
 /// How long a vector is: the column's, bge-m3's.
 pub const DIMENSIONS: usize = 1024;
 
 /// The sticker captions with no vector by `model`, newest first: what the
 /// worker missed, or all of them after a change of model.
-pub async fn unembedded(conn: &mut PgConnection, model: &str) -> sqlx::Result<Vec<String>> {
-    sqlx::query_scalar!(
+pub async fn unembedded(conn: &mut PgConnection, model: &str) -> sqlx::Result<Vec<Sha256>> {
+    let files = sqlx::query_scalar!(
         "select c.sha256 from media_captions c
          where c.kind = 'sticker' and not c.skip and c.text <> ''
            and not exists (select 1 from caption_embeddings e
@@ -22,14 +25,15 @@ pub async fn unembedded(conn: &mut PgConnection, model: &str) -> sqlx::Result<Ve
         model
     )
     .fetch_all(conn)
-    .await
+    .await?;
+    files.iter().map(|sha256| named(sha256)).collect()
 }
 
 /// The caption to embed for the file `sha256`: a sticker's that isn't
 /// skipped or empty, and has no vector by `model` yet.
 pub async fn to_embed(
     conn: &mut PgConnection,
-    sha256: &str,
+    sha256: &Sha256,
     model: &str,
 ) -> sqlx::Result<Option<String>> {
     sqlx::query_scalar!(
@@ -37,7 +41,7 @@ pub async fn to_embed(
          where c.sha256 = $1 and c.kind = 'sticker' and not c.skip and c.text <> ''
            and not exists (select 1 from caption_embeddings e
                            where e.sha256 = c.sha256 and e.model = $2)",
-        sha256,
+        sha256.as_str(),
         model
     )
     .fetch_optional(conn)
@@ -48,7 +52,7 @@ pub async fn to_embed(
 /// model.
 pub async fn write(
     conn: &mut PgConnection,
-    sha256: &str,
+    sha256: &Sha256,
     model: &str,
     vector: &[f32],
     at: DateTime<Utc>,
@@ -59,7 +63,7 @@ pub async fn write(
          on conflict (sha256) do update
          set model = excluded.model, embedding = excluded.embedding,
              created_at = excluded.created_at",
-        sha256,
+        sha256.as_str(),
         model,
         vector as &[f32],
         at

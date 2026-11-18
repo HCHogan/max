@@ -8,6 +8,9 @@
 //! source of truth for a native round trip, and nodes can be rebuilt from it
 //! if a normaliser changes.
 
+use std::fmt::{self, Write};
+use std::str::FromStr;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -131,12 +134,59 @@ pub fn media(nodes: &[Node]) -> impl Iterator<Item = (u16, Option<&MediaRef>, &M
         .map(|((media, meta), n)| (n, media, meta))
 }
 
+/// A file's name in the content store: the SHA-256 of its bytes, as 64
+/// lowercase hex digits. The store makes one of the bytes it is given,
+/// and text from outside is parsed; one in a stored node is read as it
+/// was written.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Sha256(String);
+
+impl Sha256 {
+    /// Of the hash itself.
+    pub fn of(digest: [u8; 32]) -> Self {
+        let mut hex = String::with_capacity(2 * digest.len());
+        for byte in digest {
+            let _ = write!(hex, "{byte:02x}");
+        }
+        Self(hex)
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Text that isn't a file's name in the content store.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("{0:?} isn't a SHA-256 in lowercase hex")]
+pub struct NotSha256(String);
+
+impl FromStr for Sha256 {
+    type Err = NotSha256;
+
+    fn from_str(text: &str) -> Result<Self, NotSha256> {
+        let hex = |byte: u8| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte);
+        if text.len() == 64 && text.bytes().all(hex) {
+            Ok(Self(text.to_owned()))
+        } else {
+            Err(NotSha256(text.to_owned()))
+        }
+    }
+}
+
+impl fmt::Display for Sha256 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.pad(&self.0)
+    }
+}
+
 /// Where a stored picture or file lives.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MediaRef {
-    /// Content-addressed, by lowercase SHA-256 hex.
-    Blob(String),
+    /// In the content store.
+    Blob(Sha256),
     Remote(String),
 }
 
@@ -225,21 +275,21 @@ pub enum DraftNode {
     /// A picture a tool made, in the content store already. The model
     /// can't write it.
     Made {
-        sha256: String,
+        sha256: Sha256,
         mime: String,
         size: u64,
     },
     /// A file a tool sends, in the content store already, shown under
     /// `name`. The model can't write it.
     File {
-        sha256: String,
+        sha256: Sha256,
         name: String,
         size: u64,
     },
     /// A voice message a tool sends, in the content store already. The
     /// model can't write it.
     Voice {
-        sha256: String,
+        sha256: Sha256,
         size: u64,
     },
 }

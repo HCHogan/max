@@ -6,22 +6,23 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use max_core::ids::{ConversationId, MessageId};
-use max_core::message::{MediaKind, MediaRef, Node, media};
+use max_core::message::{MediaKind, MediaRef, Node, Sha256, media};
 use sqlx::types::Json;
 use sqlx::{Connection, PgConnection};
+
+use crate::named;
 
 /// Downloaded bytes, as the content store holds them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Blob {
-    /// Lowercase hex.
-    pub sha256: String,
+    pub sha256: Sha256,
     pub mime: Option<String>,
     pub size: u64,
     pub width: Option<u32>,
     pub height: Option<u32>,
     /// What the model is sent of a picture: these bytes, or a smaller
     /// copy. None for what isn't a picture.
-    pub model_sha256: Option<String>,
+    pub model_sha256: Option<Sha256>,
 }
 
 /// A message with media still to download.
@@ -55,14 +56,14 @@ pub async fn remember(conn: &mut PgConnection, blob: &Blob, at: DateTime<Utc>) -
         "insert into media (sha256, mime, size, width, height, model_sha256, first_seen_at)
          values ($1, $2, $3, $4, $5, $6, $7)
          on conflict (sha256) do nothing",
-        blob.sha256,
+        blob.sha256.as_str(),
         blob.mime,
         i64::try_from(blob.size).unwrap_or(i64::MAX),
         blob.width
             .map(|width| i32::try_from(width).unwrap_or(i32::MAX)),
         blob.height
             .map(|height| i32::try_from(height).unwrap_or(i32::MAX)),
-        blob.model_sha256,
+        blob.model_sha256.as_ref().map(Sha256::as_str),
         at
     )
     .execute(conn)
@@ -76,14 +77,14 @@ pub async fn link(
     conn: &mut PgConnection,
     message: MessageId,
     ordinal: u16,
-    sha256: &str,
+    sha256: &Sha256,
 ) -> sqlx::Result<()> {
     sqlx::query!(
         "insert into message_media (message_id, ordinal, sha256) values ($1, $2, $3)
          on conflict do nothing",
         message.0,
         i16::try_from(ordinal).unwrap_or(i16::MAX),
-        sha256
+        sha256.as_str()
     )
     .execute(conn)
     .await?;
@@ -99,7 +100,7 @@ pub struct Stored {
     pub kind: MediaKind,
     /// A file's, as the row's node has it.
     pub name: Option<String>,
-    pub sha256: String,
+    pub sha256: Sha256,
     pub mime: Option<String>,
     pub size: u64,
 }
@@ -124,16 +125,19 @@ pub async fn stored(
     )
     .fetch_optional(conn)
     .await?;
-    Ok(row.and_then(|row| {
-        let (_, _, meta) = media(&row.nodes.0).find(|(n, _, _)| *n == ordinal)?;
-        Some(Stored {
-            conversation: ConversationId(row.conversation_id),
-            kind: meta.kind,
-            name: meta.name.clone(),
-            sha256: row.sha256,
-            mime: row.mime,
-            size: u64::try_from(row.size).unwrap_or_default(),
-        })
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let Some((_, _, meta)) = media(&row.nodes.0).find(|(n, _, _)| *n == ordinal) else {
+        return Ok(None);
+    };
+    Ok(Some(Stored {
+        conversation: ConversationId(row.conversation_id),
+        kind: meta.kind,
+        name: meta.name.clone(),
+        sha256: named(&row.sha256)?,
+        mime: row.mime,
+        size: u64::try_from(row.size).unwrap_or_default(),
     }))
 }
 
@@ -141,17 +145,19 @@ pub async fn stored(
 pub async fn downloaded(
     conn: &mut PgConnection,
     message: MessageId,
-) -> sqlx::Result<Vec<(u16, String)>> {
+) -> sqlx::Result<Vec<(u16, Sha256)>> {
     let rows = sqlx::query!(
         "select ordinal, sha256 from message_media where message_id = $1 order by ordinal",
         message.0
     )
     .fetch_all(conn)
     .await?;
-    Ok(rows
-        .into_iter()
-        .map(|row| (u16::try_from(row.ordinal).unwrap_or_default(), row.sha256))
-        .collect())
+    rows.into_iter()
+        .map(|row| {
+            let ordinal = u16::try_from(row.ordinal).unwrap_or_default();
+            Ok((ordinal, named(&row.sha256)?))
+        })
+        .collect()
 }
 
 /// For each of `messages` there is: when it came in, and the version made
@@ -159,7 +165,7 @@ pub async fn downloaded(
 pub async fn for_model(
     conn: &mut PgConnection,
     messages: &[MessageId],
-) -> sqlx::Result<BTreeMap<MessageId, (DateTime<Utc>, BTreeMap<u16, String>)>> {
+) -> sqlx::Result<BTreeMap<MessageId, (DateTime<Utc>, BTreeMap<u16, Sha256>)>> {
     let ids: Vec<i64> = messages.iter().map(|id| id.0).collect();
     let rows = sqlx::query!(
         r#"
@@ -180,7 +186,7 @@ pub async fn for_model(
             .entry(MessageId(row.id))
             .or_insert_with(|| (row.received_at, BTreeMap::new()));
         if let (Some(ordinal), Some(sha256)) = (row.ordinal, row.model_sha256) {
-            pictures.insert(u16::try_from(ordinal).unwrap_or_default(), sha256);
+            pictures.insert(u16::try_from(ordinal).unwrap_or_default(), named(&sha256)?);
         }
     }
     Ok(found)

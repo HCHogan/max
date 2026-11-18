@@ -7,7 +7,8 @@ use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use sha2::{Digest, Sha256};
+use max_core::message::Sha256;
+use sha2::Digest;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 
@@ -32,17 +33,16 @@ impl Store {
         })
     }
 
-    /// Where the file with this lowercase hex SHA-256 is, or would be.
-    pub fn path(&self, sha256: &str) -> PathBuf {
-        self.objects
-            .join(sha256.get(..2).unwrap_or("00"))
-            .join(sha256)
+    /// Where the file of this name is, or would be.
+    pub fn path(&self, sha256: &Sha256) -> PathBuf {
+        let name = sha256.as_str();
+        self.objects.join(name.get(..2).unwrap_or("00")).join(name)
     }
 
     /// Stores `bytes` and returns their SHA-256. Bytes already there are
     /// left alone. A new file is renamed into its place, so no one reads
     /// half of one.
-    pub async fn put(&self, bytes: Vec<u8>) -> io::Result<String> {
+    pub async fn put(&self, bytes: Vec<u8>) -> io::Result<Sha256> {
         let (sha256, bytes) = named(bytes).await?;
         let path = self.path(&sha256);
         if fs::try_exists(&path).await? {
@@ -75,7 +75,7 @@ impl Store {
             store: self,
             file,
             path,
-            hasher: Sha256::new(),
+            hasher: sha2::Sha256::new(),
             size: 0,
             placed: false,
         })
@@ -96,7 +96,7 @@ pub struct Partial<'a> {
     store: &'a Store,
     file: fs::File,
     path: PathBuf,
-    hasher: Sha256,
+    hasher: sha2::Sha256,
     size: u64,
     placed: bool,
 }
@@ -110,9 +110,9 @@ impl Partial<'_> {
 
     /// Puts what was written in its place, and returns its SHA-256 and
     /// size.
-    pub async fn finish(mut self) -> io::Result<(String, u64)> {
+    pub async fn finish(mut self) -> io::Result<(Sha256, u64)> {
         self.file.flush().await?;
-        let sha256 = hex(&std::mem::take(&mut self.hasher).finalize());
+        let sha256 = Sha256::of(std::mem::take(&mut self.hasher).finalize().into());
         let path = self.store.path(&sha256);
         if !fs::try_exists(&path).await? {
             self.store.place(&self.path, &path).await?;
@@ -131,15 +131,12 @@ impl Drop for Partial<'_> {
     }
 }
 
-/// The name `bytes` are stored by, their lowercase hex SHA-256, without
-/// storing them; and the bytes back.
-pub async fn named(bytes: Vec<u8>) -> io::Result<(String, Vec<u8>)> {
+/// The name `bytes` are stored by, without storing them; and the bytes
+/// back.
+pub async fn named(bytes: Vec<u8>) -> io::Result<(Sha256, Vec<u8>)> {
     // A video's hash takes a while: not on the runtime's threads.
-    tokio::task::spawn_blocking(move || (hex(&Sha256::digest(&bytes)), bytes))
+    let hashed = move || (Sha256::of(sha2::Sha256::digest(&bytes).into()), bytes);
+    tokio::task::spawn_blocking(hashed)
         .await
         .map_err(io::Error::other)
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }

@@ -10,6 +10,7 @@ use std::time::Duration;
 use chrono::{TimeDelta, Utc};
 use color_eyre::eyre::{Result, bail};
 use max_core::item::{Image, Item, ItemKind};
+use max_core::message::Sha256;
 use max_core::run::Request;
 use max_db::captions::{self, Caption, Kind};
 use max_db::{PgPool, usage};
@@ -52,7 +53,7 @@ pub struct Captioner {
     pub pictures: Arc<Pictures>,
     /// The embedding worker, which is handed the files of the sticker
     /// captions written; None when there is none.
-    pub stickers: Option<UnboundedSender<String>>,
+    pub stickers: Option<UnboundedSender<Sha256>>,
 }
 
 /// A file to caption, and a row's medium that has it: what the model is
@@ -60,7 +61,7 @@ pub struct Captioner {
 #[derive(Clone)]
 pub struct Picture {
     pub image: Image,
-    pub sha256: String,
+    pub sha256: Sha256,
 }
 
 // A file is captioned once, whichever row brought it.
@@ -224,7 +225,7 @@ impl Captioner {
             roster: BTreeSet::default(),
         };
         let pictures = self.pictures.read(&request).await;
-        if pictures.0.is_empty() {
+        if pictures.is_empty() {
             bail!("the picture can't be read");
         }
         let purpose = usage::Purpose::Caption;

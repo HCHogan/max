@@ -6,7 +6,7 @@ use std::path::Path;
 
 use chrono::Utc;
 use max_core::limits::SENT_FILE_BYTES;
-use max_core::message::{Draft, DraftNode};
+use max_core::message::{Draft, DraftNode, Sha256};
 use max_db::media::{self, Blob};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -120,7 +120,7 @@ pub(super) async fn keep(
     file: File,
     relative: &Path,
     most: u64,
-) -> Result<(String, u64), Failure> {
+) -> Result<(Sha256, u64), Failure> {
     let stored = |error: std::io::Error| {
         warn!(%error, "couldn't store a file to send");
         internal()

@@ -15,13 +15,13 @@ pub use client::{Call, Client, Provider};
 pub use error::{Cause, Error};
 
 use std::borrow::Cow;
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::fmt;
 
 use base64::display::Base64Display;
 use base64::engine::general_purpose::STANDARD;
 use max_core::item::{Image, Item, ItemKind, Part, ToolOutput, Usage};
-use max_core::message::MediaRef;
+use max_core::message::{MediaRef, Sha256};
 use max_core::tools::ToolSpec;
 use serde::{Serialize, Serializer};
 use serde_json::value::RawValue;
@@ -38,13 +38,32 @@ pub struct Options {
     pub cache_breakpoints: bool,
 }
 
-/// The pictures a request's items name: a row's by handle, a tool
-/// result's by SHA-256; and the videos tool results show, by SHA-256.
-/// `max` reads them before the call. One it couldn't read, or that isn't
-/// downloaded, is left out of the request; its handle is still in the
-/// text.
+/// The media a request's items name, which `max` reads before the call.
+/// One it couldn't read, or that isn't downloaded, is left out of the
+/// request; its handle is still in the text.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Pictures(pub BTreeMap<String, Medium>);
+pub struct Pictures {
+    /// Rows' pictures, each by which medium of which row it is.
+    rows: HashMap<Image, Medium>,
+    /// The pictures and videos tool results show, each by its file.
+    files: HashMap<Sha256, Medium>,
+}
+
+impl Pictures {
+    /// A row's picture.
+    pub fn add_row(&mut self, image: Image, medium: Medium) {
+        self.rows.insert(image, medium);
+    }
+
+    /// A picture or a video a tool result shows.
+    pub fn add_file(&mut self, sha256: Sha256, medium: Medium) {
+        self.files.insert(sha256, medium);
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.rows.is_empty() && self.files.is_empty()
+    }
+}
 
 /// A picture's or a video's file. It goes out as a data URL, base64'd as
 /// the body is written: no copy of it is made for the request.
@@ -108,8 +127,8 @@ fn pieces<'a>(
     let mut placed: Vec<(usize, String, &Medium)> = images
         .iter()
         .filter_map(|image| {
+            let medium = pictures.rows.get(image)?;
             let handle = image.handle();
-            let medium = pictures.0.get(&handle)?;
             let at = after_line(text, &handle).unwrap_or(text.len());
             Some((at, handle, medium))
         })
@@ -167,7 +186,7 @@ fn tool_pieces<'a>(output: &'a ToolOutput, pictures: &'a Pictures) -> Vec<Piece<
             Part::Media {
                 media: MediaRef::Blob(sha256),
             } => pictures
-                .0
+                .files
                 .get(sha256)
                 .map_or(Piece::Text(LEFT_OUT.into()), Piece::Picture),
             Part::Media { .. } => Piece::Text(LEFT_OUT.into()),
@@ -175,7 +194,7 @@ fn tool_pieces<'a>(output: &'a ToolOutput, pictures: &'a Pictures) -> Vec<Piece<
                 media: MediaRef::Blob(sha256),
                 ..
             } => pictures
-                .0
+                .files
                 .get(sha256)
                 .map_or(Piece::Text(VIDEO_LEFT_OUT.into()), Piece::Video),
             Part::Video { .. } => Piece::Text(VIDEO_LEFT_OUT.into()),
