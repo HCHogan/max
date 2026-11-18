@@ -10,11 +10,11 @@ use crate::search::{Error, Found};
 const DEFAULT: u8 = 5;
 const MOST: u8 = 10;
 
-pub struct WebSearch;
+pub(super) struct WebSearch;
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct Args {
+pub(super) struct Args {
     #[schemars(length(min = 1))]
     query: String,
     #[schemars(range(min = 1, max = MOST), description = format!("how many, {DEFAULT} by default"))]
@@ -22,7 +22,7 @@ pub struct Args {
 }
 
 #[derive(Serialize, JsonSchema)]
-pub struct Results {
+pub(super) struct Results {
     results: Vec<Found>,
 }
 

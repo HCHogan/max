@@ -12,13 +12,13 @@ use sqlx::PgConnection;
 use crate::ledger::{self, NewMessage};
 use crate::platform::{self, Account, ConversationKind, Endpoint};
 
-pub struct Group {
+pub(crate) struct Group {
     pub endpoint: Endpoint,
     pub max: Account,
     pub xiaoming: Account,
 }
 
-pub async fn group(conn: &mut PgConnection, native_id: &str) -> sqlx::Result<Group> {
+pub(crate) async fn group(conn: &mut PgConnection, native_id: &str) -> sqlx::Result<Group> {
     let max = platform::account(conn, Platform::Qq, "20000", "Max").await?;
     let xiaoming = platform::account(conn, Platform::Qq, "10001", "小明").await?;
     let kind = ConversationKind::Group;
@@ -32,11 +32,11 @@ pub async fn group(conn: &mut PgConnection, native_id: &str) -> sqlx::Result<Gro
 }
 
 /// Minutes into the test's day.
-pub fn at(minute: i64) -> DateTime<Utc> {
+pub(crate) fn at(minute: i64) -> DateTime<Utc> {
     DateTime::from_timestamp(1_800_000_000 + minute * 60, 0).unwrap_or_default()
 }
 
-pub fn sender(account: Account, name: &str, role: Option<Role>) -> Sender {
+pub(crate) fn sender(account: Account, name: &str, role: Option<Role>) -> Sender {
     Sender {
         identity: account.identity,
         name: name.into(),
@@ -44,7 +44,7 @@ pub fn sender(account: Account, name: &str, role: Option<Role>) -> Sender {
     }
 }
 
-pub fn said(text: &str) -> Content {
+pub(crate) fn said(text: &str) -> Content {
     Content::Message {
         reply_to: None,
         nodes: vec![Node::Text { text: text.into() }],
@@ -53,7 +53,7 @@ pub fn said(text: &str) -> Content {
 
 /// Commits a row at `minute`, with its text rendered for search. Someone
 /// else's comes with the platform id `n<minute>`; Max's has none.
-pub async fn commit(
+pub(crate) async fn commit(
     conn: &mut PgConnection,
     group: &Group,
     sender: &Sender,

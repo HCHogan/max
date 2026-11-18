@@ -17,11 +17,11 @@ use super::{Context, Failure};
 /// The longest text either takes, in characters.
 const LONGEST: u32 = 4000;
 
-pub struct Say;
+pub(super) struct Say;
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct SayArgs {
+pub(super) struct SayArgs {
     #[schemars(
         length(min = 1, max = LONGEST),
         description = "what to say, written as your own replies are: [reply#id], [mention#id], [sticker#id.n], [image#id.n], [split], and a blank line between messages"
@@ -30,7 +30,7 @@ pub struct SayArgs {
 }
 
 #[derive(Serialize, JsonSchema)]
-pub struct Said {
+pub(super) struct Said {
     /// The messages it became, in order.
     messages: Vec<i64>,
 }
@@ -110,11 +110,11 @@ impl Tool for Say {
     }
 }
 
-pub struct Wake;
+pub(super) struct Wake;
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct WakeArgs {
+pub(super) struct WakeArgs {
     #[schemars(
         length(min = 1, max = LONGEST),
         description = "what Max is shown: what happened"
@@ -123,7 +123,7 @@ pub struct WakeArgs {
 }
 
 #[derive(Serialize, JsonSchema)]
-pub struct Woken {
+pub(super) struct Woken {
     /// That Max was woken.
     said: String,
 }

@@ -27,7 +27,7 @@ pub(super) const MOST: usize = 100;
 
 /// A page of what was read, and where to go on.
 #[derive(Serialize, JsonSchema)]
-pub struct Page {
+pub(crate) struct Page {
     text: String,
     page: usize,
     pages: usize,

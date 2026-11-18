@@ -26,11 +26,11 @@ use crate::conversation::project;
 const DEFAULT: usize = 100;
 const MOST: usize = 1000;
 
-pub struct Rows;
+pub(crate) struct Rows;
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct Args {
+pub(crate) struct Args {
     #[schemars(description = "the rows after this message, 123 for #123: the first of them")]
     after: Option<i64>,
     #[schemars(description = "the rows before this message; without after, the newest of them")]
@@ -43,7 +43,7 @@ pub struct Args {
 }
 
 #[derive(Serialize, JsonSchema)]
-pub struct Read {
+pub(crate) struct Read {
     /// In the timeline's order, each as [`data`] writes it.
     #[schemars(with = "Vec<Shape>")]
     rows: Vec<Value>,

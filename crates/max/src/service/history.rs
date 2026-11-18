@@ -20,11 +20,11 @@ use super::{Context, Failure};
 use read::{AROUND, MOST_AROUND, Next, Page};
 use search::{Hit, MOST_TERMS};
 
-pub struct History;
+pub(super) struct History;
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct Args {
+pub(super) struct Args {
     #[schemars(
         length(min = 1),
         description = format!("keywords separated by spaces, at most {MOST_TERMS}; given, it searches")
@@ -66,7 +66,7 @@ pub struct Args {
 /// What a search found, or a page read.
 #[derive(Serialize, JsonSchema)]
 #[serde(untagged)]
-pub enum Found {
+pub(super) enum Found {
     Search { results: Vec<Hit> },
     Read(Page),
 }

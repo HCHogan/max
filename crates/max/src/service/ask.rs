@@ -12,12 +12,12 @@ use super::tool::Tool;
 use super::{Context, Failure};
 use crate::conversation::Poster;
 
-pub struct Ask;
-pub struct Answer;
+pub(super) struct Ask;
+pub(super) struct Answer;
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct Asking {
+pub(super) struct Asking {
     #[schemars(
         range(min = 1),
         description = "the number of the conversation to ask: 9 for the c#9 listed under [能问的会话]"
@@ -32,7 +32,7 @@ pub struct Asking {
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct Answering {
+pub(super) struct Answering {
     #[schemars(
         range(min = 1),
         description = "the question's number: 5 for [ask#5 问]"
@@ -44,13 +44,13 @@ pub struct Answering {
 
 /// The conversation the question went to.
 #[derive(Serialize, JsonSchema)]
-pub struct Asked {
+pub(super) struct Asked {
     asked: String,
 }
 
 /// The conversation the answer went to.
 #[derive(Serialize, JsonSchema)]
-pub struct Answered {
+pub(super) struct Answered {
     to: String,
 }
 

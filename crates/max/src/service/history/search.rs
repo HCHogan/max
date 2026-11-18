@@ -45,7 +45,7 @@ static SLOTS: Semaphore = Semaphore::const_new(4);
 
 /// A result, as the program gets it, and what it is ranked by.
 #[derive(Debug, Serialize, JsonSchema)]
-pub struct Hit {
+pub(crate) struct Hit {
     #[serde(rename = "ref")]
     handle: String,
     time: String,
@@ -65,7 +65,7 @@ pub struct Hit {
 
 /// `history`'s arguments that read a row in context.
 #[derive(Debug, Serialize, JsonSchema)]
-pub struct Around {
+pub(super) struct Around {
     around: i64,
 }
 

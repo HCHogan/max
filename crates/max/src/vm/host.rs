@@ -45,7 +45,7 @@ impl Answer {
     }
 }
 
-pub fn router(service: UnboundedSender<Internal>) -> Router {
+pub(super) fn router(service: UnboundedSender<Internal>) -> Router {
     Router::new()
         .route("/units", post(units))
         .with_state(service)

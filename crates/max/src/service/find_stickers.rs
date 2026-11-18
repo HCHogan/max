@@ -15,11 +15,11 @@ use super::{Context, Failure};
 const DEFAULT: u8 = 5;
 const MOST: u8 = 10;
 
-pub struct FindStickers;
+pub(super) struct FindStickers;
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct Args {
+pub(super) struct Args {
     #[schemars(
         length(min = 1),
         description = "what to express, such as “无语”, “幸灾乐祸” or “翻白眼的猫”"
@@ -30,12 +30,12 @@ pub struct Args {
 }
 
 #[derive(Serialize, JsonSchema)]
-pub struct Found {
+pub(super) struct Found {
     stickers: Vec<Sticker>,
 }
 
 #[derive(Serialize, JsonSchema)]
-pub struct Sticker {
+pub(super) struct Sticker {
     handle: String,
     description: String,
 }

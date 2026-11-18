@@ -26,7 +26,7 @@ use super::ssh::{self, Connection};
 use crate::config::{self, Slot};
 
 /// How long the guest has to boot and let max in.
-pub const BOOT: Duration = Duration::from_secs(60);
+pub(super) const BOOT: Duration = Duration::from_secs(60);
 /// How long a VM that runs already has to let max in.
 const ATTACH: Duration = Duration::from_secs(10);
 /// Between tries to log in while the guest boots.
@@ -45,7 +45,7 @@ const CALLS: &str = "notify.vsock_7777";
 
 /// What the flake's `guest` package says to boot.
 #[derive(Debug, Deserialize)]
-pub struct Guest {
+pub(super) struct Guest {
     pub kernel: PathBuf,
     pub initrd: PathBuf,
     pub cmdline: String,
@@ -59,7 +59,7 @@ pub struct Guest {
 }
 
 impl Guest {
-    pub fn load(path: &Path) -> Result<Self> {
+    pub(super) fn load(path: &Path) -> Result<Self> {
         let text = std::fs::read_to_string(path)
             .wrap_err_with(|| format!("reading the guest {}", path.display()))?;
         Ok(serde_json::from_str(&text)?)
@@ -69,7 +69,7 @@ impl Guest {
 /// What max wrote down of a VM as it booted it, for the max that attaches
 /// to it later: where it is, and what it runs.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Boot {
+pub(super) struct Boot {
     /// Its tap's slot.
     pub slot: usize,
     /// The contract of the guest it booted.
@@ -86,7 +86,7 @@ pub struct Boot {
 
 impl Boot {
     /// The one in the VM's directory.
-    pub async fn read(dir: &Path) -> Result<Self> {
+    pub(super) async fn read(dir: &Path) -> Result<Self> {
         let path = dir.join(RECORD);
         let text = fs::read(&path)
             .await
@@ -102,14 +102,14 @@ impl Boot {
     /// Whether a VM of this boot has to boot again to run `guest`'s image
     /// whole: a switch gives it the system, and leaves the kernel and the
     /// initrd it booted.
-    pub fn reboots_for(&self, guest: &Guest) -> bool {
+    pub(super) fn reboots_for(&self, guest: &Guest) -> bool {
         self.kernel != guest.kernel || self.initrd != guest.initrd
     }
 }
 
 /// A conversation's VM: its unit, and what goes with it on the host.
 #[derive(Clone, Debug)]
-pub struct Machine {
+pub(super) struct Machine {
     systemctl: PathBuf,
     unit: String,
     /// The VM's files.
@@ -121,7 +121,7 @@ pub struct Machine {
 }
 
 impl Machine {
-    pub fn of(config: &config::Vm, conversation: ConversationId) -> Self {
+    pub(super) fn of(config: &config::Vm, conversation: ConversationId) -> Self {
         let instance = format!("{}{}", config.instances, conversation.get());
         Self {
             systemctl: config.systemctl.clone(),
@@ -136,7 +136,7 @@ impl Machine {
     /// way when this returns, and systemd has it when what this returns
     /// is done: a boot of the same VM waits for that, since a start that
     /// reached systemd first would be the one stopped.
-    pub fn stop(&self) -> impl Future<Output = ()> + Send + use<> {
+    pub(super) fn stop(&self) -> impl Future<Output = ()> + Send + use<> {
         let stopping = self
             .systemctl(&["stop", "--no-block"])
             .stdin(Stdio::null())
@@ -155,7 +155,7 @@ impl Machine {
     /// What it ran is the collector's again: a VM that has ended. A few
     /// unlinks, done before this returns: left for later, they could take
     /// the link of the boot that comes next.
-    pub fn unroot(&self) {
+    pub(super) fn unroot(&self) {
         for root in self.roots() {
             let _ = std::fs::remove_file(root);
         }
@@ -205,7 +205,7 @@ impl Machine {
     }
 
     /// Stops it, and waits until it has stopped.
-    pub async fn stopped(&self) {
+    pub(super) async fn stopped(&self) {
         if let Err(error) = self.run(&["stop"]).await {
             warn!(unit = %self.unit, error = format!("{error:#}"), "couldn't stop a VM");
         }
@@ -245,7 +245,7 @@ impl Machine {
 
 /// The conversations whose VMs run, by the units systemd has active: the
 /// ones a max before this one booted.
-pub async fn running(config: &config::Vm) -> Result<Vec<ConversationId>> {
+pub(super) async fn running(config: &config::Vm) -> Result<Vec<ConversationId>> {
     let pattern = format!("{}{}*", config.unit, config.instances);
     let listed = Command::new(&config.systemctl)
         .args(["list-units", "--type=service", "--state=active"])
@@ -268,7 +268,7 @@ pub async fn running(config: &config::Vm) -> Result<Vec<ConversationId>> {
 /// for: all but those of `running`. A VM that ended without max, as when
 /// the host restarted, left its links, which max removes only as it
 /// stops one.
-pub fn unroot_ended(config: &config::Vm, running: &[ConversationId]) {
+pub(super) fn unroot_ended(config: &config::Vm, running: &[ConversationId]) {
     if let Some(roots) = &config.roots {
         unroot_but(roots, &config.instances, running);
     }
@@ -321,7 +321,7 @@ async fn calls(dir: &Path) -> std::io::Result<()> {
 /// guest a connection at max's socket is from. /proc doesn't say: each
 /// unit is in a user namespace of its own, and with `ProtectProc=invisible`
 /// sees none of another's processes.
-pub async fn whose(config: &config::Vm, pid: i32) -> Option<ConversationId> {
+pub(super) async fn whose(config: &config::Vm, pid: i32) -> Option<ConversationId> {
     let asked = Command::new(&config.systemctl)
         .args(["whoami", &pid.to_string()])
         .stdin(Stdio::null())
@@ -336,14 +336,14 @@ pub async fn whose(config: &config::Vm, pid: i32) -> Option<ConversationId> {
 }
 
 /// A VM max can use: its unit, and the SSH connection.
-pub struct Booted {
+pub(super) struct Booted {
     pub machine: Machine,
     pub connection: Connection,
 }
 
 /// Boots `conversation`'s VM on `slot`, the slot `index`; without the
 /// units Max keeps in its /work unless `units`.
-pub async fn boot(
+pub(super) async fn boot(
     config: &config::Vm,
     guest: &Guest,
     conversation: ConversationId,
@@ -443,7 +443,10 @@ pub async fn boot(
 /// Attaches to `conversation`'s VM, which runs: logs in with the key its
 /// boot left. None if its unit has ended: there is nothing to attach to,
 /// and its socket, which stays, would only be waited on.
-pub async fn attach(config: &config::Vm, conversation: ConversationId) -> Result<Option<Booted>> {
+pub(super) async fn attach(
+    config: &config::Vm,
+    conversation: ConversationId,
+) -> Result<Option<Booted>> {
     let machine = Machine::of(config, conversation);
     if !machine.active().await {
         return Ok(None);
@@ -488,7 +491,7 @@ async fn let_in(socket: &Path, key: &Arc<PrivateKey>, within: Duration) -> Resul
 /// VM must still boot again for the image, its kernel or initrd being
 /// another's. The new image's own `max-switch` does it (nix/guest.nix),
 /// so a guest older than that command is switched too.
-pub async fn switch(
+pub(super) async fn switch(
     config: &config::Vm,
     guest: &Guest,
     machine: &Machine,

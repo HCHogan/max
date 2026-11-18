@@ -10,11 +10,11 @@ use super::tool::Tool;
 use super::{Context, Failure, internal};
 use crate::conversation::Configured;
 
-pub struct Config;
+pub(super) struct Config;
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct Args {
+pub(super) struct Args {
     #[schemars(
         range(min = 0, max = *Setting::IdleWindowSecs.range().end()),
         description = "seconds a turn idles after it last spoke before it ends; 0 is back to the default"
@@ -28,14 +28,14 @@ pub struct Args {
 }
 
 #[derive(Serialize, JsonSchema)]
-pub struct Limits {
+pub(super) struct Limits {
     idle_window_secs: Shown,
     call_time_secs: Shown,
 }
 
 /// A limit as it is now, and what it is when nobody has set it.
 #[derive(Serialize, JsonSchema)]
-pub struct Shown {
+pub(super) struct Shown {
     value: u64,
     default: u64,
 }

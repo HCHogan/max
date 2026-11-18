@@ -21,17 +21,17 @@ use crate::llm::{Caller, Models};
 use crate::service::Services;
 use crate::worker::Rows;
 
-pub fn offset() -> FixedOffset {
+pub(crate) fn offset() -> FixedOffset {
     FixedOffset::east_opt(8 * 3600).unwrap()
 }
 
-pub fn at(minute: u32) -> DateTime<Utc> {
+pub(crate) fn at(minute: u32) -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 10, 29, 4, minute, 0).unwrap()
 }
 
 /// What actors share: a scripted model, a sender that only queues, and no
 /// table to take what one conversation has for another.
-pub fn shared(
+pub(crate) fn shared(
     pool: &PgPool,
     script: &Arc<Script>,
     idle_window_secs: u64,
@@ -65,11 +65,11 @@ pub fn shared(
 }
 
 /// A QQ group with Max in it.
-pub async fn group(conn: &mut PgConnection) -> Place {
+pub(crate) async fn group(conn: &mut PgConnection) -> Place {
     group_named(conn, "group:GROUP1").await
 }
 
-pub async fn group_named(conn: &mut PgConnection, native_id: &str) -> Place {
+pub(crate) async fn group_named(conn: &mut PgConnection, native_id: &str) -> Place {
     place(conn, native_id, ConversationKind::Group).await
 }
 
@@ -92,7 +92,7 @@ async fn place(conn: &mut PgConnection, native_id: &str, kind: ConversationKind)
 }
 
 /// 小明 says something in the group.
-pub fn from_xiaoming(n: u32, nodes: Vec<InNode>) -> Inbound {
+pub(crate) fn from_xiaoming(n: u32, nodes: Vec<InNode>) -> Inbound {
     Inbound {
         platform: Platform::Qq,
         chat: Chat {
@@ -113,12 +113,12 @@ pub fn from_xiaoming(n: u32, nodes: Vec<InNode>) -> Inbound {
     }
 }
 
-pub fn text(text: &str) -> InNode {
+pub(crate) fn text(text: &str) -> InNode {
     InNode::Node(Node::Text { text: text.into() })
 }
 
 /// 小红 says something in the group.
-pub fn from_xiaohong(n: u32, nodes: Vec<InNode>) -> Inbound {
+pub(crate) fn from_xiaohong(n: u32, nodes: Vec<InNode>) -> Inbound {
     let mut inbound = from_xiaoming(n, nodes);
     inbound.sender = Person {
         native_user_id: "XIAOHONG".into(),

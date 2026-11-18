@@ -20,17 +20,17 @@ use super::{Context, Failure};
 /// How long QQ lets any message be recalled.
 const WINDOW: TimeDelta = TimeDelta::minutes(2);
 
-pub struct RecallMessage;
+pub(super) struct RecallMessage;
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct Args {
+pub(super) struct Args {
     #[schemars(description = "the message's number: 123 for #123")]
     id: i64,
 }
 
 #[derive(Serialize, JsonSchema)]
-pub struct Recalled {
+pub(super) struct Recalled {
     recalled: i64,
 }
 

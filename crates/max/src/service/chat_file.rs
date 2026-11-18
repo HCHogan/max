@@ -17,11 +17,11 @@ const DIR: &str = "chat";
 /// The most of a file's name kept, in bytes.
 const LONGEST_NAME: usize = 150;
 
-pub struct File;
+pub(super) struct File;
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct Args {
+pub(super) struct Args {
     #[schemars(
         length(min = 1),
         description = "the handle, as the records show it: file#123.0, or image#, sticker#, video#, audio#"
@@ -31,7 +31,7 @@ pub struct Args {
 
 /// Where the copy is, and what the record says of the file.
 #[derive(Serialize, JsonSchema)]
-pub struct Fetched {
+pub(super) struct Fetched {
     path: String,
     name: Option<String>,
     size: u64,

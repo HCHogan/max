@@ -53,7 +53,7 @@ fn with_provider(mut llm: config::Llm, base_url: &str) -> Result<Upstreams> {
 
 /// On the last slot, which a running service takes last; or the
 /// operations network's last.
-pub fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
+pub(crate) fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
     let (config, vm) = configured(path, operations)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

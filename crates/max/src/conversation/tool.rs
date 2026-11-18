@@ -10,7 +10,7 @@ use super::{Event, TaskId};
 use crate::tools;
 use crate::vm::Vms;
 
-pub async fn call(
+pub(super) async fn call(
     vms: Option<Vms>,
     context: tools::Context,
     call: Call,
