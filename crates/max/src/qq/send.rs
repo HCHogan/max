@@ -32,7 +32,7 @@ use tokio::sync::mpsc::{self, UnboundedReceiver};
 use tokio::time::{Instant, sleep_until};
 use tracing::{info, warn};
 
-use crate::conversation::{Outgoing, Place};
+use crate::conversation::{Outgoing, Place, Refused};
 use crate::media::store::Store;
 use crate::scope::Scope;
 
@@ -388,13 +388,13 @@ impl Unsent {
     }
 
     /// As whoever waits on it is told.
-    fn told(self) -> String {
-        match self {
+    fn told(self) -> Refused {
+        Refused::Unsent(match self {
             Self::Refused(text) => text,
             Self::Unknown(text) => {
                 format!("QQ never answered, so it isn't known whether it was sent: {text}")
             }
-        }
+        })
     }
 }
 

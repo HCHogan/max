@@ -35,15 +35,11 @@ impl Conversation {
         &mut self,
         to: ConversationId,
         question: &str,
-    ) -> Result<Result<String, String>> {
+    ) -> Result<Result<String, Refused>> {
         let here = self.place.conversation;
         let mut conn = self.shared.services.pool.acquire().await?;
-        // A conversation there is no edge to and one that doesn't exist
-        // are refused alike: asking tells nothing of which there are.
         if !links::linked(&mut conn, here, to).await? {
-            return Ok(Err(format!(
-                "can't ask c#{to}: there is no link from here to it, or no such conversation; whom Max here may ask is listed under [能问的会话]"
-            )));
+            return Ok(Err(Refused::NotLinked(to)));
         }
         let from = peer(&mut conn, here).await?;
         let to = peer(&mut conn, to).await?;
@@ -92,11 +88,9 @@ impl Conversation {
 
     /// `answer` to question `to`: it goes to the conversation that asked.
     /// Whom it went to, or why it wasn't taken.
-    pub(super) fn answer_question(&mut self, to: u32, text: &str) -> Result<String, String> {
+    pub(super) fn answer_question(&mut self, to: u32, text: &str) -> Result<String, Refused> {
         let Some(question) = self.asked.kept.remove(&to) else {
-            return Err(format!(
-                "there is no ask#{to} to answer: no such question, or it was answered already, or it was asked in an earlier turn, which ended without answering it; nothing was sent"
-            ));
+            return Err(Refused::NoQuestion(to));
         };
         let asker = question.from.to_string();
         let conversation = self.place.conversation;

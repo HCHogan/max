@@ -148,7 +148,7 @@ impl Tool for Wake {
         let said = poster
             .wake(text)
             .await
-            .map_err(|why| Failure::new("not_woken", why))?;
+            .map_err(|why| Failure::new("not_woken", why.to_string()))?;
         Ok(Woken { said })
     }
 }

@@ -30,7 +30,8 @@ use super::ingest::{self, By};
 use super::notice::Notice;
 use super::project::{self, Projection};
 use super::{
-    Act, Event, Place, Post, Poster, Receipt, Signal, Subscription, TaskId, classify, model, tool,
+    Act, Event, Place, Post, Poster, Receipt, Refusal, Refused, Signal, Subscription, TaskId,
+    classify, model, tool,
 };
 use crate::bind::Binds;
 use crate::causes;
@@ -53,8 +54,6 @@ const SUBSCRIBED_ROWS: usize = 256;
 /// The most of a reason a failure line shows: a provider's error page
 /// runs to kilobytes.
 const REASON_CHARS: usize = 300;
-/// Why a draft wasn't said: nothing in it could be.
-const NOTHING_TO_SAY: &str = "there was nothing in it to send";
 
 /// What an event would have the conversation do, as far as stopping
 /// goes: whether it has Max say or do something, which `/stop` forbids,
@@ -78,25 +77,6 @@ impl Does {
 
     const fn new(acts: bool, starts: bool) -> Self {
         Self { acts, starts }
-    }
-}
-
-/// Why the conversation won't do what an event asks.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Refusal {
-    /// `/stop` stopped Max here.
-    Stopped,
-    /// Max is shutting down.
-    Stopping,
-}
-
-impl Refusal {
-    /// As whoever asked is told.
-    pub(super) fn why(self) -> &'static str {
-        match self {
-            Refusal::Stopped => "Max is stopped here (/stop), so this wasn't done",
-            Refusal::Stopping => "Max is restarting, so this wasn't done",
-        }
     }
 }
 
@@ -865,7 +845,7 @@ impl Conversation {
         let Post { act, receipt } = post;
         if let Some(refused) = self.refuses(Does::ACTS) {
             if let Some(receipt) = receipt {
-                let _ = receipt.send(Err(refused.why().to_owned()));
+                let _ = receipt.send(Err(refused.into()));
             }
             return Ok(());
         }
@@ -877,7 +857,7 @@ impl Conversation {
                 let said = self.say(draft, None, None, By::Program, None).await?;
                 if let Some(receipt) = receipt {
                     let row = said.map(|(id, _)| id);
-                    let _ = receipt.send(row.ok_or_else(|| NOTHING_TO_SAY.to_owned()));
+                    let _ = receipt.send(row.ok_or(Refused::NothingToSay));
                 }
             }
             Act::Unsend(target) => {
@@ -912,7 +892,7 @@ impl Conversation {
         )
         .await?;
         drop(conn);
-        Ok(self.hand_over(said, receipt, NOTHING_TO_SAY))
+        Ok(self.hand_over(said, receipt, Refused::NothingToSay))
     }
 
     /// Takes back `target`, as `say` says something.
@@ -932,7 +912,7 @@ impl Conversation {
         )
         .await?;
         drop(conn);
-        Ok(self.hand_over(unsend, receipt, "no such message here"))
+        Ok(self.hand_over(unsend, receipt, Refused::NoSuchMessage))
     }
 
     /// A row of Max's that was committed, for the sender: the row and
@@ -941,11 +921,11 @@ impl Conversation {
         &mut self,
         committed: Option<Message>,
         receipt: Option<Receipt>,
-        why: &str,
+        why: Refused,
     ) -> Option<(MessageId, DateTime<Utc>)> {
         let Some(message) = committed else {
             if let Some(receipt) = receipt {
-                let _ = receipt.send(Err(why.to_owned()));
+                let _ = receipt.send(Err(why));
             }
             return None;
         };

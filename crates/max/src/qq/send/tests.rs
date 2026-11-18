@@ -236,6 +236,6 @@ async fn a_lost_answer_is_neither_resent_nor_failed(pool: PgPool) {
     let bodies: Vec<_> = s.sent().into_iter().map(|(_, m)| m.body).collect();
     assert_eq!(bodies, [Body::Markdown("一".into())]);
     assert_eq!(s.delivery(&message).await, (Delivery::Unknown, None, None));
-    let told = told.await.unwrap().unwrap_err();
+    let told = told.await.unwrap().unwrap_err().to_string();
     assert!(told.starts_with("QQ never answered"), "{told}");
 }

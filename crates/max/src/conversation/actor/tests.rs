@@ -364,7 +364,7 @@ async fn kill_stops_the_core_quietly(pool: PgPool) {
 }
 
 /// A post that waits to hear how it went.
-fn post(act: Act) -> (Post, oneshot::Receiver<Result<MessageId, String>>) {
+fn post(act: Act) -> (Post, oneshot::Receiver<Result<MessageId, Refused>>) {
     let (receipt, sent) = oneshot::channel();
     let post = Post {
         act,
@@ -458,8 +458,11 @@ async fn stop_ends_the_turn_and_nothing_starts_until_start(pool: PgPool) {
             text: "CI 挂了".into(),
         }],
     };
-    let stopped = Refusal::Stopped.why().to_owned();
-    assert_eq!(stopped, "Max is stopped here (/stop), so this wasn't done");
+    let stopped = Refused::from(Refusal::Stopped);
+    assert_eq!(
+        stopped.to_string(),
+        "Max is stopped here (/stop), so this wasn't done"
+    );
     let (say, sent) = post(Act::Say(draft));
     h.mailbox.send(Event::Post(say)).unwrap();
     assert_eq!(sent.await.unwrap(), Err(stopped.clone()));
@@ -477,7 +480,7 @@ async fn stop_ends_the_turn_and_nothing_starts_until_start(pool: PgPool) {
         reply,
     };
     h.mailbox.send(call).unwrap();
-    let refused = service::Failure::new("refused", stopped.clone());
+    let refused = service::Failure::new("refused", stopped.to_string());
     assert_eq!(muted.await.unwrap().unwrap_err(), refused);
     let asked = h.poster().ask(ConversationId(9), "在吗".into()).await;
     assert_eq!(asked.unwrap_err(), stopped);

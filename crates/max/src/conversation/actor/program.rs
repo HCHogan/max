@@ -19,7 +19,7 @@ impl Conversation {
     ) {
         // What it would say or do in the chat is refused as it comes.
         if let Some(refused) = self.refuses(Does::RUNS) {
-            let _ = reply.send(Err(service::Failure::new("refused", refused.why())));
+            let _ = reply.send(Err(service::Failure::new("refused", refused.to_string())));
             return;
         }
         let work = self

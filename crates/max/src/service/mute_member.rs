@@ -69,7 +69,7 @@ async fn mute(context: &Context, Args { member, seconds }: Args) -> Result<Muted
     // which then couldn't refuse it once Max is stopped: it is asked.
     if let Some(conversation) = context.poster.as_ref() {
         let allowed = conversation.act_alone().await;
-        allowed.map_err(|why| Failure::new("refused", why))?;
+        allowed.map_err(|why| Failure::new("refused", why.to_string()))?;
     }
     let place = &context.place;
     let (Some(qq), Platform::Qq) = (&context.services.groups, place.platform) else {
