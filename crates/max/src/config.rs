@@ -84,7 +84,7 @@ impl Limits {
             ensure!(
                 range.contains(&value),
                 "{} is {value}, out of {}..={}",
-                setting.name(),
+                setting.as_str(),
                 range.start(),
                 range.end()
             );

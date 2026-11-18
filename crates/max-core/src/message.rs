@@ -23,6 +23,11 @@ pub enum Platform {
     QqLegacy,
 }
 
+crate::names!(Platform, "platform", {
+    Qq => "qq",
+    QqLegacy => "qq_legacy",
+});
+
 /// One row of a conversation's timeline.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Message {
@@ -56,6 +61,12 @@ pub enum Role {
     Admin,
     Member,
 }
+
+crate::names!(Role, "role", {
+    Owner => "owner",
+    Admin => "admin",
+    Member => "member",
+});
 
 /// What a timeline row records: something said, or an event about an
 /// earlier row.
@@ -149,18 +160,14 @@ pub enum MediaKind {
     File,
 }
 
-impl MediaKind {
-    /// How a handle or placeholder names it: `image`, `sticker`, …
-    pub fn word(self) -> &'static str {
-        match self {
-            Self::Image => "image",
-            Self::Sticker => "sticker",
-            Self::Video => "video",
-            Self::Audio => "audio",
-            Self::File => "file",
-        }
-    }
-}
+// How a handle or a placeholder names it, too: `image#103.0`.
+crate::names!(MediaKind, "media kind", {
+    Image => "image",
+    Sticker => "sticker",
+    Video => "video",
+    Audio => "audio",
+    File => "file",
+});
 
 /// A share card, such as a QQ lightapp.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

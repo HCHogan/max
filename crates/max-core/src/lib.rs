@@ -10,6 +10,7 @@ pub mod intent;
 pub mod item;
 pub mod limits;
 pub mod message;
+pub mod names;
 pub mod project;
 pub mod prompt;
 pub mod render;

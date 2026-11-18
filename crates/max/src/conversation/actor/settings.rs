@@ -70,8 +70,7 @@ impl Conversation {
     ) -> Result<()> {
         for &(setting, value) in changes {
             self.settings.overrides.set(setting, value);
-            let name = setting.name();
-            info!(conversation = %self.place.conversation, setting = name, ?value, by, "configured");
+            info!(conversation = %self.place.conversation, %setting, ?value, by, "configured");
         }
         self.save_settings().await
     }
@@ -92,8 +91,8 @@ impl Conversation {
                 .collect();
             return Ok(format!("this conversation's limits\n{}", lines.join("\n")));
         };
-        let Some(setting) = Setting::find(name) else {
-            let names: Vec<&str> = Setting::ALL.into_iter().map(Setting::name).collect();
+        let Ok(setting) = name.parse::<Setting>() else {
+            let names: Vec<&str> = Setting::ALL.into_iter().map(Setting::as_str).collect();
             return Ok(format!(
                 "error: no such setting; there are {}",
                 names.join(", ")
@@ -138,7 +137,7 @@ impl Conversation {
             value,
             default,
         } = configured;
-        let mut line = format!("{:<18}{value}", setting.name());
+        let mut line = format!("{:<18}{value}", setting.as_str());
         if self.settings.overrides.get(*setting).is_some() {
             let _ = write!(line, " (default {default})");
         }
@@ -151,7 +150,7 @@ impl Conversation {
             .into_iter()
             .filter_map(|setting| {
                 let value = self.settings.overrides.get(setting)?;
-                Some(format!("{} {value}", setting.name()))
+                Some(format!("{setting} {value}"))
             })
             .collect();
         (!set.is_empty()).then(|| set.join(" · "))

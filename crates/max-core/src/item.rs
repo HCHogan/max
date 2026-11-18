@@ -66,7 +66,7 @@ pub struct Image {
 impl Image {
     /// What the text names it by: `image#123.0`.
     pub fn handle(&self) -> String {
-        format!("{}#{}.{}", self.kind.word(), self.message, self.ordinal)
+        format!("{}#{}.{}", self.kind, self.message, self.ordinal)
     }
 }
 
