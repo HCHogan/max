@@ -6,20 +6,20 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use super::Event;
 
-pub struct Report<F: FnOnce() -> Event> {
+pub(super) struct Report<F: FnOnce() -> Event> {
     mailbox: UnboundedSender<Event>,
     fallback: Option<F>,
 }
 
 impl<F: FnOnce() -> Event> Report<F> {
-    pub fn new(mailbox: UnboundedSender<Event>, fallback: F) -> Self {
+    pub(super) fn new(mailbox: UnboundedSender<Event>, fallback: F) -> Self {
         Self {
             mailbox,
             fallback: Some(fallback),
         }
     }
 
-    pub fn send(mut self, event: Event) {
+    pub(super) fn send(mut self, event: Event) {
         self.fallback = None;
         let _ = self.mailbox.send(event);
     }

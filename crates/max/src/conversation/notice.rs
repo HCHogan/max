@@ -15,7 +15,7 @@ use max_db::links::Peer;
 use super::Unanswered;
 use crate::tokens;
 
-pub enum Notice<'a> {
+pub(super) enum Notice<'a> {
     /// The classifier judged that Max should join in, and why.
     Judged { note: &'a str },
     /// A program in the group's VM ran `maxx wake`, the hour's `count`th.
@@ -42,7 +42,7 @@ pub enum Notice<'a> {
 impl Notice<'_> {
     /// What Max is shown. A part that takes over `single` tokens shows
     /// its beginning.
-    pub fn item(&self, single: u32) -> Item {
+    pub(super) fn item(&self, single: u32) -> Item {
         let text = self.text(single);
         let tokens = tokens::count(&text);
         Item::new(ItemKind::user(text), tokens)
@@ -50,7 +50,7 @@ impl Notice<'_> {
 
     /// Its words. A part that takes over `single` tokens shows its
     /// beginning.
-    pub fn text(&self, single: u32) -> String {
+    pub(super) fn text(&self, single: u32) -> String {
         match *self {
             Notice::Judged { note } => format!("[判定：{note}]"),
             // The count once there has been more than one this hour.

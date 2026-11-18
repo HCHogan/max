@@ -90,7 +90,7 @@ struct Asked {
 }
 
 /// `/events` for the VMs; its streams end at `stop`.
-pub fn router(signals: UnboundedSender<Signal>, stop: CancellationToken) -> Router {
+pub(super) fn router(signals: UnboundedSender<Signal>, stop: CancellationToken) -> Router {
     Router::new()
         .route("/events", get(events))
         .with_state(Events { signals, stop })

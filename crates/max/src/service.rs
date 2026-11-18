@@ -213,7 +213,7 @@ pub(crate) mod testing {
     /// Serves `app` on `listener` until `stop`, every request as one
     /// from the VM of `conversation`: over TCP, which Node's fetch
     /// reaches, where the VMs' own socket says whose each is.
-    pub async fn serve(
+    pub(crate) async fn serve(
         conversation: ConversationId,
         listener: TcpListener,
         app: Router,
@@ -226,7 +226,7 @@ pub(crate) mod testing {
 
     /// Where a service's calls go, each run in `context` by a task of
     /// `scope`, as its conversation's actor would run it.
-    pub fn answering(scope: &mut Scope, context: Context) -> UnboundedSender<Signal> {
+    pub(crate) fn answering(scope: &mut Scope, context: Context) -> UnboundedSender<Signal> {
         let (calls, mut called) = unbounded_channel();
         scope.spawn(move |_| async move {
             while let Some(signal) = called.recv().await {

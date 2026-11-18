@@ -16,11 +16,11 @@ use super::{Context, Failure, internal};
 use crate::media::prepare::{png, prepare};
 use max_core::limits::PICTURE_BYTES;
 
-pub struct SendImage;
+pub(super) struct SendImage;
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct Args {
+pub(super) struct Args {
     #[schemars(
         length(min = 1),
         description = "a path under /work; a relative one is from /work"
@@ -31,7 +31,7 @@ pub struct Args {
 }
 
 #[derive(Serialize, JsonSchema)]
-pub struct Sent {
+pub(super) struct Sent {
     handle: String,
 }
 

@@ -367,7 +367,7 @@ pub(crate) mod testing {
     use super::*;
 
     /// One scripted answer.
-    pub enum Answer {
+    pub(crate) enum Answer {
         /// The model writes this, in these pieces.
         Says(Vec<String>),
         /// The model writes this, then the stream ends unfinished.
@@ -381,7 +381,7 @@ pub(crate) mod testing {
     }
 
     impl Answer {
-        pub fn says(text: &str) -> Self {
+        pub(crate) fn says(text: &str) -> Self {
             Self::Says(vec![text.to_owned()])
         }
     }
@@ -389,17 +389,17 @@ pub(crate) mod testing {
     /// Answers calls in order and keeps the requests it was sent, and
     /// the handles of the pictures each came with.
     #[derive(Default)]
-    pub struct Script {
+    pub(crate) struct Script {
         answers: Mutex<VecDeque<Answer>>,
         pub requests: Mutex<Vec<Request>>,
     }
 
     impl Script {
-        pub fn push(&self, answer: Answer) {
+        pub(crate) fn push(&self, answer: Answer) {
             self.answers.lock().unwrap().push_back(answer);
         }
 
-        pub fn calls(&self) -> usize {
+        pub(crate) fn calls(&self) -> usize {
             self.requests.lock().unwrap().len()
         }
     }
@@ -441,7 +441,7 @@ pub(crate) mod testing {
 
     /// A Chat completion stream that writes `pieces` one chunk each, and
     /// finishes if `complete`.
-    pub fn chat_stream(pieces: &[String], complete: bool) -> Vec<u8> {
+    pub(crate) fn chat_stream(pieces: &[String], complete: bool) -> Vec<u8> {
         let mut out = String::new();
         let chunk = |delta: serde_json::Value, finish: Option<&str>, usage| {
             json!({
@@ -462,7 +462,7 @@ pub(crate) mod testing {
     }
 
     /// A Chat completion stream that calls one tool.
-    pub fn tool_call_stream(name: &str, arguments: &str) -> Vec<u8> {
+    pub(crate) fn tool_call_stream(name: &str, arguments: &str) -> Vec<u8> {
         let call = json!({"tool_calls": [{
             "index": 0, "id": "call_1", "type": "function",
             "function": {"name": name, "arguments": arguments},
@@ -481,7 +481,7 @@ pub(crate) mod testing {
     }
 
     /// `[llm]` with one Chat provider, `test`, and two models.
-    pub fn config() -> config::Llm {
+    pub(crate) fn config() -> config::Llm {
         let text = r#"
             default = { model = "test/big", effort = "high" }
             intent = { model = "test/small" }
@@ -502,7 +502,7 @@ pub(crate) mod testing {
         toml::from_str(text).unwrap()
     }
 
-    pub fn models(script: &Arc<Script>) -> Models {
+    pub(crate) fn models(script: &Arc<Script>) -> Models {
         let script = Arc::clone(script);
         Models::with_callers(&config(), move |_, _| Ok(script.clone() as Arc<dyn Caller>)).unwrap()
     }
