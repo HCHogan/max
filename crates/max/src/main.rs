@@ -128,7 +128,7 @@ fn with_provider(mut llm: config::Llm, base_url: &str) -> Result<Upstreams> {
     llm.providers
         .insert("vm-check".into(), provider.try_into()?);
     llm.job = Some(config::Selection {
-        model: "vm-check/vm-check".into(),
+        model: "vm-check/vm-check".parse()?,
         effort: None,
     });
     let agents = Models::new(&llm)?.job().transpose()?;
