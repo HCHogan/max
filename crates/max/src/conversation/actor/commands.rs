@@ -283,14 +283,14 @@ impl Conversation {
         line(
             "core",
             match &self.core {
-                Some(a) => {
+                Some(active) => {
                     let mut core = format!(
                         "t#{} · {} · round {}",
-                        a.ordinal,
-                        span(a.started.elapsed()),
-                        a.run.round()
+                        active.ordinal,
+                        span(active.started.elapsed()),
+                        active.run.round()
                     );
-                    let running = model(&a.chosen);
+                    let running = model(&active.chosen);
                     if next.as_ref() != Some(&running) {
                         let _ = write!(core, " · {running}");
                     }
@@ -481,10 +481,10 @@ impl Conversation {
     /// keeps what it started with until it ends, which is mostly when it
     /// has been idle for its window.
     fn takes_effect(&self) -> String {
-        let Some(a) = &self.core else {
+        let Some(active) = &self.core else {
             return "takes effect from the next reply".to_owned();
         };
-        let idle = self.idle_window(a).as_secs();
+        let idle = self.idle_window(active).as_secs();
         let idle = match (idle / 60, idle % 60) {
             (1, 0) => "a minute".to_owned(),
             (minutes, 0) => format!("{minutes} minutes"),

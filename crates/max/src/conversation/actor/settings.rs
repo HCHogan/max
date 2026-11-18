@@ -15,13 +15,13 @@ use crate::command::{Choice, Config};
 use crate::conversation::Configured;
 
 impl Conversation {
-    /// How long `a` waits idle before it ends: this conversation's window,
+    /// How long `active` waits idle before it ends: this conversation's window,
     /// or its model's. A change applies to a running core at once.
-    pub(super) fn idle_window(&self, a: &Active) -> Duration {
+    pub(super) fn idle_window(&self, active: &Active) -> Duration {
         self.settings
             .overrides
             .idle_window_secs
-            .map_or(a.chosen.idle_window, Duration::from_secs)
+            .map_or(active.chosen.idle_window, Duration::from_secs)
     }
 
     /// The wall clock of a Max tool's call, for the programs and commands
@@ -42,7 +42,7 @@ impl Conversation {
     fn default_of(&self, setting: Setting) -> u64 {
         self.shared.limits.default_of(setting).unwrap_or_else(|| {
             let window = match &self.core {
-                Some(a) => a.chosen.idle_window,
+                Some(active) => active.chosen.idle_window,
                 None => self
                     .shared
                     .models
