@@ -125,18 +125,25 @@ async fn events(
         );
     };
     let head = subscription.head;
-    let backlog = match after {
-        Some(after) if after < head.get() => match backlog(&subscription, after).await {
-            Ok(backlog) => backlog,
-            Err(error) => {
-                warn!(%conversation, %error, "couldn't read the rows a program missed");
-                return refuse(StatusCode::INTERNAL_SERVER_ERROR, "can't read the records");
+    let backlog = match (after, head) {
+        (Some(after), Some(head)) if after < head.get() => {
+            match backlog(&subscription, after, head).await {
+                Ok(backlog) => backlog,
+                Err(error) => {
+                    warn!(%conversation, %error, "couldn't read the rows a program missed");
+                    return refuse(StatusCode::INTERNAL_SERVER_ERROR, "can't read the records");
+                }
             }
-        },
+        }
         _ => VecDeque::new(),
     };
+    // No row has the id 0, or one below: from there on is from the first.
+    let last = match after {
+        Some(after) => (after > 0).then(|| MessageId::new(after)),
+        None => head,
+    };
     let following = Following {
-        last: after.map_or(head, MessageId::new),
+        last,
         subscription,
         backlog,
         full,
@@ -144,7 +151,7 @@ async fn events(
     };
     Response::builder()
         .header(header::CONTENT_TYPE, "application/x-ndjson")
-        .header(HEAD, head.get())
+        .header(HEAD, head.map_or(0, MessageId::get))
         .body(Body::from_stream(following.lines()))
         .unwrap_or_else(|_| {
             refuse(
@@ -169,12 +176,16 @@ fn asked(query: Option<&str>) -> Option<Asked> {
     Some(asked)
 }
 
-/// The rows after `after` up to the head, the latest [`EVENTS_CAUGHT_UP`].
-async fn backlog(subscription: &Subscription, after: i64) -> sqlx::Result<VecDeque<MessageId>> {
+/// The rows after `after` up to `head`, the latest [`EVENTS_CAUGHT_UP`].
+async fn backlog(
+    subscription: &Subscription,
+    after: i64,
+    head: MessageId,
+) -> sqlx::Result<VecDeque<MessageId>> {
     let mut conn = subscription.services.pool.acquire().await?;
     let between = (
-        Some(MessageId::new(after + 1)),
-        Some(MessageId::new(subscription.head.get() + 1)),
+        Some(MessageId::new(after.saturating_add(1))),
+        Some(MessageId::new(head.get().saturating_add(1))),
     );
     let conversation = subscription.place.conversation;
     let mut ids = ledger::stretch(
@@ -194,8 +205,9 @@ async fn backlog(subscription: &Subscription, after: i64) -> sqlx::Result<VecDeq
 struct Following {
     subscription: Subscription,
     backlog: VecDeque<MessageId>,
-    /// The last row sent; or where the stream starts.
-    last: MessageId,
+    /// The last row sent, or where the stream starts: none before the
+    /// first row.
+    last: Option<MessageId>,
     /// Whether a line has its row as data too.
     full: bool,
     stop: CancellationToken,
@@ -236,7 +248,7 @@ impl Following {
                 () = sleep(HEARTBEAT) => return Ok(Some(Bytes::from_static(b"\n"))),
             };
             match received {
-                Ok(message) if message.id <= self.last => {}
+                Ok(message) if Some(message.id) <= self.last => {}
                 Ok(message) => return self.written(std::slice::from_ref(&message)).await.map(Some),
                 // Too far behind, the program asks again from its last
                 // row, which the database has; or the actor stopped.
@@ -296,7 +308,7 @@ impl Following {
             };
             serde_json::to_writer(&mut out, &line).expect("a line is JSON");
             out.push(b'\n');
-            self.last = message.id;
+            self.last = Some(message.id);
         }
         Ok(Bytes::from(out))
     }

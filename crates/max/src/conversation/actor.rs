@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use color_eyre::eyre::{Report, Result};
+use color_eyre::eyre::{Report, Result, eyre};
 use max_core::ids::{ConversationId, IdentityId, MessageId, PrincipalId, TurnId};
 use max_core::intent::{Decision, Entry, EntryKind, Intent, Reason};
 use max_core::item::{Item, ModelOutput, Timing};
@@ -128,9 +128,10 @@ pub struct Conversation {
     shared: Arc<Shared>,
     place: Arc<Place>,
     settings: Settings,
-    head: MessageId,
+    /// The last row of the timeline, once there is one.
+    head: Option<MessageId>,
     /// Everything up to here has been in a model request.
-    seen: MessageId,
+    seen: Option<MessageId>,
     core: Option<Active>,
     intent: Intent,
     /// The classifier, and the calls of the programs in the group's VM.
@@ -186,9 +187,7 @@ impl Conversation {
         mailbox: UnboundedSender<Event>,
     ) -> Result<Self> {
         let mut conn = shared.services.pool.acquire().await?;
-        let head = ledger::head(&mut conn, place.conversation)
-            .await?
-            .unwrap_or(MessageId::new(0));
+        let head = ledger::head(&mut conn, place.conversation).await?;
         let settings = platform::settings(&mut conn, place.conversation).await?;
         let mut intent = Intent::new();
         intent.set_proactive(settings.proactive);
@@ -391,7 +390,7 @@ impl Conversation {
     /// A row is committed: it is the head, and the workers and the
     /// programs following the timeline hear of it.
     fn committed(&mut self, message: &Arc<Message>) {
-        self.head = message.id;
+        self.head = Some(message.id);
         self.shared.rows.send(&self.place, message);
         if self.subscribers.receiver_count() > 0 {
             let _ = self.subscribers.send(Arc::clone(message));
@@ -411,7 +410,7 @@ impl Conversation {
 
     async fn inbound(&mut self, inbound: Inbound, bound: bool) -> Result<()> {
         // A group bound to an old conversation goes on from its history.
-        let continued = self.head > MessageId::new(0);
+        let continued = self.head.is_some();
         let mut conn = self.shared.services.pool.acquire().await?;
         // A platform may say a message twice, as QQ does when it replays
         // a resumed session.
@@ -507,7 +506,7 @@ impl Conversation {
         while let Some(decision) = decisions.pop_front() {
             match decision {
                 Decision::Wake { ids, reason } => {
-                    if ids.iter().all(|id| *id <= self.seen) {
+                    if ids.iter().all(|id| Some(*id) <= self.seen) {
                         debug!(?ids, "dropped a wake for rows a model has seen");
                         continue;
                     }
@@ -617,7 +616,11 @@ impl Conversation {
             now,
             offset: self.shared.services.offset,
         };
-        let from = self.head;
+        // What wakes Max is a row, or comes to a conversation that has
+        // rows: a core's base is projected from them.
+        let from = self
+            .head
+            .ok_or_else(|| eyre!("a core can't start in a conversation without a row"))?;
         let mut conn = self.shared.services.pool.acquire().await?;
         let (context, inputs) = projection.base(&mut conn, from, vec![wake]).await?;
         let started = turns::start(&mut conn, self.place.conversation, &inputs, from, now).await?;
