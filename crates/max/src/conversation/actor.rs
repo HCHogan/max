@@ -345,7 +345,8 @@ impl Conversation {
                 match out {
                     Ok((out, timing)) => self.model_output(out, timing).await,
                     Err(error) => {
-                        warn!(conversation = %self.place.conversation, %error, "the model call failed");
+                        let error = causes::chain(&error);
+                        warn!(conversation = %self.place.conversation, error, "the model call failed");
                         self.end(End::Failed(FailReason::Model { error })).await
                     }
                 }

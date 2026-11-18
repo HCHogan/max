@@ -12,7 +12,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tracing::warn;
 
 use super::report::Report;
-use super::{Event, TaskId};
+use super::{Event, ModelFailed, TaskId};
 use crate::causes;
 use crate::llm::Chosen;
 use crate::media::pictures::Pictures;
@@ -29,7 +29,7 @@ pub async fn call(
 ) {
     let report = Report::new(mailbox.clone(), move || Event::ModelDone {
         task,
-        out: Err("the model call ended without a result".into()),
+        out: Err(ModelFailed::Lost),
     });
     let pictures = match pictures {
         Some(pictures) => pictures.read(&request).await,
@@ -48,7 +48,7 @@ pub async fn call(
                 tokio::time::sleep(wait).await;
                 attempt += 1;
             }
-            Err(error) => break Err(causes::chain(&error)),
+            Err(error) => break Err(error.into()),
         }
     };
     report.send(Event::ModelDone { task, out });
