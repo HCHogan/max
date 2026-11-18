@@ -9,6 +9,11 @@
 //! database's own, or a decode error where a column holds what this code
 //! doesn't know. That goes for all of them, and none says it again.
 
+#![expect(
+    clippy::missing_errors_doc,
+    reason = "every function fails as its queries do, which the crate's documentation says once"
+)]
+
 pub mod captions;
 pub mod embeddings;
 pub mod ledger;
