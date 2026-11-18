@@ -369,6 +369,7 @@ impl Sink for Said {
 /// A command's directory in the guest: `dir` if absolute,
 /// else under /work. A guest path, left to the guest to resolve: the VM,
 /// not the directory, is the boundary.
+#[must_use]
 pub fn guest_dir(dir: Option<&str>) -> String {
     match dir {
         Some(dir) if dir.starts_with('/') => dir.to_owned(),
@@ -378,6 +379,7 @@ pub fn guest_dir(dir: Option<&str>) -> String {
 }
 
 /// What a task or a command is, in a line: the first of it, cut short.
+#[must_use]
 pub fn headline(task: &str) -> String {
     let line = task.trim().lines().next().unwrap_or_default();
     let mut title: String = line.chars().take(30).collect();

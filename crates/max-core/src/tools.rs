@@ -101,6 +101,7 @@ struct ShellArgs {
 
 impl Tool {
     /// The name the model calls it by.
+    #[must_use]
     pub fn name(&self) -> &'static str {
         match self {
             Self::RunCode { .. } => RUN_CODE,

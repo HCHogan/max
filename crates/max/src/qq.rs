@@ -14,6 +14,7 @@ const C2C: &str = "c2c:";
 /// A chat as its endpoint's native id has it: `group:<group_openid>` or
 /// `c2c:<user_openid>`. A group of the QQ before this one is named the
 /// same way, by its number.
+#[must_use]
 pub fn native_id(chat: Chat<'_>) -> String {
     match chat {
         Chat::Group(group) => format!("{GROUP}{group}"),
@@ -30,6 +31,7 @@ pub fn chat(native_id: &str) -> Option<Chat<'_>> {
 }
 
 /// The group a native id names, if it names one.
+#[must_use]
 pub fn group(native_id: &str) -> Option<&str> {
     match chat(native_id)? {
         Chat::Group(group) => Some(group),

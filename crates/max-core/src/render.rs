@@ -101,6 +101,7 @@ impl<P: People> Render<'_, P> {
     /// before them was sent, if one was already shown, so a date line
     /// appears only when the day changes; a gap line follows a long
     /// silence.
+    #[must_use]
     pub fn joined(&self, lines: &[(&Message, String)], mut after: Option<DateTime<Utc>>) -> String {
         let mut out = String::new();
         for (message, line) in lines {
@@ -117,6 +118,7 @@ impl<P: People> Render<'_, P> {
 
     /// The line before a row sent `at`: a date line when the day changes
     /// since `after`, a gap line after a long silence, otherwise none.
+    #[must_use]
     pub fn separator(&self, after: Option<DateTime<Utc>>, at: DateTime<Utc>) -> Option<String> {
         let local = at.with_timezone(&self.offset);
         match after.map(|at| at.with_timezone(&self.offset)) {
@@ -131,12 +133,14 @@ impl<P: People> Render<'_, P> {
         }
     }
 
+    #[must_use]
     pub fn line(&self, message: &Message, mark: Mark) -> String {
         let content = self.content_of(Some(message.id), &message.content);
         self.header(message, mark) + &content + suffix(mark)
     }
 
     /// The line cut to [`EXCERPT_CHARS`], pointing at the full text.
+    #[must_use]
     pub fn excerpt(&self, message: &Message, mark: Mark) -> String {
         let content: String = self
             .content_of(Some(message.id), &message.content)
@@ -166,11 +170,13 @@ impl<P: People> Render<'_, P> {
 
     /// A row's content on one line, for search: line breaks become ` ⏎ `,
     /// and media have no handles, since the row has no id yet.
+    #[must_use]
     pub fn content(&self, content: &Content) -> String {
         self.content_of(None, content)
     }
 
     /// A stored row's content, as its line shows it after the header.
+    #[must_use]
     pub fn body(&self, message: &Message) -> String {
         self.content_of(Some(message.id), &message.content)
     }
@@ -282,6 +288,7 @@ fn card_line(card: &Card) -> String {
 }
 
 /// `2026-10-03 周六 14:02`, in local time.
+#[must_use]
 pub fn moment(at: DateTime<Utc>, offset: FixedOffset) -> String {
     let local = at.with_timezone(&offset);
     let date = local.date_naive();
@@ -306,6 +313,7 @@ pub(crate) fn weekday(day: Weekday) -> &'static str {
 
 /// A span of time, as the prompt and the notices say it: `两小时`, or
 /// `90 分钟`.
+#[must_use]
 pub fn span(time: Duration) -> String {
     let minutes = time.as_secs() / 60;
     match minutes {

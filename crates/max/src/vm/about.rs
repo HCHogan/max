@@ -151,6 +151,7 @@ impl Unit {
 /// blocks of everything under it, a file with several names once, and no
 /// link followed. It stops at `until` with what it has counted, and says
 /// whether that is all of it. None without the directory.
+#[must_use]
 pub fn taken(work: &Path, until: Instant) -> Option<(u64, bool)> {
     // One directory open at a time: those found in it wait by name.
     let mut open = Some(std::fs::read_dir(work).ok()?);

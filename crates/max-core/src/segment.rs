@@ -65,6 +65,7 @@ pub struct Segmenter {
 }
 
 impl Segmenter {
+    #[must_use]
     pub fn new(known: BTreeSet<PrincipalId>) -> Self {
         Self {
             chunker: Chunker::default(),
@@ -77,6 +78,7 @@ impl Segmenter {
         self.parse(chunks)
     }
 
+    #[must_use]
     pub fn finish(mut self) -> Vec<Segment> {
         let chunks = std::mem::take(&mut self.chunker).finish();
         self.parse(chunks)
@@ -99,6 +101,7 @@ impl Segmenter {
 
 /// Whether `text` from the model, whole, says anything: whether a
 /// [`Segmenter`] with `known` for its roster would make a message of it.
+#[must_use]
 pub fn speaks(text: &str, known: &BTreeSet<PrincipalId>) -> bool {
     let mut chunker = Chunker::default();
     let mut chunks = chunker.push(text);
@@ -122,6 +125,7 @@ impl Chunker {
 
     /// The end of the text; returns the remaining chunks. An unclosed fence
     /// runs to the end, so it comes out as one chunk.
+    #[must_use]
     pub fn finish(mut self) -> Vec<String> {
         let mut out = Vec::new();
         self.0.finish(&mut out);

@@ -3,6 +3,7 @@
 
 /// The length in seconds of the MP4 in `bytes`, by its movie header: one
 /// that starts with `ftyp` and has `moov/mvhd`.
+#[must_use]
 pub fn length(bytes: &[u8]) -> Option<f64> {
     let (kind, _) = Boxes(bytes).next()?;
     if kind != *b"ftyp" {

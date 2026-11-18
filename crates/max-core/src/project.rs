@@ -34,6 +34,7 @@ pub struct Budgets {
 }
 
 impl Budgets {
+    #[must_use]
     pub fn for_window(window: u32) -> Self {
         let tail_high = (window / 8).min(64_000);
         Self {
@@ -50,6 +51,7 @@ impl Budgets {
 /// more, and the caller moves the mark there. The cut points are counted
 /// from the mark, not from the end, so the start stays put while rows
 /// arrive, until the next stretch is due.
+#[must_use]
 pub fn tail_start(tokens: &[u32], budgets: &Budgets) -> usize {
     let limit = u64::from(budgets.tail_high);
     let total: u64 = tokens.iter().map(|&t| u64::from(t)).sum();
@@ -69,6 +71,7 @@ pub fn tail_start(tokens: &[u32], budgets: &Budgets) -> usize {
 }
 
 /// `[mention#12] 小明（管理员）`.
+#[must_use]
 pub fn roster_line(principal: PrincipalId, name: &str, role: Option<Role>, is_max: bool) -> String {
     let name = name.replace(['\n', '\r'], " ");
     let note = match (is_max, role) {
@@ -81,6 +84,7 @@ pub fn roster_line(principal: PrincipalId, name: &str, role: Option<Role>, is_ma
 }
 
 /// The people a text names with `[mention#N]`, such as in what Max says.
+#[must_use]
 pub fn mentioned(text: &str) -> BTreeSet<PrincipalId> {
     mentions(text).map(|mention| mention.principal).collect()
 }
@@ -104,6 +108,7 @@ pub struct Volatile {
 }
 
 impl Volatile {
+    #[must_use]
     pub fn render(&self, offset: FixedOffset) -> String {
         let mut out = now_line(self.now, offset);
         let lists = [
@@ -168,6 +173,7 @@ pub fn memory(text: &str, count: impl Fn(&str) -> u32) -> String {
 }
 
 /// `[现在] 2026-10-29 周四 12:10`, on its own line.
+#[must_use]
 pub fn now_line(now: DateTime<Utc>, offset: FixedOffset) -> String {
     format!("[现在] {}\n", moment(now, offset))
 }

@@ -116,6 +116,7 @@ impl Default for Intent {
 }
 
 impl Intent {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             proactive: true,

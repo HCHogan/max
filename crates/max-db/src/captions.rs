@@ -21,6 +21,7 @@ pub enum Kind {
 impl Kind {
     /// What a medium of this kind is captioned as; None for what isn't a
     /// picture.
+    #[must_use]
     pub fn of(kind: MediaKind) -> Option<Self> {
         match kind {
             MediaKind::Image => Some(Self::Image),

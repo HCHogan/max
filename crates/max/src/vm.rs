@@ -52,6 +52,7 @@ pub struct Stopped {
 
 /// Where `conversation`'s /work is on the host, under the VMs' `dir`,
 /// whether or not its VM runs.
+#[must_use]
 pub fn work(dir: &Path, conversation: ConversationId) -> PathBuf {
     dir.join(conversation.to_string()).join("work")
 }
@@ -243,18 +244,21 @@ impl Vms {
     }
 
     /// Whether the conversation's VM is on the operations network.
+    #[must_use]
     pub fn operates(&self, conversation: ConversationId) -> bool {
         self.operating.contains(&conversation)
     }
 
     /// How long a VM may go without a command before it is stopped,
     /// unless it is kept on.
+    #[must_use]
     pub fn idle(&self) -> Duration {
         self.idle
     }
 
     /// The HTTP APIs the VMs call through the host, as the system prompt
     /// lists them.
+    #[must_use]
     pub fn apis(&self) -> &str {
         self.apis.prompt()
     }
@@ -333,11 +337,13 @@ impl Vm {
         )
     }
 
+    #[must_use]
     pub fn connection(&self) -> &Connection {
         &self.connection
     }
 
     /// The host's side of the guest's /work.
+    #[must_use]
     pub fn work(&self) -> &Path {
         &self.work
     }

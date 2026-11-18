@@ -144,6 +144,7 @@ pub struct Sha256(String);
 
 impl Sha256 {
     /// Of the hash itself.
+    #[must_use]
     pub fn of(digest: [u8; 32]) -> Self {
         let mut hex = String::with_capacity(2 * digest.len());
         for byte in digest {
@@ -152,6 +153,7 @@ impl Sha256 {
         Self(hex)
     }
 
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }

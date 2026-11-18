@@ -16,6 +16,7 @@ pub const PERSONA_CHARS: usize = 500;
 /// `[判定 …]` line.
 pub const NOTE_CHARS: usize = 40;
 
+#[must_use]
 pub fn system(persona: &str) -> String {
     let persona: String = persona.chars().take(PERSONA_CHARS).collect();
     format!(
@@ -62,6 +63,7 @@ pub fn named(text: &str, names: &BTreeMap<PrincipalId, String>) -> String {
 }
 
 /// `context` and `new` are rendered lines, oldest first.
+#[must_use]
 pub fn user(context: &str, new: &str) -> String {
     let or_none = |text: &str| {
         if text.trim().is_empty() {
@@ -86,6 +88,7 @@ struct Raw {
 
 /// The first `{` through the last `}`, so fences and prose around the
 /// object don't matter.
+#[must_use]
 pub fn parse(text: &str) -> Option<Verdict> {
     let start = text.find('{')?;
     let end = text.rfind('}')?;

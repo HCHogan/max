@@ -48,6 +48,7 @@ pub enum Command {
 /// A command's answer as it is said: the result, any more lines under
 /// it, in a text code block, set apart from what Max says in a turn. It
 /// doesn't name the command, which is the message right above it.
+#[must_use]
 pub fn answer(body: &str) -> String {
     fenced("text", body)
 }
@@ -98,6 +99,7 @@ pub enum Config {
 
 /// The command a message gives Max, if any: in a group, only one that
 /// @-mentions Max.
+#[must_use]
 pub fn given(inbound: &Inbound) -> Option<Command> {
     if inbound.chat.kind == ConversationKind::Group && !inbound.mentions_me() {
         return None;
@@ -107,6 +109,7 @@ pub fn given(inbound: &Inbound) -> Option<Command> {
 
 /// The same, from what was read of the message already: whether it
 /// @-mentions Max, and its plain text.
+#[must_use]
 pub fn in_text(kind: ConversationKind, mentions_me: bool, text: &str) -> Option<Command> {
     if kind == ConversationKind::Group && !mentions_me {
         return None;
@@ -116,6 +119,7 @@ pub fn in_text(kind: ConversationKind, mentions_me: bool, text: &str) -> Option<
 
 /// How to give `command` in a conversation of `kind`: after an @ of Max,
 /// whose name there is `me`, in a group.
+#[must_use]
 pub fn how(kind: ConversationKind, me: &str, command: &str) -> String {
     match kind {
         ConversationKind::Group => format!("@{me} {command}"),

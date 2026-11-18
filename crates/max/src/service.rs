@@ -80,6 +80,7 @@ pub struct Context {
 #[cfg(test)]
 impl Services {
     /// Only the database, at UTC+8.
+    #[must_use]
     pub fn bare(pool: PgPool) -> Self {
         Self {
             pool,
@@ -96,6 +97,7 @@ impl Services {
 impl Context {
     /// A check's in `place`: pages of 2000 tokens, no /work, and nobody
     /// to say anything for.
+    #[must_use]
     pub fn check(services: Services, place: Arc<Place>) -> Self {
         Self {
             services: Arc::new(services),
@@ -146,6 +148,7 @@ impl Failure {
 
     /// Max stopped with the call in its hands: in the middle of it, or,
     /// seldom, in the moment before it would have begun it.
+    #[must_use]
     pub fn closed() -> Self {
         Self::new("closed", "Max stopped before it was done")
     }

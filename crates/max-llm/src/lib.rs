@@ -60,6 +60,7 @@ impl Pictures {
         self.files.insert(sha256, medium);
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.rows.is_empty() && self.files.is_empty()
     }

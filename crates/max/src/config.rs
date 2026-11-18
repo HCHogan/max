@@ -74,6 +74,7 @@ impl Default for Limits {
 
 impl Limits {
     /// The default of `setting`; None for the idle window, the model's.
+    #[must_use]
     pub fn default_of(&self, setting: Setting) -> Option<u64> {
         match setting {
             Setting::IdleWindowSecs => None,
@@ -274,6 +275,7 @@ impl TryFrom<String> for Rule {
 
 impl Rule {
     /// Whether it allows `method` on `path`, which begins with `/`.
+    #[must_use]
     pub fn allows(&self, method: &str, path: &str) -> bool {
         if self.method.as_deref().is_some_and(|own| own != method) {
             return false;
@@ -335,10 +337,12 @@ pub struct NotAUrl {
 }
 
 impl BaseUrl {
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.text
     }
 
+    #[must_use]
     pub fn url(&self) -> &reqwest::Url {
         &self.url
     }
@@ -834,6 +838,7 @@ impl Llm {
 
 impl Vm {
     /// Whether the conversation's VM is on the operations network.
+    #[must_use]
     pub fn operates(&self, conversation: ConversationId) -> bool {
         self.operations
             .as_ref()
@@ -842,6 +847,7 @@ impl Vm {
 
     /// The slot `index` names: the ordinary ones first, then the
     /// operations network's.
+    #[must_use]
     pub fn slot(&self, index: usize) -> &Slot {
         match index.checked_sub(self.slots.len()) {
             None => &self.slots[index],
@@ -850,6 +856,7 @@ impl Vm {
     }
 
     /// The indexes of the operations network's slots.
+    #[must_use]
     pub fn operations_slots(&self) -> std::ops::Range<usize> {
         let ops = self.operations.as_ref().map_or(0, |ops| ops.slots.len());
         self.slots.len()..self.slots.len() + ops

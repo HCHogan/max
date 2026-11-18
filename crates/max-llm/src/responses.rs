@@ -220,6 +220,7 @@ pub struct Parser {
 }
 
 impl Parser {
+    #[must_use]
     pub fn new(model: ModelTag) -> Self {
         Self {
             model,
@@ -230,11 +231,13 @@ impl Parser {
 
     /// The model has begun to answer: an output item, reasoning included,
     /// has started.
+    #[must_use]
     pub fn started(&self) -> bool {
         self.started
     }
 
     /// The response is complete; nothing after this matters.
+    #[must_use]
     pub fn finished(&self) -> bool {
         self.output.is_some()
     }

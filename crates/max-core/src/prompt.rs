@@ -118,6 +118,7 @@ const APIS: &str = "宿主替你带 key 调的 HTTP API：在 VM 里请求 http:
 /// The prompt for `persona`, `tools` the Max tools' TypeScript
 /// declarations, which the max crate makes from the tools themselves, and
 /// `apis` a line for each HTTP API the host calls for the VMs.
+#[must_use]
 pub fn system(
     persona: &str,
     tools: &str,

@@ -39,6 +39,7 @@ impl fmt::Display for Peer {
 
 /// The conversation a handle names: `c#7` as [`Peer`] shows it, or the
 /// number alone.
+#[must_use]
 pub fn named(handle: &str) -> Option<ConversationId> {
     let handle = handle.trim();
     let number = handle

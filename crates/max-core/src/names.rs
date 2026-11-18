@@ -21,6 +21,7 @@ macro_rules! names {
             pub const ALL: [Self; $crate::names!(@count $($variant)+)] = [$(Self::$variant),+];
 
             /// Its name, as it is stored and written.
+            #[must_use]
             pub const fn as_str(self) -> &'static str {
                 match self {
                     $(Self::$variant => $name,)+

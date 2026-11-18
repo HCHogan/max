@@ -193,6 +193,7 @@ impl Projection<'_> {
 }
 
 /// The row `message` quotes, if any.
+#[must_use]
 pub fn quotes(message: &Message) -> Option<MessageId> {
     match message.content {
         Content::Message { reply_to, .. } => reply_to,
@@ -269,6 +270,7 @@ pub async fn follow_up(
 
 /// What became of Max's row, if it didn't reach the platform; else who
 /// said it, if not Max.
+#[must_use]
 pub fn own_mark(row: &Row) -> Mark {
     match row.delivery {
         Some(Delivery::Failed) => Mark::NotSent,
