@@ -8,6 +8,7 @@
 pub struct Unknown {
     /// What was to be named, such as `role`.
     pub what: &'static str,
+    /// What was given for one.
     pub name: String,
 }
 

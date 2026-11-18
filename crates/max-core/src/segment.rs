@@ -48,6 +48,7 @@ pub struct Segment {
     /// The chunk as the model wrote it. When a model call is cut off, the
     /// sources of the segments that went out are what Max said.
     pub source: String,
+    /// The message it says.
     pub draft: Draft,
     /// Markers in it whose id isn't one, `[reply#]` or `[mention#${id}]`:
     /// outside code, where they would be placeholders, they are text, and
@@ -65,6 +66,7 @@ pub struct Segmenter {
 }
 
 impl Segmenter {
+    /// A segmenter for a model shown `known` in its roster.
     #[must_use]
     pub fn new(known: BTreeSet<PrincipalId>) -> Self {
         Self {
@@ -73,11 +75,13 @@ impl Segmenter {
         }
     }
 
+    /// Feeds more of the model's text; returns the messages it completed.
     pub fn push(&mut self, delta: &str) -> Vec<Segment> {
         let chunks = self.chunker.push(delta);
         self.parse(chunks)
     }
 
+    /// The end of the text; returns the messages that remained.
     #[must_use]
     pub fn finish(mut self) -> Vec<Segment> {
         let chunks = std::mem::take(&mut self.chunker).finish();

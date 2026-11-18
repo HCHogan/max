@@ -11,12 +11,15 @@ use crate::ids::CallId;
 use crate::item::ToolCall;
 use crate::limits::{BACKGROUND_TIME, BACKGROUND_TIME_MAX, RUN_TIME, RUN_TIME_MAX, SHOWN_BYTES};
 
-/// The tools' names, as the model calls them.
+/// The program tool's name, as the model calls it.
 pub const RUN_CODE: &str = "run_code";
+/// The command tool's name.
 pub const SHELL: &str = "shell";
 
+/// A tool as a request declares it.
 #[derive(Debug)]
 pub struct ToolSpec {
+    /// What the model calls it by.
     pub name: &'static str,
     /// Written from [`limits`](crate::limits), once.
     pub description: String,
@@ -24,6 +27,7 @@ pub struct ToolSpec {
     pub parameters: &'static str,
 }
 
+/// The two tools, in the order every request declares them.
 pub static TOOLS: LazyLock<[ToolSpec; 2]> = LazyLock::new(|| {
     let run = RUN_TIME.as_secs();
     let run_max = RUN_TIME_MAX.as_millis();
@@ -63,20 +67,31 @@ pub static TOOLS: LazyLock<[ToolSpec; 2]> = LazyLock::new(|| {
 /// A tool call that is well formed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Call {
+    /// The provider's id for the call.
     pub id: CallId,
+    /// What it asks for.
     pub tool: Tool,
 }
 
+/// A call's tool and arguments, parsed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Tool {
+    /// A program for the runner.
     RunCode {
+        /// The body of an async function.
         code: String,
+        /// What the program reads as `args`.
         args: Option<serde_json::Value>,
+        /// Its wall clock, if not the default.
         timeout_ms: Option<u64>,
     },
+    /// A command for bash.
     Shell {
+        /// The command line.
         command: String,
+        /// Where it runs, if not /work.
         workdir: Option<String>,
+        /// Its wall clock, if not the default.
         timeout_ms: Option<u64>,
         /// Runs on after the call returns; its end wakes Max.
         background: bool,
@@ -117,20 +132,29 @@ pub enum Malformed {
     /// The arguments aren't the tool's: what serde says of them.
     #[error("{tool}'s arguments are wrong: {error}")]
     Arguments {
+        /// The tool called.
         tool: &'static str,
+        /// What serde says of them.
         error: serde_json::Error,
     },
     /// The code or the command is blank.
     #[error("{tool}: {field} is empty")]
     Empty {
+        /// The tool called.
         tool: &'static str,
+        /// The argument that is blank.
         field: &'static str,
     },
+    /// No tool has that name.
     #[error("there is no tool named {0}: only {RUN_CODE} and {SHELL}")]
     Unknown(String),
 }
 
 /// The call, or what is wrong with it.
+///
+/// # Errors
+///
+/// [`Malformed`], which says what is wrong with the call.
 pub fn parse(call: &ToolCall) -> Result<Call, Malformed> {
     let arguments = |tool| move |error| Malformed::Arguments { tool, error };
     let empty = |tool, field| Malformed::Empty { tool, field };

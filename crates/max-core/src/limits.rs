@@ -126,13 +126,16 @@ impl Setting {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Overrides {
+    /// [`Setting::IdleWindowSecs`], if it is set.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub idle_window_secs: Option<u64>,
+    /// [`Setting::CallTimeSecs`], if it is set.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub call_time_secs: Option<u64>,
 }
 
 impl Overrides {
+    /// What `setting` is set to, if it is.
     #[must_use]
     pub fn get(&self, setting: Setting) -> Option<u64> {
         match setting {

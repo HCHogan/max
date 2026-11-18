@@ -36,6 +36,7 @@ pub struct Mention {
     pub start: usize,
     /// Where its number ends: at the `]`, when the marker is whole.
     pub end: usize,
+    /// Whom it names.
     pub principal: PrincipalId,
 }
 
@@ -61,6 +62,7 @@ pub fn mentions(text: &str) -> impl Iterator<Item = Mention> + '_ {
 /// Who is behind an account. The ledger stores accounts; the model sees
 /// people.
 pub trait People {
+    /// The person behind `identity`, if they are known.
     fn principal(&self, identity: IdentityId) -> Option<PrincipalId>;
 }
 
@@ -73,10 +75,12 @@ impl People for BTreeMap<IdentityId, PrincipalId> {
 /// Something about a row the model should notice.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Mark {
+    /// Nothing.
     #[default]
     None,
     /// A trigger addressed to Max.
     MentionsYou,
+    /// A reply to something Max said.
     RepliesToYou,
     /// Max said it, but the platform refused it.
     NotSent,
@@ -90,8 +94,10 @@ pub enum Mark {
     Host,
 }
 
+/// Renders rows as the model reads them.
 #[derive(Debug)]
 pub struct Render<'a, P> {
+    /// Who is behind each account.
     pub people: &'a P,
     /// Local time, for HH:MM and dates.
     pub offset: FixedOffset,
@@ -134,6 +140,7 @@ impl<P: People> Render<'_, P> {
         }
     }
 
+    /// A row's line: its header, its content, and what its mark adds.
     #[must_use]
     pub fn line(&self, message: &Message, mark: Mark) -> String {
         let content = self.content_of(Some(message.id), &message.content);
