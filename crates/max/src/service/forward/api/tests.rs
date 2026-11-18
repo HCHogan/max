@@ -13,7 +13,7 @@ fn secret_file() -> std::path::PathBuf {
 fn mail(base_url: &str) -> config::Api {
     let rule = |text: &str| Rule::try_from(text.to_owned()).unwrap();
     config::Api {
-        base_url: base_url.to_owned(),
+        base_url: base_url.to_owned().try_into().unwrap(),
         secret_file: secret_file(),
         headers: BTreeMap::from([("Authorization".into(), "Bearer {secret}".into())]),
         query: BTreeMap::new(),

@@ -126,7 +126,7 @@ impl Api {
             .map(|(name, value)| (name.clone(), value.replace("{secret}", &secret)))
             .collect();
         Ok(Self {
-            base: Url::parse(&api.base_url)?,
+            base: api.base_url.url().clone(),
             headers,
             query,
             allow: api.allow.clone(),
