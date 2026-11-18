@@ -210,7 +210,7 @@ impl Vms {
                 .operations
                 .iter()
                 .flat_map(|ops| &ops.conversations)
-                .map(|&id| ConversationId(id))
+                .copied()
                 .collect(),
         );
         // Where every VM's guest reaches max: the tools, the timeline's
@@ -610,7 +610,7 @@ impl Service {
     /// Boots the conversation's VM for `waiting`: without Max's units if
     /// it has been failing.
     fn start(&mut self, conversation: ConversationId, waiting: Waiting) {
-        let operates = self.config.operates(conversation.0);
+        let operates = self.config.operates(conversation);
         let pool = self.config.operations_slots();
         let Some(slot) = self.free.take(operates).or_else(|| {
             evict(&mut self.vms, &self.kept, &mut self.stopping, |slot| {
@@ -676,7 +676,7 @@ impl Service {
     /// can't use is stopped, and boots again when it is next needed.
     async fn attach(&mut self, conversation: ConversationId) {
         let machine = Machine::of(&self.config, conversation);
-        let operates = self.config.operates(conversation.0);
+        let operates = self.config.operates(conversation);
         let usable = match Boot::read(&machine.dir).await {
             Err(error) => Err(format!("{error:#}")),
             Ok(boot) if boot.contract != self.guest.contract => Err(format!(
