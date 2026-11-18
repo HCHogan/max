@@ -185,7 +185,7 @@ impl Conversation {
         // the classifier, wake nobody now.
         self.intent.forget();
         // Nor is anything another conversation asked answered.
-        self.refuse_questions(asking::STOPPED_THERE);
+        self.refuse_questions(Unanswered::Stopped);
         self.kill(committed, "stop").await?;
         let how = command::how(self.place.kind, &self.place.my_name, "/start");
         Ok(format!(

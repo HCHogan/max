@@ -65,10 +65,10 @@ impl Conversation {
     pub(super) async fn asked(&mut self, question: Question) -> Result<()> {
         if let Some(refused) = self.refuses(Does::STARTS) {
             let why = match refused {
-                Refusal::Stopped => STOPPED_THERE,
-                Refusal::Stopping => "Max is restarting there",
+                Refusal::Stopped => Unanswered::Stopped,
+                Refusal::Stopping => Unanswered::Restarting,
             };
-            self.tell(question.answered(Err(why.to_owned())));
+            self.tell(question.answered(Err(why)));
             return Ok(());
         }
         let conversation = self.place.conversation;
@@ -120,9 +120,9 @@ impl Conversation {
     /// What other conversations asked and Max hasn't answered won't be
     /// answered, and each hears `why`: `/stop`, or the core that read
     /// them ended.
-    pub(super) fn refuse_questions(&mut self, why: &str) {
+    pub(super) fn refuse_questions(&mut self, why: Unanswered) {
         for question in std::mem::take(&mut self.asked.kept).into_values() {
-            self.tell(question.answered(Err(why.to_owned())));
+            self.tell(question.answered(Err(why)));
         }
     }
 
@@ -132,9 +132,3 @@ impl Conversation {
         let _ = self.shared.signals.send(signal);
     }
 }
-
-/// Why a conversation that is stopped doesn't answer...
-pub(super) const STOPPED_THERE: &str = "Max is stopped there (/stop)";
-/// ...and one whose core ended with the question still there: its idle
-/// window ran out, or the turn was killed or failed.
-pub(super) const TURN_OVER: &str = "Max there ended its turn without answering";

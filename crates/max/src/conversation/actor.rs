@@ -31,7 +31,7 @@ use super::notice::Notice;
 use super::project::{self, Projection};
 use super::{
     Act, Event, Place, Post, Poster, Receipt, Refusal, Refused, Signal, Subscription, TaskId,
-    classify, model, tool,
+    Unanswered, classify, model, tool,
 };
 use crate::bind::Binds;
 use crate::causes;
@@ -275,7 +275,7 @@ impl Conversation {
     /// group's VM runs on: it isn't the actor's.
     async fn give_up(&mut self, error: &Report) {
         let core = self.core.take();
-        self.refuse_questions(asking::TURN_OVER);
+        self.refuse_questions(Unanswered::TurnOver);
         let why = causes::chain(&**error);
         if let Err(error) = self.wind_up(core, &why).await {
             let conversation = self.place.conversation;
@@ -764,7 +764,7 @@ impl Conversation {
         // Aborts the model call in flight: started now, not waited for.
         drop(a.io);
         // What it was asked and didn't answer, nobody will.
-        self.refuse_questions(asking::TURN_OVER);
+        self.refuse_questions(Unanswered::TurnOver);
         if let Some(text) = a.voice.cut_off() {
             let tokens = tokens::count(&text);
             if let Err(rejected) = a.run.partial_output(text, tokens) {

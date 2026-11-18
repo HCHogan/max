@@ -251,12 +251,33 @@ pub struct Answer {
     pub question: String,
     /// What Max there said; or why nothing comes, where that can be
     /// told.
-    pub said: Result<String, String>,
+    pub said: Result<String, Unanswered>,
+}
+
+/// Why Max in another conversation gives no answer, as the asker is
+/// told.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum Unanswered {
+    /// `/stop` stopped Max there.
+    #[error("Max is stopped there (/stop)")]
+    Stopped,
+    #[error("Max is restarting there")]
+    Restarting,
+    /// The core that read the question ended with it still there: its
+    /// idle window ran out, or the turn was killed or failed.
+    #[error("Max there ended its turn without answering")]
+    TurnOver,
+    /// The conversation table found no chat to start its actor in.
+    #[error("Max serves no chat of that conversation")]
+    NoChat,
+    /// The table couldn't start its actor.
+    #[error("Max couldn't start on that conversation")]
+    NotStarted,
 }
 
 impl Question {
     /// What tells the asker `said` of it: an answer, or why none comes.
-    pub fn answered(self, said: Result<String, String>) -> Signal {
+    pub fn answered(self, said: Result<String, Unanswered>) -> Signal {
         Signal::Heard {
             conversation: self.from.conversation,
             heard: Heard::Answered(Answer {

@@ -12,6 +12,7 @@ use max_core::item::{Item, ItemKind};
 use max_core::render::EXCERPT_CHARS;
 use max_db::links::Peer;
 
+use super::Unanswered;
 use crate::tokens;
 
 pub enum Notice<'a> {
@@ -34,7 +35,7 @@ pub enum Notice<'a> {
     Answered {
         by: &'a Peer,
         question: &'a str,
-        said: &'a Result<String, String>,
+        said: &'a Result<String, Unanswered>,
     },
 }
 
