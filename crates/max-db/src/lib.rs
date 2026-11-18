@@ -4,6 +4,10 @@
 //! transaction: `&mut *tx` inside one, or a connection from the pool. A
 //! query that needs several statements to agree opens its own (a
 //! savepoint when the caller already has a transaction).
+//!
+//! Every function fails as its queries do, with sqlx's error: the
+//! database's own, or a decode error where a column holds what this code
+//! doesn't know. That goes for all of them, and none says it again.
 
 pub mod captions;
 pub mod embeddings;

@@ -13,21 +13,29 @@ use crate::{named, unknown};
 /// A row to commit.
 #[derive(Clone, Debug)]
 pub struct NewMessage<'a> {
+    /// The conversation it is a row of.
     pub conversation: ConversationId,
+    /// The chat it came in at, or goes out to.
     pub endpoint: EndpointId,
+    /// Who said it, as they are now.
     pub sender: &'a Sender,
     /// The platform's id for an inbound row; None for what Max says.
     pub native_id: Option<&'a str>,
     /// The id the platform quotes it by, where that differs: QQ's msg_idx.
     pub quote_id: Option<&'a str>,
+    /// When the platform says it was sent.
     pub sent_at: DateTime<Utc>,
+    /// When max took it.
     pub received_at: DateTime<Utc>,
     /// A command, which the actor runs; only for `Content::Message`.
     pub command: bool,
+    /// What it says, or what it does to an earlier row.
     pub content: &'a Content,
+    /// The platform's payload, kept as it came.
     pub raw: &'a serde_json::Value,
     /// The rendered text, for search.
     pub text: &'a str,
+    /// For what Max says: the turn that says it.
     pub turn: Option<TurnId>,
     /// Where in its turn's output a segment Max said came.
     pub segment: Option<i32>,
@@ -36,17 +44,23 @@ pub struct NewMessage<'a> {
 /// A stored row, with what the reader needs besides the message.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Row {
+    /// The message.
     pub message: Message,
+    /// The chat it came in at, or went out to.
     pub endpoint: EndpointId,
+    /// Whether it is a command.
     pub command: bool,
     /// For what Max sent to the row's endpoint: what became of it, once
     /// known.
     pub delivery: Option<Delivery>,
 }
 
+/// What became of a row Max sent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Delivery {
+    /// The platform took it.
     Sent,
+    /// The platform refused it, or it never got there.
     Failed,
     /// Max crashed before hearing back.
     Unknown,
@@ -128,6 +142,7 @@ fn content(
     })
 }
 
+/// Commits a row to the timeline: its id.
 pub async fn insert(conn: &mut PgConnection, new: &NewMessage<'_>) -> sqlx::Result<MessageId> {
     let columns = columns(new.content, new.command);
     let id = sqlx::query_scalar!(
@@ -626,20 +641,25 @@ pub async fn quote_id(conn: &mut PgConnection, message: MessageId) -> sqlx::Resu
 /// What the platform said when Max sent a row.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Sent<'a> {
+    /// The platform took it.
     Delivered {
+        /// The platform's id for it.
         native_id: &'a str,
         /// For quoting it, where the platform has a separate id.
         quote_id: Option<&'a str>,
     },
     /// Done, such as an unsend, which has no platform id of its own.
     Done,
+    /// The platform refused it, or it never got there.
     Failed {
+        /// What the platform or the sender said of it.
         error: &'a str,
     },
     /// Whether the platform took it isn't known: its answer was lost.
     Unknown,
 }
 
+/// Records what became of a row Max sent to `endpoint`.
 pub async fn record_delivery(
     conn: &mut PgConnection,
     message: MessageId,

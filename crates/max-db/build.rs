@@ -1,4 +1,6 @@
-// sqlx::migrate! embeds the migrations; rebuild when they change.
+//! sqlx::migrate! embeds the migrations: cargo builds again when they
+//! change.
+
 fn main() {
     println!("cargo:rerun-if-changed=migrations");
 }

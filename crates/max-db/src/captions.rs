@@ -14,7 +14,9 @@ use crate::named;
 /// Which prompt a caption was written with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Kind {
+    /// Written as a picture's: what it shows.
     Image,
+    /// Written as a sticker's: what it says, and when to use it.
     Sticker,
 }
 
@@ -36,15 +38,20 @@ max_core::names!(Kind, "caption kind", {
     Sticker => "sticker",
 });
 
+/// A caption to write.
 #[derive(Debug)]
 pub struct Caption<'a> {
+    /// The file it is of.
     pub sha256: &'a Sha256,
+    /// The prompt it was written with.
     pub kind: Kind,
     /// Empty when the model gave up.
     pub text: &'a str,
     /// A sticker not to send.
     pub skip: bool,
+    /// The model that wrote it; None for one that was imported.
     pub model: Option<&'a str>,
+    /// When it was written.
     pub at: DateTime<Utc>,
 }
 
@@ -66,6 +73,7 @@ pub async fn write(conn: &mut PgConnection, caption: &Caption<'_>) -> sqlx::Resu
     Ok(written.rows_affected() == 1)
 }
 
+/// Whether the file has a caption, an empty one included.
 pub async fn exists(conn: &mut PgConnection, sha256: &Sha256) -> sqlx::Result<bool> {
     let found = sqlx::query_scalar!(
         r#"select exists (select 1 from media_captions where sha256 = $1) as "exists!""#,
@@ -79,8 +87,11 @@ pub async fn exists(conn: &mut PgConnection, sha256: &Sha256) -> sqlx::Result<bo
 /// A picture without a caption, and the first message it came in.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Uncaptioned {
+    /// The message.
     pub message: MessageId,
+    /// Which of the message's media it is.
     pub ordinal: u16,
+    /// The file.
     pub sha256: Sha256,
     /// A picture or a sticker, as that message has it.
     pub kind: MediaKind,
