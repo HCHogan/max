@@ -7,16 +7,8 @@ use sqlx::PgConnection;
 use sqlx::types::Json;
 
 use crate::captions;
-use crate::platform::{platform_name, role};
-use crate::unknown;
-
-fn role_name(role: Role) -> &'static str {
-    match role {
-        Role::Owner => "owner",
-        Role::Admin => "admin",
-        Role::Member => "member",
-    }
-}
+use crate::platform::role;
+use crate::{named, unknown};
 
 /// A row to commit.
 #[derive(Clone, Debug)]
@@ -59,6 +51,12 @@ pub enum Delivery {
     /// Max crashed before hearing back.
     Unknown,
 }
+
+max_core::names!(Delivery, "delivery status", {
+    Sent => "sent",
+    Failed => "failed",
+    Unknown => "unknown",
+});
 
 /// The key in a row's `raw` that says who said a row of Max's account
 /// that Max didn't. It is all that's read back of `raw`: the rest is the
@@ -147,7 +145,7 @@ pub async fn insert(conn: &mut PgConnection, new: &NewMessage<'_>) -> sqlx::Resu
         new.endpoint.0,
         new.sender.identity.0,
         new.sender.name,
-        new.sender.role.map(role_name),
+        new.sender.role.map(Role::as_str),
         new.native_id,
         new.quote_id,
         new.sent_at,
@@ -201,13 +199,7 @@ struct Raw {
 
 impl Raw {
     fn row(self) -> sqlx::Result<Row> {
-        let delivery = match self.delivery.as_deref() {
-            None => None,
-            Some("sent") => Some(Delivery::Sent),
-            Some("failed") => Some(Delivery::Failed),
-            Some("unknown") => Some(Delivery::Unknown),
-            Some(other) => return Err(unknown("delivery status", other)),
-        };
+        let delivery = self.delivery.as_deref().map(named).transpose()?;
         Ok(Row {
             message: Message {
                 id: MessageId(self.id),
@@ -659,17 +651,17 @@ pub async fn record_delivery(
         Sent::Delivered {
             native_id,
             quote_id,
-        } => ("sent", Some(*native_id), *quote_id, None),
-        Sent::Done => ("sent", None, None, None),
-        Sent::Failed { error } => ("failed", None, None, Some(*error)),
-        Sent::Unknown => ("unknown", None, None, None),
+        } => (Delivery::Sent, Some(*native_id), *quote_id, None),
+        Sent::Done => (Delivery::Sent, None, None, None),
+        Sent::Failed { error } => (Delivery::Failed, None, None, Some(*error)),
+        Sent::Unknown => (Delivery::Unknown, None, None, None),
     };
     sqlx::query!(
         "insert into deliveries (message_id, endpoint_id, status, native_id, quote_id, error, at)
          values ($1, $2, $3, $4, $5, $6, $7)",
         message.0,
         endpoint.0,
-        status,
+        status.as_str(),
         native_id,
         quote_id,
         error,
@@ -698,7 +690,7 @@ pub async fn mark_unknown(
               select from deliveries d where d.message_id = m.id and d.endpoint_id = m.endpoint_id
           )
         "#,
-        platform_name(platform),
+        platform.as_str(),
         at
     )
     .execute(conn)

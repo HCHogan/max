@@ -26,14 +26,12 @@ impl Kind {
             MediaKind::Video | MediaKind::Audio | MediaKind::File => None,
         }
     }
-
-    fn word(self) -> &'static str {
-        match self {
-            Self::Image => "image",
-            Self::Sticker => "sticker",
-        }
-    }
 }
+
+max_core::names!(Kind, "caption kind", {
+    Image => "image",
+    Sticker => "sticker",
+});
 
 pub struct Caption<'a> {
     pub sha256: &'a str,
@@ -53,7 +51,7 @@ pub async fn write(conn: &mut PgConnection, caption: &Caption<'_>) -> sqlx::Resu
          values ($1, $2, $3, $4, $5, $6)
          on conflict (sha256) do nothing",
         caption.sha256,
-        caption.kind.word(),
+        caption.kind.as_str(),
         caption.text,
         caption.skip,
         caption.model,

@@ -19,6 +19,9 @@ pub mod vectors;
 #[cfg(test)]
 mod testing;
 
+use std::str::FromStr;
+
+use max_core::names::Unknown;
 pub use sqlx::{PgConnection, PgPool};
 
 /// The migrations in `migrations/`, embedded.
@@ -28,6 +31,12 @@ pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!();
 /// the code disagree.
 fn unknown(column: &str, value: &str) -> sqlx::Error {
     sqlx::Error::Decode(format!("unknown {column}: {value:?}").into())
+}
+
+/// What a column names, by `max_core::names!`.
+fn named<T: FromStr<Err = Unknown>>(name: &str) -> sqlx::Result<T> {
+    name.parse()
+        .map_err(|unknown: Unknown| sqlx::Error::Decode(unknown.into()))
 }
 
 #[cfg(test)]

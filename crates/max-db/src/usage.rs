@@ -14,6 +14,12 @@ pub enum Purpose {
     Caption,
 }
 
+max_core::names!(Purpose, "purpose", {
+    Turn => "turn",
+    Intent => "intent",
+    Caption => "caption",
+});
+
 #[derive(Clone, Debug)]
 pub struct Call<'a> {
     pub conversation: Option<ConversationId>,
@@ -31,11 +37,6 @@ pub struct Call<'a> {
 }
 
 pub async fn record(conn: &mut PgConnection, call: &Call<'_>) -> sqlx::Result<()> {
-    let purpose = match call.purpose {
-        Purpose::Turn => "turn",
-        Purpose::Intent => "intent",
-        Purpose::Caption => "caption",
-    };
     let usage = call.usage;
     let timing = call.timing;
     sqlx::query!(
@@ -48,7 +49,7 @@ pub async fn record(conn: &mut PgConnection, call: &Call<'_>) -> sqlx::Result<()
         "#,
         call.conversation.map(|conversation| conversation.0),
         call.turn.map(|turn| turn.0),
-        purpose,
+        call.purpose.as_str(),
         call.provider,
         call.model,
         call.effort,
