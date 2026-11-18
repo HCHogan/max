@@ -2,7 +2,6 @@
 //! `/v1/embeddings`, such as Ollama's with bge-m3. The sticker library's
 //! vectors and `find_stickers`' queries come from here. See "Sending images".
 
-use std::fmt;
 use std::time::Duration;
 
 use max_db::embeddings::DIMENSIONS;
@@ -20,25 +19,16 @@ pub struct Embedder {
     pub model: String,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
     /// The service is down, out of reach, too slow, or said no.
+    #[error("embedding service unavailable: {0}")]
     Unavailable(String),
     /// It answered with something that isn't a vector of the model's
     /// length for each text.
+    #[error("embedding service answered wrong: {0}")]
     Malformed(String),
 }
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Unavailable(why) => write!(f, "embedding service unavailable: {why}"),
-            Self::Malformed(why) => write!(f, "embedding service answered wrong: {why}"),
-        }
-    }
-}
-
-impl std::error::Error for Error {}
 
 #[derive(Deserialize)]
 struct Answer {
