@@ -103,12 +103,12 @@ impl Pictures {
             let mut found = Vec::new();
             let mut waiting = false;
             for image in wanted {
-                let Some((received, pictures)) = rows.get(&image.message) else {
+                let Some(row) = rows.get(&image.message) else {
                     continue;
                 };
-                match pictures.get(&image.ordinal) {
+                match row.pictures.get(&image.ordinal) {
                     Some(sha256) => found.push((*image, sha256.clone())),
-                    None => waiting |= now < *received + WAIT,
+                    None => waiting |= now < row.received + WAIT,
                 }
             }
             if !waiting {

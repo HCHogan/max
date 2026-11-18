@@ -13,7 +13,7 @@ use max_core::item::Image;
 use max_core::message::{Content, MediaKind, MediaRef, Sha256};
 use max_db::PgPool;
 use max_db::captions::Kind;
-use max_db::media::{Blob, downloaded, pending, record};
+use max_db::media::{Blob, Remote, downloaded, pending, record};
 use reqwest::Client;
 use tokio::sync::Semaphore;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
@@ -179,7 +179,7 @@ impl Download {
                 pending
                     .remote
                     .into_iter()
-                    .map(move |(ordinal, kind, url)| Medium {
+                    .map(move |Remote { ordinal, kind, url }| Medium {
                         message,
                         ordinal,
                         kind,
