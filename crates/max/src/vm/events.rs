@@ -287,7 +287,7 @@ impl Following {
                 None
             };
             let reply_to = match &message.content {
-                Content::Message { reply_to, .. } => reply_to.map(|id| id.get()),
+                Content::Message { reply_to, .. } => reply_to.map(MessageId::get),
                 _ => None,
             };
             let line = Line {

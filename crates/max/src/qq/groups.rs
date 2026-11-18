@@ -19,14 +19,14 @@ pub trait Groups: Send + Sync + 'static {
 
 impl Groups for qqbot::Client {
     fn muted<'a>(&'a self, group: &'a str) -> Answer<'a, Vec<Muted>> {
-        Box::pin(qqbot::Client::muted(self, group))
+        Box::pin(Self::muted(self, group))
     }
 
     fn mute<'a>(&'a self, group: &'a str, mute: &'a Mute<'a>) -> Answer<'a, ()> {
-        Box::pin(qqbot::Client::mute(self, group, mute))
+        Box::pin(Self::mute(self, group, mute))
     }
 
     fn info<'a>(&'a self, group: &'a str) -> Answer<'a, GroupInfo> {
-        Box::pin(qqbot::Client::info(self, group))
+        Box::pin(Self::info(self, group))
     }
 }

@@ -158,30 +158,30 @@ impl FromStr for Command {
         };
         let argument = (!argument.is_empty()).then(|| argument.to_owned());
         Ok(match word.to_lowercase().as_str() {
-            "status" => Command::Status,
-            "kill" => Command::Kill,
-            "stop" => Command::Stop,
-            "start" => Command::Start,
-            "model" => Command::Model(argument.filter(|argument| argument != "list")),
-            "effort" => Command::Effort(argument.as_deref().map(Choice::from)),
-            "proactive" => Command::Proactive(match argument.as_deref() {
+            "status" => Self::Status,
+            "kill" => Self::Kill,
+            "stop" => Self::Stop,
+            "start" => Self::Start,
+            "model" => Self::Model(argument.filter(|argument| argument != "list")),
+            "effort" => Self::Effort(argument.as_deref().map(Choice::from)),
+            "proactive" => Self::Proactive(match argument.as_deref() {
                 None => None,
                 Some("on" | "default") => Some(true),
                 Some("off") => Some(false),
                 Some(_) => return Err(NotACommand),
             }),
-            "persona" => Command::Persona(match argument {
+            "persona" => Self::Persona(match argument {
                 None => Persona::Show,
                 Some(text) if ["clear", "reset", "default"].contains(&text.as_str()) => {
                     Persona::Reset
                 }
                 Some(text) => Persona::Set(text),
             }),
-            "clear" => Command::Clear {
+            "clear" => Self::Clear {
                 all: argument.as_deref() == Some("--all"),
             },
-            "unclear" => Command::Unclear,
-            "config" => Command::Config(match argument.as_deref() {
+            "unclear" => Self::Unclear,
+            "config" => Self::Config(match argument.as_deref() {
                 None => Config::All,
                 Some(argument) => match argument.split_once(char::is_whitespace) {
                     None => Config::One(argument.to_owned()),
@@ -191,9 +191,9 @@ impl FromStr for Command {
                     },
                 },
             }),
-            "bind" => Command::Bind(argument),
-            "link" => Command::Link(argument),
-            "unlink" => Command::Unlink(argument),
+            "bind" => Self::Bind(argument),
+            "link" => Self::Link(argument),
+            "unlink" => Self::Unlink(argument),
             _ => return Err(NotACommand),
         })
     }

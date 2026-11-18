@@ -48,7 +48,7 @@ impl<T: Clone> Codes<T> {
         let mut codes = self
             .codes
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         codes.retain(|_, issued| issued.valid(now));
         loop {
             // A code lets whoever says it first tie two conversations:
@@ -67,7 +67,7 @@ impl<T: Clone> Codes<T> {
         let mut codes = self
             .codes
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let issued = codes.remove(code.trim())?;
         issued.valid(now).then_some(issued.what)
     }
@@ -77,7 +77,7 @@ impl<T: Clone> Codes<T> {
         let codes = self
             .codes
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let issued = codes.get(code.trim())?;
         issued.valid(now).then(|| issued.what.clone())
     }

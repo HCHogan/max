@@ -9,7 +9,7 @@ use sqlx::{Connection, PgConnection};
 
 /// Something of a row's, with the row and its conversation: its text to
 /// embed, or the vector of it.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Of<T> {
     /// The row.
     pub message: MessageId,
@@ -40,7 +40,7 @@ pub async fn unembedded(
     after: Option<MessageId>,
     limit: i64,
 ) -> sqlx::Result<Vec<MessageId>> {
-    let before = after.map_or(i64::MAX, |id| id.get());
+    let before = after.map_or(i64::MAX, MessageId::get);
     let ids = sqlx::query_scalar!(
         "select m.id from messages m
          where m.id < $2 and m.kind = 'chat' and char_length(recall_text(m.text)) >= 4

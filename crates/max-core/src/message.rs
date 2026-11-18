@@ -85,7 +85,7 @@ crate::names!(Role, "role", {
 
 /// What a timeline row records: something said, or an event about an
 /// earlier row.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Content {
     /// Something said.
@@ -110,7 +110,7 @@ pub enum Content {
 }
 
 /// A piece of what a message says.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Node {
     /// Plain text.
