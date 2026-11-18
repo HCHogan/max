@@ -3,10 +3,8 @@
 //! in memory: a restart forgets them.
 
 use std::collections::HashMap;
-use std::collections::hash_map::RandomState;
-use std::hash::{BuildHasher, Hasher};
 use std::sync::Mutex;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 const VALID: Duration = Duration::from_secs(600);
 
@@ -44,14 +42,10 @@ impl<T: Clone> Codes<T> {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         codes.retain(|_, issued| issued.valid(now));
         loop {
-            // RandomState's keys come from the OS: enough for a code that
-            // is said once and lives ten minutes.
-            let mut hasher = RandomState::new().build_hasher();
-            let clock = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default();
-            hasher.write_u128(clock.as_nanos());
-            let code = format!("{:06}", hasher.finish() % 1_000_000);
+            // A code lets whoever says it first tie two conversations:
+            // from the generator the VMs' keys are made with, which the
+            // OS seeds.
+            let code = format!("{:06}", rand::random_range(0..1_000_000_u32));
             if !codes.contains_key(&code) {
                 codes.insert(code.clone(), Issued { what, at: now });
                 return code;
