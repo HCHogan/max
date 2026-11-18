@@ -4,10 +4,8 @@
 //! page at a time, newest first, and all of them again after a change of
 //! model. See "Recall".
 
-use std::collections::HashSet;
 use std::slice;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
@@ -23,7 +21,7 @@ use tracing::{debug, info, warn};
 
 use crate::embedding::Embedder;
 use crate::scope::Scope;
-use crate::worker::Row;
+use crate::worker::{Busy, Row};
 
 /// Requests to the embedding service at a time.
 const AT_ONCE: usize = 2;
@@ -58,8 +56,10 @@ impl Vectors {
         let slots = Arc::new(Semaphore::new(AT_ONCE));
         // What is being embedded: a row that a scan finds meanwhile is
         // embedded twice, which is only a waste.
-        let busy = Arc::new(Mutex::new(HashSet::new()));
-        let scanning = Arc::new(AtomicBool::new(false));
+        let busy = Busy::default();
+        // A scan runs alone: one still going when the next is due is let
+        // go on.
+        let scanning = Busy::default();
         let mut tasks = Scope::new();
         let mut scans = interval(RESCAN);
         scans.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -67,30 +67,28 @@ impl Vectors {
             tokio::select! {
                 () = stop.cancelled() => break,
                 _ = scans.tick() => {
-                    if scanning.swap(true, Ordering::SeqCst) {
+                    let Some(scan) = scanning.claim(&()) else {
                         continue;
-                    }
-                    let (worker, slots, scanning) =
-                        (Arc::clone(&worker), Arc::clone(&slots), Arc::clone(&scanning));
+                    };
+                    let (worker, slots) = (Arc::clone(&worker), Arc::clone(&slots));
                     tasks.spawn(move |_| async move {
+                        let _scan = scan;
                         match worker.scan(&slots).await {
                             Ok(pages) if pages > 0 => info!(pages, "recall vector pages made"),
                             Ok(_) => {}
                             Err(error) => warn!("the recall vector scan failed: {error:#}"),
                         }
-                        scanning.store(false, Ordering::SeqCst);
                     });
                 }
                 key = keys.recv() => {
                     let Some(key) = key else { break };
-                    if !busy.lock().unwrap_or_else(PoisonError::into_inner).insert(key) {
+                    let Some(claim) = busy.claim(&key) else {
                         continue;
-                    }
-                    let (worker, slots, busy) =
-                        (Arc::clone(&worker), Arc::clone(&slots), Arc::clone(&busy));
+                    };
+                    let (worker, slots) = (Arc::clone(&worker), Arc::clone(&slots));
                     tasks.spawn(move |_| async move {
+                        let _claim = claim;
                         worker.tries(key, &slots).await;
-                        busy.lock().unwrap_or_else(PoisonError::into_inner).remove(&key);
                     });
                 }
             }

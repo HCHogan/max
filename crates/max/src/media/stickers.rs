@@ -3,8 +3,7 @@
 //! it the captions it writes; its scan finds the rest, and all of them
 //! again after a change of model. See "Sending images".
 
-use std::collections::HashSet;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
@@ -19,6 +18,7 @@ use tracing::{debug, warn};
 
 use crate::embedding::Embedder;
 use crate::scope::Scope;
+use crate::worker::Busy;
 
 /// Captions embedded at a time.
 const AT_ONCE: usize = 2;
@@ -44,19 +44,16 @@ impl Stickers {
         let slots = Arc::new(Semaphore::new(AT_ONCE));
         // The files being embedded: one written again meanwhile, or found
         // by a scan, isn't sent twice.
-        let busy = Arc::new(Mutex::new(HashSet::new()));
+        let busy = Busy::default();
         let mut embedding = Scope::new();
         let mut start = |sha256: Sha256| {
-            let mut files = busy.lock().unwrap_or_else(PoisonError::into_inner);
-            if !files.insert(sha256.clone()) {
+            let Some(claim) = busy.claim(&sha256) else {
                 return;
-            }
-            let (stickers, slots, busy) =
-                (Arc::clone(&stickers), Arc::clone(&slots), Arc::clone(&busy));
+            };
+            let (stickers, slots) = (Arc::clone(&stickers), Arc::clone(&slots));
             embedding.spawn(move |_| async move {
+                let _claim = claim;
                 stickers.tries(&sha256, &slots).await;
-                let mut files = busy.lock().unwrap_or_else(PoisonError::into_inner);
-                files.remove(&sha256);
             });
         };
         let mut scans = interval(RESCAN);
