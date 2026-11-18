@@ -502,7 +502,7 @@ impl Conversation {
         let conversation = match argument {
             None => None,
             Some(group) => {
-                let native_id = format!("group:{group}");
+                let native_id = qq::native_id(qqbot::Chat::Group(group));
                 let mut conn = self.shared.services.pool.acquire().await?;
                 let found =
                     platform::conversation_of(&mut conn, Platform::QqLegacy, &native_id).await?;

@@ -32,6 +32,7 @@ use tokio::sync::mpsc::{self, UnboundedReceiver};
 use tokio::time::{Instant, sleep_until};
 use tracing::{info, warn};
 
+use super::chat;
 use crate::conversation::{Outgoing, Place, Refused};
 use crate::media::store::Store;
 use crate::scope::Scope;
@@ -410,15 +411,6 @@ fn refusal(error: &api::Error) -> String {
         }
         api::Error::Api { code, message, .. } => format!("QQ didn't recall it: {code} {message}"),
         error => format!("QQ never answered, so it isn't known whether it was recalled: {error}"),
-    }
-}
-
-/// `group:<group_openid>` or `c2c:<user_openid>`.
-fn chat(native_id: &str) -> Option<Chat<'_>> {
-    if let Some(group) = native_id.strip_prefix("group:") {
-        Some(Chat::Group(group))
-    } else {
-        native_id.strip_prefix("c2c:").map(Chat::User)
     }
 }
 
