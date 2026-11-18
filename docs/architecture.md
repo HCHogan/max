@@ -39,7 +39,7 @@ Non-goals:
 | --- | --- | --- | --- |
 | Async runtime | tokio, tokio-util, futures | 1.54 / 0.7.20 / 0.3 | `CancellationToken` and `FramedRead` / `LinesCodec` come from tokio-util. |
 | Serialisation | serde, serde_json | 1 |  |
-| Error handling | color-eyre; thiserror for errors callers match on | 0.6.5 / 2 | Colour is off when output goes to journald. |
+| Error handling | color-eyre; thiserror for errors callers match on | 0.6.5 / 2 | Colour is off when output goes to journald. An error says what happened and keeps what that came of as its source; `causes::chain` puts the two together where an error becomes text. |
 | Logging | tracing, tracing-subscriber | 0.1 / 0.3 | To stdout, collected by journald. |
 | Command line, configuration | clap (derive), toml | 4.6 / 1.1 | One source: the TOML file; see [Configuration](design/config.md). |
 | Database | sqlx (postgres, runtime-tokio, macros, migrate, chrono, json), Postgres with the pgvector extension | 0.9.0 | SQL is checked at compile time; the `.sqlx` offline metadata is committed; migrations use sqlx's own mechanism. No TLS: the database is local. Vectors go in as `float4[]` cast to `vector`, so there is no pgvector crate. |
@@ -279,10 +279,16 @@ and a web of dependencies while blocking nothing.
   sign or overflow (use `try_from`, or `#[expect]` with a reason where
   truncation is meant); `_` arms that cover a single variant, so a new
   variant doesn't silently fall into one; `#[expect]` with a reason
-  instead of `#[allow]`; redundant clones; large futures. Not
-  `cast_precision_loss` (every conversion to f64 here is of small numbers)
-  nor `expect_used` (`unwrap_used` already forces an `expect` with a
-  reason).
+  instead of `#[allow]`; redundant clones; large futures. What is public
+  is held to more: every public item has documentation, a function that
+  can fail or panic says when under `# Errors` or `# Panics` (max-db says
+  it once, for the crate), a public type has `Debug`, written by hand
+  where a derive would print a key, a function that only gives a value is
+  `#[must_use]`, and nothing is `pub` that can't be reached. No glob
+  imports outside a test's `use super::*`, and `unsafe` is forbidden, not
+  denied. Not `cast_precision_loss` (every conversion to f64 here is of
+  small numbers) nor `expect_used` (`unwrap_used` already forces an
+  `expect` with a reason).
 - **Limits live in `max_core::limits`.** Every limit the model is told
   of, or that is used in more than one place, is defined there once; the
   system prompt's rules, the descriptions of `run_code` and `shell` and
