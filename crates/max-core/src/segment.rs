@@ -97,6 +97,17 @@ impl Segmenter {
     }
 }
 
+/// Whether `text` from the model, whole, says anything: whether a
+/// [`Segmenter`] with `known` for its roster would make a message of it.
+pub fn speaks(text: &str, known: &BTreeSet<PrincipalId>) -> bool {
+    let mut chunker = Chunker::default();
+    let mut chunks = chunker.push(text);
+    chunks.extend(chunker.finish());
+    chunks
+        .iter()
+        .any(|chunk| parse::parse(chunk, known).is_some())
+}
+
 /// Cuts streamed text into chunks: `chunk::Chunker`, over `str`.
 #[derive(Debug, Default)]
 pub struct Chunker(chunk::Chunker);

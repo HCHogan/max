@@ -164,5 +164,5 @@ async fn silence_and_cut_offs() {
     let ((idle, cut), _socket) = tokio::join!(calls, server);
     assert!(matches!(idle, Error::Idle(_)), "{idle:?}");
     assert!(matches!(cut, Error::Truncated), "{cut:?}");
-    assert!(idle.retryable() && cut.retryable());
+    assert!(idle.is_retryable() && cut.is_retryable());
 }

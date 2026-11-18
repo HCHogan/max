@@ -127,20 +127,20 @@ impl Conversation {
             let Some(active) = self.core.as_mut() else {
                 return Ok(());
             };
-            if active.run.busy() {
+            if active.run.is_busy() {
                 return Ok(());
             }
             // Stopping, a core may finish what it is doing within the grace;
             // one with nothing to do ends now.
-            if self.stopping.is_some() && active.run.idle() {
+            if self.stopping.is_some() && active.run.is_idle() {
                 self.end(End::Idle).await?;
                 continue;
             }
             // Over its limits, the core gives up, and near them with
             // nothing to do, it ends; the next trigger starts a new one from
             // the ledger.
-            if active.run.at_limit() || (active.run.idle() && active.run.near_limit()) {
-                let how = if active.run.idle() {
+            if active.run.at_limit() || (active.run.is_idle() && active.run.near_limit()) {
+                let how = if active.run.is_idle() {
                     End::Idle
                 } else {
                     End::Failed(FailReason::ContextExhausted)
@@ -261,7 +261,7 @@ impl Conversation {
             Utc::now(),
         )
         .await?;
-        info!(turn = %active.turn, ?outcome, rounds = active.run.round(), warned = active.run.warned(), "the core ends");
+        info!(turn = %active.turn, ?outcome, rounds = active.run.round(), warned = active.run.is_warned(), "the core ends");
         drop(conn);
         let why = match how {
             End::Failed(FailReason::Model { error }) => failure("the model call failed", &error),
@@ -286,7 +286,7 @@ impl Conversation {
     pub(super) async fn report_unanswered(&mut self, run: &Run, why: &str) -> Result<()> {
         let trigger = run
             .unhandled()
-            .into_iter()
+            .iter()
             .filter(|wake| wake.reason == Reason::Direct)
             .filter_map(|wake| wake.ids.last().copied())
             .max();

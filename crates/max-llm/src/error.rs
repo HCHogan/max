@@ -4,7 +4,7 @@ use std::time::Duration;
 /// source.
 pub type Cause = Box<dyn std::error::Error + Send + Sync>;
 
-/// Why a model call failed. Whether to try again is [`Error::retryable`];
+/// Why a model call failed. Whether to try again is [`Error::is_retryable`];
 /// the caller decides whether it may, since text already said can't be
 /// taken back.
 ///
@@ -41,7 +41,7 @@ pub enum Error {
 
 impl Error {
     /// Whether the same request might succeed if sent again.
-    pub fn retryable(&self) -> bool {
+    pub fn is_retryable(&self) -> bool {
         match self {
             Self::Connect(_) | Self::Idle(_) | Self::Body(_) | Self::Truncated | Self::Aloud => {
                 true
@@ -98,20 +98,20 @@ mod tests {
             status,
             body: String::new(),
         };
-        assert!(status(429).retryable());
-        assert!(status(503).retryable());
-        assert!(!status(400).retryable());
-        assert!(!status(401).retryable());
-        assert!(Error::Truncated.retryable());
-        assert!(!Error::Incomplete("max_output_tokens".into()).retryable());
+        assert!(status(429).is_retryable());
+        assert!(status(503).is_retryable());
+        assert!(!status(400).is_retryable());
+        assert!(!status(401).is_retryable());
+        assert!(Error::Truncated.is_retryable());
+        assert!(!Error::Incomplete("max_output_tokens".into()).is_retryable());
 
         let overloaded = Error::provider(&json!({ "code": "server_error", "message": "busy" }));
-        assert!(overloaded.retryable());
+        assert!(overloaded.is_retryable());
         let wrapped = json!({ "error": { "type": "rate_limit_error", "message": "slow down" } });
-        assert!(Error::provider(&wrapped).retryable());
+        assert!(Error::provider(&wrapped).is_retryable());
         let too_long =
             Error::provider(&json!({ "code": "context_length_exceeded", "message": "" }));
-        assert!(!too_long.retryable());
+        assert!(!too_long.is_retryable());
         assert_eq!(
             too_long.to_string(),
             "the provider failed the response: context_length_exceeded: "

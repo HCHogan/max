@@ -41,7 +41,7 @@ pub async fn call(
         match once(&chosen, &request, &pictures, task, &mailbox, &mut said).await {
             Ok(out) => break Ok(out),
             // Once something is said a retry would say it again.
-            Err(error) if !said && error.retryable() && attempt < chosen.retries => {
+            Err(error) if !said && error.is_retryable() && attempt < chosen.retries => {
                 let wait = backoff(attempt);
                 let error = causes::chain(&error);
                 warn!(%task, model = %chosen.reference(), error, ?wait, "retrying the model call");

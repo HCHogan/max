@@ -191,7 +191,7 @@ fn ends_that_are_not_complete() {
         parser
             .event(&overloaded.to_string())
             .unwrap_err()
-            .retryable()
+            .is_retryable()
     );
     assert!(matches!(parser.event("data"), Err(Error::Malformed(_))));
 }
