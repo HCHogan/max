@@ -111,10 +111,10 @@ impl Conversation {
         let Some(since) = since else {
             return Ok(());
         };
-        let Some(a) = &self.core else {
+        let Some(active) = &self.core else {
             return Ok(());
         };
-        if !a.voice.may_start_over(since)
+        if !active.voice.may_start_over(since)
             || (committed.direct.is_none() && !self.own_words(committed).await?)
         {
             return Ok(());
@@ -145,20 +145,20 @@ impl Conversation {
 
     /// Takes back the model call in flight; the next step makes it again.
     fn start_over(&mut self) {
-        let Some(a) = self.core.as_mut() else {
+        let Some(active) = self.core.as_mut() else {
             return;
         };
-        let Some(calling) = a.voice.calling.take() else {
+        let Some(calling) = active.voice.calling.take() else {
             return;
         };
-        if let Err(rejected) = a.run.retract() {
-            warn!(turn = %a.turn, %rejected, "couldn't take back a model call");
-            a.voice.calling = Some(calling);
+        if let Err(rejected) = active.run.retract() {
+            warn!(turn = %active.turn, %rejected, "couldn't take back a model call");
+            active.voice.calling = Some(calling);
             return;
         }
         calling.abort.abort();
-        a.live.remove(&calling.task);
-        a.voice.restarts += 1;
-        info!(conversation = %self.place.conversation, turn = %a.turn, restarts = a.voice.restarts, "a model call starts over");
+        active.live.remove(&calling.task);
+        active.voice.restarts += 1;
+        info!(conversation = %self.place.conversation, turn = %active.turn, restarts = active.voice.restarts, "a model call starts over");
     }
 }

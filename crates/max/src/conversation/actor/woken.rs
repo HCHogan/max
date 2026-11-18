@@ -75,7 +75,7 @@ impl Conversation {
     pub(super) fn single(&self) -> u32 {
         let settings = &self.settings;
         let window = match &self.core {
-            Some(a) => Some(a.chosen.window),
+            Some(active) => Some(active.chosen.window),
             None => self
                 .shared
                 .models
