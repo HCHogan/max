@@ -231,6 +231,7 @@ pub struct Parser {
 }
 
 impl Parser {
+    /// A parser for a response of `model`.
     #[must_use]
     pub fn new(model: ModelTag) -> Self {
         Self {
@@ -254,6 +255,12 @@ impl Parser {
     }
 
     /// One event: the text in it to be said.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Malformed`] for an event that isn't JSON,
+    /// [`Error::Incomplete`] when the response stopped early, and
+    /// [`Error::Provider`] when the provider failed it.
     pub fn event(&mut self, data: &str) -> Result<Vec<String>, Error> {
         let mut event: Value = serde_json::from_str(data).map_err(Error::malformed)?;
         let text = |field: &str| event[field].as_str().unwrap_or_default().to_owned();
@@ -278,6 +285,11 @@ impl Parser {
     }
 
     /// The stream has ended.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Truncated`] when the stream ended before the response was
+    /// complete.
     pub fn finish(self) -> Result<ModelOutput, Error> {
         self.output.ok_or(Error::Truncated)
     }

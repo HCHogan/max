@@ -12,10 +12,18 @@ pub type Cause = Box<dyn std::error::Error + Send + Sync>;
 /// two are said together by whoever prints the chain, and neither twice.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    /// The request didn't get there, or no response began.
     #[error("couldn't reach the provider")]
     Connect(#[source] reqwest::Error),
+    /// The provider answered with an error's status.
     #[error("the provider answered {status}: {body}")]
-    Status { status: u16, body: String },
+    Status {
+        /// The HTTP status.
+        status: u16,
+        /// The start of what it said.
+        body: String,
+    },
+    /// Nothing arrived for the provider's idle timeout, which this is.
     #[error("nothing from the provider for {0:?}")]
     Idle(Duration),
     /// The connection broke while the response was streaming.
@@ -26,10 +34,16 @@ pub enum Error {
     Truncated,
     /// The provider reported a failure inside the stream.
     #[error("the provider failed the response: {code}: {message}")]
-    Provider { code: String, message: String },
+    Provider {
+        /// Its code for the failure, or its type where it gives no code.
+        code: String,
+        /// What it says of it.
+        message: String,
+    },
     /// The model stopped before finishing, such as at the output limit.
     #[error("the response stopped early: {0}")]
     Incomplete(String),
+    /// What came isn't what the protocol says comes.
     #[error("unexpected data from the provider")]
     Malformed(#[source] Cause),
     /// The model wrote its reasoning as its answer, under a heading such

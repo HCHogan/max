@@ -27,7 +27,9 @@ const ERROR_BODY: usize = 2000;
 pub struct Provider {
     /// Up to and including `/v1`.
     pub base_url: String,
+    /// Sent as a bearer token, if there is one.
     pub api_key: Option<String>,
+    /// Sent with every request.
     pub headers: Vec<(String, String)>,
     /// The longest wait for anything from the provider, the response's
     /// headers included. There is no limit on the whole call.
@@ -43,6 +45,7 @@ impl fmt::Debug for Provider {
     }
 }
 
+/// A provider's client: one call, one attempt.
 #[derive(Debug)]
 pub struct Client {
     http: reqwest::Client,
@@ -50,6 +53,11 @@ pub struct Client {
 }
 
 impl Client {
+    /// A client for `provider`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Connect`] if the HTTP client can't be made.
     pub fn new(provider: Provider) -> Result<Self, Error> {
         let http = reqwest::Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)
@@ -60,6 +68,13 @@ impl Client {
 
     /// Sends the request, in the protocol of its model, and waits for the
     /// response to start.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Connect`] and [`Error::Idle`] when no response begins;
+    /// [`Error::Status`] for a status that isn't a success; and for a body of
+    /// JSON where a stream was due, [`Error::Provider`], [`Error::Malformed`],
+    /// or [`Error::Body`] if it breaks off.
     pub async fn call(
         &self,
         request: &Request,
@@ -195,6 +210,12 @@ impl Call {
 
     /// The next text the model wrote, to be said, or `None` once no more
     /// is coming.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Idle`] and [`Error::Body`] when the stream stalls or breaks,
+    /// and what the protocol's parser makes of an event: [`Error::Malformed`],
+    /// [`Error::Provider`] or [`Error::Incomplete`].
     pub async fn next(&mut self) -> Result<Option<String>, Error> {
         loop {
             if let Some(text) = self.pending.pop_front() {
@@ -235,6 +256,11 @@ impl Call {
 
     /// What the model produced, once [`Call::next`] has returned `None`;
     /// an error if the response never completed.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Truncated`] when the response never completed; from Chat,
+    /// [`Error::Incomplete`] and [`Error::Aloud`] too.
     pub fn finish(self) -> Result<ModelOutput, Error> {
         match self.parser {
             Parser::Responses(parser) => parser.finish(),
