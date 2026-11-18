@@ -139,15 +139,35 @@ fn logging(level: config::Level) {
 }
 
 async fn serve(config: Config) -> Result<()> {
-    let qq = config
-        .platforms
-        .qq
-        .as_ref()
-        .map(config::Qq::credentials)
-        .transpose()?;
-    let models = Arc::new(Models::new(&config.llm)?);
+    let running = start(config).await?;
+    info!(commit = max::COMMIT, "serving");
+    let mut terminate = signal(SignalKind::terminate())?;
+    tokio::select! {
+        _ = terminate.recv() => {}
+        interrupted = tokio::signal::ctrl_c() => interrupted?,
+        () = running.failed.cancelled() => {}
+    }
+    info!("stopping");
+    running.stop().await
+}
 
-    let pool = PgPool::connect(&config.database.url)
+/// Max as it runs: what `start` started, for `stop` to end in order.
+struct Running {
+    pool: PgPool,
+    /// What every conversation shares; the sender drains once it is gone.
+    shared: Arc<Shared>,
+    intake: Scope,
+    conversations: Scope,
+    senders: Scope,
+    workers: Scope,
+    services: Scope,
+    /// Set when an adapter stops for good: Max stops too, and fails.
+    failed: CancellationToken,
+}
+
+/// The database, migrated, with the turns a crash left running closed.
+async fn database(url: &str) -> Result<PgPool> {
+    let pool = PgPool::connect(url)
         .await
         .wrap_err("connecting to the database")?;
     max_db::MIGRATOR
@@ -156,9 +176,27 @@ async fn serve(config: Config) -> Result<()> {
         .wrap_err("migrating the database")?;
     info!("migrations applied");
     table::close_unfinished(&pool).await?;
-    let owners = owners(&pool, &config).await?;
+    Ok(pool)
+}
 
-    let mut workers = Scope::new();
+/// What the derived-data workers leave for the rest to use.
+struct Derived {
+    embedder: Option<Arc<Embedder>>,
+    /// Where each committed row goes, for the workers that take rows.
+    rows: Rows,
+    pictures: Option<Arc<Pictures>>,
+}
+
+/// Starts the derived-data workers the configuration has the means for:
+/// the recall vectors and the stickers' with an embedding model, and with
+/// a media directory the downloads and, with a model for them, the
+/// captions.
+async fn derived(
+    config: &Config,
+    pool: &PgPool,
+    models: &Models,
+    workers: &mut Scope,
+) -> Result<Derived> {
     let embedder = match &config.embedding {
         Some(embedding) => {
             let key = embedding.api_key()?;
@@ -236,6 +274,31 @@ async fn serve(config: Config) -> Result<()> {
             None
         }
     };
+    Ok(Derived {
+        embedder,
+        rows,
+        pictures,
+    })
+}
+
+/// Starts everything, in the order each needs the one before.
+async fn start(config: Config) -> Result<Running> {
+    let qq = config
+        .platforms
+        .qq
+        .as_ref()
+        .map(config::Qq::credentials)
+        .transpose()?;
+    let models = Arc::new(Models::new(&config.llm)?);
+    let pool = database(&config.database.url).await?;
+    let owners = owners(&pool, &config).await?;
+
+    let mut workers = Scope::new();
+    let Derived {
+        embedder,
+        rows,
+        pictures,
+    } = derived(&config, &pool, &models, &mut workers).await?;
     let search = match &config.search {
         Some(search) => Some(Arc::new(Search::new(search::EXA, search.api_key()?)?)),
         None => {
@@ -305,7 +368,6 @@ async fn serve(config: Config) -> Result<()> {
     let mut me = HashMap::new();
     let mut intake = Scope::new();
     let mut senders = Scope::new();
-    // Set when an adapter stops for good: Max stops too, and fails.
     let failed = CancellationToken::new();
     if let Some(client) = client {
         let bot = client.me().await.wrap_err("checking the QQ credentials")?;
@@ -340,37 +402,45 @@ async fn serve(config: Config) -> Result<()> {
     let mut conversations = Scope::new();
     let table = Table::new(Arc::clone(&shared), me);
     conversations.spawn(move |_| table.run(intake_rx, signals_rx, CONVERSATIONS_GRACE));
-    info!(commit = max::COMMIT, "serving");
+    Ok(Running {
+        pool,
+        shared,
+        intake,
+        conversations,
+        senders,
+        workers,
+        services,
+        failed,
+    })
+}
 
-    let mut terminate = signal(SignalKind::terminate())?;
-    tokio::select! {
-        _ = terminate.recv() => {}
-        interrupted = tokio::signal::ctrl_c() => interrupted?,
-        () = failed.cancelled() => {}
+impl Running {
+    /// Stops what `start` started, in the order of "Shutdown order" in
+    /// docs/architecture.md; an error if an adapter had stopped for good.
+    async fn stop(self) -> Result<()> {
+        // First, no more is taken from the VMs: what they ask from here on
+        // waits at the socket for the next max.
+        if let Some(vms) = &self.shared.vms {
+            vms.stop_listening();
+        }
+        self.intake.close(INTAKE_GRACE).await;
+        // With intake closed, the table stops every conversation.
+        self.conversations
+            .close(CONVERSATIONS_GRACE + Duration::from_secs(5))
+            .await;
+        // The sender drains once every handle to it is gone.
+        drop(self.shared);
+        self.senders.close(DRAIN + Duration::from_secs(5)).await;
+        // What they were doing is redone on the next start, or given up.
+        self.workers.close(Duration::ZERO).await;
+        // The VMs stay, and what runs in them: the next max attaches to them.
+        self.services.close(Duration::ZERO).await;
+        self.pool.close().await;
+        if self.failed.is_cancelled() {
+            bail!("a platform's connection stopped for good");
+        }
+        Ok(())
     }
-    info!("stopping");
-    // First, no more is taken from the VMs: what they ask from here on
-    // waits at the socket for the next max.
-    if let Some(vms) = &shared.vms {
-        vms.stop_listening();
-    }
-    intake.close(INTAKE_GRACE).await;
-    // With intake closed, the table stops every conversation.
-    conversations
-        .close(CONVERSATIONS_GRACE + Duration::from_secs(5))
-        .await;
-    // The sender drains once every handle to it is gone.
-    drop(shared);
-    senders.close(DRAIN + Duration::from_secs(5)).await;
-    // What they were doing is redone on the next start, or given up.
-    workers.close(Duration::ZERO).await;
-    // The VMs stay, and what runs in them: the next max attaches to them.
-    services.close(Duration::ZERO).await;
-    pool.close().await;
-    if failed.is_cancelled() {
-        bail!("a platform's connection stopped for good");
-    }
-    Ok(())
 }
 
 /// The people behind the owners file's accounts, who may run every
