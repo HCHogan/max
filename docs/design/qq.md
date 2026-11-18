@@ -201,7 +201,15 @@ like group ids it stays out of the repository.
   may be left out, so the group sees only the picture, as with a member's
   sticker. GIFs are sent animated (134 frames and 1.9 MB tested). The
   upload's `raw_url` is empty, so a picture can't be put in Markdown. See
-  [Sending images](media.md#sending-images) and [Sending files](media.md#sending-files).
+  [Sending images](media.md#sending-images),
+  [Sending files](media.md#sending-files) and
+  [Sending voice messages](media.md#sending-voice-messages).
+- **Voice messages** (`file_type = 3`, tested 2026-11-18): MP3, WAV and Ogg
+  were each uploaded without a `file_name`, and an MP3 sent to a group
+  showed as a voice bar that played. QQ converts the audio itself: bytes
+  that aren't audio answer 400 with 40093008 "音频转换失败". Its
+  documentation names silk, mp3 and wav, and in one table silk alone. See
+  [Sending voice messages](media.md#sending-voice-messages).
 - **Files** (`file_type = 4`, tested): the upload needs `file_name`, which
   the group shows on a downloadable file. A group whose group files are full
   answers 50015014 "系统繁忙"; only `upload_prepare` gives the reason,

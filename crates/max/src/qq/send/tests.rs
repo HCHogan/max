@@ -14,8 +14,8 @@ use crate::conversation::{Place, ingest};
 struct Recorder {
     answers: Mutex<VecDeque<Result<(), i64>>>,
     sent: Mutex<Vec<(String, Message)>>,
-    /// A file's name, and the bytes.
-    uploaded: Mutex<Vec<(Option<String>, Vec<u8>)>>,
+    /// What each went up as, a file with its name, and the bytes.
+    uploaded: Mutex<Vec<(String, Vec<u8>)>>,
     recalled: Mutex<Vec<(String, String)>>,
 }
 
@@ -40,15 +40,16 @@ fn refused(code: i64) -> api::Error {
 impl Api for Recorder {
     fn upload<'a>(&'a self, _: Chat<'a>, media: Media<'a>) -> Answer<'a, Uploaded> {
         let mut uploaded = self.uploaded.lock().unwrap();
-        let (name, content) = match media {
-            Media::Picture(content) => (None, content),
-            Media::File { name, content } => (Some(name.to_owned()), content),
+        let (what, content) = match media {
+            Media::Picture(content) => ("picture".to_owned(), content),
+            Media::Voice(content) => ("voice".to_owned(), content),
+            Media::File { name, content } => (format!("file {name}"), content),
         };
         // The sender hands over where the bytes are, not the bytes.
         let api::Content::Path(path) = content else {
             panic!("uploaded from memory");
         };
-        uploaded.push((name, std::fs::read(path).unwrap()));
+        uploaded.push((what, std::fs::read(path).unwrap()));
         let file_info = format!("FI{}", uploaded.len());
         Box::pin(async move {
             Ok(Uploaded {

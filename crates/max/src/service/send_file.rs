@@ -87,7 +87,7 @@ async fn send(context: &Context, Args { path, name }: Args) -> Result<Sent, Fail
     let (file, _) = spawn_blocking(move || open(&work, &opened, SENT_FILE_BYTES))
         .await
         .map_err(|_| internal())??;
-    let (sha256, size) = keep(store, file, &relative).await?;
+    let (sha256, size) = keep(store, file, &relative, SENT_FILE_BYTES).await?;
     let blob = Blob {
         sha256: sha256.clone(),
         mime: None,
@@ -113,15 +113,20 @@ async fn send(context: &Context, Args { path, name }: Args) -> Result<Sent, Fail
 }
 
 /// Copies `file`, `relative` under /work, into the store as it reads it:
-/// its SHA-256 and size. Not past `SENT_FILE_BYTES`, though the guest may
+/// its SHA-256 and size. Not past `most` bytes, though the guest may
 /// write more after it was opened; not an empty one.
-async fn keep(store: &Store, file: File, relative: &Path) -> Result<(String, u64), Failure> {
+pub(super) async fn keep(
+    store: &Store,
+    file: File,
+    relative: &Path,
+    most: u64,
+) -> Result<(String, u64), Failure> {
     let stored = |error: std::io::Error| {
         warn!(%error, "couldn't store a file to send");
         internal()
     };
     let mut partial = store.partial().await.map_err(stored)?;
-    let mut file = tokio::fs::File::from_std(file).take(SENT_FILE_BYTES + 1);
+    let mut file = tokio::fs::File::from_std(file).take(most + 1);
     let mut piece = vec![0; 1 << 20];
     let mut size = 0;
     loop {
@@ -133,8 +138,8 @@ async fn keep(store: &Store, file: File, relative: &Path) -> Result<(String, u64
             break;
         }
         size += read as u64;
-        if size > SENT_FILE_BYTES {
-            return Err(too_big(relative, SENT_FILE_BYTES));
+        if size > most {
+            return Err(too_big(relative, most));
         }
         partial.write(&piece[..read]).await.map_err(stored)?;
     }

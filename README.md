@@ -55,8 +55,9 @@ the time, the host tells me in `[现在]`.
 ### 2. Only two wire tools, ever
 The `tools` array in every request I get holds **`shell`** and
 **`run_code`**, nothing else. My actual tools, such as searching the chat's
-history (`history`) or the web (`web_search`), sending pictures and files
-(`send_image`, `send_file`), finding a sticker (`find_stickers`) and muting
+history (`history`) or the web (`web_search`), sending pictures, files and
+voice messages (`send_image`, `send_file`, `send_voice`), finding a sticker
+(`find_stickers`) and muting
 or recalling (`mute_member`, `recall_message`), are TypeScript functions on
 `tools.*` inside `run_code`, and commands of the `maxx` CLI in the shell.
 Calls reach the host over vsock.

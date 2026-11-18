@@ -62,6 +62,9 @@ pub const KEPT_FILE_BYTES: u64 = 64 << 20;
 /// time. 32 MiB took 14 seconds to upload from tank on 2026-10-29, so one
 /// this big takes a minute or two, and what Max says after it waits.
 pub const SENT_FILE_BYTES: u64 = 200 << 20;
+/// The largest voice message sent to the chat. QQ's documentation has one
+/// past 20 MB go as a file instead.
+pub const SENT_VOICE_BYTES: u64 = 16 << 20;
 
 // Asking another conversation.
 

@@ -323,6 +323,18 @@ pub async fn said(
                 nodes.push(Node::Media { media, meta });
                 files.push(sha256);
             }
+            DraftNode::Voice { sha256, size } => {
+                let meta = MediaMeta {
+                    kind: MediaKind::Audio,
+                    mime: None,
+                    size: Some(size),
+                    name: None,
+                    description: None,
+                };
+                let media = Some(MediaRef::Blob(sha256.clone()));
+                nodes.push(Node::Media { media, meta });
+                files.push(sha256);
+            }
         }
     }
     if nodes.is_empty() {

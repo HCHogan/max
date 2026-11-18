@@ -27,6 +27,10 @@ send_image(args: { path: string; caption?: string }): Promise<{ handle: string }
   A picture for everyone to see goes with send_image, not as a file. To send again a file the records already have, copy it to /work with file first. */
 send_file(args: { path: string; name?: string }): Promise<{ handle: string }>;
 
+/** Sends an audio file under /work to this chat as a voice message, which shows as a bar people tap to hear. MP3, WAV or Ogg; ffmpeg converts anything else. At most 16 MiB, and not empty; no symlink on the path.
+  It returns once the audio is stored and queued, and handle is its handle; the upload goes on after that. The records keep the audio, as [audio#…], and nothing of what it says. If it doesn't go out, as when QQ can't make the audio out, its row in the records is marked （没发出去）. */
+send_voice(args: { path: string }): Promise<{ handle: string }>;
+
 /** Recalls a message of this chat; id is the number in the #number at the start of its line. Whether to is yours to judge: for flooding, ads or what breaks the rules, or when someone asks and the reason is sound; say so briefly afterwards.
   QQ lets only messages sent within 2 minutes be recalled: what you said yourself (a segment is a message, so a reply sent in several is recalled one at a time), and, when you are an admin of the group, an ordinary member's; the owner's and the admins' can't be. In a private chat only your own.
   It returns once QQ has recalled it; if QQ doesn't, the call fails and says why. The records gain a row of yours, [unsend#id], marked （没发出去） if QQ didn't recall it. */

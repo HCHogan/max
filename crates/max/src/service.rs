@@ -14,6 +14,7 @@ mod recall_message;
 pub(crate) mod rows;
 mod send_file;
 mod send_image;
+mod send_voice;
 pub mod tool;
 mod web_search;
 pub(crate) mod work;

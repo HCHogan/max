@@ -249,7 +249,7 @@ the old one said.
   - Where the caller needs to know whether the send worked, the `Post`
     carries a reply channel that the actor hands to the sender, which
     answers after recording the `deliveries` row; the actor doesn't wait.
-  - A `Post` of `Act::Queue` (`send_file`) is answered as soon as its row
+  - A `Post` of `Act::Queue` (`send_file`, `send_voice`) is answered as soon as its row
     is entered, and the sender gets no reply channel: an upload can take
     minutes, longer than a call may wait, and whether it went out shows in
     the records like any message.

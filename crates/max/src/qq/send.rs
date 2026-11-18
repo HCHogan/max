@@ -71,16 +71,17 @@ const EARLY: Duration = Duration::from_secs(3600);
 struct Shared {
     api: Arc<dyn Api>,
     pool: PgPool,
-    /// Where the pictures and files Max sends are, if anywhere.
+    /// Where the pictures, voice messages and files Max sends are, if
+    /// anywhere.
     store: Option<Arc<Store>>,
     /// When proactive messages went out, per chat and (None) for the bot.
     sent: Mutex<HashMap<Option<String>, VecDeque<Instant>>>,
     uploads: Mutex<Uploads>,
 }
 
-/// Pictures and files uploaded, by chat, SHA-256 and a file's name: the
-/// `file_info` and until when it is used, if not for good. Lost when Max
-/// stops.
+/// Pictures, voice messages and files uploaded, by chat, SHA-256 and what
+/// each goes out as: the `file_info` and until when it is used, if not
+/// for good. Lost when Max stops.
 type Uploads = HashMap<(String, Attached), (String, Option<Instant>)>;
 
 /// Before anything is said: what the last process committed and never
@@ -189,8 +190,10 @@ impl Shared {
         drop(conn);
         Ok(match attached {
             Some(attached) => {
+                // Under a picture alone: a voice message and a file have
+                // no text.
                 let caption = Some(text.trim().to_owned())
-                    .filter(|text| !text.is_empty() && attached.name.is_none());
+                    .filter(|text| !text.is_empty() && attached.kind == Kind::Picture);
                 self.attached(chat, &place.native_id, message.id, attached, caption, quote)
                     .await
             }
@@ -264,7 +267,7 @@ impl Shared {
         let key = (native_id.to_owned(), attached);
         let file_info = self.upload(chat, &key).await.map_err(|error| {
             let sha256 = &key.1.sha256;
-            warn!(message = %id, sha256, %error, "couldn't upload a picture or file");
+            warn!(message = %id, sha256, %error, "couldn't upload what a message attaches");
             Unsent::Refused(error)
         })?;
         self.proactive(native_id).await;
@@ -273,7 +276,7 @@ impl Shared {
             quote,
         };
         self.api.send(chat, &qq).await.map_err(|error| {
-            warn!(message = %id, %error, "QQ didn't take a picture or file");
+            warn!(message = %id, %error, "QQ didn't take what a message attaches");
             // In case QQ forgot it early: the next one uploads it again.
             self.uploads
                 .lock()
@@ -283,8 +286,8 @@ impl Shared {
         })
     }
 
-    /// The `file_info` of the picture or file `key` names, uploaded unless
-    /// it was lately.
+    /// The `file_info` of the picture, voice message or file `key` names,
+    /// uploaded unless it was lately.
     async fn upload(&self, chat: Chat<'_>, key: &(String, Attached)) -> Result<String, String> {
         let now = Instant::now();
         let fresh = |until: &Option<Instant>| until.is_none_or(|until| now < until);
@@ -298,13 +301,14 @@ impl Shared {
         let Some(store) = &self.store else {
             return Err("no content store".to_owned());
         };
-        let Attached { sha256, name } = &key.1;
+        let Attached { sha256, kind } = &key.1;
         // Read as it is uploaded: a file can be hundreds of MiB.
         let path = store.path(sha256);
         let content = api::Content::Path(&path);
-        let media = match name {
-            Some(name) => Media::File { name, content },
-            None => Media::Picture(content),
+        let media = match kind {
+            Kind::Picture => Media::Picture(content),
+            Kind::Voice => Media::Voice(content),
+            Kind::File(name) => Media::File { name, content },
         };
         let uploaded = self
             .api
@@ -425,15 +429,23 @@ struct Lowered {
     text: String,
     /// The id to quote, if it quotes a row QQ knows.
     quote: Option<String>,
-    /// The picture or file it sends, if any: one a message.
+    /// The picture, voice message or file it sends, if any: one a message.
     attached: Option<Attached>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct Attached {
     sha256: String,
-    /// A file's; None for a picture.
-    name: Option<String>,
+    kind: Kind,
+}
+
+/// What an attachment goes out as.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum Kind {
+    Picture,
+    Voice,
+    /// Under this name.
+    File(String),
 }
 
 async fn lower(
@@ -471,11 +483,16 @@ async fn lower(
                 media: Some(MediaRef::Blob(sha256)),
                 meta,
             } if attached.is_none() => {
-                let name = (meta.kind == MediaKind::File)
-                    .then(|| meta.name.clone().unwrap_or_else(|| "file".to_owned()));
+                let kind = match meta.kind {
+                    MediaKind::File => {
+                        Kind::File(meta.name.clone().unwrap_or_else(|| "file".to_owned()))
+                    }
+                    MediaKind::Audio => Kind::Voice,
+                    _ => Kind::Picture,
+                };
                 attached = Some(Attached {
                     sha256: sha256.clone(),
-                    name,
+                    kind,
                 });
             }
             Node::Emote(_)

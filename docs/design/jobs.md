@@ -420,13 +420,13 @@ caps, is in
   "program"}`, and render with `程序发的` (`Mark::Program`): `[12:00 maxx #45
   程序发的]: …`, in `history` and the tail alike, so Max can tell what it said
   from what a program said. That includes what a turn's own tools send
-  (`send_image`, `send_file`, a command's `say`), since the host can't tell who
+  (`send_image`, `send_file`, `send_voice`, a command's `say`), since the host can't tell who
   called; the prompt says so. A running core doesn't see these rows; the next
   core's tail has them. A script can be tried once through `shell`, and what
   it sends is marked the same.
 - **The prompt**: what needs no judgement from Max, a program says itself
-  with `maxx say`, written as replies are, marked `程序发的`; pictures and files
-  go with `maxx send-image` and `send-file`.
+  with `maxx say`, written as replies are, marked `程序发的`; pictures, files
+  and voice messages go with `maxx send-image`, `send-file` and `send-voice`.
 - **Tests**: the actor's test has `say` send two messages and return the
   ids only after the receipts, with `raw` marked and the next core seeing
   `程序发的`; vm-check's background command runs `maxx wake`, and
@@ -506,7 +506,7 @@ One function answers what an event may do (`Conversation::refuses`):
   has ended, so this wasn't done`.
 - After `/stop`, what would have Max say or do something is refused with `Max
   is stopped here (/stop), so this wasn't done`: `say`, `send_image`,
-  `send_file` and `recall_message` as their posts reach the actor;
+  `send_file`, `send_voice` and `recall_message` as their posts reach the actor;
   `mute_member`, which asks the actor first (`Request::Act`); starting an agent
   or a background command; `ask`, `answer` and `wake`. VM notices are dropped.
   What reads still works: `history`, the searches, `/api`, `maxx events`.

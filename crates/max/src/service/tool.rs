@@ -28,6 +28,7 @@ use super::recall_message::RecallMessage;
 use super::rows::Rows;
 use super::send_file::SendFile;
 use super::send_image::SendImage;
+use super::send_voice::SendVoice;
 use super::web_search::WebSearch;
 use super::{Context, Failure, arguments, internal};
 
@@ -84,6 +85,7 @@ pub static TOOLS: LazyLock<Vec<Spec>> = LazyLock::new(|| {
         spec::<File>(),
         spec::<SendImage>(),
         spec::<SendFile>(),
+        spec::<SendVoice>(),
         spec::<RecallMessage>(),
         spec::<MuteMember>(),
         spec::<FindStickers>(),

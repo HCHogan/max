@@ -229,6 +229,12 @@ pub enum DraftNode {
         name: String,
         size: u64,
     },
+    /// A voice message a tool sends, in the content store already. The
+    /// model can't write it.
+    Voice {
+        sha256: String,
+        size: u64,
+    },
 }
 
 #[cfg(test)]

@@ -186,6 +186,25 @@ them is in [The official QQ bot](qq.md#outbound).
   `/work` with `file` and sends it with `send_file`.
 - Files go to private chats too.
 
+## Sending voice messages
+
+- **`send_voice({ path })`** sends an audio file from the VM as a voice
+  message, which the chat shows as a bar that plays. Read and queued as
+  `send_file`'s is: from `/work` without following symlinks, not empty, at
+  most `SENT_VOICE_BYTES` (16 MiB; QQ's documentation has one past 20 MB go
+  as a file), entered with a `Post` of `Act::Queue` as a message of Max's
+  whose node is audio media (`DraftNode::Voice`), and `audio#id.0` returned
+  as soon as it is entered.
+- The sender uploads it as `file_type = 3`, with no `content` and no name.
+  QQ converts what it is given and knows it by its content: MP3, WAV and Ogg
+  are taken (see [QQ](qq.md)), and what isn't audio is refused at the
+  upload, so the row is marked `（没发出去）`.
+- **The audio is Max's to make**, in its VM: the host speaks no text and
+  converts nothing. The guide names the formats, and ffmpeg for the rest.
+- **The records keep the audio and nothing of what it says**: Max's own
+  voice message reads `[audio#id.0]`, where one that came in carries
+  Tencent's transcript. The guide says so.
+
 ## Reading files
 
 Programs copy media from the records into `/work` on demand; nothing of
