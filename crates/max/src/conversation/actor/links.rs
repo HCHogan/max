@@ -3,10 +3,14 @@
 //! owner, the other person in a private chat, and Max's owners. See
 //! "Asking another conversation" in docs/design/jobs.md.
 
+use chrono::Utc;
+use color_eyre::eyre::Result;
+use max_core::ids::ConversationId;
 use max_db::links::{self, Peer};
 use max_db::platform::ConversationKind;
 
-use super::*;
+use super::Conversation;
+use crate::command;
 
 impl Conversation {
     /// `/link` answers with a code, to be said where Max here is to ask;

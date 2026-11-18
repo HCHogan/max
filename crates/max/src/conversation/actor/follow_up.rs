@@ -2,7 +2,17 @@
 //! when whoever it answers goes on talking: people finish an @ in a second
 //! message 3 to 38 seconds later (2026-11-04).
 
-use super::*;
+use std::time::Duration;
+
+use color_eyre::eyre::Result;
+use max_core::message::{Content, Node};
+use max_db::ledger;
+use tokio::task::AbortHandle;
+use tokio::time::Instant;
+use tracing::{info, warn};
+
+use super::Conversation;
+use crate::conversation::{TaskId, ingest};
 
 /// How long after someone addresses Max their next message may finish
 /// what they meant, and start over the model call in flight.

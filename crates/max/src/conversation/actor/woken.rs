@@ -3,9 +3,18 @@
 //! answer from another conversation (`asking`). See "Resident programs"
 //! in docs/rust-rewrite.md.
 
-use super::*;
-use crate::conversation::Heard;
+use std::collections::VecDeque;
+
+use color_eyre::eyre::Result;
+use max_core::intent::Reason;
 use max_core::limits::HOUR;
+use max_core::project::Budgets;
+use tokio::time::Instant;
+use tracing::info;
+
+use super::{Conversation, Does};
+use crate::conversation::Heard;
+use crate::conversation::notice::Notice;
 
 /// When the group's programs woke Max, in the last hour. Not a cap: Max
 /// is shown the count with each wake, so a program that wakes it too

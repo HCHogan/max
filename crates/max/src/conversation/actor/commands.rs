@@ -8,16 +8,21 @@
 use std::fmt::Write;
 use std::time::Duration;
 
-use chrono::TimeDelta;
+use chrono::{TimeDelta, Utc};
+use color_eyre::eyre::Result;
+use max_core::message::{Draft, DraftNode, Platform, Role};
+use max_db::platform::{self, ConversationKind};
+use max_db::usage;
+use tokio::time::{Instant, timeout};
+use tracing::{info, warn};
 
-use max_core::message::{Platform, Role};
-use max_db::platform::ConversationKind;
-use tokio::time::timeout;
-
-use super::*;
+use super::{Conversation, End};
 use crate::bind::Pending;
 use crate::command::{self, Choice, Command, Config, Persona};
-use crate::conversation::ingest::Committed;
+use crate::conversation::Unanswered;
+use crate::conversation::ingest::{By, Committed};
+use crate::llm::Chosen;
+use crate::{qq, vm};
 
 mod spent;
 

@@ -3,7 +3,13 @@
 //! Max of (`maxx units start`, `max-notify@`). See "Lifetimes move to
 //! systemd" in docs/rust-rewrite.md.
 
-use super::*;
+use std::time::Duration;
+
+use color_eyre::eyre::{Result, WrapErr};
+use serde::{Deserialize, Serialize};
+
+use super::{Ran, Told, Unit, guest_dir, headline, last_line, maxx, shown, start_of, wait, with};
+use crate::vm::Vm;
 
 /// What the model is told of the command: it failed if it didn't finish.
 pub(super) async fn shell(

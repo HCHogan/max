@@ -1,6 +1,14 @@
 //! `run_code`: a program in the guest's runner, which calls Max's tools.
 
-use super::*;
+use std::sync::LazyLock;
+use std::time::Duration;
+
+use color_eyre::eyre::Result;
+use serde::Serialize;
+
+use super::{Ran, Told, Unit, shell, shown, wait, with};
+use crate::service;
+use crate::vm::Vm;
 
 /// What the runner reads on its stdin: the program, its arguments, and
 /// the names of Max's tools.

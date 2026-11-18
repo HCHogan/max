@@ -1,7 +1,9 @@
 //! What tools and programs ask of the conversation: each is refused by
 //! the one rule, or done here, and answered where the request says.
 
-use super::*;
+use color_eyre::eyre::Result;
+
+use super::{Conversation, Does};
 use crate::conversation::Request;
 
 impl Conversation {

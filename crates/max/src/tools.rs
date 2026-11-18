@@ -11,7 +11,7 @@
 //! the model pictures and videos after their result, which the call's
 //! line lists and the host reads from /work; see [`show`].
 
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 use color_eyre::eyre::{Result, WrapErr, bail};
@@ -24,7 +24,6 @@ use tokio::time::{Instant, sleep};
 use tracing::info;
 
 use crate::media::store::Store;
-use crate::service;
 use crate::tokens;
 use crate::vm::ssh::{Sink, Stream, Waited, quote};
 use crate::vm::{Vm, Vms};
