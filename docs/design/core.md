@@ -28,7 +28,7 @@ pub struct Run {
     pending: Vec<Input>,          // inputs since the last model call, shown as one [新消息] block at the next one
     phase: Phase,
     round: u32,
-    measured: Option<(u32, usize)>, // the provider's count for the last request and its output, and how much of the transcript that covers
+    measured: Option<Measured>,   // the provider's count for the last request and its output, and how much of the transcript that covers
     unhandled: Vec<Wake>,         // wakes since the run was last waiting, the first ones included, that the model hasn't finished with
     roster: BTreeSet<PrincipalId>,// the base roster plus everyone a later input brought a roster line for
     quiet: u32,                   // tool calls since the model last said something to the group, or since the last reminder
