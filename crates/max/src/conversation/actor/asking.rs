@@ -10,11 +10,16 @@
 
 use std::collections::BTreeMap;
 
+use color_eyre::eyre::Result;
+use max_core::ids::ConversationId;
+use max_core::intent::Reason;
 use max_db::links;
+use tracing::info;
 
 use super::links::peer;
-use super::*;
-use crate::conversation::{Answer, Heard, Question};
+use super::{Conversation, Does};
+use crate::conversation::notice::Notice;
+use crate::conversation::{Answer, Heard, Question, Refusal, Refused, Signal, Unanswered};
 
 /// What Max in other conversations asked the core that runs here, by the
 /// number each question got, `ask#5`: each until it is answered, or the

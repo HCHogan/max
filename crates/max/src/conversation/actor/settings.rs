@@ -4,10 +4,13 @@
 //! docs/rust-rewrite.md.
 
 use std::fmt::Write;
+use std::time::Duration;
 
+use color_eyre::eyre::Result;
 use max_core::limits::Setting;
+use tracing::info;
 
-use super::*;
+use super::{Active, Conversation};
 use crate::command::{Choice, Config};
 use crate::conversation::Configured;
 

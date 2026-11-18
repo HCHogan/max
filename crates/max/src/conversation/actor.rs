@@ -12,8 +12,8 @@ use color_eyre::eyre::{Report, Result, eyre};
 use max_core::ids::{ConversationId, IdentityId, MessageId, PrincipalId, TurnId};
 use max_core::intent::{Decision, Entry, EntryKind, Intent, Reason};
 use max_core::item::{Item, ModelOutput, Timing};
-use max_core::message::{Content, Draft, DraftNode, Message, Node, Platform};
-use max_core::project::{Budgets, MEMORY_FILE};
+use max_core::message::{Draft, DraftNode, Message, Platform};
+use max_core::project::MEMORY_FILE;
 use max_core::prompt;
 use max_core::render::Mark;
 use max_core::run::{FailReason, Fill, Input, Outcome, Run, RunSpec, Step, Wake};
@@ -21,7 +21,6 @@ use max_db::platform::{self, Settings};
 use max_db::{ledger, turns, usage};
 use tokio::sync::broadcast;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use tokio::task::AbortHandle;
 use tokio::time::{Instant, sleep_until};
 use tracing::{debug, info, warn};
 
@@ -30,8 +29,8 @@ use super::ingest::{self, By};
 use super::notice::Notice;
 use super::project::{self, Projection};
 use super::{
-    Act, Event, Place, Post, Poster, Receipt, Refusal, Refused, Signal, Subscription, TaskId,
-    Unanswered, classify, model, tool,
+    Act, Event, Place, Post, Receipt, Refusal, Refused, Signal, Subscription, TaskId, Unanswered,
+    classify, model, tool,
 };
 use crate::bind::Binds;
 use crate::causes;

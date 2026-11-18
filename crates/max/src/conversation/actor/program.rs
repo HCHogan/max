@@ -2,10 +2,14 @@
 //! call comes this way, a turn's program's and a unit's of Max's own
 //! alike. See "The guest's calls" in docs/rust-rewrite.md.
 
+use std::sync::Arc;
+
 use serde_json::Value;
 use tokio::sync::oneshot;
 
-use super::*;
+use super::{Conversation, Does};
+use crate::conversation::Poster;
+use crate::{service, vm};
 
 impl Conversation {
     /// A call of `tool` from the VM; the result goes to `reply`. The call

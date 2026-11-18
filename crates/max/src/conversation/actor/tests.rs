@@ -13,8 +13,8 @@ use tokio::sync::{mpsc, oneshot};
 
 use super::*;
 use crate::command;
-use crate::conversation::Heard;
 use crate::conversation::testing::{from_xiaohong, from_xiaoming, group, shared, text};
+use crate::conversation::{Heard, Poster};
 use crate::inbound::InNode;
 use crate::llm::testing::{Answer, Script};
 
