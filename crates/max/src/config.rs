@@ -7,11 +7,13 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use chrono::FixedOffset;
 use color_eyre::eyre::{Result, WrapErr, ensure, eyre};
+use max_core::ids::ConversationId;
 use max_core::item::Protocol;
 use max_core::limits::{self, Setting};
 use serde::Deserialize;
@@ -555,7 +557,7 @@ pub struct Vm {
     /// One per VM that can run at a time.
     pub slots: Vec<Slot>,
     /// The resolvers a guest uses.
-    pub dns: Vec<String>,
+    pub dns: Vec<IpAddr>,
     #[serde(default = "cpus")]
     pub cpus: u32,
     #[serde(default = "memory")]
@@ -591,12 +593,12 @@ pub struct Vm {
 #[serde(deny_unknown_fields)]
 pub struct Operations {
     /// The groups, by conversation; everyone in them may operate.
-    pub conversations: Vec<i64>,
+    pub conversations: Vec<ConversationId>,
     /// Their VMs' taps, routed into the namespace: one per VM of theirs
     /// that can run at a time.
     pub slots: Vec<Slot>,
     /// The resolvers their guests try first, the tailnet's, before `dns`.
-    pub dns: Vec<String>,
+    pub dns: Vec<IpAddr>,
     /// The tailnet's domain: a short host name is one under it.
     pub domain: String,
 }
@@ -626,10 +628,52 @@ fn kept() -> usize {
 #[serde(deny_unknown_fields)]
 pub struct Slot {
     pub tap: String,
-    /// The guest's, with its prefix, such as `10.235.0.2/30`.
-    pub address: String,
+    /// The guest's.
+    pub address: Cidr,
     /// The host's end of the tap.
-    pub gateway: String,
+    pub gateway: IpAddr,
+}
+
+/// An address with its prefix's length, such as `10.235.0.2/30`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "String")]
+pub struct Cidr {
+    pub address: IpAddr,
+    pub prefix: u8,
+}
+
+/// Text that isn't an address with its prefix.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("{0:?} isn't an address with its prefix, like 10.235.0.2/30")]
+pub struct NotACidr(String);
+
+impl FromStr for Cidr {
+    type Err = NotACidr;
+
+    fn from_str(text: &str) -> Result<Self, NotACidr> {
+        let parsed = || {
+            let (address, prefix) = text.split_once('/')?;
+            let address: IpAddr = address.parse().ok()?;
+            let prefix: u8 = prefix.parse().ok()?;
+            let longest = if address.is_ipv4() { 32 } else { 128 };
+            (prefix <= longest).then_some(Self { address, prefix })
+        };
+        parsed().ok_or_else(|| NotACidr(text.to_owned()))
+    }
+}
+
+impl TryFrom<String> for Cidr {
+    type Error = NotACidr;
+
+    fn try_from(text: String) -> Result<Self, NotACidr> {
+        text.parse()
+    }
+}
+
+impl fmt::Display for Cidr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}/{}", self.address, self.prefix)
+    }
 }
 
 impl Config {
@@ -722,7 +766,7 @@ impl Llm {
 
 impl Vm {
     /// Whether the conversation's VM is on the operations network.
-    pub fn operates(&self, conversation: i64) -> bool {
+    pub fn operates(&self, conversation: ConversationId) -> bool {
         self.operations
             .as_ref()
             .is_some_and(|ops| ops.conversations.contains(&conversation))
@@ -771,18 +815,6 @@ impl Vm {
         // only with two queue pairs or more, and it allows a pair per vCPU.
         ensure!(self.cpus >= 2, "a VM needs two vCPUs at least");
         ensure!(self.memory_mib >= 512, "too small a VM");
-        // They go on the guest's command line, which splits at spaces.
-        for word in self
-            .dns
-            .iter()
-            .chain(operations.into_iter().flat_map(|ops| &ops.dns))
-            .chain(slots.iter().flat_map(|slot| [&slot.address, &slot.gateway]))
-        {
-            ensure!(
-                !word.is_empty() && !word.contains([' ', ',']),
-                "{word:?} isn't an address"
-            );
-        }
         Ok(())
     }
 }

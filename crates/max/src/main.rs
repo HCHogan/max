@@ -148,7 +148,7 @@ fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
         // vm-check's conversation, 0, is one of its groups.
         Some(ops) if operations => {
             ops.slots.drain(..ops.slots.len() - 1);
-            ops.conversations = vec![0];
+            ops.conversations = vec![ConversationId(0)];
         }
         Some(ops) => ops.conversations.clear(),
         None if operations => bail!("the configuration has no [vm.operations]"),

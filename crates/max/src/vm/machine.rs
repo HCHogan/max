@@ -369,11 +369,11 @@ pub async fn boot(
     secret(&dir.join(KEY), key.to_openssh(LineEnding::LF)?.as_bytes()).await?;
     // On the operations network, the tailnet's resolvers come first, and
     // the guest's ssh takes a short host name as one under its domain.
-    let dns: Vec<&str> = operations
+    let dns: Vec<String> = operations
         .into_iter()
         .flat_map(|ops| &ops.dns)
         .chain(&config.dns)
-        .map(String::as_str)
+        .map(ToString::to_string)
         .collect();
     let mut cmdline = format!(
         "{} max.ip={} max.gateway={} max.dns={} max.key={blob}",
