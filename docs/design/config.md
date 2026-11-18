@@ -18,8 +18,11 @@ three places. None of that is kept.
   in the file too. There are no precedence rules.
 - **Strict parsing.** Every struct has `deny_unknown_fields`. Defaults are
   written once, in the code. An optional feature is an `Option<Section>`:
-  leave the section out and the feature is off. Cross-field checks run at
-  startup (a referenced model must exist, say).
+  leave the section out and the feature is off. A value with a form of
+  its own is read as its type, so one that isn't of that form is the
+  parser's error, with its place in the file: a `provider/model`, a base
+  URL, a slot's address with its prefix, a gateway or a resolver. Cross-
+  field checks run at startup (a referenced model must exist, say).
 - **Secrets and private values are file paths.** Keys are
   `api_key_file`, `secret_file` and the like; identifiers that mustn't
   reach the public repository, such as the owners, are files too
