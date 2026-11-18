@@ -54,6 +54,32 @@ fn with_provider(mut llm: config::Llm, base_url: &str) -> Result<Upstreams> {
 /// On the last slot, which a running service takes last; or the
 /// operations network's last.
 pub fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
+    let (config, vm) = configured(path, operations)?;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    let outs = runtime.block_on(checked(config, vm, command))?;
+    runtime.shutdown_timeout(SHUTDOWN);
+    let mut stdout = std::io::stdout();
+    for out in &outs {
+        for part in &out.parts {
+            match part {
+                Part::Text { text } => writeln!(stdout, "{text}")?,
+                // What the host read of what a call left to show.
+                Part::Video { seconds, .. } => writeln!(stdout, "给模型看的视频：{seconds} 秒")?,
+                Part::Media { .. } => writeln!(stdout, "给模型看的图片")?,
+            }
+        }
+        if out.error {
+            bail!("the check didn't run");
+        }
+    }
+    Ok(())
+}
+
+/// The configuration, and its VMs as vm-check has them: the last slot, and
+/// a directory and units of its own.
+fn configured(path: &Path, operations: bool) -> Result<(Config, config::Vm)> {
     let mut config = Config::load(path)?;
     logging(config.log.level);
     let Some(mut vm) = config.vm.take() else {
@@ -77,154 +103,222 @@ pub fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
     // And units of its own, by their instance: max leaves them alone, as
     // vm-check does max's.
     vm.instances = "check-".to_owned();
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?;
-    let outs = runtime.block_on(async {
-        let mut services = Scope::new();
-        let (signals, mut heard) = mpsc::unbounded_channel();
-        // The background agents' model: a provider of vm-check's own,
-        // which says one thing to whatever it is asked, and counts how
-        // often.
-        let provider = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-        let base_url = format!("http://{}/v1", provider.local_addr()?);
-        let asked = Arc::new(AtomicUsize::new(0));
-        let counted = Arc::clone(&asked);
-        services.spawn(move |stop| async move {
-            let says = move || {
-                counted.fetch_add(1, Ordering::Relaxed);
-                async { ([("content-type", "text/event-stream")], AGENT_SAYS) }
-            };
-            let app = axum::Router::new().route("/v1/chat/completions", axum::routing::post(says));
-            let served = axum::serve(provider, app);
-            let _ = served.with_graceful_shutdown(stop.cancelled_owned()).await;
-        });
-        let agents = Arc::new(with_provider(config.llm.clone(), &base_url)?);
-        let vms = Vms::start(vm, &mut services, signals, Some(agents), Arc::default())?;
-        // A store of vm-check's own, for what calls show the model.
-        let stored = std::env::temp_dir().join(format!("maxx-vm-check-{}", std::process::id()));
-        let store = Arc::new(Store::open(&stored).await?);
-        // What something in the VM calls is run here, as a conversation's
-        // actor would run it, with nobody to say anything for. No
-        // conversation has id 0, so its history finds nothing, from the
-        // database.
-        let called = service::Context {
-            services: Arc::new(service::Services {
-                pool: PgPool::connect_lazy(&config.database.url)?,
-                offset: config.utc_offset,
-                search: None,
-                store: Some(Arc::clone(&store)),
-                embedder: None,
-                groups: None,
-            }),
-            place: Arc::new(Place {
-                conversation: ConversationId::new(0),
-                kind: ConversationKind::Group,
-                endpoint: EndpointId::new(0),
-                platform: Platform::Qq,
-                native_id: "vm-check".into(),
-                me: Account {
-                    identity: IdentityId::new(0),
-                    principal: PrincipalId::new(0),
-                },
-                my_name: "maxx".into(),
-            }),
-            page_tokens: 2000,
-            work: None,
-            call_time: Duration::from_secs(config.limits.call_time_secs),
-            poster: None,
-        };
-        // But what maxx wake would wake Max with, which is noted. A
-        // background command's end comes that way, from the guest: `told`
-        // has each as it comes.
-        let woken = Arc::new(Mutex::new(Vec::new()));
-        let noted = Arc::clone(&woken);
-        let (tell, mut told) = mpsc::unbounded_channel::<String>();
-        services.spawn(move |_| async move {
-            while let Some(signal) = heard.recv().await {
-                let (text, reply) = match signal {
-                    Signal::Call {
-                        tool, args, reply, ..
-                    } if tool == "wake" => {
-                        let text = args["text"].as_str().unwrap_or_default().to_owned();
-                        (text, Some(reply))
-                    }
-                    Signal::Call {
-                        tool, args, reply, ..
-                    } => {
-                        let _ = reply.send(service::call(&tool, &called, args).await);
-                        continue;
-                    }
-                    Signal::Heard {
-                        heard: Heard::Vm(text),
-                        ..
-                    } => (text, None),
-                    // vm-check has no timeline, and one conversation.
-                    Signal::Subscribe { .. } | Signal::Heard { .. } => continue,
-                };
-                // Noted before maxx wake hears back, and vm-check goes on.
-                noted
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .push(text.clone());
-                let _ = tell.send(text);
-                if let Some(reply) = reply {
-                    let _ = reply.send(Ok(serde_json::json!({ "said": "vm-check 收到了" })));
-                }
-            }
-        });
+    Ok((config, vm))
+}
+
+/// Boots the VM, takes it through the steps and stops it: what each step
+/// showed.
+async fn checked(config: Config, vm: config::Vm, command: String) -> Result<Vec<ToolOutput>> {
+    let mut services = Scope::new();
+    let (signals, heard) = mpsc::unbounded_channel();
+    let (base_url, asked) = provider(&mut services).await?;
+    let agents = Arc::new(with_provider(config.llm.clone(), &base_url)?);
+    let vms = Vms::start(vm, &mut services, signals, Some(agents), Arc::default())?;
+    // A store of vm-check's own, for what calls show the model.
+    let stored = std::env::temp_dir().join(format!("maxx-vm-check-{}", std::process::id()));
+    let store = Arc::new(Store::open(&stored).await?);
+    let called = called(&config, &store)?;
+    let (woken, told) = hearing(&mut services, heard, called);
+    let mut check = Check {
+        vms,
         // A model that watches what the calls show it.
-        let context = tools::Context {
+        context: tools::Context {
             conversation: ConversationId::new(0),
             store: Some(store),
             video: true,
+        },
+        told,
+        asked,
+        woken,
+    };
+    let outs = check.steps(command).await;
+    // A VM outlives the service that booted it, as it outlives max:
+    // vm-check stops its own, and the next run boots afresh.
+    check.vms.shut().await;
+    drop(check);
+    services.close(Duration::from_secs(5)).await;
+    let _ = std::fs::remove_dir_all(&stored);
+    Ok(outs)
+}
+
+/// The background agents' model: a provider of vm-check's own, which says
+/// one thing to whatever it is asked, and counts how often. Its base URL,
+/// and the count.
+async fn provider(services: &mut Scope) -> Result<(String, Arc<AtomicUsize>)> {
+    let provider = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let base_url = format!("http://{}/v1", provider.local_addr()?);
+    let asked = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&asked);
+    services.spawn(move |stop| async move {
+        let says = move || {
+            counted.fetch_add(1, Ordering::Relaxed);
+            async { ([("content-type", "text/event-stream")], AGENT_SAYS) }
         };
-        let shell = Tool::Shell {
-            command,
-            workdir: None,
-            timeout_ms: None,
-            background: false,
-        };
-        let program = Tool::RunCode {
-            code: "const read = await max.raw('history', {around: 1});\n\
-                   return {node: process.version, history: read.ok ? 'ok' : read.error.code}"
-                .into(),
-            args: None,
-            timeout_ms: None,
-        };
-        let browse = |code: &str| Tool::RunCode {
-            code: code.into(),
-            args: None,
-            timeout_ms: None,
-        };
-        let command = |command: &str| Tool::Shell {
-            command: command.into(),
-            workdir: None,
-            timeout_ms: None,
-            background: false,
-        };
-        let steps = [
-            shell,
-            program,
-            browse(BROWSE),
-            browse(BROWSE_AGAIN),
+        let app = axum::Router::new().route("/v1/chat/completions", axum::routing::post(says));
+        let served = axum::serve(provider, app);
+        let _ = served.with_graceful_shutdown(stop.cancelled_owned()).await;
+    });
+    Ok((base_url, asked))
+}
+
+/// What something in the VM calls is run in, as a conversation's actor
+/// would run it, with nobody to say anything for. No conversation has id
+/// 0, so its history finds nothing, from the database.
+fn called(config: &Config, store: &Arc<Store>) -> Result<service::Context> {
+    Ok(service::Context {
+        services: Arc::new(service::Services {
+            pool: PgPool::connect_lazy(&config.database.url)?,
+            offset: config.utc_offset,
+            search: None,
+            store: Some(Arc::clone(store)),
+            embedder: None,
+            groups: None,
+        }),
+        place: Arc::new(Place {
+            conversation: ConversationId::new(0),
+            kind: ConversationKind::Group,
+            endpoint: EndpointId::new(0),
+            platform: Platform::Qq,
+            native_id: "vm-check".into(),
+            me: Account {
+                identity: IdentityId::new(0),
+                principal: PrincipalId::new(0),
+            },
+            my_name: "maxx".into(),
+        }),
+        page_tokens: 2000,
+        work: None,
+        call_time: Duration::from_secs(config.limits.call_time_secs),
+        poster: None,
+    })
+}
+
+/// Runs what the VM calls in `called`, but for what maxx wake would wake
+/// Max with, which is noted. A background command's end comes that way,
+/// from the guest. What was noted, and each as it comes.
+fn hearing(
+    services: &mut Scope,
+    mut heard: mpsc::UnboundedReceiver<Signal>,
+    called: service::Context,
+) -> (Arc<Mutex<Vec<String>>>, mpsc::UnboundedReceiver<String>) {
+    let woken = Arc::new(Mutex::new(Vec::new()));
+    let noted = Arc::clone(&woken);
+    let (tell, told) = mpsc::unbounded_channel::<String>();
+    services.spawn(move |_| async move {
+        while let Some(signal) = heard.recv().await {
+            let (text, reply) = match signal {
+                Signal::Call {
+                    tool, args, reply, ..
+                } if tool == "wake" => {
+                    let text = args["text"].as_str().unwrap_or_default().to_owned();
+                    (text, Some(reply))
+                }
+                Signal::Call {
+                    tool, args, reply, ..
+                } => {
+                    let _ = reply.send(service::call(&tool, &called, args).await);
+                    continue;
+                }
+                Signal::Heard {
+                    heard: Heard::Vm(text),
+                    ..
+                } => (text, None),
+                // vm-check has no timeline, and one conversation.
+                Signal::Subscribe { .. } | Signal::Heard { .. } => continue,
+            };
+            // Noted before maxx wake hears back, and vm-check goes on.
+            noted
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(text.clone());
+            let _ = tell.send(text);
+            if let Some(reply) = reply {
+                let _ = reply.send(Ok(serde_json::json!({ "said": "vm-check 收到了" })));
+            }
+        }
+    });
+    (woken, told)
+}
+
+/// A program for the runner.
+fn program(code: &str) -> Tool {
+    Tool::RunCode {
+        code: code.into(),
+        args: None,
+        timeout_ms: None,
+    }
+}
+
+/// A command the call waits for.
+fn command(command: &str) -> Tool {
+    Tool::Shell {
+        command: command.into(),
+        workdir: None,
+        timeout_ms: None,
+        background: false,
+    }
+}
+
+/// The VM under check, and what vm-check watches it by.
+struct Check {
+    vms: Vms,
+    context: tools::Context,
+    /// What the guest wakes Max with, each as it comes.
+    told: mpsc::UnboundedReceiver<String>,
+    /// How often the agents' model was called.
+    asked: Arc<AtomicUsize>,
+    /// Everything the guest woke Max with.
+    woken: Arc<Mutex<Vec<String>>>,
+}
+
+impl Check {
+    async fn run(&self, tool: Tool) -> ToolOutput {
+        tools::run(tool, Some(&self.vms), &self.context).await
+    }
+
+    /// Every step, in order: what each showed.
+    async fn steps(&mut self, asked: String) -> Vec<ToolOutput> {
+        let history = "const read = await max.raw('history', {around: 1});\n\
+                       return {node: process.version, history: read.ok ? 'ok' : read.error.code}";
+        let calls = [
+            command(&asked),
+            program(history),
+            program(BROWSE),
+            program(BROWSE_AGAIN),
             command(EXTENSION),
-            browse(EXTENSION_PAGE),
+            program(EXTENSION_PAGE),
             command(VIDEO),
             command(MAXX),
             command(UNITS),
         ];
         let mut outs = Vec::new();
-        for tool in steps {
-            outs.push(tools::run(tool, Some(&vms), &context).await);
+        for tool in calls {
+            outs.push(self.run(tool).await);
         }
-        outs.push(about(&vms).await);
-        // A call max lets go of before its end, as a killed turn's: its
-        // channel closes, and the guest stops its unit. The call after
-        // it counts what runs besides itself.
+        outs.push(about(&self.vms).await);
+        outs.push(self.let_go().await);
+        outs.extend(self.background().await);
+        outs.extend(self.agent().await);
+        let woken = self
+            .woken
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .join("\n");
+        outs.push(ToolOutput::text(
+            format!("叫醒：{woken}"),
+            woken.is_empty(),
+            0,
+        ));
+        outs
+    }
+
+    /// A call max lets go of before its end, as a killed turn's: its
+    /// channel closes, and the guest stops its unit. The call after it
+    /// counts what runs besides itself.
+    async fn let_go(&self) -> ToolOutput {
         let long = command("touch /work/.max/let-go; sleep 300");
         let waited = Duration::from_secs(3);
-        let _ = tokio::time::timeout(waited, tools::run(long, Some(&vms), &context)).await;
+        let _ = tokio::time::timeout(waited, self.run(long)).await;
         let left = command(
             "for n in $(seq 30); do \
              others=$(($(maxx units list | jq '[.units[] | select(.kind != \"unit\")] | length') - 1)); \
@@ -232,11 +326,14 @@ pub fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
              echo \"放手的调用跑起来过 $(ls /work/.max/let-go | wc -l) 个，还剩 $others 个\"; \
              rm -f /work/.max/let-go",
         );
-        outs.push(tools::run(left, Some(&vms), &context).await);
-        // A background command: a unit of the guest's, which max doesn't
-        // wait for. Its output is in its file before it ends; its maxx
-        // calls as a call's does; and the guest tells of its end with a
-        // wake of its own.
+        self.run(left).await
+    }
+
+    /// A background command: a unit of the guest's, which max doesn't
+    /// wait for. Its output is in its file before it ends; its maxx calls
+    /// as a call's does; and the guest tells of its end with a wake of
+    /// its own.
+    async fn background(&mut self) -> [ToolOutput; 2] {
         let background = Tool::Shell {
             command: "echo 后台起了; sleep 1; \
                       grep -c 后台起了 \"$(ls -t /work/.max/out/max-job-*.txt | head -1)\"; \
@@ -246,8 +343,8 @@ pub fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
             timeout_ms: Some(60_000),
             background: true,
         };
-        outs.push(tools::run(background, Some(&vms), &context).await);
-        outs.push(match told_of(&mut told, "[max-job-", 60).await {
+        let started = self.run(background).await;
+        let ended = match told_of(&mut self.told, "[max-job-", 60).await {
             Some(text) => {
                 let whole = text.contains("完成] $ echo 后台起了")
                     && text.contains("exit status 0")
@@ -255,58 +352,27 @@ pub fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
                 ToolOutput::text(format!("后台命令结束的通知：{text}"), !whole, 0)
             }
             None => ToolOutput::text("后台命令结束了没人说".to_owned(), true, 0),
-        });
-        // A background agent: a unit of the guest's too, pi itself, whose
-        // model calls come through max to vm-check's provider, and whose
-        // report the guest wakes Max with.
+        };
+        [started, ended]
+    }
+
+    /// A background agent: a unit of the guest's too, pi itself, whose
+    /// model calls come through max to vm-check's provider, and whose
+    /// report the guest wakes Max with.
+    async fn agent(&mut self) -> [ToolOutput; 3] {
         let agent = command("maxx agent start --title 检查 --task - <<< '说一句话就行'");
-        outs.push(tools::run(agent, Some(&vms), &context).await);
-        outs.push(match told_of(&mut told, "[max-agent-", 180).await {
+        let started = self.run(agent).await;
+        let report = match told_of(&mut self.told, "[max-agent-", 180).await {
             Some(text) => {
                 let whole = text.contains("完成] 检查\nvm-check 的 agent 说完了");
                 ToolOutput::text(format!("后台 agent 的报告：{text}"), !whole, 0)
             }
             None => ToolOutput::text("后台 agent 结束了没人说".to_owned(), true, 0),
-        });
-        let calls = asked.load(Ordering::Relaxed);
-        outs.push(ToolOutput::text(
-            format!("后台 agent 的模型调用：{calls} 次"),
-            calls == 0,
-            0,
-        ));
-        let woken = woken
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .join("\n");
-        outs.push(ToolOutput::text(
-            format!("叫醒：{woken}"),
-            woken.is_empty(),
-            0,
-        ));
-        // A VM outlives the service that booted it, as it outlives max:
-        // vm-check stops its own, and the next run boots afresh.
-        vms.shut().await;
-        drop(vms);
-        services.close(Duration::from_secs(5)).await;
-        let _ = std::fs::remove_dir_all(&stored);
-        Ok::<_, color_eyre::Report>(outs)
-    })?;
-    runtime.shutdown_timeout(SHUTDOWN);
-    let mut stdout = std::io::stdout();
-    for out in &outs {
-        for part in &out.parts {
-            match part {
-                Part::Text { text } => writeln!(stdout, "{text}")?,
-                // What the host read of what a call left to show.
-                Part::Video { seconds, .. } => writeln!(stdout, "给模型看的视频：{seconds} 秒")?,
-                Part::Media { .. } => writeln!(stdout, "给模型看的图片")?,
-            }
-        }
-        if out.error {
-            bail!("the check didn't run");
-        }
+        };
+        let calls = self.asked.load(Ordering::Relaxed);
+        let called = ToolOutput::text(format!("后台 agent 的模型调用：{calls} 次"), calls == 0, 0);
+        [started, report, called]
     }
-    Ok(())
 }
 
 /// What `/status` asks of a guest: its NixOS, the memory in use there,
