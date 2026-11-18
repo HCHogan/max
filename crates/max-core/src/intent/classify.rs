@@ -7,6 +7,7 @@ use serde::Deserialize;
 
 use super::Verdict;
 use crate::ids::PrincipalId;
+use crate::render::mentions;
 
 /// How much of the persona the classifier sees.
 pub const PERSONA_CHARS: usize = 500;
@@ -45,30 +46,19 @@ pub fn system(persona: &str) -> String {
 /// name, where the core has a roster to look it up in. Max's name is in
 /// `names` like anyone's; someone missing is `@某人`.
 pub fn named(text: &str, names: &BTreeMap<PrincipalId, String>) -> String {
-    const TOKEN: &str = "[mention#";
     let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(at) = rest.find(TOKEN) {
-        out += &rest[..at];
-        let after = &rest[at + TOKEN.len()..];
-        let digits = after
-            .find(|c: char| !c.is_ascii_digit())
-            .unwrap_or(after.len());
-        let principal = after[..digits].parse().ok().map(PrincipalId::new);
-        match principal {
-            Some(principal) if after[digits..].starts_with(']') => {
-                let name = names.get(&principal).map_or("某人", String::as_str);
-                out += "@";
-                out += name;
-                rest = &after[digits + 1..];
-            }
-            _ => {
-                out += TOKEN;
-                rest = after;
-            }
+    let mut from = 0;
+    for mention in mentions(text) {
+        if !text[mention.end..].starts_with(']') {
+            continue;
         }
+        out.push_str(&text[from..mention.start]);
+        out.push('@');
+        out.push_str(names.get(&mention.principal).map_or("某人", String::as_str));
+        from = mention.end + 1;
     }
-    out + rest
+    out.push_str(&text[from..]);
+    out
 }
 
 /// `context` and `new` are rendered lines, oldest first.
@@ -110,6 +100,19 @@ pub fn parse(text: &str) -> Option<Verdict> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mentions_read_by_name() {
+        let names = [(PrincipalId::new(12), "小明".to_owned())].into();
+        let text =
+            "[mention#12] 看 [mention#7]，[mention#12: 小明] [mention#] [mention#[mention#12]";
+        assert_eq!(
+            named(text, &names),
+            "@小明 看 @某人，[mention#12: 小明] [mention#] [mention#@小明"
+        );
+        let whom: Vec<i64> = mentions(text).map(|one| one.principal.get()).collect();
+        assert_eq!(whom, [12, 7, 12, 12]);
+    }
 
     #[test]
     fn parsing_tolerates_fences_and_gaps() {

@@ -19,7 +19,7 @@ use crate::ids::PrincipalId;
 use crate::item::{Image, Item, ItemKind};
 use crate::limits::MEMORY_TOKENS;
 use crate::message::{Content, MediaKind, Message, Node, Role};
-use crate::render::moment;
+use crate::render::{mentions, moment};
 use crate::run::Context;
 
 /// Token budgets for the blocks, from the model's window `C`.
@@ -82,15 +82,7 @@ pub fn roster_line(principal: PrincipalId, name: &str, role: Option<Role>, is_ma
 
 /// The people a text names with `[mention#N]`, such as in what Max says.
 pub fn mentioned(text: &str) -> BTreeSet<PrincipalId> {
-    text.match_indices("[mention#")
-        .filter_map(|(at, token)| {
-            let rest = &text[at + token.len()..];
-            let digits = rest
-                .find(|c: char| !c.is_ascii_digit())
-                .unwrap_or(rest.len());
-            rest[..digits].parse().ok().map(PrincipalId::new)
-        })
-        .collect()
+    mentions(text).map(|mention| mention.principal).collect()
 }
 
 /// The volatile block: what changes from one core to the next.
