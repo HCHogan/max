@@ -79,7 +79,7 @@ shuts it down), and mailboxes (who sends what to whom).
     once started; if it exits on an error, the next message starts it
     again (see [Restarts](design/actor.md#restarts)).
   - **senders**: the platform sender.
-  - **workers**: the derived-data workers and the dreamer; see
+  - **workers**: the derived-data workers; see
     [The three roles](#the-three-roles).
   - **services**: the VM service and max's service to the VMs.
 - The conversation actor is the conversation's only thread of control
@@ -188,9 +188,6 @@ The tasks fall into three kinds, by what they produce:
    [Recall](design/context.md#recall)). Not wanted: persistent queues,
    failure tables, retry-count columns, leases, `LISTEN/NOTIFY` and policy
    knobs in the configuration.
-
-   The dreamer, which tidies the memory files nightly, runs under workers
-   too; see [Memory](design/context.md#memory).
 3. **Trigger sources**: what they produce isn't a table but input, all of
    which goes into the actor's one entry point (step 2 of the
    [Processing flow](design/actor.md#processing-flow)): fed to the running
@@ -288,8 +285,8 @@ and a web of dependencies while blocking nothing.
   reason).
 - **Limits live in `max_core::limits`.** Every limit the model is told
   of, or that is used in more than one place, is defined there once; the
-  system prompt's rules, the descriptions of `run_code` and `shell`, the
-  background agent's description and the dreamer's prompt are generated
+  system prompt's rules, the descriptions of `run_code` and `shell` and
+  the background agent's description are generated
   from it with `format!`, so changing a number changes what the model
   reads. How long a VM may idle comes from `vm.idle_minutes` and reaches
   `prompt::system` through `Vms::idle`. `webread`'s default length is

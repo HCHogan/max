@@ -31,7 +31,6 @@ use tracing::{error, info};
 
 use max::config::{self, Config};
 use max::conversation::{Heard, Place, Shared, Signal};
-use max::dreamer::Dreamer;
 use max::embedding::Embedder;
 use max::forwarder;
 use max::llm::Models;
@@ -720,19 +719,6 @@ async fn serve(config: Config) -> Result<()> {
         .map(|client| Arc::clone(client) as Arc<dyn Groups>);
     let mut services = Scope::new();
     let vm_dir = config.vm.as_ref().map(|vm| vm.dir.clone());
-    match (&vm_dir, models.dreamer().transpose()?) {
-        (Some(dir), Some(chosen)) => {
-            let dreamer = Dreamer {
-                pool: pool.clone(),
-                chosen,
-                dir: dir.clone(),
-                offset: config.utc_offset,
-            };
-            workers.spawn(move |stop| dreamer.run(stop));
-        }
-        (Some(_), None) => info!("no dreamer model: memory files aren't tidied"),
-        (None, _) => {}
-    }
     // What the VMs have for the conversations, such as a wake, and what
     // one conversation's actor has for another: a question for its Max.
     let (signals, signals_rx) = mpsc::unbounded_channel();

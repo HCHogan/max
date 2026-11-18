@@ -6,9 +6,8 @@
 //! the maxx user can write.
 
 use std::fs::{File, Metadata};
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::{Component, Path, PathBuf};
-use std::time::SystemTime;
 
 use rustix::fd::OwnedFd;
 use rustix::fs::{Mode, OFlags};
@@ -44,15 +43,6 @@ pub(crate) fn beneath_work(path: &str) -> Result<PathBuf, Failure> {
 /// component at a time without following a symlink: the guest writes
 /// /work, and a link there would point into the host. Blocking.
 pub(crate) fn read(work: &Path, relative: &Path, most: u64) -> Result<Vec<u8>, Failure> {
-    read_stamped(work, relative, most).map(|(bytes, _)| bytes)
-}
-
-/// What [`read`] reads, and when the file was last written.
-pub(crate) fn read_stamped(
-    work: &Path,
-    relative: &Path,
-    most: u64,
-) -> Result<(Vec<u8>, SystemTime), Failure> {
     let (mut file, metadata) = open(work, relative, most)?;
     let shown = shown(relative);
     let unreadable =
@@ -66,8 +56,7 @@ pub(crate) fn read_stamped(
     if bytes.len() as u64 > most {
         return Err(too_big(relative, most));
     }
-    let modified = metadata.modified().map_err(unreadable)?;
-    Ok((bytes, modified))
+    Ok(bytes)
 }
 
 /// Opens `relative` under `work` as [`read`] does, if it is a file of at
@@ -126,31 +115,12 @@ pub(super) fn too_big(relative: &Path, most: u64) -> Failure {
     )
 }
 
-/// Copies the host's file `from` to `dir/name` under `work`, as [`write`]
-/// does. Blocking.
+/// Copies the host's file `from` to `dir/name` under `work`, making `dir`
+/// if it isn't there and replacing what is at `name`. Blocking.
 pub(super) fn put(work: &Path, dir: &str, name: &str, from: &Path) -> Result<(), Failure> {
     place(work, dir, name, |file| {
         File::open(from).and_then(|mut source| std::io::copy(&mut source, file))?;
         Ok(())
-    })
-}
-
-/// Writes `bytes` to `dir/name` under `work`, making `dir` if it isn't
-/// there and replacing what is at `name`; dated `modified`, if given.
-/// Blocking.
-pub(crate) fn write(
-    work: &Path,
-    dir: &str,
-    name: &str,
-    bytes: &[u8],
-    modified: Option<SystemTime>,
-) -> Result<(), Failure> {
-    place(work, dir, name, |file| {
-        file.write_all(bytes)?;
-        match modified {
-            Some(modified) => file.set_modified(modified),
-            None => Ok(()),
-        }
     })
 }
 

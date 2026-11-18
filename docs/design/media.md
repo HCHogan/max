@@ -212,7 +212,7 @@ inodes).
   the host outside `/work`. It writes a temporary file and renames it into
   place; a `chat` that is a link, or a target that is a directory, is
   `bad_path`; a link at the target is itself replaced. The full output of
-  `run_code` and `shell` (`.max/out`), the memory file and the dreamer go
+  `run_code` and `shell` (`.max/out`) and the memory file go
   through it too, and full output is written only to new files: if anything
   already has that name, a link included, nothing is written.
 - No cleanup: `/work/chat` holds ordinary files, which programs delete

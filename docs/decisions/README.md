@@ -8,6 +8,7 @@ Why Max is built the way it is: one file for each decision that was a real trade
 - [The LLM client is written in-house](own-llm-client.md)
 - [The tail is split into messages by turn](tail-split-by-turn.md)
 - [Memory is a file Max writes itself](memory-is-a-file.md)
+- [Max tidies its own memory](max-tidies-its-own-memory.md)
 - [No historian, no summaries](no-summaries.md)
 - [One tool for recall, on trigrams and half-precision vectors](history-tool.md)
 - [Rare cases fail plainly](rare-cases-fail-plainly.md)

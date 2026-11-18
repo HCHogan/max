@@ -105,8 +105,8 @@ As in Codex, pi and Hermes, three layers:
    the maximum output, the input modalities, whether it reasons, default
    sampling and its price.
 3. **Selection: who uses which model, and how.** The default, and the
-   model and effort of each role: `intent`, and the optional `caption`,
-   `job` (the background agents' default) and `dreamer`. References are
+   model and effort of each role: `intent`, and the optional `caption`
+   and `job` (the background agents' default). References are
    `provider/model`, split at the first `/`; provider names may not
    contain `/`.
 

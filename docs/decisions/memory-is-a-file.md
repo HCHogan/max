@@ -27,8 +27,8 @@ every turn carries. The design is in [Memory](../design/context.md#memory).
 Something carried in every turn, with the main model deciding what to
 record, modelled on Claude Code's auto memory: one Markdown file per
 conversation in its VM's `/work`, injected into the volatile block, kept
-under a cap, and tidied nightly by the dreamer. No memory table,
-categories or expiry. The Haskell version's memories were moved into an
+under a cap, and tidied nightly by a model of the host's, the dreamer. No
+memory table, categories or expiry. The Haskell version's memories were moved into an
 initial file per group by hand, by a sub-agent, dropping everything of no
 use.
 
@@ -38,8 +38,10 @@ use.
   90 turns. It had been asked to insert entries by section and
   person, which is laborious with `shell`, and a prompt line ("每多跑一次
   run_code 群友就多等一轮") made it reluctant to make an extra call. It now
-  appends one line with `echo`, and the dreamer places it.
-- **The dreamer**: the model only ever added and never tidied.
+  appends one line with `echo`.
+- **The dreamer** was added because the model only ever added and never
+  tidied. It is gone since: see
+  [Max tidies its own memory](max-tidies-its-own-memory.md).
 - **Record first, then reply**: the prompt had asked Max to put
   the reply and the recording command in one output, reply first, and write
   `[silence]` after recording; it never did. Its only write that day came

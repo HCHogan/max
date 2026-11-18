@@ -224,12 +224,6 @@ impl Models {
         Some(self.choose(&caption.model, caption.effort.as_deref()))
     }
 
-    /// The dreamer's model, when one is configured.
-    pub fn dreamer(&self) -> Option<Result<Chosen>> {
-        let dreamer = self.llm.dreamer.as_ref()?;
-        Some(self.choose(&dreamer.model, dreamer.effort.as_deref()))
-    }
-
     /// Where model calls from the VMs go, when background agents have a
     /// model: to any configured one, and to theirs unless another is
     /// named. Reads the providers' keys.

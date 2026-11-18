@@ -12,8 +12,6 @@ pub enum Purpose {
     Turn,
     Intent,
     Caption,
-    /// Tidying a memory file.
-    Dreamer,
 }
 
 #[derive(Clone, Debug)]
@@ -37,7 +35,6 @@ pub async fn record(conn: &mut PgConnection, call: &Call<'_>) -> sqlx::Result<()
         Purpose::Turn => "turn",
         Purpose::Intent => "intent",
         Purpose::Caption => "caption",
-        Purpose::Dreamer => "dreamer",
     };
     let usage = call.usage;
     let timing = call.timing;

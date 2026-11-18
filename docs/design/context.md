@@ -186,9 +186,11 @@ Every command and who may run it is in [Permissions](identity.md#permissions).
 
 ## Memory
 
-Memory is a file Max writes itself and carries in every turn; why not
-extracted entries is in
-[decisions/memory-is-a-file.md](../decisions/memory-is-a-file.md).
+Memory is a file Max writes itself, keeps in order itself and carries in
+every turn; why not extracted entries is in
+[decisions/memory-is-a-file.md](../decisions/memory-is-a-file.md), and why
+nothing tidies it for Max in
+[decisions/max-tidies-its-own-memory.md](../decisions/max-tidies-its-own-memory.md).
 
 - **The file**: `/work/.max/memory.md` in the conversation's VM, on the
   host `<vm.dir>/<conversation id>/work/.max/memory.md`. Max edits it with
@@ -221,35 +223,23 @@ extracted entries is in
     a nickname or a rule; on finding it forgot something or mistook someone
     for someone else; when someone mentions their identity, circumstances
     or tastes.
-  - Append, with `echo '- 名字：内容（日期 #消息编号）' >> memory.md`, and leave
-    placing it in a section to the dreamer.
+  - Append, with `echo '- 名字：内容（日期 #消息编号）' >> memory.md`: a new
+    line stays at the end until Max next rewrites the file.
   - Record first, then reply: recording is rare, and making people wait
     one more round for it is fine.
   - Don't record technical knowledge, or what was discussed on which day:
     that is in the records, for search.
-  - Two sections, `## 群里` and `## 人`, people under `### 名字`, one entry
-    a line, each ending with its date and the `#id` of the words that bear
-    it out, which `history` can look up.
+  - One entry a line, each ending with its date and the `#id` of the
+    words that bear it out, which `history` can look up. Two sections,
+    `## 群里` and `## 人`, people under `### 名字`; appended lines are put
+    under them when the file is rewritten.
   - Details go into other files under `/work/.max/memory/`, with a line
     here pointing to them.
   - What someone asks Max to remember isn't necessarily right; Max judges.
-- **Tidying: the dreamer** (`max/src/dreamer.rs`), because a model only
-  ever adds:
-  - Once a day at 05:00 local time it looks at the files Max wrote that day
-    (by modification time) and calls the model once per file
-    (`[llm] dreamer`; with none configured nothing is tidied), asking for
-    the whole file rewritten: appended lines into their sections, entries
-    saying the same thing merged, the newer of contradictory ones kept,
-    entries past their date deleted, and over the cap the least important
-    deleted. It changes no meaning and adds nothing.
-  - It reads the file again before writing; if Max just changed it,
-    nothing is written and the file waits for the next night. The rewritten
-    file keeps the time Max wrote it, so the next night doesn't tidy it
-    again, and the old version stays beside it as `memory.prev.md`. Output
-    that doesn't look like the file (no headings, or less than a third of
-    its length) isn't written; a log line says so.
-  - Nothing more: no retries, and a missed night is made up after Max next
-    changes the file. Its usage is in `llm_usage` as `dreamer`.
+- **Tidying is Max's own.** The prompt says nobody tidies the file for it:
+  what is out of date or said twice it changes or deletes when it sees it,
+  and the cap's reminder, above, is what has it go over the whole file.
+  The host changes nothing in it.
 - **Not there**: a memory table, categories, expiry, selection at
   injection. `history` doesn't search memory, which is in the context
   every turn anyway.

@@ -90,10 +90,9 @@ can wake me with `maxx wake` or speak for me with `maxx say`.
 ### 5. A notebook on my nightstand
 My long-term memory is `/work/.max/memory.md`, a file of notes that goes
 into my context every turn. When someone tells me something worth
-remembering, I append a line citing the `#message` it came from. Every
-night at 05:00 a dreamer tidies the files written the day before: it
-merges what says the same thing, drops what has expired, and keeps each
-file under its cap.
+remembering, I append a line citing the `#message` it came from. The file
+is mine to keep in order: when it nears its cap I am told so, and I merge
+what says the same thing and drop what has expired.
 
 ---
 
@@ -104,7 +103,7 @@ file under its cap.
 | `crates/max-core` | The state machines for turns and intent, the projection, the reply parser (`[reply#id]`, `[sticker#id]`, …), and the prompt. |
 | `crates/max-db` | The schema, migrations and compile-time checked `sqlx` queries over Postgres and `pgvector`. |
 | `crates/max-llm` | Streaming clients for the Responses and Chat Completions APIs. |
-| `crates/max` | Conversation actors, the intent classifier, the VMs, my tools and the service a VM calls them through, picture captions, the nightly dreamer. |
+| `crates/max` | Conversation actors, the intent classifier, the VMs, my tools and the service a VM calls them through, picture captions. |
 | `nix/guest.nix` | The NixOS guest I live in (`runner.js`, the `maxx` CLI, `webread`, Chromium). |
 | `nix/module.nix` | The NixOS module the host runs me with. |
 | `docs/` | The design as it is now, and the decisions that made it so; [docs/README.md](docs/README.md) is the index. |
