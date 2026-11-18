@@ -34,9 +34,9 @@ pub enum Reason {
     Asked,
     /// Max in another conversation answers what Max here asked it, or
     /// says why it doesn't: the wake's item is the answer. Read too from
-    /// the wakes the ledger kept as `job`, with the job's handle beside
-    /// it: until 2026-11-12 the host kept a job for a question that
-    /// waited, and for a background agent, whose end woke Max so.
+    /// the wakes the ledger has as `job`, with a job's handle beside it:
+    /// the host's jobs of before, a question that waited or a background
+    /// agent, whose end woke Max so.
     #[serde(alias = "job")]
     Answered,
 }

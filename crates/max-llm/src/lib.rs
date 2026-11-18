@@ -115,8 +115,8 @@ impl<T: AsRef<str>> Serialize for Joined<T> {
 
 /// A user item's content: its text, with each picture after its handle
 /// right after the line of its row, so that it is next to who sent it; at
-/// the end if no line names it. All went at the end until 2026-11-04,
-/// where the model had to match handles to rows to tell whose was whose.
+/// the end if no line names it. With all of them at the end, the model
+/// has to match handles to rows to tell whose is whose.
 /// None when there are no pictures to send, so the content stays a plain
 /// string, as it was before pictures.
 fn pieces<'a>(

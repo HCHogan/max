@@ -1,44 +1,34 @@
 //! The segmenter: the only place where model text becomes messages, for
-//! replies and progress narration alike. In the Haskell version every
-//! sender that kept its own copy of "turn text into messages" ended up
-//! leaking a raw `[split]` or `[reply#id]` into the group.
+//! replies and progress narration alike. A sender with a copy of its own
+//! of "turn text into messages" ends up leaking a raw `[split]` or
+//! `[reply#id]` into the group. The rules are here in short; what each is
+//! for is under "How replies are written" in docs/design/ledger.md.
 //!
 //! Text is cut into chunks, one message each, at blank lines and at
-//! `[split]`, never inside a code fence or an inline code span (Max writes
-//! a placeholder there to show it, as on 10-30 `[mention#830]`, which went
-//! out as a real @ and showed QQ's tag with the openid in it); a picture's
-//! handle is a chunk of
-//! its own, as QQ sends a picture on its own. The cuts depend only on the text,
-//! not on how it arrived: streamed in any pieces, it gives the same chunks
-//! as all at once. (The Haskell version also released long paragraphs at
-//! sentence ends while streaming, which made the result depend on timing.)
+//! `[split]`, never inside a code fence or an inline code span, where a
+//! placeholder is Max showing what one looks like; a picture's handle is a
+//! chunk of its own, as QQ sends a picture on its own. The cuts depend
+//! only on the text, not on how it arrived: streamed in any pieces, it
+//! gives the same chunks as all at once.
 //!
 //! Once a line is a Markdown heading, the reply has turned into a document
 //! and is sent by sections: a heading starts a message, and blank lines no
 //! longer cut, so a section goes out whole, as QQ renders it. A thematic
-//! break (`---`) cuts wherever it is and is never sent. On 10-30 a long
-//! answer went out as a heading, a table and an empty-looking `---`, each
-//! a message of its own. A line that starts with a quote, `[reply#id]`,
-//! starts a message, and ends the document: Max is back to chatting. From
-//! 11-02 to 11-04, three times a jab at someone written after a document's
-//! last section went out inside that section, and so the whole section as
-//! a reply to them. A quote with nothing after it in its message, as on a
-//! line of its own or before a break, quotes the next message, unless that
-//! starts with a quote of its own; with no next message, it goes. Until
-//! 11-07 it went out alone, as a message `parse` makes nothing of, and the
-//! next message quoted nothing.
+//! break (`---`) cuts wherever it is and is never sent. A line that starts
+//! with a quote, `[reply#id]`, starts a message, and ends the document: Max
+//! is back to chatting. A quote with nothing after it in its message, as
+//! on a line of its own or before a break, quotes the next message, unless
+//! that starts with a quote of its own; with no next message, it goes.
 //!
 //! A message can start in the middle of a line: after `[split]` or a
 //! picture's handle, what follows is judged as a line of its own, and on a
 //! line that starts with a quote, which QQ shows as a reply, what follows
-//! the quote is what is a fence, a heading or a break. Judged only at the
-//! start of the line, a fence there was taken for text: the code was cut
-//! at its blank lines, and its closing fence taken for an opening one.
+//! the quote is what is a fence, a heading or a break.
 //!
 //! `<think>` spans are dropped before anything else, including everything
 //! after an unclosed one: some relays put reasoning in the text. A
 //! `<think>` in a fence or an inline code span is Max showing the tag, and
-//! stays; until 11-07 it opened a span, and the rest of the reply went.
+//! stays.
 //!
 //! The chunker and the placeholders it looks for are in `chunk`, written
 //! so that Aeneas can translate them to Lean, where `verify/` proves what
