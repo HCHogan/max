@@ -22,8 +22,8 @@ Abridged from the code:
 pub struct Conversation {
     place: Arc<Place>,          // the conversation and its chat
     settings: Settings,         // what the conversation set with /config; see config.md
-    head: MessageId,            // the last row entered; see "The timeline"
-    seen: MessageId,            // everything up to here has been in a model request
+    head: Option<MessageId>,    // the last row entered, once there is one; see "The timeline"
+    seen: Option<MessageId>,    // everything up to here has been in a model request
     core: Option<Active>,
     intent: Intent,             // a pure state machine; see intent.md
     side: Scope,                // the classifier, and the calls of programs in the VM
