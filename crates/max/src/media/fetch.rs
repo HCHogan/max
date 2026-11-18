@@ -1,6 +1,5 @@
 //! Downloading a medium: one GET, read up to a limit.
 
-use std::fmt;
 use std::time::Duration;
 
 use axum::body::Bytes;
@@ -24,13 +23,16 @@ pub struct Body {
     read: u64,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
     /// More than the limit: only what QQ said about it is kept.
+    #[error("too large")]
     TooLarge,
     /// The server's answer, such as 404 for an address that expired.
+    #[error("HTTP {0}")]
     Status(u16),
     /// The connection failed or timed out.
+    #[error("{0}")]
     Failed(String),
 }
 
@@ -42,16 +44,6 @@ impl Error {
             Self::TooLarge => false,
             Self::Status(status) => *status >= 500 || *status == 429,
             Self::Failed(_) => true,
-        }
-    }
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::TooLarge => write!(f, "too large"),
-            Self::Status(status) => write!(f, "HTTP {status}"),
-            Self::Failed(error) => write!(f, "{error}"),
         }
     }
 }
