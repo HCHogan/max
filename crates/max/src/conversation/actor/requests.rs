@@ -7,7 +7,7 @@ use crate::conversation::Request;
 impl Conversation {
     pub(super) async fn request(&mut self, request: Request) -> Result<()> {
         if let Some(refused) = self.refuses(does(&request)) {
-            request.refuse(refused.why());
+            request.refuse(refused.into());
             return Ok(());
         }
         match request {

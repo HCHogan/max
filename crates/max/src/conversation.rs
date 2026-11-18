@@ -136,9 +136,56 @@ impl fmt::Debug for Subscription {
     }
 }
 
+/// Why the conversation won't do what an event asks, by the one rule of
+/// what goes on once Max is stopped or stopping.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum Refusal {
+    /// `/stop` stopped Max here.
+    #[error("Max is stopped here (/stop), so this wasn't done")]
+    Stopped,
+    /// Max is shutting down.
+    #[error("Max is restarting, so this wasn't done")]
+    Stopping,
+}
+
+/// Why a conversation didn't do what a tool asked of it, worded as the
+/// tool's caller is told.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum Refused {
+    /// The actor is gone: it stopped on an error, or Max is stopping.
+    #[error("this conversation's actor has stopped")]
+    Gone,
+    /// The actor went with the request in its hands.
+    #[error("the conversation stopped before answering")]
+    Abandoned,
+    #[error(transparent)]
+    Rule(#[from] Refusal),
+    /// `ask`: no edge leads to that conversation, or there is none. The
+    /// two are refused alike: asking tells nothing of which there are.
+    #[error(
+        "can't ask c#{0}: there is no link from here to it, or no such conversation; whom Max here may ask is listed under [能问的会话]"
+    )]
+    NotLinked(ConversationId),
+    /// `answer`: no question of that number is kept.
+    #[error(
+        "there is no ask#{0} to answer: no such question, or it was answered already, or it was asked in an earlier turn, which ended without answering it; nothing was sent"
+    )]
+    NoQuestion(u32),
+    /// Nothing in a draft could be said.
+    #[error("there was nothing in it to send")]
+    NothingToSay,
+    /// The row to take back isn't one of this conversation's.
+    #[error("no such message here")]
+    NoSuchMessage,
+    /// The platform didn't take it, or its answer was lost: what the
+    /// sender says of that.
+    #[error("{0}")]
+    Unsent(String),
+}
+
 /// Where a request's answer goes: what was asked for, or why it wasn't
 /// done.
-pub type Reply<T> = oneshot::Sender<Result<T, String>>;
+pub type Reply<T> = oneshot::Sender<Result<T, Refused>>;
 
 /// What a tool asks of its conversation's actor, each with where its
 /// answer goes.
@@ -172,8 +219,7 @@ pub enum Request {
 
 impl Request {
     /// Answers that it wasn't done, and why.
-    pub fn refuse(self, why: &str) {
-        let why = why.to_owned();
+    pub fn refuse(self, why: Refused) {
         match self {
             Request::Act { reply } => drop(reply.send(Err(why))),
             Request::Configure { reply, .. } => drop(reply.send(Err(why))),
@@ -255,23 +301,18 @@ pub struct Configured {
 
 /// Where the sender says how a row's sending went: the row, or why it
 /// didn't go out.
-pub type Receipt = oneshot::Sender<Result<MessageId, String>>;
+pub type Receipt = oneshot::Sender<Result<MessageId, Refused>>;
 
 /// Something handed to the conversation to say or do, on its way.
-pub struct Sending(oneshot::Receiver<Result<MessageId, String>>);
+pub struct Sending(oneshot::Receiver<Result<MessageId, Refused>>);
 
 impl Sending {
     /// Waits until it is sent, or only committed for [`Act::Queue`]: the
     /// row, or why it didn't go out.
-    pub async fn sent(self) -> Result<MessageId, String> {
-        self.0.await.map_err(|_| UNANSWERED.to_owned())?
+    pub async fn sent(self) -> Result<MessageId, Refused> {
+        self.0.await.map_err(|_| Refused::Abandoned)?
     }
 }
-
-/// What a tool is told when its conversation's actor is gone...
-const GONE: &str = "this conversation's actor has stopped";
-/// ...or went before it answered.
-const UNANSWERED: &str = "the conversation stopped before answering";
 
 /// Lets a tool act in its conversation: say something, ask another
 /// conversation or answer one.
@@ -287,29 +328,29 @@ impl Poster {
 
     /// Wakes Max with a program's `text`: what the program is told, or
     /// why not.
-    pub async fn wake(&self, text: String) -> Result<String, String> {
+    pub async fn wake(&self, text: String) -> Result<String, Refused> {
         self.request(|reply| Request::Wake { text, reply }).await
     }
 
     /// Says `draft`, and waits until it is sent.
-    pub async fn post(&self, draft: Draft) -> Result<MessageId, String> {
+    pub async fn post(&self, draft: Draft) -> Result<MessageId, Refused> {
         self.say(draft)?.sent().await
     }
 
     /// Hands `draft` to the conversation, which says it whether or not
     /// anyone waits: what comes back is how the sending went.
-    pub fn say(&self, draft: Draft) -> Result<Sending, String> {
+    pub fn say(&self, draft: Draft) -> Result<Sending, Refused> {
         self.act(Act::Say(draft))
     }
 
     /// Hands `draft` to the conversation, and waits only until it is
     /// committed, not sent: the row.
-    pub async fn queue(&self, draft: Draft) -> Result<MessageId, String> {
+    pub async fn queue(&self, draft: Draft) -> Result<MessageId, Refused> {
         self.act(Act::Queue(draft))?.sent().await
     }
 
     /// Takes back `target`, and waits until the platform has.
-    pub async fn unsend(&self, target: MessageId) -> Result<MessageId, String> {
+    pub async fn unsend(&self, target: MessageId) -> Result<MessageId, Refused> {
         self.act(Act::Unsend(target))?.sent().await
     }
 
@@ -318,14 +359,14 @@ impl Poster {
     pub async fn configure(
         &self,
         changes: Vec<(Setting, Option<u64>)>,
-    ) -> Result<Vec<Configured>, String> {
+    ) -> Result<Vec<Configured>, Refused> {
         self.request(|reply| Request::Configure { changes, reply })
             .await
     }
 
     /// Asks Max in conversation `to`: whom the question went to, or why
     /// it wasn't asked.
-    pub async fn ask(&self, to: ConversationId, question: String) -> Result<String, String> {
+    pub async fn ask(&self, to: ConversationId, question: String) -> Result<String, Refused> {
         let ask = |reply| Request::Ask {
             to,
             question,
@@ -336,31 +377,31 @@ impl Poster {
 
     /// Answers question `to`, which Max in another conversation asked:
     /// whom it went to, or why it wasn't taken.
-    pub async fn answer(&self, to: u32, text: String) -> Result<String, String> {
+    pub async fn answer(&self, to: u32, text: String) -> Result<String, Refused> {
         self.request(|reply| Request::Answer { to, text, reply })
             .await
     }
 
     /// Asks whether the tool may act in the chat by itself: `/stop`
     /// forbids it.
-    pub async fn act_alone(&self) -> Result<(), String> {
+    pub async fn act_alone(&self) -> Result<(), Refused> {
         self.request(|reply| Request::Act { reply }).await
     }
 
     /// Sends the request `make` builds around where its answer goes, and
     /// waits for the answer.
-    async fn request<T>(&self, make: impl FnOnce(Reply<T>) -> Request) -> Result<T, String> {
+    async fn request<T>(&self, make: impl FnOnce(Reply<T>) -> Request) -> Result<T, Refused> {
         let (reply, answer) = oneshot::channel();
         self.send(make(reply))?;
-        answer.await.map_err(|_| UNANSWERED.to_owned())?
+        answer.await.map_err(|_| Refused::Abandoned)?
     }
 
-    fn send(&self, request: Request) -> Result<(), String> {
+    fn send(&self, request: Request) -> Result<(), Refused> {
         let sent = self.mailbox.send(Event::Request(request));
-        sent.map_err(|_| GONE.to_owned())
+        sent.map_err(|_| Refused::Gone)
     }
 
-    fn act(&self, act: Act) -> Result<Sending, String> {
+    fn act(&self, act: Act) -> Result<Sending, Refused> {
         let (receipt, sent) = oneshot::channel();
         let post = Post {
             act,
@@ -368,7 +409,7 @@ impl Poster {
         };
         self.mailbox
             .send(Event::Post(post))
-            .map_err(|_| GONE.to_owned())?;
+            .map_err(|_| Refused::Gone)?;
         Ok(Sending(sent))
     }
 }

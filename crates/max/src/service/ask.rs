@@ -77,7 +77,7 @@ impl Tool for Ask {
         let asked = conversation(context)?
             .ask(ConversationId(to), question)
             .await
-            .map_err(|message| Failure::new("not_asked", message))?;
+            .map_err(|why| Failure::new("not_asked", why.to_string()))?;
         Ok(Asked { asked })
     }
 }
@@ -107,7 +107,7 @@ impl Tool for Answer {
         let to = conversation(context)?
             .answer(to, text)
             .await
-            .map_err(|message| Failure::new("not_answered", message))?;
+            .map_err(|why| Failure::new("not_answered", why.to_string()))?;
         Ok(Answered { to })
     }
 }

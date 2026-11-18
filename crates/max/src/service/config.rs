@@ -94,7 +94,7 @@ impl Tool for Config {
         let configured = poster
             .configure(changes)
             .await
-            .map_err(|message| Failure::new("not_configured", message))?;
+            .map_err(|why| Failure::new("not_configured", why.to_string()))?;
         let shown = |setting: Setting| {
             let one = configured.iter().find(|one| one.setting == setting);
             one.map(|&Configured { value, default, .. }| Shown { value, default })
