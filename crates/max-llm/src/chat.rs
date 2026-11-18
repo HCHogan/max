@@ -457,6 +457,7 @@ struct Call {
 }
 
 impl Parser {
+    /// A parser for a response of `model`.
     #[must_use]
     pub fn new(model: ModelTag) -> Self {
         Self {
@@ -494,6 +495,11 @@ impl Parser {
     }
 
     /// One chunk: the text in it to be said.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Malformed`] for a chunk that isn't JSON, and
+    /// [`Error::Provider`] for one that carries the provider's error.
     pub fn event(&mut self, data: &str) -> Result<Vec<String>, Error> {
         if data.trim() == "[DONE]" {
             self.done = true;
@@ -538,6 +544,12 @@ impl Parser {
     }
 
     /// The stream has ended.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Truncated`] when the stream ended without its last chunk,
+    /// [`Error::Incomplete`] when the model stopped early, and
+    /// [`Error::Aloud`] when it wrote its reasoning as its answer.
     pub fn finish(self) -> Result<ModelOutput, Error> {
         match self.finish_reason.as_deref() {
             None if !self.done => return Err(Error::Truncated),

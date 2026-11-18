@@ -31,7 +31,9 @@ use serde_json::value::RawValue;
 pub struct Options {
     /// Reasoning effort, as the provider spells it.
     pub effort: Option<String>,
+    /// The sampling temperature, if the model has one set.
     pub temperature: Option<f64>,
+    /// The nucleus sampling cut-off, if the model has one set.
     pub top_p: Option<f64>,
     /// Mark where each stable block of the context ends, for servers that
     /// cache a prefix only where told to (NInfer). Chat only.
@@ -60,6 +62,7 @@ impl Pictures {
         self.files.insert(sha256, medium);
     }
 
+    /// Whether there is nothing to send.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.rows.is_empty() && self.files.is_empty()
@@ -70,7 +73,9 @@ impl Pictures {
 /// the body is written: no copy of it is made for the request.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Medium {
+    /// Its MIME type.
     pub mime: &'static str,
+    /// The file's bytes.
     pub bytes: Vec<u8>,
 }
 
