@@ -5,9 +5,11 @@ use std::collections::{BTreeMap, HashSet};
 
 use chrono::{DateTime, Utc};
 use max_core::ids::MessageId;
-use max_core::message::{MediaKind, Node, media};
+use max_core::message::{MediaKind, Node, Sha256, media};
 use sqlx::PgConnection;
 use sqlx::types::Json;
+
+use crate::named;
 
 /// Which prompt a caption was written with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -34,7 +36,7 @@ max_core::names!(Kind, "caption kind", {
 });
 
 pub struct Caption<'a> {
-    pub sha256: &'a str,
+    pub sha256: &'a Sha256,
     pub kind: Kind,
     /// Empty when the model gave up.
     pub text: &'a str,
@@ -50,7 +52,7 @@ pub async fn write(conn: &mut PgConnection, caption: &Caption<'_>) -> sqlx::Resu
         "insert into media_captions (sha256, kind, text, skip, model, created_at)
          values ($1, $2, $3, $4, $5, $6)
          on conflict (sha256) do nothing",
-        caption.sha256,
+        caption.sha256.as_str(),
         caption.kind.as_str(),
         caption.text,
         caption.skip,
@@ -62,10 +64,10 @@ pub async fn write(conn: &mut PgConnection, caption: &Caption<'_>) -> sqlx::Resu
     Ok(written.rows_affected() == 1)
 }
 
-pub async fn exists(conn: &mut PgConnection, sha256: &str) -> sqlx::Result<bool> {
+pub async fn exists(conn: &mut PgConnection, sha256: &Sha256) -> sqlx::Result<bool> {
     let found = sqlx::query_scalar!(
         r#"select exists (select 1 from media_captions where sha256 = $1) as "exists!""#,
-        sha256
+        sha256.as_str()
     )
     .fetch_one(conn)
     .await?;
@@ -77,7 +79,7 @@ pub async fn exists(conn: &mut PgConnection, sha256: &str) -> sqlx::Result<bool>
 pub struct Uncaptioned {
     pub message: MessageId,
     pub ordinal: u16,
-    pub sha256: String,
+    pub sha256: Sha256,
     /// A picture or a sticker, as that message has it.
     pub kind: MediaKind,
 }
@@ -104,21 +106,26 @@ pub async fn uncaptioned(
     .fetch_all(conn)
     .await?;
     let mut seen = HashSet::new();
-    Ok(rows
-        .into_iter()
-        .filter_map(|row| {
-            let ordinal = u16::try_from(row.ordinal).ok()?;
-            let (_, _, meta) = media(&row.nodes.0).find(|(n, _, _)| *n == ordinal)?;
-            let kind = meta.kind;
-            Kind::of(kind)?;
-            seen.insert(row.sha256.clone()).then_some(Uncaptioned {
+    let mut uncaptioned = Vec::new();
+    for row in rows {
+        let Ok(ordinal) = u16::try_from(row.ordinal) else {
+            continue;
+        };
+        let Some((_, _, meta)) = media(&row.nodes.0).find(|(n, _, _)| *n == ordinal) else {
+            continue;
+        };
+        let kind = meta.kind;
+        let sha256: Sha256 = named(&row.sha256)?;
+        if Kind::of(kind).is_some() && seen.insert(sha256.clone()) {
+            uncaptioned.push(Uncaptioned {
                 message: MessageId(row.message_id),
                 ordinal,
-                sha256: row.sha256,
+                sha256,
                 kind,
-            })
-        })
-        .collect())
+            });
+        }
+    }
+    Ok(uncaptioned)
 }
 
 /// The captions of the media of `messages`, by message and ordinal; the

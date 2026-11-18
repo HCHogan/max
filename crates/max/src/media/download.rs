@@ -10,7 +10,7 @@ use chrono::Utc;
 use color_eyre::eyre::{Result, eyre};
 use max_core::ids::MessageId;
 use max_core::item::Image;
-use max_core::message::{Content, MediaKind, MediaRef};
+use max_core::message::{Content, MediaKind, MediaRef, Sha256};
 use max_db::PgPool;
 use max_db::captions::Kind;
 use max_db::media::{Blob, downloaded, pending, record};
@@ -43,7 +43,7 @@ const RETRIES: [Duration; 2] = [Duration::from_secs(1), Duration::from_secs(4)];
 /// What a download got: a picture whole, or anything else stored.
 enum Got {
     Picture(Vec<u8>),
-    Stored { sha256: String, size: u64 },
+    Stored { sha256: Sha256, size: u64 },
 }
 
 /// Why a try at a download failed: the download, which may not go better

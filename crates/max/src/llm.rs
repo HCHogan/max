@@ -374,7 +374,6 @@ pub(crate) mod testing {
     pub struct Script {
         answers: Mutex<VecDeque<Answer>>,
         pub requests: Mutex<Vec<Request>>,
-        pub pictures: Mutex<Vec<Vec<String>>>,
     }
 
     impl Script {
@@ -392,10 +391,8 @@ pub(crate) mod testing {
             &'a self,
             request: &'a Request,
             _: &'a Options,
-            pictures: &'a Pictures,
+            _: &'a Pictures,
         ) -> Pin<Box<dyn Future<Output = Result<Call, max_llm::Error>> + Send + 'a>> {
-            let handles = pictures.0.keys().cloned().collect();
-            self.pictures.lock().unwrap().push(handles);
             self.requests.lock().unwrap().push(Request {
                 model: request.model.clone(),
                 items: request.items.clone(),

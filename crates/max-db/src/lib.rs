@@ -21,7 +21,6 @@ mod testing;
 
 use std::str::FromStr;
 
-use max_core::names::Unknown;
 pub use sqlx::{PgConnection, PgPool};
 
 /// The migrations in `migrations/`, embedded.
@@ -33,10 +32,14 @@ fn unknown(column: &str, value: &str) -> sqlx::Error {
     sqlx::Error::Decode(format!("unknown {column}: {value:?}").into())
 }
 
-/// What a column names, by `max_core::names!`.
-fn named<T: FromStr<Err = Unknown>>(name: &str) -> sqlx::Result<T> {
+/// What a column names: one of an enum's `max_core::names!`, or a file
+/// in the content store.
+fn named<T>(name: &str) -> sqlx::Result<T>
+where
+    T: FromStr<Err: std::error::Error + Send + Sync + 'static>,
+{
     name.parse()
-        .map_err(|unknown: Unknown| sqlx::Error::Decode(unknown.into()))
+        .map_err(|error: T::Err| sqlx::Error::Decode(error.into()))
 }
 
 #[cfg(test)]

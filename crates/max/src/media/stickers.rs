@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use chrono::Utc;
 use color_eyre::eyre::Result;
+use max_core::message::Sha256;
 use max_db::{PgPool, embeddings};
 use tokio::sync::Semaphore;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -38,14 +39,14 @@ impl Stickers {
     /// writes, and every hour from the start those still without a
     /// vector. Vectors still being made then are dropped; a scan finds
     /// them.
-    pub async fn run(self, mut written: UnboundedReceiver<String>, stop: CancellationToken) {
+    pub async fn run(self, mut written: UnboundedReceiver<Sha256>, stop: CancellationToken) {
         let stickers = Arc::new(self);
         let slots = Arc::new(Semaphore::new(AT_ONCE));
         // The files being embedded: one written again meanwhile, or found
         // by a scan, isn't sent twice.
         let busy = Arc::new(Mutex::new(HashSet::new()));
         let mut embedding = Scope::new();
-        let mut start = |sha256: String| {
+        let mut start = |sha256: Sha256| {
             let mut files = busy.lock().unwrap_or_else(PoisonError::into_inner);
             if !files.insert(sha256.clone()) {
                 return;
@@ -79,7 +80,7 @@ impl Stickers {
     /// Embeds the caption of `sha256`, again after each failure, and gives
     /// up after the last retry until a scan finds it. A slot is held only
     /// while trying.
-    async fn tries(&self, sha256: &str, slots: &Semaphore) {
+    async fn tries(&self, sha256: &Sha256, slots: &Semaphore) {
         let mut retries = RETRIES.iter();
         loop {
             let Ok(slot) = slots.acquire().await else {
@@ -90,25 +91,25 @@ impl Stickers {
             let Err(error) = tried else { return };
             match retries.next() {
                 Some(wait) => {
-                    debug!(sha256, "an embedding failed: {error:#}");
+                    debug!(%sha256, "an embedding failed: {error:#}");
                     sleep(*wait).await;
                 }
                 None => {
-                    warn!(sha256, "gave up an embedding: {error:#}");
+                    warn!(%sha256, "gave up an embedding: {error:#}");
                     return;
                 }
             }
         }
     }
 
-    async fn scan(&self) -> Result<Vec<String>> {
+    async fn scan(&self) -> Result<Vec<Sha256>> {
         let mut conn = self.pool.acquire().await?;
         Ok(embeddings::unembedded(&mut conn, &self.embedder.model).await?)
     }
 
     /// One try at the vector of `sha256`'s caption, if it is a sticker's
     /// caption without one from this model.
-    async fn embed(&self, sha256: &str) -> Result<()> {
+    async fn embed(&self, sha256: &Sha256) -> Result<()> {
         let model = &self.embedder.model;
         let mut conn = self.pool.acquire().await?;
         let Some(caption) = embeddings::to_embed(&mut conn, sha256, model).await? else {

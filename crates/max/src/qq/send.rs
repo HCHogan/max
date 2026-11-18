@@ -20,7 +20,7 @@ use std::time::Duration;
 use chrono::Utc;
 use max_core::ids::{EndpointId, MessageId};
 use max_core::message::{
-    Content, MediaKind, MediaRef, MentionTarget, Message as Row, Node, Platform,
+    Content, MediaKind, MediaRef, MentionTarget, Message as Row, Node, Platform, Sha256,
 };
 use max_db::ledger::{self, Sent as Delivered};
 use max_db::platform::{self, ConversationKind};
@@ -267,7 +267,7 @@ impl Shared {
         let key = (native_id.to_owned(), attached);
         let file_info = self.upload(chat, &key).await.map_err(|error| {
             let sha256 = &key.1.sha256;
-            warn!(message = %id, sha256, %error, "couldn't upload what a message attaches");
+            warn!(message = %id, %sha256, %error, "couldn't upload what a message attaches");
             Unsent::Refused(error)
         })?;
         self.proactive(native_id).await;
@@ -435,7 +435,7 @@ struct Lowered {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct Attached {
-    sha256: String,
+    sha256: Sha256,
     kind: Kind,
 }
 

@@ -13,7 +13,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use max_core::item::Part;
-use max_core::message::MediaRef;
+use max_core::message::{MediaRef, Sha256};
 use serde::Deserialize;
 use tokio::task::spawn_blocking;
 use tracing::warn;
@@ -198,7 +198,7 @@ async fn kept(
     bytes: Vec<u8>,
     room: bool,
     so_far: &[Part],
-    part: impl FnOnce(String) -> Part,
+    part: impl FnOnce(Sha256) -> Part,
 ) -> Result<Option<Part>, Failure> {
     if !room {
         let (sha256, _) = named(bytes).await.map_err(|_| internal())?;
