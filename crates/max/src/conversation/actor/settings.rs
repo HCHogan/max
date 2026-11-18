@@ -8,6 +8,7 @@ use std::fmt::Write;
 use max_core::limits::Setting;
 
 use super::*;
+use crate::command::{Choice, Config};
 use crate::conversation::Configured;
 
 impl Conversation {
@@ -77,19 +78,18 @@ impl Conversation {
 
     /// `/config`: every limit; `/config <name>`: one; `/config <name>
     /// <value>` or `default` sets it, as `by` asked.
-    pub(super) async fn config(
-        &mut self,
-        name: Option<&str>,
-        value: Option<&str>,
-        by: &str,
-    ) -> Result<String> {
-        let Some(name) = name else {
-            let lines: Vec<String> = self
-                .configured()
-                .iter()
-                .map(|configured| self.config_line(configured))
-                .collect();
-            return Ok(format!("this conversation's limits\n{}", lines.join("\n")));
+    pub(super) async fn config(&mut self, config: Config, by: &str) -> Result<String> {
+        let (name, value) = match config {
+            Config::All => {
+                let lines: Vec<String> = self
+                    .configured()
+                    .iter()
+                    .map(|configured| self.config_line(configured))
+                    .collect();
+                return Ok(format!("this conversation's limits\n{}", lines.join("\n")));
+            }
+            Config::One(name) => (name, None),
+            Config::Set { name, value } => (name, Some(value)),
         };
         let Ok(setting) = name.parse::<Setting>() else {
             let names: Vec<&str> = Setting::ALL.into_iter().map(Setting::as_str).collect();
@@ -105,8 +105,8 @@ impl Conversation {
         };
         let range = setting.range();
         let value = match value {
-            "default" => None,
-            number => match number.parse::<u64>() {
+            Choice::Default => None,
+            Choice::To(number) => match number.parse::<u64>() {
                 Ok(number) if range.contains(&number) => Some(number),
                 _ => {
                     return Ok(format!(

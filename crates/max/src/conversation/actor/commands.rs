@@ -16,7 +16,7 @@ use tokio::time::timeout;
 
 use super::*;
 use crate::bind::Pending;
-use crate::command::{self, Command, Persona};
+use crate::command::{self, Choice, Command, Config, Persona};
 use crate::conversation::ingest::Committed;
 
 mod spent;
@@ -72,15 +72,14 @@ impl Conversation {
             Command::Status => Rank::Anyone,
             Command::Model(None) | Command::Effort(None) | Command::Proactive(None) => Rank::Anyone,
             Command::Persona(Persona::Show) | Command::Clear { all: false } => Rank::Anyone,
-            Command::Model(Some(argument)) if argument == "list" => Rank::Anyone,
-            Command::Config { value: None, .. } => Rank::Anyone,
+            Command::Config(Config::All | Config::One(_)) => Rank::Anyone,
             Command::Kill
             | Command::Stop
             | Command::Start
             | Command::Persona(_)
             | Command::Clear { .. }
             | Command::Unclear
-            | Command::Config { .. } => Rank::Admin,
+            | Command::Config(_) => Rank::Admin,
             Command::Link(_) | Command::Unlink(_) => Rank::GroupOwner,
             Command::Model(_) | Command::Effort(_) | Command::Proactive(_) => Rank::ChatOwner,
             Command::Bind(_) => Rank::Owner,
@@ -114,9 +113,9 @@ impl Conversation {
                 format!("cleared: earlier messages are out of the context; {how} brings them back")
             }
             Command::Unclear => self.unclear().await?,
-            Command::Config { name, value } => {
+            Command::Config(config) => {
                 let by = &committed.message.sender.name;
-                self.config(name.as_deref(), value.as_deref(), by).await?
+                self.config(config, by).await?
             }
             Command::Bind(argument) => self.bind(committed, argument.as_deref()).await?,
             Command::Link(code) => self.link(code.as_deref()).await?,
@@ -403,7 +402,7 @@ impl Conversation {
         let models = &self.shared.models;
         let list = models.references().join(", ");
         let current = self.settings.model.clone();
-        let Some(reference) = argument.filter(|argument| *argument != "list") else {
+        let Some(reference) = argument else {
             let current = match models.turn(current.as_deref(), None) {
                 Ok(chosen) => chosen.reference(),
                 Err(_) => current.unwrap_or_default(),
@@ -413,18 +412,25 @@ impl Conversation {
         if let Err(error) = models.choose(reference, None) {
             return Ok(format!("error: no such model ({error})\navailable: {list}"));
         }
-        self.settings.model = (reference != "default").then(|| reference.to_owned());
+        self.settings.model = Some(reference.to_owned());
         self.save_settings().await?;
         Ok(format!("switched to {reference}; {}", self.takes_effect()))
     }
 
-    async fn effort(&mut self, argument: Option<String>) -> Result<String> {
-        let Some(level) = argument else {
+    async fn effort(&mut self, argument: Option<Choice>) -> Result<String> {
+        let Some(choice) = argument else {
             let effort = self.settings.effort.as_deref().unwrap_or("default");
             return Ok(format!("effort: {effort}"));
         };
+        let level = match &choice {
+            Choice::Default => "default",
+            Choice::To(level) => level,
+        };
         let answer = format!("effort set to {level}; {}", self.takes_effect());
-        self.settings.effort = (level != "default").then_some(level);
+        self.settings.effort = match choice {
+            Choice::Default => None,
+            Choice::To(level) => Some(level),
+        };
         self.save_settings().await?;
         Ok(answer)
     }
