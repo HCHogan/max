@@ -52,6 +52,7 @@ pub struct Table {
 }
 
 impl Table {
+    #[must_use]
     pub fn new(shared: Arc<Shared>, me: HashMap<Platform, Me>) -> Self {
         Self {
             shared,

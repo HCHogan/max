@@ -41,6 +41,7 @@ pub enum Error {
 
 impl Error {
     /// Whether the same request might succeed if sent again.
+    #[must_use]
     pub fn is_retryable(&self) -> bool {
         match self {
             Self::Connect(_) | Self::Idle(_) | Self::Body(_) | Self::Truncated | Self::Aloud => {

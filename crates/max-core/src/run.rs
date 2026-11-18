@@ -31,6 +31,7 @@ impl RunSpec {
     /// How big transcript and waiting inputs may grow before the core gives
     /// up: the window minus output, a 5% margin and the base context,
     /// and never more than half the window.
+    #[must_use]
     pub fn limit(&self, base: u32) -> u32 {
         let c = self.window;
         let available = c
@@ -243,6 +244,7 @@ enum Phase {
 impl Run {
     /// `first` is already rendered in `base`; its wakes are the run's
     /// first to handle.
+    #[must_use]
     pub fn new(spec: RunSpec, base: Context, first: Vec<Input>) -> Self {
         let base_tokens = total(base.items.iter().map(|item| item.tokens));
         let roster = base.roster.clone();
@@ -271,6 +273,7 @@ impl Run {
 
     /// A model call or tool batch is in flight. The actor asks for the next
     /// step only when this is false.
+    #[must_use]
     pub fn is_busy(&self) -> bool {
         matches!(self.phase, Phase::Calling | Phase::Running(_))
     }
@@ -446,6 +449,7 @@ impl Run {
     /// Transcript and waiting inputs are over the limit and the model has
     /// been warned, or the first inputs alone leave no room. The actor ends
     /// the run there.
+    #[must_use]
     pub fn at_limit(&self) -> bool {
         let limit = self.spec.limit(self.base_tokens);
         limit == 0 || (self.warned && self.size() > self.base_tokens.saturating_add(limit))
@@ -454,12 +458,14 @@ impl Run {
     /// Transcript and waiting inputs are past nine tenths of the limit: the
     /// model is warned at its next call, and the actor ends a run that has
     /// nothing to do, so that the next trigger starts afresh.
+    #[must_use]
     pub fn near_limit(&self) -> bool {
         let limit = self.spec.limit(self.base_tokens);
         self.size() > self.base_tokens.saturating_add(limit / 10 * 9)
     }
 
     /// How full the context is: what `at_limit` compares.
+    #[must_use]
     pub fn fill(&self) -> Fill {
         Fill {
             tokens: self.size(),
@@ -470,17 +476,20 @@ impl Run {
     }
 
     /// Whether the model has been warned that the run is near its limit.
+    #[must_use]
     pub fn is_warned(&self) -> bool {
         self.warned
     }
 
     /// The wakes the model hasn't finished with: seen by a model call that
     /// didn't reach an output without tool calls, or not seen yet.
+    #[must_use]
     pub fn unhandled(&self) -> &[Wake] {
         &self.unhandled
     }
 
     /// For a run that has ended or is idle.
+    #[must_use]
     pub fn outcome(&self) -> Outcome {
         match &self.phase {
             Phase::Interrupted => Outcome::Interrupted,
@@ -494,20 +503,24 @@ impl Run {
 
     /// The core is waiting for nothing and has nothing to do: ending it now
     /// loses nothing.
+    #[must_use]
     pub fn is_idle(&self) -> bool {
         matches!(self.phase, Phase::Waiting)
     }
 
+    #[must_use]
     pub fn round(&self) -> u32 {
         self.round
     }
 
     /// Everyone the run has a roster line for, in its base or an input:
     /// a later input needn't bring theirs again.
+    #[must_use]
     pub fn roster(&self) -> &BTreeSet<PrincipalId> {
         &self.roster
     }
 
+    #[must_use]
     pub fn record(&self) -> RunRecord<'_> {
         RunRecord {
             spec: &self.spec,

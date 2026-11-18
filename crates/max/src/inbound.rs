@@ -67,6 +67,7 @@ pub enum InNode {
 impl Inbound {
     /// What the sender wrote, without the @ of Max: a command's text, and
     /// what intent's gate reads.
+    #[must_use]
     pub fn plain_text(&self) -> String {
         let mut text = String::new();
         for node in &self.nodes {
@@ -84,6 +85,7 @@ impl Inbound {
         text
     }
 
+    #[must_use]
     pub fn mentions_me(&self) -> bool {
         self.nodes
             .iter()

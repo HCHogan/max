@@ -174,6 +174,7 @@ impl Call {
     }
 
     /// A response recorded earlier, read as if it were arriving.
+    #[must_use]
     pub fn replay(model: ModelTag, recorded: Vec<u8>) -> Self {
         let body = stream::iter([Ok::<_, io::Error>(VecDeque::from(recorded))]);
         let events = SseStream::from_bytes_stream(body);
@@ -212,6 +213,7 @@ impl Call {
 
     /// How the call has gone in time; once [`Call::next`] has returned
     /// `None`, how it went.
+    #[must_use]
     pub fn timing(&self) -> Timing {
         Timing {
             first: self.first,

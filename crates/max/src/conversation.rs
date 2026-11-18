@@ -290,6 +290,7 @@ pub enum Unanswered {
 
 impl Question {
     /// What tells the asker `said` of it: an answer, or why none comes.
+    #[must_use]
     pub fn answered(self, said: Result<String, Unanswered>) -> Signal {
         Signal::Heard {
             conversation: self.from.conversation,
@@ -356,6 +357,7 @@ pub struct Poster {
 }
 
 impl Poster {
+    #[must_use]
     pub fn new(mailbox: UnboundedSender<Event>) -> Self {
         Self { mailbox }
     }
@@ -455,6 +457,7 @@ pub struct TaskId(u64);
 
 impl TaskId {
     /// The `n`th task of its conversation.
+    #[must_use]
     pub const fn new(n: u64) -> Self {
         Self(n)
     }

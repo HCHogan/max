@@ -447,6 +447,7 @@ struct Call {
 }
 
 impl Parser {
+    #[must_use]
     pub fn new(model: ModelTag) -> Self {
         Self {
             model,
@@ -461,11 +462,13 @@ impl Parser {
     }
 
     /// The provider said `[DONE]`; nothing after this matters.
+    #[must_use]
     pub fn finished(&self) -> bool {
         self.done
     }
 
     /// The model has begun to answer: text, reasoning or a tool call.
+    #[must_use]
     pub fn started(&self) -> bool {
         let reasoning = REASONING.iter().any(|field| {
             self.fields

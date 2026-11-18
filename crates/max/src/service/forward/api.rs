@@ -88,6 +88,7 @@ impl Apis {
     }
 
     /// The APIs' lines in the system prompt; empty without any.
+    #[must_use]
     pub fn prompt(&self) -> &str {
         &self.prompt
     }

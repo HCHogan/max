@@ -112,6 +112,7 @@ crate::names!(Setting, "setting", {
 impl Setting {
     /// What a conversation, or the configuration file's `[limits]`, may
     /// set it to.
+    #[must_use]
     pub const fn range(self) -> RangeInclusive<u64> {
         match self {
             Self::IdleWindowSecs => 60..=7200,
@@ -132,6 +133,7 @@ pub struct Overrides {
 }
 
 impl Overrides {
+    #[must_use]
     pub fn get(&self, setting: Setting) -> Option<u64> {
         match setting {
             Setting::IdleWindowSecs => self.idle_window_secs,

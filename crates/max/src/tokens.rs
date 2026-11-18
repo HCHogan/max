@@ -5,6 +5,7 @@
 
 /// Tokens in `text`, by GPT-5's encoding. For other providers' models it
 /// is an estimate, as is every count that isn't the provider's own.
+#[must_use]
 pub fn count(text: &str) -> u32 {
     let tokens = tiktoken_rs::o200k_base_singleton().encode_ordinary(text);
     u32::try_from(tokens.len()).unwrap_or(u32::MAX)

@@ -31,6 +31,7 @@ pub enum Direct {
 }
 
 impl Direct {
+    #[must_use]
     pub fn mark(self) -> Mark {
         match self {
             Self::MentionsMe => Mark::MentionsYou,
@@ -239,6 +240,7 @@ pub enum By {
 }
 
 /// Who said `message`, a row of Max's account.
+#[must_use]
 pub fn by(message: &Message) -> By {
     match message.raw.get(ledger::SAID_BY).and_then(|by| by.as_str()) {
         Some(PROGRAM) => By::Program,

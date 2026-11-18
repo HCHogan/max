@@ -28,6 +28,7 @@ pub const SNIFF: usize = 16;
 
 /// Whether `bytes`, a file's first [`SNIFF`] bytes or all of a shorter
 /// one, begin a picture [`prepare`] reads.
+#[must_use]
 pub fn is_picture(bytes: &[u8]) -> bool {
     format(bytes).is_some()
 }

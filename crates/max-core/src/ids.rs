@@ -14,11 +14,13 @@ macro_rules! ids {
 
         impl $name {
             /// The id a row has in the database.
+            #[must_use]
             pub const fn new(id: $inner) -> Self {
                 Self(id)
             }
 
             /// As the database has it.
+            #[must_use]
             pub const fn get(self) -> $inner {
                 self.0
             }
@@ -57,6 +59,7 @@ impl CallId {
         Self(id.into())
     }
 
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }

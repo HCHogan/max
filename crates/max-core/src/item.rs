@@ -65,6 +65,7 @@ pub struct Image {
 
 impl Image {
     /// What the text names it by: `image#123.0`.
+    #[must_use]
     pub fn handle(&self) -> String {
         format!("{}#{}.{}", self.kind, self.message, self.ordinal)
     }
@@ -82,6 +83,7 @@ impl ItemKind {
 
 impl Item {
     /// An item `max` or the core wrote, not the model.
+    #[must_use]
     pub fn new(kind: ItemKind, tokens: u32) -> Self {
         Self {
             kind,

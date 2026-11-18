@@ -239,6 +239,7 @@ pub async fn ask(connection: &Connection, line: &str) -> Result<String> {
 }
 
 /// `text` as one word for the guest's shell.
+#[must_use]
 pub fn quote(text: &str) -> String {
     format!("'{}'", text.replace('\'', r"'\''"))
 }

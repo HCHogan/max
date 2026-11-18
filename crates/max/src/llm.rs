@@ -84,6 +84,7 @@ pub struct Upstream {
 impl Upstream {
     /// `provider/model`, as the configuration names it, and as a call
     /// from a VM does.
+    #[must_use]
     pub fn reference(&self) -> String {
         format!("{}/{}", self.provider, self.model)
     }
@@ -104,6 +105,7 @@ impl Upstreams {
     /// The model a call names: the agents' own for no name, and for one
     /// that isn't configured, so that a program which knows nothing of
     /// the names here can call a model all the same.
+    #[must_use]
     pub fn named(&self, name: Option<&str>) -> &Arc<Upstream> {
         name.and_then(|name| self.all.get(name))
             .unwrap_or(&self.default)
@@ -112,6 +114,7 @@ impl Upstreams {
 
 impl Chosen {
     /// `provider/model`, as `/model` takes it.
+    #[must_use]
     pub fn reference(&self) -> String {
         format!("{}/{}", self.provider, self.tag.model)
     }
@@ -148,6 +151,7 @@ impl Chosen {
     }
 
     /// A call of this model's, for `llm_usage`.
+    #[must_use]
     pub fn usage(
         &self,
         purpose: usage::Purpose,
@@ -222,6 +226,7 @@ impl Models {
     }
 
     /// The caption worker's model, when one is configured.
+    #[must_use]
     pub fn caption(&self) -> Option<Result<Chosen>> {
         let caption = self.llm.caption.as_ref()?;
         Some(self.chosen(&caption.model, caption.effort.as_deref()))
@@ -230,6 +235,7 @@ impl Models {
     /// Where model calls from the VMs go, when background agents have a
     /// model: to any configured one, and to theirs unless another is
     /// named. Reads the providers' keys.
+    #[must_use]
     pub fn job(&self) -> Option<Result<Upstreams>> {
         let job = self.llm.job.as_ref()?;
         Some(self.upstreams(job))
@@ -270,6 +276,7 @@ impl Models {
 
     /// The list price of `provider`'s `model`, as `llm_usage` names them,
     /// if it is configured and has one.
+    #[must_use]
     pub fn price(&self, provider: &str, model: &str) -> Option<config::Price> {
         self.llm.providers.get(provider)?.models.get(model)?.price
     }
@@ -277,6 +284,7 @@ impl Models {
     /// How long a core on `model` waits idle before it ends: its
     /// provider's window, or the default model's when it is None or no
     /// longer configured.
+    #[must_use]
     pub fn idle_window(&self, model: Option<&str>) -> Duration {
         let window = |reference: &ModelRef| {
             let (provider, _) = self.llm.model(reference).ok()?;
@@ -290,6 +298,7 @@ impl Models {
     }
 
     /// Every `provider/model`, for `/model` to list.
+    #[must_use]
     pub fn references(&self) -> Vec<String> {
         self.llm
             .providers

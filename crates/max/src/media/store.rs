@@ -34,6 +34,7 @@ impl Store {
     }
 
     /// Where the file of this name is, or would be.
+    #[must_use]
     pub fn path(&self, sha256: &Sha256) -> PathBuf {
         let name = sha256.as_str();
         self.objects.join(name.get(..2).unwrap_or("00")).join(name)
