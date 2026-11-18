@@ -29,7 +29,7 @@ use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tracing::{debug, error, info, warn};
 
 use crate::command::{self, Command};
-use crate::conversation::{Conversation, Event, Heard, Place, Shared, Signal};
+use crate::conversation::{Conversation, Event, Heard, Place, Shared, Signal, Unanswered};
 use crate::inbound::Inbound;
 use crate::scope::Scope;
 use crate::service;
@@ -226,11 +226,11 @@ impl Table {
             }
             Ok(None) => {
                 warn!(%conversation, "something for a conversation Max isn't in");
-                self.unanswered(event, "Max serves no chat of that conversation");
+                self.unanswered(event, Unanswered::NoChat);
                 Ok(())
             }
             Err(error) => {
-                self.unanswered(event, "Max couldn't start on that conversation");
+                self.unanswered(event, Unanswered::NotStarted);
                 Err(error)
             }
         }
@@ -266,16 +266,13 @@ impl Table {
     /// `event` reaches no actor: the question in it is answered with
     /// `why`, back through here to its asker, and the call in it fails
     /// with it. The rest waits for nothing.
-    fn unanswered(&self, event: Event, why: &str) {
+    fn unanswered(&self, event: Event, why: Unanswered) {
         match event {
             Event::Heard(Heard::Asked(question)) => {
-                let _ = self
-                    .shared
-                    .signals
-                    .send(question.answered(Err(why.to_owned())));
+                let _ = self.shared.signals.send(question.answered(Err(why)));
             }
             Event::Call { reply, .. } => {
-                let _ = reply.send(Err(service::Failure::new("internal", why)));
+                let _ = reply.send(Err(service::Failure::new("internal", why.to_string())));
             }
             _ => {}
         }
