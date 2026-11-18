@@ -131,10 +131,11 @@ pub enum Heard {
 
 /// The timeline from `head` on, for a program in the group's VM: every
 /// row committed after it comes to `rows`, until the actor stops. The rows
-/// up to `head` are in the database.
+/// up to `head` are in the database; a conversation without a row has
+/// none.
 pub struct Subscription {
     pub place: Arc<Place>,
-    pub head: MessageId,
+    pub head: Option<MessageId>,
     pub rows: broadcast::Receiver<Arc<Message>>,
     pub services: Arc<service::Services>,
 }
