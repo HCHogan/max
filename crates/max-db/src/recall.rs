@@ -11,6 +11,7 @@ use sqlx::{Connection, PgConnection};
 /// What to look for, and where.
 #[derive(Clone, Debug)]
 pub struct Query<'a> {
+    /// The conversation searched.
     pub conversation: ConversationId,
     /// A LIKE pattern per term, for lowercased text: `%term%`, with `%`,
     /// `_` and `\` in the term escaped.
@@ -18,6 +19,7 @@ pub struct Query<'a> {
     /// Rows from `from` and before `until`, by id: a stretch of the
     /// timeline, as `history` works out from days, moments or rows.
     pub from: Option<MessageId>,
+    /// The stretch's end, as `from` is its start.
     pub until: Option<MessageId>,
     /// Rows whose sender's name, lowercased, is like this; with no
     /// patterns, all of them.

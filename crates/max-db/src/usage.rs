@@ -7,10 +7,14 @@ use max_core::ids::{ConversationId, TurnId};
 use max_core::item::{Timing, Usage};
 use sqlx::PgConnection;
 
+/// What a model call was for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Purpose {
+    /// A turn's.
     Turn,
+    /// The classifier's.
     Intent,
+    /// A caption's.
     Caption,
 }
 
@@ -20,22 +24,32 @@ max_core::names!(Purpose, "purpose", {
     Caption => "caption",
 });
 
+/// A model call to record.
 #[derive(Clone, Debug)]
 pub struct Call<'a> {
+    /// The conversation it was for, if for one.
     pub conversation: Option<ConversationId>,
+    /// The turn it was part of, if of one.
     pub turn: Option<TurnId>,
+    /// What it was for.
     pub purpose: Purpose,
+    /// The provider called.
     pub provider: &'a str,
+    /// The model, as the provider names it.
     pub model: &'a str,
+    /// The effort asked for, if any.
     pub effort: Option<&'a str>,
+    /// What the provider says it used.
     pub usage: Usage,
     /// Millionths of a US dollar, when the price is known.
     pub cost_micros: Option<i64>,
     /// When max measured it.
     pub timing: Option<Timing>,
+    /// When it ended.
     pub at: DateTime<Utc>,
 }
 
+/// Records a model call.
 pub async fn record(conn: &mut PgConnection, call: &Call<'_>) -> sqlx::Result<()> {
     let usage = call.usage;
     let timing = call.timing;
@@ -75,11 +89,15 @@ fn ms(duration: Duration) -> i32 {
 /// The tokens of a conversation's calls on one model, summed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Used {
+    /// The provider.
     pub provider: String,
+    /// The model.
     pub model: String,
+    /// The input's tokens.
     pub input: i64,
     /// Of the input, how much hit the cache.
     pub cached: i64,
+    /// The output's tokens.
     pub output: i64,
 }
 

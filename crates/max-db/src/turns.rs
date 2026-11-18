@@ -9,8 +9,10 @@ use sqlx::types::Json;
 
 use crate::unknown;
 
+/// A turn as it starts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Started {
+    /// The turn.
     pub turn: TurnId,
     /// t#N, counted per conversation.
     pub ordinal: i32,
@@ -98,6 +100,7 @@ async fn insert(
     Ok(())
 }
 
+/// How `turn` ended, if it has.
 pub async fn outcome(conn: &mut PgConnection, turn: TurnId) -> sqlx::Result<Option<Outcome>> {
     let Some(row) = sqlx::query!(
         "select outcome, failure, error from turn_outcomes where turn_id = $1",
@@ -144,7 +147,9 @@ pub async fn unfinished(
 /// woke for. Its base showed the rows it woke for apart from the tail.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TailEnd {
+    /// Its snapshot position: the last row of its tail.
     pub from: MessageId,
+    /// The first row it woke for, if it woke for one.
     pub woken: Option<MessageId>,
 }
 

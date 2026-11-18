@@ -15,10 +15,15 @@ use crate::named;
 /// Downloaded bytes, as the content store holds them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Blob {
+    /// The file.
     pub sha256: Sha256,
+    /// Its MIME type, where it is known.
     pub mime: Option<String>,
+    /// Its size in bytes.
     pub size: u64,
+    /// A picture's width in pixels.
     pub width: Option<u32>,
+    /// A picture's height in pixels.
     pub height: Option<u32>,
     /// What the model is sent of a picture: these bytes, or a smaller
     /// copy. None for what isn't a picture.
@@ -28,6 +33,7 @@ pub struct Blob {
 /// A message with media still to download.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Pending {
+    /// The message.
     pub message: MessageId,
     /// Those not downloaded yet.
     pub remote: Vec<Remote>,
@@ -36,8 +42,11 @@ pub struct Pending {
 /// A medium still at its address: which of its message's it is.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Remote {
+    /// Which of the message's media it is.
     pub ordinal: u16,
+    /// What it was sent as.
     pub kind: MediaKind,
+    /// Where the platform has it.
     pub url: String,
 }
 
@@ -118,8 +127,11 @@ pub struct Stored {
     pub kind: MediaKind,
     /// A file's, as the row's node has it.
     pub name: Option<String>,
+    /// The file.
     pub sha256: Sha256,
+    /// Its MIME type, where it is known.
     pub mime: Option<String>,
+    /// Its size in bytes.
     pub size: u64,
 }
 

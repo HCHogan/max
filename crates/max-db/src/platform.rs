@@ -19,7 +19,9 @@ pub(crate) fn role(name: Option<String>) -> sqlx::Result<Option<Role>> {
 /// A platform account and the person behind it, after merges.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Account {
+    /// The account.
     pub identity: IdentityId,
+    /// The person behind it.
     pub principal: PrincipalId,
 }
 
@@ -115,9 +117,12 @@ pub async fn principals(
         .collect())
 }
 
+/// What kind of chat a conversation is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConversationKind {
+    /// A group.
     Group,
+    /// A private chat.
     Direct,
 }
 
@@ -126,9 +131,12 @@ max_core::names!(ConversationKind, "conversation kind", {
     Direct => "direct",
 });
 
+/// A chat a conversation is in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Endpoint {
+    /// The endpoint.
     pub id: EndpointId,
+    /// Its conversation.
     pub conversation: ConversationId,
 }
 
@@ -288,6 +296,7 @@ pub async fn attach(
     })
 }
 
+/// Whether `conversation` is a group or a private chat.
 pub async fn conversation_kind(
     conn: &mut PgConnection,
     conversation: ConversationId,
@@ -355,12 +364,18 @@ pub async fn native_user_id(
 /// mention there, or mute. The name and role are as of that message.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Speaker {
+    /// The account.
     pub identity: IdentityId,
+    /// The platform's id for it.
     pub native_user_id: String,
+    /// What they were called then.
     pub name: String,
+    /// Their role then; None in a private chat.
     pub role: Option<Role>,
 }
 
+/// The account `principal` last spoke from in `endpoint`, if they have
+/// spoken there.
 pub async fn speaker(
     conn: &mut PgConnection,
     endpoint: EndpointId,
@@ -399,11 +414,15 @@ pub async fn speaker(
 /// message in the endpoint, or the name they were first seen with.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Known {
+    /// The person.
     pub principal: PrincipalId,
+    /// What they are called.
     pub name: String,
+    /// Their role; None in a private chat, or for someone who hasn't spoken.
     pub role: Option<Role>,
 }
 
+/// What a roster line says of each of `people` in `endpoint`.
 pub async fn roster(
     conn: &mut PgConnection,
     endpoint: EndpointId,
@@ -465,6 +484,8 @@ pub async fn gateway_session(
     .transpose()
 }
 
+/// Saves where a platform's gateway session has come to, for the next
+/// start to resume from.
 pub async fn save_gateway_session(
     conn: &mut PgConnection,
     platform: Platform,
@@ -493,10 +514,15 @@ pub async fn save_gateway_session(
 /// What the conversation's commands set.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Settings {
+    /// The model, if `/model` chose one.
     pub model: Option<String>,
+    /// The effort, if `/effort` set one.
     pub effort: Option<String>,
+    /// The persona, if `/persona` set one.
     pub persona: Option<String>,
+    /// Whether Max may join in unasked.
     pub proactive: bool,
+    /// `/clear --all`: the last row out of the context.
     pub cleared_upto: Option<MessageId>,
     /// `/stop`: messages are recorded, but nothing starts a turn.
     pub stopped: bool,
@@ -518,6 +544,8 @@ impl Default for Settings {
     }
 }
 
+/// What `conversation`'s commands have set; the defaults where none
+/// has.
 pub async fn settings(
     conn: &mut PgConnection,
     conversation: ConversationId,
@@ -555,6 +583,7 @@ pub async fn tail_after(
     Ok(after.flatten().map(MessageId::new))
 }
 
+/// Moves the mark the conversation's tail starts after.
 pub async fn set_tail_after(
     conn: &mut PgConnection,
     conversation: ConversationId,
@@ -570,6 +599,7 @@ pub async fn set_tail_after(
     Ok(())
 }
 
+/// Saves what `conversation`'s commands set.
 pub async fn save_settings(
     conn: &mut PgConnection,
     conversation: ConversationId,

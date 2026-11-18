@@ -11,8 +11,11 @@ use sqlx::{Connection, PgConnection};
 /// embed, or the vector of it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Of<T> {
+    /// The row.
     pub message: MessageId,
+    /// The row's conversation.
     pub conversation: ConversationId,
+    /// What of the row this is.
     pub what: T,
 }
 
