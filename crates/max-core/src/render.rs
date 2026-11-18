@@ -26,6 +26,38 @@ const GAP: TimeDelta = TimeDelta::hours(1);
 /// `history`.
 pub const EXCERPT_CHARS: usize = 2000;
 
+/// How a line names a person, up to their number: `[mention#12]`.
+const MENTION: &str = "[mention#";
+
+/// A person named in a rendered line, or in text that copies one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Mention {
+    /// Where the marker starts.
+    pub start: usize,
+    /// Where its number ends: at the `]`, when the marker is whole.
+    pub end: usize,
+    pub principal: PrincipalId,
+}
+
+/// The markers in `text`, in order, closed or not: `[mention#` and a
+/// number. The segmenter reads what the model writes by a grammar of its
+/// own, in `segment::chunk`, which `verify/` proves things of.
+pub fn mentions(text: &str) -> impl Iterator<Item = Mention> + '_ {
+    text.match_indices(MENTION)
+        .filter_map(move |(start, marker)| {
+            let number = start + marker.len();
+            let rest = &text[number..];
+            let digits = rest
+                .find(|c: char| !c.is_ascii_digit())
+                .unwrap_or(rest.len());
+            Some(Mention {
+                start,
+                end: number + digits,
+                principal: PrincipalId::new(rest[..digits].parse().ok()?),
+            })
+        })
+}
+
 /// Who is behind an account. The ledger stores accounts; the model sees
 /// people.
 pub trait People {
@@ -181,7 +213,7 @@ impl<P: People> Render<'_, P> {
                 target: MentionTarget::Identity(identity),
                 display,
             } => match self.people.principal(*identity) {
-                Some(principal) => format!("[mention#{principal}]"),
+                Some(principal) => format!("{MENTION}{principal}]"),
                 None => format!("@{display}"),
             },
             Node::Mention {
