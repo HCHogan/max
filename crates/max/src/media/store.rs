@@ -12,6 +12,7 @@ use sha2::Digest;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 
+/// The content store: see the module.
 #[derive(Debug)]
 pub struct Store {
     objects: PathBuf,
@@ -21,6 +22,10 @@ pub struct Store {
 impl Store {
     /// The store in `dir`. What a write left in `tmp/` when max stopped is
     /// thrown away.
+    ///
+    /// # Errors
+    ///
+    /// If `tmp/` can't be emptied and made.
     pub async fn open(dir: &Path) -> io::Result<Self> {
         let tmp = dir.join("tmp");
         match fs::remove_dir_all(&tmp).await {
@@ -44,6 +49,10 @@ impl Store {
     /// Stores `bytes` and returns their SHA-256. Bytes already there are
     /// left alone. A new file is renamed into its place, so no one reads
     /// half of one.
+    ///
+    /// # Errors
+    ///
+    /// If the file can't be written or put in its place.
     pub async fn put(&self, bytes: Vec<u8>) -> io::Result<Sha256> {
         let (sha256, bytes) = named(bytes).await?;
         let path = self.path(&sha256);
@@ -66,6 +75,10 @@ impl Store {
 
     /// A file to store a piece at a time, hashed as it's written: one
     /// too large to hold.
+    ///
+    /// # Errors
+    ///
+    /// If the file can't be made.
     pub async fn partial(&self) -> io::Result<Partial<'_>> {
         let path = self.tmp.join(format!("{:016x}", rand::random::<u64>()));
         let file = fs::OpenOptions::new()
@@ -105,6 +118,11 @@ pub struct Partial<'a> {
 }
 
 impl Partial<'_> {
+    /// Writes more of the file.
+    ///
+    /// # Errors
+    ///
+    /// If the file can't be written.
     pub async fn write(&mut self, bytes: &[u8]) -> io::Result<()> {
         self.hasher.update(bytes);
         self.size += bytes.len() as u64;
@@ -113,6 +131,10 @@ impl Partial<'_> {
 
     /// Puts what was written in its place, and returns its SHA-256 and
     /// size.
+    ///
+    /// # Errors
+    ///
+    /// If the file can't be put in its place.
     pub async fn finish(mut self) -> io::Result<(Sha256, u64)> {
         self.file.flush().await?;
         let sha256 = Sha256::of(std::mem::take(&mut self.hasher).finalize().into());
@@ -136,6 +158,10 @@ impl Drop for Partial<'_> {
 
 /// The name `bytes` are stored by, without storing them; and the bytes
 /// back.
+///
+/// # Errors
+///
+/// If the task that hashes them is lost.
 pub async fn named(bytes: Vec<u8>) -> io::Result<(Sha256, Vec<u8>)> {
     // A video's hash takes a while: not on the runtime's threads.
     let hashed = move || (Sha256::of(sha2::Sha256::digest(&bytes).into()), bytes);

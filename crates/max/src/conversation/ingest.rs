@@ -24,13 +24,16 @@ use crate::inbound::{InNode, Inbound, Quote};
 /// Why a row is addressed to Max.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Direct {
+    /// It @-mentions Max.
     MentionsMe,
+    /// It replies to something Max said.
     RepliesToMe,
     /// Anything in a private chat.
     Private,
 }
 
 impl Direct {
+    /// How its line is marked for the model.
     #[must_use]
     pub fn mark(self) -> Mark {
         match self {
@@ -44,9 +47,13 @@ impl Direct {
 /// A row someone sent, as committed, with what the actor routes on.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Committed {
+    /// The row.
     pub message: Arc<Message>,
+    /// Whose account sent it, and the person behind it.
     pub sender: Account,
+    /// The command it gives, if it gives one.
     pub command: Option<Command>,
+    /// Why it is addressed to Max, if it is.
     pub direct: Option<Direct>,
     /// What the sender wrote, without the @ of Max.
     pub text: String,
@@ -57,6 +64,12 @@ pub struct Committed {
 /// gave a known id went back fewer than 540 rows.
 const QUOTE_SEARCH: i64 = 1000;
 
+/// Commits a message someone sent: its sender's account, its nodes with
+/// mentions and its quote resolved, and its row.
+///
+/// # Errors
+///
+/// If a query fails.
 pub async fn inbound(
     conn: &mut PgConnection,
     place: &Place,
@@ -225,6 +238,7 @@ fn words(text: &str) -> String {
 /// [`SAID_BY`](ledger::SAID_BY): [`PROGRAM`] or [`HOST`]. Max's own rows
 /// have none.
 pub const PROGRAM: &str = "program";
+/// The host said it: a command's answer, or a notice.
 pub const HOST: &str = "host";
 
 /// Who says a row of Max's account.
@@ -256,6 +270,9 @@ pub fn by(message: &Message) -> By {
     clippy::too_many_arguments,
     reason = "the row's parts, each from the caller"
 )]
+/// # Errors
+///
+/// If a query fails.
 pub async fn said(
     conn: &mut PgConnection,
     place: &Place,
@@ -366,6 +383,10 @@ pub async fn said(
 
 /// Max takes back a message of this timeline: an unsend row. None if
 /// `target` is no message here.
+///
+/// # Errors
+///
+/// If a query fails.
 pub async fn unsend(
     conn: &mut PgConnection,
     place: &Place,

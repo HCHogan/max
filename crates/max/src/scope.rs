@@ -15,6 +15,7 @@ use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 
+/// Owns the tasks spawned through it: see the module.
 #[derive(Debug, Default)]
 pub struct Scope {
     tasks: JoinSet<()>,
@@ -22,6 +23,7 @@ pub struct Scope {
 }
 
 impl Scope {
+    /// A scope with no tasks.
     #[must_use]
     pub fn new() -> Self {
         Self::default()

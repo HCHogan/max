@@ -14,10 +14,13 @@ use crate::inbound::Inbound;
 /// A command and its argument, parsed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Command {
+    /// `/status`: how Max is here.
     Status,
+    /// `/kill`: ends the running turn.
     Kill,
     /// `/stop`: Max records messages but doesn't reply, until `/start`.
     Stop,
+    /// `/start`: Max replies again.
     Start,
     /// `/model` or `/model list`, which show the models, or `/model
     /// <provider/model>`.
@@ -26,9 +29,11 @@ pub enum Command {
     Effort(Option<Choice>),
     /// `/proactive`, or on, off, default.
     Proactive(Option<bool>),
+    /// `/persona`, alone or with one.
     Persona(Persona),
     /// `/clear --all`; a bare `/clear` is answered with how.
     Clear {
+        /// Whether `--all` was said.
         all: bool,
     },
     /// `/unclear`: takes `/clear --all` back.
@@ -61,17 +66,23 @@ pub fn fenced(language: &str, body: &str) -> String {
     format!("{fence}{language}\n{body}\n{fence}")
 }
 
+/// What `/persona` is given.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Persona {
+    /// Nothing: it shows the persona.
     Show,
+    /// `clear`, `reset` or `default`: back to the default one.
     Reset,
+    /// Anything else: the new persona.
     Set(String),
 }
 
 /// What a command sets something to: `default`, or what it says.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Choice {
+    /// The word `default`.
     Default,
+    /// Any other word, as it was written.
     To(String),
 }
 
@@ -91,8 +102,11 @@ pub enum Config {
     All,
     /// The one of this name.
     One(String),
+    /// The limit of this name is set.
     Set {
+        /// The limit's name.
         name: String,
+        /// What it is set to.
         value: Choice,
     },
 }

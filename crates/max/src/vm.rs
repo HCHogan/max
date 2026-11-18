@@ -48,6 +48,7 @@ const SOCKET: &str = "max.sock";
 /// What `maxx units stop-all` says: the units it stopped.
 #[derive(Debug, Deserialize)]
 pub struct Stopped {
+    /// The units' names.
     pub stopped: Vec<String>,
 }
 
@@ -183,6 +184,11 @@ impl Vms {
     /// goes to `signals`. What they call besides Max's tools is carried
     /// here too: the models, `agents`, if the background agents have one,
     /// and the `apis` the host keeps the keys of.
+    ///
+    /// # Errors
+    ///
+    /// If the guest's image can't be read, the VMs' directory can't be made,
+    /// or their socket can't be listened at.
     pub fn start(
         config: config::Vm,
         scope: &mut Scope,
@@ -275,6 +281,10 @@ impl Vms {
 
     /// The conversation's VM, started if it isn't running; or why there
     /// isn't one.
+    ///
+    /// # Errors
+    ///
+    /// [`NoVm`], which says why there is none.
     pub async fn get(&self, conversation: ConversationId) -> Result<Vm, NoVm> {
         self.ask(conversation, true).await
     }
@@ -311,18 +321,31 @@ impl Vm {
     /// Starts `line`, a call (`maxx units run`), in the guest's shell, and
     /// gives it `input`. The guest stops the call when what this returns
     /// is dropped, or max's connection goes.
+    ///
+    /// # Errors
+    ///
+    /// If the command's channel can't be opened, or the line or its input
+    /// sent.
     pub async fn command(&self, line: &str, input: &[u8]) -> Result<Command> {
         Command::start(&self.connection, line, input, self.closes.clone()).await
     }
 
     /// Runs `line`, a command of max's own that is no unit, and waits for
     /// it: what it wrote to stdout.
+    ///
+    /// # Errors
+    ///
+    /// If the command can't be run, or doesn't exit with 0.
     pub async fn ask(&self, line: &str) -> Result<String> {
         ssh::ask(&self.connection, line).await
     }
 
     /// What the guest says of itself, and of those of `units` its systemd
     /// knows: for `/status`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Vm::ask`], or if what the guest says can't be read.
     pub async fn about(&self, units: &[String]) -> Result<About> {
         about::read(&self.ask(&about::line(units)).await?)
     }
@@ -347,6 +370,7 @@ impl Vm {
         )
     }
 
+    /// The SSH connection to the guest.
     #[must_use]
     pub fn connection(&self) -> &Connection {
         &self.connection

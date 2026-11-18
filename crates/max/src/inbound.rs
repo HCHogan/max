@@ -8,18 +8,26 @@ use max_core::message::{Node, Platform, Role};
 
 use max_db::platform::ConversationKind;
 
+/// A message someone sent, as its platform's adapter read it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Inbound {
+    /// The platform it came on.
     pub platform: Platform,
+    /// The chat it came in.
     pub chat: Chat,
     /// The platform's id for the message.
     pub native_id: String,
     /// The id it is quoted by, where that differs: QQ's msg_idx.
     pub quote_id: Option<String>,
+    /// Who sent it.
     pub sender: Person,
+    /// When the platform says it was sent.
     pub at: DateTime<Utc>,
+    /// The message it quotes, if any.
     pub quote: Option<Quote>,
+    /// What it says, in order.
     pub nodes: Vec<InNode>,
+    /// The platform's payload, kept as it came.
     pub raw: serde_json::Value,
 }
 
@@ -27,13 +35,18 @@ pub struct Inbound {
 /// `group:<group_openid>`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Chat {
+    /// The adapter's id for the chat.
     pub native_id: String,
+    /// A group or a private chat.
     pub kind: ConversationKind,
 }
 
+/// Someone in a chat, as their platform has them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Person {
+    /// The platform's id for their account.
     pub native_user_id: String,
+    /// What they are called there.
     pub name: String,
     /// None in private chats.
     pub role: Option<Role>,
@@ -42,6 +55,7 @@ pub struct Person {
 /// The message this one quotes.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct Quote {
+    /// The id the quoted message is quoted by, where the platform gives it.
     pub quote_id: Option<String>,
     /// What the platform showed of it, to find it by when the id is
     /// unknown: its text, without mentions or faces...
@@ -50,16 +64,22 @@ pub struct Quote {
     pub files: Vec<String>,
 }
 
+/// A piece of an inbound message: a node, or a mention not yet tied to
+/// an account.
 #[derive(Clone, Debug, PartialEq)]
 pub enum InNode {
+    /// What needs no looking up.
     Node(Node),
     /// Someone, by their platform id.
     Mention {
+        /// The platform's id for whom.
         user: String,
+        /// The name the @ showed.
         display: String,
     },
     /// Max.
     MentionMe {
+        /// The name the @ showed.
         display: String,
     },
 }
@@ -85,6 +105,7 @@ impl Inbound {
         text
     }
 
+    /// Whether it @-mentions Max.
     #[must_use]
     pub fn mentions_me(&self) -> bool {
         self.nodes

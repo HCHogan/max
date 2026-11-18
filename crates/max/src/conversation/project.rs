@@ -26,14 +26,19 @@ use crate::tokens;
 /// What a projection reads besides the ledger.
 #[derive(Clone, Debug)]
 pub struct Projection<'a> {
+    /// The conversation's place.
     pub place: &'a Place,
+    /// The system prompt.
     pub system: String,
+    /// The model's context window, in tokens.
     pub window: u32,
     /// `/clear --all`'s mark: nothing before it is shown.
     pub cleared_upto: Option<MessageId>,
     /// Max's memory file, as the core is shown it.
     pub memory: String,
+    /// The time, for the clock line.
     pub now: DateTime<Utc>,
+    /// Local time's offset.
     pub offset: FixedOffset,
 }
 
@@ -42,6 +47,10 @@ impl Projection<'_> {
     /// rendered in it as its first inputs. When the tail has grown past
     /// its high watermark, it is cut and its mark saved. The system
     /// prompt and the memory go into the context as they are.
+    ///
+    /// # Errors
+    ///
+    /// If a query fails.
     pub async fn base(
         self,
         conn: &mut PgConnection,
@@ -202,6 +211,10 @@ pub fn quotes(message: &Message) -> Option<MessageId> {
 }
 
 /// An @ of Max or a reply to one of Max's rows.
+///
+/// # Errors
+///
+/// If a query fails.
 pub async fn direct_mark(
     conn: &mut PgConnection,
     place: &Place,
@@ -228,6 +241,10 @@ pub async fn direct_mark(
 /// Rows a running core hasn't seen, as one input: their lines, after a
 /// roster line for each person it hasn't seen yet. `after` is when the
 /// last row it saw was sent.
+///
+/// # Errors
+///
+/// If a query fails.
 pub async fn follow_up(
     conn: &mut PgConnection,
     place: &Place,

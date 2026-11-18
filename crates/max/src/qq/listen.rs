@@ -18,6 +18,11 @@ use super::inbound::inbound;
 use crate::inbound::Inbound;
 
 /// Until `stop`, or until QQ closes the gateway for good.
+///
+/// # Errors
+///
+/// When QQ closes the gateway for good, or the session can't be read or
+/// saved.
 pub async fn listen(
     client: &qqbot::Client,
     pool: &PgPool,

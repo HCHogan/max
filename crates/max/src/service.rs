@@ -47,7 +47,9 @@ use crate::search::Search;
 /// `Option` is None when the configuration has none of it.
 #[derive(Clone)]
 pub struct Services {
+    /// The database.
     pub pool: PgPool,
+    /// Local time's offset, for the clocks the tools show.
     pub offset: FixedOffset,
     /// For `web_search`.
     pub search: Option<Arc<Search>>,
@@ -79,7 +81,9 @@ impl fmt::Debug for Services {
 /// them apart (2026-11-12).
 #[derive(Debug)]
 pub struct Context {
+    /// The database, and what the tools reach.
     pub services: Arc<Services>,
+    /// The conversation's place.
     pub place: Arc<Place>,
     /// The most tokens a page of text holds: the model's cap on one item.
     pub page_tokens: u32,
@@ -128,7 +132,9 @@ impl Context {
 /// A call that failed, as the program sees it.
 #[derive(Debug)]
 pub struct Failure {
+    /// What kind of failure, for a program to tell them apart by.
     pub code: &'static str,
+    /// What went wrong, in words.
     pub message: String,
     /// What a failure of max's own came of. The program isn't told: it
     /// is for the log.
@@ -145,6 +151,7 @@ impl PartialEq for Failure {
 impl Eq for Failure {}
 
 impl Failure {
+    /// A failure a program is told of.
     pub fn new(code: &'static str, message: impl Into<String>) -> Self {
         Self {
             code,
@@ -180,6 +187,11 @@ impl From<sqlx::Error> for Failure {
 
 /// Runs the Max tool `name` for a call from a VM, within the context's
 /// call time.
+///
+/// # Errors
+///
+/// The tool's [`Failure`]; `unknown_tool` for a name no tool has, and
+/// `timeout` once the context's call time has run out.
 pub async fn call(name: &str, context: &Context, args: Value) -> Result<Value, Failure> {
     let Some(tool) = tool::find(name) else {
         return Err(unknown(name));

@@ -35,9 +35,12 @@ const PAGE: i64 = 16;
 /// it is about, and a request stays well inside the service's time limit.
 const MOST_CHARS: usize = 2000;
 
+/// The recall vector worker: what it needs.
 #[derive(Debug)]
 pub struct Vectors {
+    /// The database.
     pub pool: PgPool,
+    /// The embedding model's client.
     pub embedder: Arc<Embedder>,
 }
 

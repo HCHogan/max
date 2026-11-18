@@ -22,6 +22,7 @@ const STDERR_KEPT: usize = 1024;
 /// The most of a control command's answer kept.
 const ANSWER_KEPT: usize = 64 << 10;
 
+/// russh's handler for a connection to a guest: it takes any host key.
 #[derive(Debug)]
 pub struct Client;
 
@@ -38,9 +39,14 @@ impl client::Handler for Client {
     }
 }
 
+/// An SSH connection to a guest.
 pub type Connection = Handle<Client>;
 
 /// Logs in as root with `key`. Fails while the guest is still booting.
+///
+/// # Errors
+///
+/// If the socket can't be reached, or the guest doesn't take the key.
 pub async fn connect(socket: &Path, key: Arc<PrivateKey>) -> Result<Connection> {
     let mut stream = UnixStream::connect(socket).await?;
     stream.write_all(b"CONNECT 22\n").await?;
@@ -87,6 +93,10 @@ pub struct Command {
 impl Command {
     /// Runs `line` in a shell as root and gives it `input`, with no end
     /// to it: the guest reads as much as `line` says.
+    ///
+    /// # Errors
+    ///
+    /// If the channel can't be opened, or the line or its input sent.
     pub async fn start(
         connection: &Connection,
         line: &str,
@@ -112,6 +122,10 @@ impl Command {
     /// the exit status if the guest sent one, or until `until` is done.
     /// `until` is checked only between pieces, so `sink` never has one cut
     /// off halfway; what is still to be read stays for the next wait.
+    ///
+    /// # Errors
+    ///
+    /// If `sink` fails to take a piece.
     pub async fn wait_or<T>(
         &mut self,
         sink: &mut impl Sink,
@@ -139,6 +153,7 @@ impl Drop for Command {
 
 /// Where a command's output goes as it arrives.
 pub trait Sink {
+    /// Takes `data`, which the command wrote to `stream`.
     fn output(&mut self, stream: Stream, data: &[u8]) -> impl Future<Output = Result<()>> + Send;
 }
 
@@ -195,7 +210,9 @@ pub enum Waited<T> {
 /// The command's stdout or stderr.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Stream {
+    /// Standard output.
     Out,
+    /// Standard error.
     Err,
 }
 
@@ -213,6 +230,11 @@ pub async fn closer(mut channels: UnboundedReceiver<Channel<Msg>>) {
 /// the start of it, for a command of max's own that answers in a line or
 /// a few. Fails unless it exits with 0, saying how it did end and what it
 /// wrote to stderr, the start of it.
+///
+/// # Errors
+///
+/// If the command can't be run, or doesn't exit with 0: how it ended,
+/// and the start of what it wrote to stderr.
 pub async fn ask(connection: &Connection, line: &str) -> Result<String> {
     let mut channel = connection.channel_open_session().await?;
     channel.exec(true, line).await?;

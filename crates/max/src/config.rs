@@ -20,6 +20,7 @@ use max_core::message::Platform;
 use serde::Deserialize;
 use tracing::level_filters::LevelFilter;
 
+/// The configuration file, as it is written.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
@@ -28,10 +29,14 @@ pub struct Config {
     pub utc_offset: FixedOffset,
     /// `platform:native id` per line, such as `qq:<user_openid>`.
     pub owners_file: Option<PathBuf>,
+    /// What is logged.
     #[serde(default)]
     pub log: Log,
+    /// The database.
     pub database: Database,
+    /// The models, and who uses which.
     pub llm: Llm,
+    /// The chat platforms Max is on.
     #[serde(default)]
     pub platforms: Platforms,
     /// Without it, the tools tell the model there is no VM.
@@ -51,6 +56,7 @@ pub struct Config {
     /// by the name in `/api/<name>/…`.
     #[serde(default)]
     pub api: BTreeMap<String, Api>,
+    /// The defaults of the limits a conversation may set for itself.
     #[serde(default)]
     pub limits: Limits,
 }
@@ -61,6 +67,7 @@ pub struct Config {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct Limits {
+    /// [`Setting::CallTimeSecs`], unless a conversation set its own.
     pub call_time_secs: u64,
 }
 
@@ -107,11 +114,18 @@ impl Limits {
 pub struct Embedding {
     /// An OpenAI-compatible API's, ending in `/v1`.
     pub base_url: BaseUrl,
+    /// The model's name, sent with each request and kept with each vector.
     pub model: String,
+    /// The file its API key is in, if it takes one.
     pub api_key_file: Option<PathBuf>,
 }
 
 impl Embedding {
+    /// The key, read from its file.
+    ///
+    /// # Errors
+    ///
+    /// If the key's file can't be read.
     pub fn api_key(&self) -> Result<Option<String>> {
         self.api_key_file.as_deref().map(secret).transpose()
     }
@@ -121,10 +135,16 @@ impl Embedding {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Search {
+    /// The file its API key is in.
     pub api_key_file: PathBuf,
 }
 
 impl Search {
+    /// The key, read from its file.
+    ///
+    /// # Errors
+    ///
+    /// If the key's file can't be read.
     pub fn api_key(&self) -> Result<String> {
         secret(&self.api_key_file)
     }
@@ -135,6 +155,7 @@ impl Search {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GitHub {
+    /// The account's login.
     pub login: String,
     /// The account's number, for its commits' noreply address.
     pub user_id: u64,
@@ -172,6 +193,7 @@ impl GitHub {
 pub struct Api {
     /// What follows `/api/<name>` in a VM's call follows this.
     pub base_url: BaseUrl,
+    /// The file its secret is in.
     pub secret_file: PathBuf,
     /// Headers every call carries, `{secret}` in them standing for the
     /// secret, such as `Authorization = "Bearer {secret}"`.
@@ -189,6 +211,11 @@ pub struct Api {
 }
 
 impl Api {
+    /// The secret, read from its file.
+    ///
+    /// # Errors
+    ///
+    /// If the secret's file can't be read.
     pub fn secret(&self) -> Result<String> {
         secret(&self.secret_file)
     }
@@ -306,7 +333,9 @@ impl std::fmt::Display for Rule {
 /// Who a guest's commits are by.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Author {
+    /// The name on a commit.
     pub name: String,
+    /// The address on a commit.
     pub email: String,
 }
 
@@ -337,11 +366,13 @@ pub struct NotAUrl {
 }
 
 impl BaseUrl {
+    /// As the file has it.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.text
     }
 
+    /// As it parses.
     #[must_use]
     pub fn url(&self) -> &reqwest::Url {
         &self.url
@@ -368,7 +399,9 @@ impl fmt::Display for BaseUrl {
 /// One of Max's owners, by an account of theirs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Owner {
+    /// The platform their account is on.
     pub platform: Platform,
+    /// The platform's id for the account.
     pub native_id: String,
 }
 
@@ -382,21 +415,29 @@ fn offset<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<FixedOffs
         .map_err(|_| serde::de::Error::custom(format!("{text:?} isn't an offset like +08:00")))
 }
 
+/// `[log]`.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Log {
+    /// The least that is logged.
     #[serde(default)]
     pub level: Level,
 }
 
+/// A log level, as tracing has them.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Level {
+    /// Errors alone.
     Error,
+    /// Warnings and errors.
     Warn,
+    /// What Max does, too.
     #[default]
     Info,
+    /// And what it finds on the way.
     Debug,
+    /// Everything.
     Trace,
 }
 
@@ -412,6 +453,7 @@ impl From<Level> for LevelFilter {
     }
 }
 
+/// `[database]`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Database {
@@ -437,6 +479,7 @@ pub struct Llm {
     /// reaches them through max's service to the VM. Without it, there are
     /// no background agents, and nothing in a VM calls a model.
     pub job: Option<Selection>,
+    /// The providers, by the name a `provider/model` begins with.
     pub providers: BTreeMap<String, Provider>,
 }
 
@@ -444,7 +487,9 @@ pub struct Llm {
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Selection {
+    /// The model.
     pub model: ModelRef,
+    /// The reasoning effort, as its provider spells it.
     pub effort: Option<String>,
 }
 
@@ -453,6 +498,7 @@ pub struct Selection {
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(try_from = "String")]
 pub struct ModelRef {
+    /// The provider's name in the configuration.
     pub provider: String,
     /// The id sent to the API, which may have a `/` of its own.
     pub model: String,
@@ -491,12 +537,17 @@ impl fmt::Display for ModelRef {
     }
 }
 
+/// A provider: how to reach it, and its models.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Provider {
+    /// Its API, up to and including `/v1`.
     pub base_url: BaseUrl,
+    /// The protocol it speaks.
     pub protocol: ProtocolName,
+    /// The file its API key is in, if it takes one.
     pub api_key_file: Option<PathBuf>,
+    /// Headers every request to it carries.
     #[serde(default)]
     pub headers: BTreeMap<String, String>,
     /// Attempts after the first, for errors worth retrying, and only while
@@ -515,6 +566,7 @@ pub struct Provider {
     /// (NInfer). Chat only.
     #[serde(default)]
     pub cache_breakpoints: bool,
+    /// Its models, by the id sent to the API.
     pub models: BTreeMap<String, Model>,
 }
 
@@ -533,10 +585,13 @@ fn idle_window() -> u64 {
     IDLE_WINDOW_SECS
 }
 
+/// A protocol's name in the file.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ProtocolName {
+    /// OpenAI's Responses.
     Responses,
+    /// Chat Completions.
     Chat,
 }
 
@@ -553,9 +608,13 @@ impl From<ProtocolName> for Protocol {
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Model {
+    /// Its context window, in tokens.
     pub context_window: u32,
+    /// Its output limit, in tokens, if it has one.
     pub max_output: Option<u32>,
+    /// The sampling temperature, if not the provider's own.
     pub temperature: Option<f64>,
+    /// The nucleus sampling cut-off, if not the provider's own.
     pub top_p: Option<f64>,
     /// Whether it watches videos (Gemini's): tools.video works only on such
     /// a model, through Chat.
@@ -570,6 +629,7 @@ pub struct Model {
 #[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Price {
+    /// Input.
     pub input: f64,
     /// Input read from the provider's cache; the input's price, unless
     /// said.
@@ -578,9 +638,11 @@ pub struct Price {
     pub output: f64,
 }
 
+/// `[platforms]`.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Platforms {
+    /// QQ, through the official bot API.
     pub qq: Option<Qq>,
 }
 
@@ -588,7 +650,9 @@ pub struct Platforms {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Qq {
+    /// The file the bot's AppID is in.
     pub app_id_file: PathBuf,
+    /// The file the bot's secret is in.
     pub app_secret_file: PathBuf,
 }
 
@@ -620,8 +684,10 @@ pub struct Vm {
     pub slots: Vec<Slot>,
     /// The resolvers a guest uses.
     pub dns: Vec<IpAddr>,
+    /// A VM's virtual CPUs.
     #[serde(default = "cpus")]
     pub cpus: u32,
+    /// A VM's memory, in MiB.
     #[serde(default = "memory")]
     pub memory_mib: u32,
     /// The disk that holds what the guest adds to the store.
@@ -689,6 +755,7 @@ fn kept() -> usize {
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Slot {
+    /// The tap's name.
     pub tap: String,
     /// The guest's.
     pub address: Cidr,
@@ -700,7 +767,9 @@ pub struct Slot {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(try_from = "String")]
 pub struct Cidr {
+    /// The address.
     pub address: IpAddr,
+    /// How many of its bits are the network's.
     pub prefix: u8,
 }
 
@@ -740,6 +809,11 @@ impl fmt::Display for Cidr {
 
 impl Config {
     /// Reads and checks the file, without reading the secrets it names.
+    ///
+    /// # Errors
+    ///
+    /// If the file can't be read, isn't the configuration's TOML, or says
+    /// something the checks refuse.
     pub fn load(path: &Path) -> Result<Self> {
         let text = fs::read_to_string(path)
             .wrap_err_with(|| format!("reading the configuration {}", path.display()))?;
@@ -773,6 +847,11 @@ impl Config {
     }
 
     /// The owners' accounts, as the owners file lists them.
+    ///
+    /// # Errors
+    ///
+    /// If the owners file can't be read, or a line of it isn't `platform:id`
+    /// on a platform Max is on.
     pub fn owners(&self) -> Result<Vec<Owner>> {
         let Some(path) = &self.owners_file else {
             return Ok(Vec::new());
@@ -822,6 +901,10 @@ impl Llm {
 
     /// The provider and the model `reference` names, as they are
     /// configured.
+    ///
+    /// # Errors
+    ///
+    /// If `reference` names no configured provider, or no model of its.
     pub fn model(&self, reference: &ModelRef) -> Result<(&Provider, &Model)> {
         let ModelRef { provider, model } = reference;
         let configured = self
@@ -847,6 +930,10 @@ impl Vm {
 
     /// The slot `index` names: the ordinary ones first, then the
     /// operations network's.
+    ///
+    /// # Panics
+    ///
+    /// If `index` names no slot.
     #[must_use]
     pub fn slot(&self, index: usize) -> &Slot {
         match index.checked_sub(self.slots.len()) {
@@ -895,12 +982,22 @@ impl Vm {
 }
 
 impl Provider {
+    /// The key, read from its file.
+    ///
+    /// # Errors
+    ///
+    /// If the key's file can't be read.
     pub fn api_key(&self) -> Result<Option<String>> {
         self.api_key_file.as_deref().map(secret).transpose()
     }
 }
 
 impl Qq {
+    /// The bot's AppID and secret, read from their files.
+    ///
+    /// # Errors
+    ///
+    /// If either file can't be read.
     pub fn credentials(&self) -> Result<qqbot::Credentials> {
         Ok(qqbot::Credentials {
             app_id: secret(&self.app_id_file)?,

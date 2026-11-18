@@ -41,6 +41,7 @@ use self::show::Left;
 /// what showing its model a picture or a video takes.
 #[derive(Debug)]
 pub struct Context {
+    /// The conversation whose VM the tool runs in.
     pub conversation: ConversationId,
     /// Keeps what is shown; None where there is no content store.
     pub store: Option<Arc<Store>>,

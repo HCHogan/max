@@ -83,6 +83,10 @@ struct Api {
 
 impl Apis {
     /// The APIs `configured`, their secrets read.
+    ///
+    /// # Errors
+    ///
+    /// If a secret's file can't be read, or a header doesn't take its secret.
     pub fn load(configured: &BTreeMap<String, config::Api>) -> Result<Self> {
         let mut table = BTreeMap::new();
         for (name, api) in configured {
@@ -221,6 +225,11 @@ struct Forward {
 }
 
 /// `/api/…` for the VMs.
+///
+/// # Panics
+///
+/// If the HTTP client can't be made, which these settings don't bring
+/// about.
 pub fn router(apis: Arc<Apis>) -> Router {
     // A redirect goes back to the program: followed here, it would take
     // the key's headers to wherever the API pointed.

@@ -15,7 +15,9 @@ use crate::conversation::Place;
 /// A row as committed, in the conversation it was committed in.
 #[derive(Clone, Debug)]
 pub struct Row {
+    /// Where it was committed.
     pub place: Arc<Place>,
+    /// The row.
     pub message: Arc<Message>,
 }
 
@@ -43,6 +45,7 @@ impl Rows {
         rx
     }
 
+    /// Gives every worker the row committed at `place`.
     pub fn send(&self, place: &Arc<Place>, message: &Arc<Message>) {
         if self.0.is_empty() {
             return;
