@@ -13,6 +13,7 @@ use tracing::warn;
 
 use super::report::Report;
 use super::{Event, TaskId};
+use crate::causes;
 use crate::llm::Chosen;
 use crate::media::pictures::Pictures;
 
@@ -42,11 +43,12 @@ pub async fn call(
             // Once something is said a retry would say it again.
             Err(error) if !said && error.retryable() && attempt < chosen.retries => {
                 let wait = backoff(attempt);
-                warn!(%task, model = %chosen.reference(), %error, ?wait, "retrying the model call");
+                let error = causes::chain(&error);
+                warn!(%task, model = %chosen.reference(), error, ?wait, "retrying the model call");
                 tokio::time::sleep(wait).await;
                 attempt += 1;
             }
-            Err(error) => break Err(error.to_string()),
+            Err(error) => break Err(causes::chain(&error)),
         }
     };
     report.send(Event::ModelDone { task, out });

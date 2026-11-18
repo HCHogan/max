@@ -10,6 +10,7 @@ pub const COMMIT: &str = match option_env!("MAX_COMMIT") {
 };
 
 pub mod bind;
+pub mod causes;
 pub mod code;
 pub mod command;
 pub mod config;

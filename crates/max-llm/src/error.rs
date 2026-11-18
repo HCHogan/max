@@ -1,19 +1,26 @@
 use std::time::Duration;
 
+/// What a failure came of, where something under it says: an error's
+/// source.
+pub type Cause = Box<dyn std::error::Error + Send + Sync>;
+
 /// Why a model call failed. Whether to try again is [`Error::retryable`];
 /// the caller decides whether it may, since text already said can't be
 /// taken back.
+///
+/// A variant says what happened, and its source what that came of: the
+/// two are said together by whoever prints the chain, and neither twice.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("couldn't reach the provider: {0}")]
+    #[error("couldn't reach the provider")]
     Connect(#[source] reqwest::Error),
     #[error("the provider answered {status}: {body}")]
     Status { status: u16, body: String },
     #[error("nothing from the provider for {0:?}")]
     Idle(Duration),
     /// The connection broke while the response was streaming.
-    #[error("the response broke off: {0}")]
-    Body(String),
+    #[error("the response broke off")]
+    Body(#[source] Cause),
     /// The stream ended cleanly but without its final event.
     #[error("the response ended before it was complete")]
     Truncated,
@@ -23,8 +30,8 @@ pub enum Error {
     /// The model stopped before finishing, such as at the output limit.
     #[error("the response stopped early: {0}")]
     Incomplete(String),
-    #[error("unexpected data from the provider: {0}")]
-    Malformed(String),
+    #[error("unexpected data from the provider")]
+    Malformed(#[source] Cause),
     /// The model wrote its reasoning as its answer, under a heading such
     /// as `Thinking Process:`, instead of thinking first. Nothing of it was
     /// said.
@@ -53,8 +60,8 @@ impl Error {
         }
     }
 
-    pub(crate) fn malformed(error: impl std::fmt::Display) -> Self {
-        Self::Malformed(error.to_string())
+    pub(crate) fn malformed(cause: impl Into<Cause>) -> Self {
+        Self::Malformed(cause.into())
     }
 
     /// From an error object as providers send it, inside a stream or as a
