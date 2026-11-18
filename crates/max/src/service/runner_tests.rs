@@ -162,7 +162,7 @@ async fn programs_call_max_tools_and_return(pool: PgPool) {
     assert!(ran.stdout.starts_with("SyntaxError"), "{}", ran.stdout);
 
     // Every tool is a program's, those the prompt doesn't declare too;
-    // and what was the runner's own request until 2026-11-12 is gone.
+    // and the runner has no request of its own for a file.
     let ran = run(
         &url,
         "return [typeof tools.say, typeof tools.file, typeof max.file]",

@@ -1,6 +1,5 @@
 //! `file`: a medium of the conversation's record, by its handle, copied
-//! into /work/chat for a program to read. Until 2026-11-12 it was a
-//! request of the runner's own, `max.file`. See "Reading files".
+//! into /work/chat for a program to read. See "Reading files".
 
 use max_core::ids::MessageId;
 use max_db::media::{self, Stored};
