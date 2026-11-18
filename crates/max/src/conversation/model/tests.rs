@@ -35,7 +35,8 @@ async fn run(script: &Arc<Script>) -> (Vec<String>, Result<(), String>) {
             Event::ModelDone { task, out } => {
                 assert_eq!(task, TaskId(1));
                 assert!(rx.try_recv().is_err(), "an event after ModelDone");
-                return (said, out.map(|_| ()));
+                let out = out.map(|_| ()).map_err(|error| error.to_string());
+                return (said, out);
             }
             other => panic!("{other:?}"),
         }

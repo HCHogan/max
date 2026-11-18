@@ -50,7 +50,7 @@ pub enum Event {
     /// retried.
     ModelDone {
         task: TaskId,
-        out: Result<(ModelOutput, Timing), String>,
+        out: Result<(ModelOutput, Timing), ModelFailed>,
     },
     ToolDone {
         task: TaskId,
@@ -75,6 +75,18 @@ pub enum Event {
     Subscribe(oneshot::Sender<Subscription>),
     /// Max restarts: end the core, within a grace, then stop.
     Stop,
+}
+
+/// Why a model call gave no output.
+#[derive(Debug, thiserror::Error)]
+pub enum ModelFailed {
+    /// As max-llm says of the last attempt.
+    #[error(transparent)]
+    Call(#[from] max_llm::Error),
+    /// Its task was aborted or panicked before it said how the call
+    /// went.
+    #[error("the model call ended without a result")]
+    Lost,
 }
 
 /// What goes to a conversation's actor by its conversation, whatever chat
