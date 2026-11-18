@@ -80,8 +80,7 @@ async fn answered(
         return Answer::refused("Max is stopping");
     }
     match timeout(WAIT, said).await {
-        Ok(Ok(Ok(said))) => Answer { ok: true, said },
-        Ok(Ok(Err(said))) => Answer::refused(said),
+        Ok(Ok(said)) => Answer { ok: true, said },
         _ => Answer::refused("Max never answered"),
     }
 }
