@@ -4,8 +4,8 @@
 //! after that one, the latest [`EVENTS_CAUGHT_UP`] of them, from the database. A
 //! line with nothing on it is the heartbeat. With `full=1` a line has the
 //! row as data too, as the `rows` tool gives it (service/rows.rs). Which
-//! group it is is the VM's forwarder's to say, as for the programs'
-//! calls. See "Resident programs" in docs/design/jobs.md.
+//! group it is is its connection's to say, as for the programs' calls.
+//! See "Resident programs" in docs/design/jobs.md.
 
 use std::borrow::Borrow;
 use std::collections::{BTreeMap, VecDeque};

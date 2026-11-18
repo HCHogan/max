@@ -42,7 +42,7 @@ class ToolError extends Error {
 // A client of max at url.
 function connect({ url = MAX } = {}) {
   // What max answers a request with, as {ok: true, value}; a failure
-  // when it can't be reached or what comes back isn't JSON. It is asked
+  // when nothing answers or what comes back isn't JSON. It is asked
   // once: while max restarts the request waits on the host, at max's
   // socket, and the max that comes answers it. The VM, and what runs in
   // it, outlives max.
@@ -64,7 +64,9 @@ function connect({ url = MAX } = {}) {
       if (error.name === "AbortError") {
         return { ok: false, error: { code: "cancelled", message: "the call was cancelled; what acts in the chat may have taken effect: look at the records before trying again" } };
       }
-      return { ok: false, error: { code: "unreachable", message: `can't reach max: ${error.message}` } };
+      // Nothing listens for max, or max went with the call in its
+      // hands: either way the connection only closes.
+      return { ok: false, error: { code: "unreachable", message: `max didn't answer (${error.message}); if it had begun the call, what acts in the chat may have taken effect: look at the records before trying again` } };
     }
   }
 

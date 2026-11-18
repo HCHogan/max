@@ -28,8 +28,7 @@ A proxy in tokenizer's manner, beside the background agents' `/llm`, on the
 channel the VM already has to the host: `http://127.0.0.1:7777/api/<name>/…`,
 with each API's `base_url`, where its key goes, which methods and paths it
 allows and an hourly count in the configuration. No extra service to run:
-the VM's forwarder answers it
-([what leaves the host](what-leaves-the-host.md)).
+max answers it.
 
 ## Cost
 

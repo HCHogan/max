@@ -530,8 +530,9 @@ in
         };
     };
 
-    # Where the VMs' forwarders reach max: systemd listens there, whether
-    # max runs or not, and max is given the socket when it starts. What a
+    # Where the VMs' guests reach max, each VM's port for the host being a
+    # link to it: systemd listens there, whether max runs or not, and max
+    # is given the socket when it starts. What a
     # guest asks while max restarts, as at every deploy, waits at it, and
     # the max that comes answers; nothing in a guest asks twice. It is the
     # target's as max is: `systemctl stop ${name}.target` stops both. With
@@ -539,7 +540,7 @@ in
     # thing a guest asks starts max again; to keep max down, stop
     # ${name}.socket too.
     systemd.sockets.${name} = lib.mkIf vm {
-      description = "Where the VMs' forwarders reach max (${name})";
+      description = "Where the VMs' guests reach max (${name})";
       wantedBy = [ "${name}.target" ];
       partOf = [ "${name}.target" ];
       listenStreams = [ "${vmDir}/max.sock" ];
@@ -562,8 +563,6 @@ in
     systemd.services.${vmUnit} = lib.mkIf vm {
       description = "A group's VM (${name}, %I)";
       partOf = [ "${name}.target" ];
-      # Its forwarder, below, comes and goes with it.
-      wants = [ "${name}-forward@%i.service" ];
       restartIfChanged = false;
       serviceConfig = sandbox true // {
         EnvironmentFile = "${vmDir}/%I/boot.env";
@@ -574,34 +573,6 @@ in
       };
     };
     environment.systemPackages = lib.mkIf vm [ vmSsh ];
-
-    # A VM's forwarder, `max forward`: where the VM's guest reaches the
-    # host, for as long as the VM runs. It carries what needs none of
-    # max itself, the models' calls and the keyed APIs', and passes the
-    # rest on to max, so a restart of max, as at every deploy, cuts no
-    # model call an agent is in the middle of. Like the VM's unit, a
-    # deploy that changes it leaves the ones that run: a VM has the new
-    # one when it next boots. The configuration it reads is the one max
-    # names it in the VM's directory, at boot and each time max attaches,
-    # so a deploy's models and keys reach it without a restart. See "A
-    # VM's forwarder" in docs/rust-rewrite.md.
-    systemd.services."${name}-forward@" = lib.mkIf vm {
-      description = "A group's VM's forwarder (${name}, %I)";
-      bindsTo = [ "${vmUnit}%i.service" ];
-      after = [ "${vmUnit}%i.service" ];
-      restartIfChanged = false;
-      # Tried again for as long as the VM runs: a secret that can't be
-      # read yet may be there the next time.
-      unitConfig.StartLimitIntervalSec = 0;
-      serviceConfig = sandbox false // {
-        ExecStart = "${max} forward --dir ${vmDir}/%I";
-        Restart = "on-failure";
-        RestartSec = 2;
-        # Its socket, in the VM's directory.
-        ReadWritePaths = [ vmDir ];
-        TimeoutStopSec = 10;
-      };
-    };
 
     # max's user starts and stops the VMs' units, and no other.
     security.polkit.enable = lib.mkIf vm true;

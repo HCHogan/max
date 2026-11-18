@@ -20,7 +20,7 @@ The design, in reading order:
 5. [context.md](design/context.md): what a request holds, memory and recall
 6. [intent.md](design/intent.md): what wakes Max
 7. [tools.md](design/tools.md): codemode, the tools and the guest's calls
-8. [vm.md](design/vm.md): the group VMs and their forwarders
+8. [vm.md](design/vm.md): the group VMs and how their guests reach max
 9. [jobs.md](design/jobs.md): agents, background commands, resident programs, questions
 10. [commands.md](design/commands.md), [identity.md](design/identity.md), [config.md](design/config.md)
 11. [qq.md](design/qq.md), [media.md](design/media.md)

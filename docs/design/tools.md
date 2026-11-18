@@ -194,9 +194,10 @@ one caller, is in
 
 - **The channel**: with cloud-hypervisor's hybrid vsock, a guest connecting
   to a port on the host lands on the UNIX socket `<vsock socket>_<port>`.
-  The VM's forwarder listens at `notify.vsock_7777` and passes the tools'
-  calls on to max (see [A VM's forwarder](vm.md#a-vms-forwarder)); which VM
-  is calling is what its forwarder says, which is that VM's alone. In the guest,
+  A VM's `notify.vsock_7777` is a link to the one socket max listens at
+  (see [A guest's calls reach max](vm.md#a-guests-calls-reach-max)); which
+  VM is calling is the process's to say that made the connection, the VM's
+  own cloud-hypervisor. In the guest,
   `127.0.0.1:7777` is forwarded to that port by the socket-activated
   `max-host` (one socat per connection to vsock 2:7777), and every client is
   given `http://127.0.0.1:7777` (`MAXX_URL`). The host stays unreachable at
@@ -431,8 +432,8 @@ The host forwards HTTP requests for the VM and adds a key on the way, so
 the key never enters the VM, without a host tool per service. Why this shape
 is in [decisions/host-keyed-apis.md](../decisions/host-keyed-apis.md).
 
-- **Use**: a program requests `http://127.0.0.1:7777/api/<name>/<path>`; the
-  VM's forwarder appends the path to the configured `base_url`, inserts the
+- **Use**: a program requests `http://127.0.0.1:7777/api/<name>/<path>`;
+  max appends the path to the configured `base_url`, inserts the
   key and forwards it, and the response streams back unchanged. curl and
   fetch work; an SDK takes `http://127.0.0.1:7777/api/<name>` as its base URL
   and any key. Anything in the VM may call it, and the host can't tell what.
@@ -453,8 +454,8 @@ is in [decisions/host-keyed-apis.md](../decisions/host-keyed-apis.md).
     stores `base64(user:password)` and writes `Authorization = "Basic {secret}"`.
   - `allow` lists `METHOD path`, the method possibly `*`; a `*` segment
     matches one segment, a trailing `**` everything below. Without `allow`,
-    everything is allowed. `per_hour` is each chat's own (see
-    [A VM's forwarder](vm.md#a-vms-forwarder)).
+    everything is allowed. `per_hour` is all the chats' together, counted
+    in max's memory, and starts over with max.
   - `about`, with the address, `allow` and `per_hour`, is a line of the system
     prompt per API; without a VM, left out.
   - Names are lowercase letters, digits and `-`. `check-config` checks these

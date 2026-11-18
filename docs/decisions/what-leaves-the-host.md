@@ -1,6 +1,6 @@
 # What leaves the host process
 
-A survey, with the long run in mind, of which parts of max are worth a process of their own and which could move from the host into a group's VM. Two things are, in this order, and the rest stays where it is. The first, the forwarder, is done, and so are the timeline's rows as data: see [A VM's forwarder](../design/vm.md#a-vms-forwarder). The second, a turn's loop in the guest, isn't designed. Before the forwarder, `/llm` and `/api` were routes of max's service to each VM, so every deploy cut an agent's model call in the middle (pi tries again, which is why this was bearable) and any `git push` or API call in flight.
+A survey, with the long run in mind, of which parts of max are worth a process of their own and which could move from the host into a group's VM. Two things were found to be, in this order, and the rest stays where it is. The first, the forwarder, was built and taken out again: see [A guest's calls come straight to max](guests-reach-max-directly.md). The timeline's rows as data are done. The second, a turn's loop in the guest, isn't designed, and would need the forwarder back. Before the forwarder, `/llm` and `/api` were routes of max's service to each VM, so every deploy cut an agent's model call in the middle (pi tries again, which is why this was bearable) and any `git push` or API call in flight.
 
 ## The survey
 

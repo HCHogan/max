@@ -25,10 +25,8 @@ three places. None of that is kept.
   reach the public repository, such as the owners, are files too
   (`owners_file`, one per line). The configuration file holds nothing
   sensitive. Every secret file is read at startup, and a missing one stops
-  max with an error. A VM's forwarder reads them again itself (see
-  [A VM's forwarder](vm.md#a-vms-forwarder)).
-- **No hot reload** for max: a change means a restart. The forwarders,
-  which outlive max, read the configuration the newest max names to them.
+  max with an error.
+- **No hot reload**: a change means a restart.
 
 The top-level sections: `utc_offset`, `owners_file`, `log`, `database`,
 `llm`, `platforms.qq`, `limits`, and the optional `vm`, `media`, `search`,

@@ -19,7 +19,7 @@ mod web_search;
 pub(crate) mod work;
 
 pub use forward::{api, router as agents};
-pub use http::{Calling, Waited, router, serve};
+pub use http::{Caller, Calling, Waited, Whose, router, serve};
 pub use mute_member::MuteMember;
 
 #[cfg(test)]
@@ -168,26 +168,29 @@ fn arguments<T: DeserializeOwned>(tool: &str, args: Value) -> Result<T, Failure>
 /// What stands in for the conversations' actors, where a test has none.
 #[cfg(test)]
 pub(crate) mod testing {
-    use axum::Router;
-    use axum::extract::Request;
-    use axum::http::HeaderValue;
-    use axum::middleware::map_request;
+    use axum::extract::ConnectInfo;
+    use axum::{Extension, Router};
     use max_core::ids::ConversationId;
+    use tokio::net::TcpListener;
     use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
+    use tokio_util::sync::CancellationToken;
 
-    use super::{Context, call};
+    use super::{Caller, Context, call};
     use crate::conversation::Signal;
-    use crate::forwarder::CONVERSATION;
     use crate::scope::Scope;
 
-    /// `app` as the VM of `conversation` reaches it: every request named
-    /// as that VM's forwarder would name it, where a test has none.
-    pub fn named(conversation: ConversationId, app: Router) -> Router {
-        app.layer(map_request(move |mut request: Request| async move {
-            let named = HeaderValue::from(conversation.0);
-            request.headers_mut().insert(CONVERSATION, named);
-            request
-        }))
+    /// Serves `app` on `listener` until `stop`, every request as one
+    /// from the VM of `conversation`: over TCP, which Node's fetch
+    /// reaches, where the VMs' own socket says whose each is.
+    pub async fn serve(
+        conversation: ConversationId,
+        listener: TcpListener,
+        app: Router,
+        stop: CancellationToken,
+    ) {
+        let app = app.layer(Extension(ConnectInfo(Caller(Some(conversation)))));
+        let served = axum::serve(listener, app);
+        let _ = served.with_graceful_shutdown(stop.cancelled_owned()).await;
     }
 
     /// Where a service's calls go, each run in `context` by a task of

@@ -1,7 +1,7 @@
 //! The VM service's own route on max's service to the groups' VMs: `maxx
 //! units apply` POSTs `{"units": 2}` to `/units` and gets `{"ok": true,
-//! "said": "…"}` back. Which group it comes from is the VM's forwarder's
-//! to say (`service::Calling`), so there is no token. See "Resident
+//! "said": "…"}` back. Which group it comes from is its connection's to
+//! say (`service::Calling`), so there is no token. See "Resident
 //! programs" in docs/design/jobs.md.
 
 use std::time::Duration;

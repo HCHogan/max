@@ -34,8 +34,10 @@ use self::machine::{BOOT, Boot, Booted, Guest, Machine};
 use self::ssh::{Closes, Command, Connection};
 use crate::config;
 use crate::conversation::{Heard, Signal};
+use crate::llm::Upstreams;
 use crate::scope::Scope;
-use crate::{forwarder, service};
+use crate::service;
+use crate::service::api::Apis;
 
 /// How often idle and dead VMs are looked for, and kept ones that are
 /// down are started.
@@ -48,6 +50,9 @@ const QUIET: Duration = Duration::from_secs(10 * 60);
 const FAILING: Duration = Duration::from_secs(30 * 60);
 /// The files `maxx units apply` installs.
 const UNIT_KINDS: [&str; 5] = ["service", "socket", "timer", "path", "target"];
+/// Where max listens for what the guests ask of it, beside the VMs'
+/// directories: one socket for them all.
+const SOCKET: &str = "max.sock";
 
 /// What `maxx units list` says (nix/max-jobs.sh): what runs in a guest.
 #[derive(Deserialize)]
@@ -74,15 +79,15 @@ pub fn work(dir: &Path, conversation: ConversationId) -> PathBuf {
     dir.join(conversation.0.to_string()).join("work")
 }
 
-/// Listens where the VMs' forwarders pass on what their guests ask of
-/// max: `max.sock` in `dir`, beside the VMs' directories, one socket for
-/// them all (`crate::forwarder`). As a unit of systemd's the socket isn't
-/// max's to make: systemd listens there and gives max the socket
-/// ([`given`]), so what a guest asks while max restarts waits at it for
-/// the max that comes. Otherwise, as under vm-check or in a terminal, max
-/// binds it, in place of what an earlier one left.
+/// Listens where the VMs' guests reach max: `max.sock` in `dir`, beside
+/// the VMs' directories, one socket for them all, which each VM's port
+/// for the host is a link to (`machine`). As a unit of systemd's the
+/// socket isn't max's to make: systemd listens there and gives max the
+/// socket ([`given`]), so what a guest asks while max restarts waits at it
+/// for the max that comes. Otherwise, as under vm-check or in a terminal,
+/// max binds it, in place of what an earlier one left.
 fn listen(dir: &Path) -> Result<UnixListener> {
-    let socket = dir.join(forwarder::MAX);
+    let socket = dir.join(SOCKET);
     if let Some(given) = given(&socket) {
         info!(socket = %socket.display(), "listening at the socket systemd gave max");
         return given.wrap_err("taking the socket systemd listens at");
@@ -138,7 +143,7 @@ fn idle(config: &config::Vm) -> Duration {
 #[derive(Clone)]
 pub struct Vms {
     requests: UnboundedSender<Request>,
-    apis: Arc<str>,
+    apis: Arc<Apis>,
     idle: Duration,
     /// The groups on the operations network.
     operating: Arc<BTreeSet<ConversationId>>,
@@ -169,14 +174,15 @@ pub struct Vm {
 
 impl Vms {
     /// Starts the service in `scope`; what programs in the VMs say to Max
-    /// goes to `signals`, and `apis` is what the system prompt says of
-    /// the APIs they may call. Those, and the models' calls, are each
-    /// VM's forwarder's to carry (`crate::forwarder`), not max's.
+    /// goes to `signals`. What they call besides Max's tools is carried
+    /// here too: the models, `agents`, if the background agents have one,
+    /// and the `apis` the host keeps the keys of.
     pub fn start(
         config: config::Vm,
         scope: &mut Scope,
         signals: UnboundedSender<Signal>,
-        apis: Arc<str>,
+        agents: Option<Arc<Upstreams>>,
+        apis: Arc<Apis>,
     ) -> Result<Self> {
         let guest = Guest::load(&config.guest)?;
         std::fs::create_dir_all(&config.dir)?;
@@ -189,9 +195,18 @@ impl Vms {
                 .map(|&id| ConversationId(id))
                 .collect(),
         );
-        // Where every VM's forwarder passes on what its guest asks of
-        // max: the tools, the timeline's rows, the units' count.
+        // Where every VM's guest reaches max: the tools, the timeline's
+        // rows, the units' count, the models and the keyed APIs. Whose
+        // VM a connection is from is systemd's to say, by the process
+        // that made it.
         let listener = listen(&config.dir)?;
+        let config = Arc::new(config);
+        let units = Arc::clone(&config);
+        let whose: service::Whose = Arc::new(move |pid| {
+            let units = Arc::clone(&units);
+            async move { machine::whose(&units, pid).await }.boxed()
+        });
+        let listener = service::Waited::new(listener, whose);
         let (internal, internal_rx) = mpsc::unbounded_channel();
         let host = host::router(internal.clone());
         let calls = signals.clone();
@@ -200,10 +215,11 @@ impl Vms {
         // end, while the calls it has go on.
         let listening = CancellationToken::new();
         let ends = listening.clone();
+        let carried = service::agents(agents).merge(service::api::router(Arc::clone(&apis)));
         scope.spawn(move |stop| async move {
             let host = host.merge(events::router(calls.clone(), ends.clone()));
-            let app = service::router(calls, host);
-            let serving = service::serve(service::Waited(listener), app, ends.clone());
+            let app = service::router(calls, host).merge(carried);
+            let serving = service::serve(listener, app, ends.clone());
             tokio::pin!(serving);
             tokio::select! {
                 () = &mut serving => {}
@@ -245,7 +261,7 @@ impl Vms {
     /// The HTTP APIs the VMs call through the host, as the system prompt
     /// lists them.
     pub fn apis(&self) -> &str {
-        &self.apis
+        self.apis.prompt()
     }
 
     /// The conversation's VM, started if it isn't running; or why there
@@ -454,7 +470,7 @@ struct Service {
 }
 
 async fn run(
-    config: config::Vm,
+    config: Arc<config::Vm>,
     guest: Guest,
     signals: UnboundedSender<Signal>,
     mut requests: UnboundedReceiver<Request>,
@@ -465,7 +481,7 @@ async fn run(
     let mut service = Service {
         idle: idle(&config),
         free: Free::new(&config),
-        config: Arc::new(config),
+        config,
         guest: Arc::new(guest),
         signals,
         vms: HashMap::new(),

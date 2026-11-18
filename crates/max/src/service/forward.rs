@@ -10,10 +10,11 @@
 //! it wants (nix/max-agent.sh). A call that names none, or one that isn't
 //! configured, goes to the agents' own, `llm.job`.
 //!
-//! Each VM's forwarder serves this, a process that outlives max as the
-//! VM does (`crate::forwarder`): a call isn't cut when max is deployed.
+//! max serves this beside its tools, so a call in flight ends with max,
+//! as at a deploy: pi takes that for a failed call too, and its next try
+//! waits at max's socket for the max that comes.
 //!
-//! Any call on a VM's socket is taken: nothing in the VM holds a key or
+//! Any call at max's socket is taken: nothing in the VM holds a key or
 //! a token, and nothing is counted of what it calls, which is the
 //! provider's to say. An agent is a unit of the guest's, which max keeps
 //! nothing of; `GET /llm` tells it what the models are. See "Background
@@ -53,8 +54,8 @@ struct Forward {
     client: reqwest::Client,
 }
 
-/// `/llm` and `/llm/…` for a VM: the `models` it may call, if the agents
-/// have one.
+/// `/llm` and `/llm/…` for the VMs: the `models` they may call, if the
+/// agents have one.
 pub fn router(models: Option<Arc<Upstreams>>) -> Router {
     let client = reqwest::Client::builder()
         .connect_timeout(CONNECT)

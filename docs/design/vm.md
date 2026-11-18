@@ -36,8 +36,10 @@ Only declarative configuration applied at boot needs root, all in NixOS:
 ## Starting a VM
 
 - max picks a free slot (with none free, it stops the VM unused longest
-  that is neither in use, busy nor kept on), prepares `work` and
-  `nix.img` under `<vm.dir>/<conversation id>/`, and writes three files:
+  that is neither in use, busy nor kept on), prepares `work`, `nix.img`
+  and the link the guest's calls come by
+  (see [A guest's calls reach max](#a-guests-calls-reach-max)) under
+  `<vm.dir>/<conversation id>/`, and writes three files:
   `boot.env`, which the unit reads (the tap,
   the sizes, the kernel, the initrd and the command line); `boot.json`,
   which the next max reads (the slot, the guest's contract, the image,
@@ -59,8 +61,8 @@ Only declarative configuration applied at boot needs root, all in NixOS:
 - **Channels**: the hybrid vsock socket is in the VM's directory. max
   connects to port 22 over it (sending `CONNECT 22\n` first) and runs russh,
   one connection per VM and one channel per command. Calls from the guest
-  arrive at `notify.vsock_7777`, where the VM's forwarder listens (see
-  [A VM's forwarder](#a-vms-forwarder) and
+  arrive at `notify.vsock_7777`, a link to max's own socket (see
+  [A guest's calls reach max](#a-guests-calls-reach-max) and
   [The guest's calls](tools.md#the-guests-calls)).
 - **A guest that resets ends its VM.** The guest's command line has
   `reboot=t panic=-1`, so a reboot and a kernel panic both reset the
@@ -120,23 +122,25 @@ is in [decisions/lifetimes-to-systemd.md](../decisions/lifetimes-to-systemd.md).
   from under a running guest. The links go when max stops the VM, and those
   of VMs that ended without max (a host restart) when max next starts.
 - **While max restarts**, what a guest asks of it waits. The socket the
-  forwarders reach max at is systemd's (`maxx.socket`), which listens
+  guests reach max at is systemd's (`maxx.socket`), which listens
   whether max runs or not: a request made meanwhile waits there, and the max
   that comes answers it. Nothing in a guest asks twice. As max begins to
   stop it takes no more from the socket (`Vms::stop_listening`), so nothing
   new comes to a max that won't begin it. A call that was running when max
-  stopped fails as `closed`: it may have acted.
+  stopped fails as `closed`: it may have acted. A model's or a keyed API's
+  call that max was passing on is cut off with max; whoever tries it again
+  waits at the socket.
 - **A call whose caller left while it waited isn't begun.** A turn cut off
   by the restart takes its program with it, and the request that program
-  had waiting is still at the socket, whole. The forwarder closed that
-  connection when its caller went, and max asks of each connection it
-  takes, before reading anything, whether its other end has hung up
-  (`service::Waited`): one that has is dropped.
+  had waiting is still at the socket, whole. Its connection closed when its
+  caller went, and max asks of each connection it takes, before reading
+  anything, whether its other end has hung up (`service::Waited`): one that
+  has is dropped.
 - **Stopped for good**, max is stopped with its socket: `systemctl stop
-  maxx.socket maxx.service`, or the target. Then nothing listens, and a
-  forwarder answers a guest 503 with a failed call, `unreachable`. With
-  max's unit alone stopped the socket still listens, and the next thing a
-  guest asks starts max again.
+  maxx.socket maxx.service`, or the target. Then nothing listens, a guest's
+  connection only closes, and its client reports a failed call,
+  `unreachable`. With max's unit alone stopped the socket still listens,
+  and the next thing a guest asks starts max again.
 - **Stopping**: only max asking systemd stops a VM (idle, evicted, dead, on
   an older image and quiet, unusable at attach), or `systemctl stop
   maxx.target`, or vm-check, which stops its own (`Vms::shut`). A stop is
@@ -212,7 +216,11 @@ is in [decisions/lifetimes-to-systemd.md](../decisions/lifetimes-to-systemd.md).
 A VM escape yields `maxx`, which can read the database and the secrets.
 cloud-hypervisor runs with seccomp and Landlock and no capabilities, under
 `NoNewPrivs`; Landlock allows `/sys/devices/virtual/net` read-only (the
-tap's flags) and the VM's directory read-write (the vsock socket).
+tap's flags) and the VM's directory read-write (the vsock socket). max's
+socket, which the guest's calls go to by a link in that directory, is
+beside it: Landlock as cloud-hypervisor sets it up governs opening files,
+and not connecting to a Unix socket by its path (kernel 6.18), which the
+nested test would show if it changed.
 virtiofsd, as an ordinary user, enters new user, mount, pid and net
 namespaces, changes its root to the share and holds no capabilities. The
 guest's root is mapped to `maxx` and every other uid squashed to it, so
@@ -298,68 +306,49 @@ the Haskell version's `nix/operations.nix`, on cloud-hypervisor taps.
   `vm/machine.rs`, `max-guest` in `nix/guest.nix`, `vm.operations` in
   `nix/module.nix`.
 
-## A VM's forwarder
+## A guest's calls reach max
 
-The models' calls and the keyed APIs are answered by a process that
-outlives max, so a deploy doesn't cut an agent's model call or a `git
-push` in the middle. Why this and not more is in
-[decisions/what-leaves-the-host.md](../decisions/what-leaves-the-host.md).
+Everything a guest asks of the host comes to max itself, at one socket,
+with no process between them. Why is in
+[decisions/guests-reach-max-directly.md](../decisions/guests-reach-max-directly.md).
 
-- **A unit for each VM**, `<name>-forward@<conversation>`, running `max
-  forward --dir <the VM's directory>`, bound to the VM's unit, which wants
-  it: systemd starts and stops it with the VM, and max does neither. A
-  deploy that changes it leaves those that run (`restartIfChanged =
-  false`); a VM gets the new one at its next boot.
-- **The front door**: the forwarder listens where cloud-hypervisor connects
-  when the guest connects to the host's port, `notify.vsock_7777` in the
-  VM's directory. It answers `/llm` and `/api` itself (`service/forward.rs`,
-  `forward/api.rs`) and passes everything else to max: the tools,
-  `/events`, `/units`. So nothing in a group's `/work` that names
-  `127.0.0.1:7777`, a git remote among them, had to change.
-- **max listens for every forwarder at one socket**, `<vm.dir>/max.sock`,
-  beside the VMs' directories. A forwarder is one VM's, and names its
-  conversation to max in a header, `max-conversation`, in place of whatever
-  the guest wrote under that name (`service::Calling`). Only max's user
-  reaches the socket, so nothing in a VM speaks for another's. The socket
-  is a unit of systemd's, which gives it to max as max's standard input
-  (`StandardInput=socket`; `vm::given`); under vm-check and in a terminal
-  max binds it itself. A deploy restarts max in one step
-  (`stopIfChanged = false`) and leaves the socket; why it is so is in
-  [decisions/max-socket-is-systemds.md](../decisions/max-socket-is-systemds.md).
-- **A forwarder waits with its guest**: while max restarts its request sits
-  at the socket, for as long as the guest's caller waits. A request max had
-  and didn't answer is a failed call, `closed`, which may have acted. A
-  request the guest drops is dropped at max, which cancels the call. Each
-  request is a connection of its own to max, since one kept from before a
-  restart would fail a call max never saw.
-- **Its configuration is a link**, `forward.config` in the VM's directory,
-  to the file max was started with. max makes it at boot and again each
-  time it attaches, and the forwarder looks every two seconds: a link made
-  again is read again, with the keys its file names, even if it names the
-  same file. So a deploy's new models and keys reach running forwarders when
-  the new max is back, with no restart. A new configuration is served by a
-  new server on the same socket, and the old one ends when its calls do.
-  The forwarder reads only `[llm]`, `[api]` and `[log]`
-  (`config::Forwarded`), so what a newer max has elsewhere doesn't stop an
-  older forwarder; a file whose `[llm]` or `[api]` it can't read is left,
-  and it goes on with the last. Nothing secret is written into the VM's
-  directory, which cloud-hypervisor may read: the file names the secrets'
-  files, and the forwarder reads them.
-- **An API's hourly limit is each chat's**: a forwarder counts its own
-  VM's calls of the last hour, in memory, and shares nothing with another
-  VM's. The count starts over with the VM's boot, and when the forwarder
-  reads a configuration anew, as when max is back from a deploy.
-- **max keeps no API key**, only their lines in the system prompt. It reads
-  the secrets and the models' keys once at startup and lets them go, so that
-  a missing one stops max at a deploy, not a forwarder when a VM boots.
-- **A forwarder records nothing**: it has no connection to the database,
-  a model call's usage isn't read on its way back, and what it counts of
-  an API is gone with the process; see
+- **One socket for every VM**, `<vm.dir>/max.sock`, beside the VMs'
+  directories. cloud-hypervisor connects to `notify.vsock_7777` in the VM's
+  directory when the guest connects to the host's port 7777, and that is a
+  link to `../max.sock`, which max makes when it boots the VM
+  (`machine::calls`). Nothing in a group's `/work` that names
+  `127.0.0.1:7777`, a git remote among them, knows of it.
+- **The socket is systemd's**, a unit (`maxx.socket`) that gives it to max
+  as max's standard input (`StandardInput=socket`; `vm::given`); under
+  vm-check and in a terminal max binds it itself. A deploy restarts max in
+  one step (`stopIfChanged = false`) and leaves the socket; why it is so is
+  in [decisions/max-socket-is-systemds.md](../decisions/max-socket-is-systemds.md).
+- **Whose VM a call is from is the process's that made its connection.** A
+  guest's connection to the host is made for it by its VM's
+  cloud-hypervisor, the main process of the VM's unit. Of each connection
+  it takes, max reads the pid at the other end (`SO_PEERCRED`) and asks
+  systemd which unit that process belongs to (`systemctl whoami`;
+  `machine::whose`), once a connection, a few milliseconds:
+  `maxx-vm@7.service` is conversation 7's (`service::Caller`,
+  `service::Calling`). Nothing in a guest chooses that process, so no VM
+  speaks for another's, and only max's user reaches the socket. A call on a
+  connection that no VM's process made is refused, 400. `/proc` doesn't
+  say: each unit has a user namespace of its own, and with
+  `ProtectProc=invisible` sees none of another's processes.
+- **max answers everything there**: the tools, `/events` and `/units`, and
+  the models' calls and the keyed APIs', `/llm` and `/api`
+  (`service/forward.rs`, `forward/api.rs`), with the keys it read at
+  startup.
+- **A call waits with its guest** while max restarts: it sits at the socket
+  for as long as the guest's caller waits. A connection the guest drops is
+  dropped at max, which cancels the call.
+- **An API's hourly limit is all the chats' together**, counted in max's
+  memory: the count starts over with max.
+- **A model call from a VM isn't recorded**: its usage isn't read on its
+  way back; see
   [decisions/forwarder-keeps-no-count.md](../decisions/forwarder-keeps-no-count.md).
-- **vm-check** gives its VM's forwarder a configuration of its own, with a
-  provider for the agents that counts what it is asked.
-- A forwarder's code is as old as its VM's boot; only what it reads follows
-  a deploy.
+- **vm-check** has a provider of its own for the agents, which counts what
+  it is asked.
 
 ## Testing
 
@@ -370,9 +359,9 @@ push` in the middle. Why this and not more is in
 - The flake's `nestedChecks.<system>.vm` runs the module, the taps, nft and
   the hardened service in a NixOS test machine, and `maxx-vm-check` inside
   it, which needs nested KVM: CI's runners can't give it, so it isn't in
-  `checks` and is run on tank. It also covers the forwarder across a stop of
-  max, a switch to a second image, `maxx-ssh` and the machined
-  registration, and the operations network against a fake tailnet (a veth
+  `checks` and is run on tank. It also covers a guest's calls across a
+  restart and a stop of max, a model's answer streamed through max, a
+  switch to a second image, `maxx-ssh` and the machined registration, and the operations network against a fake tailnet (a veth
   in `maxx-ops` to 100.64.0.2 in another namespace: the operations VM
   reaches it, an ordinary VM can't and has no ssh_config), with networkd
   checked to keep the rule. On a Mac it runs too slowly to pass; see

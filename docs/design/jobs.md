@@ -32,7 +32,7 @@ of it.
   and why when it starts none.
 - **Models.** `job = { model, effort }` in `[llm]` is the agents' default;
   without it there are no agents. pi holds no key: its calls go to
-  `http://127.0.0.1:7777/llm/<endpoint>`, where the VM's forwarder sends a
+  `http://127.0.0.1:7777/llm/<endpoint>`, where max sends a
   call that names a configured model (`provider/model`, as `/model` names
   them) to that provider and any other to the agents' own, replaces `model`
   with the provider's id, adds the provider's key and headers, and passes
@@ -56,7 +56,7 @@ of it.
     knows which agent called. So anything in the VM can spend on any
     configured model, which is accepted, as the VM is the group's own and
     its programs could always start an agent.
-- **Usage** isn't recorded: the forwarder (`service/forward.rs`) passes a
+- **Usage** isn't recorded: max (`service/forward.rs`) passes a
   call on and its answer back without reading what it used, and `/status`
   shows what Max's own calls used. What the agents spend is in the
   provider's records, for all the groups together; why is in
@@ -174,8 +174,9 @@ Checked with pi 1.4.0 and 1.5.0:
 - `--append-system-prompt` goes after pi's own prompt; a `SYSTEM.md` in the
   agent directory would replace it, so the file is `agent-system.md`.
 - pi retries a failed model call 3 times by default, about 14 seconds in all;
-  `"retry": {"maxRetries": 8}` outlasts a restart of max, while the
-  forwarder answers 503.
+  `"retry": {"maxRetries": 8}` gives it longer. A call that a restart of
+  max cuts off fails once: the next try waits at max's socket for the max
+  that comes.
 - `--session-id` names a new session, and with `--fork` names the copy, which
   is in the current directory whatever the earlier's was. The copy's model
   and thinking are the command line's, not those the session had. Its system

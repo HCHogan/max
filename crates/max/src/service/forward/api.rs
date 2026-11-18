@@ -1,11 +1,9 @@
 //! The HTTP APIs the VMs call through the host: a program in the VM sends
 //! `/api/<name>/…` with no key, and it goes on to the API's base URL with
 //! the key the host keeps, which never enters the VM. Only the calls the
-//! configuration allows go, at most so many an hour; the answer comes back
-//! as it is, a redirect too. Each VM has a forwarder of its own (see
-//! `crate::forwarder`), which counts its own VM's calls and no other's: an
-//! API's hour is each chat's. See "Host-keyed APIs" in
-//! docs/design/tools.md.
+//! configuration allows go, at most so many an hour from all the chats
+//! together, counted in max's memory; the answer comes back as it is, a
+//! redirect too. See "Host-keyed APIs" in docs/design/tools.md.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -19,7 +17,6 @@ use axum::http::{HeaderMap, Method, StatusCode, Uri};
 use axum::response::Response;
 use axum::routing::any;
 use color_eyre::eyre::{Result, WrapErr};
-use max_core::ids::ConversationId;
 use reqwest::Url;
 use reqwest::redirect::Policy;
 use tokio::time::timeout;
@@ -27,6 +24,7 @@ use tracing::info;
 
 use super::{CONNECT, LARGEST, chunks, refuse};
 use crate::config::{self, Rule};
+use crate::service::Calling;
 use max_core::limits::HOUR;
 
 /// The response's headers and every piece after them must arrive within
@@ -57,10 +55,12 @@ const UNANSWERED: [HeaderName; 4] = [
     header::CONTENT_LENGTH,
 ];
 
-/// The configured APIs, with their secrets.
+/// The configured APIs, with their secrets, and what the system prompt
+/// says of them.
 #[derive(Default)]
 pub struct Apis {
     table: BTreeMap<String, Api>,
+    prompt: String,
 }
 
 struct Api {
@@ -69,7 +69,7 @@ struct Api {
     query: Vec<(String, String)>,
     allow: Option<Vec<Rule>>,
     per_hour: Option<u32>,
-    /// When this VM's calls went, in the last hour.
+    /// When the VMs' calls went, in the last hour.
     sent: Mutex<VecDeque<Instant>>,
 }
 
@@ -81,13 +81,20 @@ impl Apis {
             let loaded = Api::load(api).wrap_err_with(|| format!("in api.{name}"))?;
             table.insert(name.clone(), loaded);
         }
-        Ok(Self { table })
+        Ok(Self {
+            table,
+            prompt: prompt(configured),
+        })
+    }
+
+    /// The APIs' lines in the system prompt; empty without any.
+    pub fn prompt(&self) -> &str {
+        &self.prompt
     }
 }
 
-/// The APIs' lines in the system prompt, which take no secret to write;
-/// empty without any.
-pub fn prompt(configured: &BTreeMap<String, config::Api>) -> String {
+/// The APIs' lines in the system prompt.
+fn prompt(configured: &BTreeMap<String, config::Api>) -> String {
     let mut lines = Vec::new();
     for (name, api) in configured {
         let mut line = format!("- {name} ({}): {}", api.base_url, api.about.trim());
@@ -96,7 +103,7 @@ pub fn prompt(configured: &BTreeMap<String, config::Api>) -> String {
             line.push_str(&format!(" Only {} allowed.", allow.join(", ")));
         }
         if let Some(per_hour) = api.per_hour {
-            line.push_str(&format!(" At most {per_hour} calls an hour from a chat."));
+            line.push_str(&format!(" At most {per_hour} calls an hour."));
         }
         lines.push(line);
     }
@@ -178,8 +185,7 @@ impl Api {
     }
 
     /// Counts one more call at `now`, if the hour has room for it. The
-    /// count is this process's, and starts over with it and with a
-    /// configuration read anew.
+    /// count is max's, every chat's together, and starts over with max.
     fn take(&self, now: Instant) -> bool {
         let Some(per_hour) = self.per_hour else {
             return true;
@@ -201,13 +207,12 @@ impl Api {
 
 #[derive(Clone)]
 struct Forward {
-    conversation: ConversationId,
     apis: Arc<Apis>,
     client: reqwest::Client,
 }
 
-/// `/api/…` for the VM of `conversation`.
-pub fn router(conversation: ConversationId, apis: Arc<Apis>) -> Router {
+/// `/api/…` for the VMs.
+pub fn router(apis: Arc<Apis>) -> Router {
     // A redirect goes back to the program: followed here, it would take
     // the key's headers to wherever the API pointed.
     let client = reqwest::Client::builder()
@@ -215,11 +220,7 @@ pub fn router(conversation: ConversationId, apis: Arc<Apis>) -> Router {
         .redirect(Policy::none())
         .build()
         .expect("a client with a connect timeout builds");
-    let forward = Forward {
-        conversation,
-        apis,
-        client,
-    };
+    let forward = Forward { apis, client };
     Router::new()
         .route("/api/{*rest}", any(call))
         .layer(DefaultBodyLimit::max(LARGEST))
@@ -228,12 +229,12 @@ pub fn router(conversation: ConversationId, apis: Arc<Apis>) -> Router {
 
 async fn call(
     State(forward): State<Forward>,
+    Calling(conversation): Calling,
     method: Method,
     uri: Uri,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let conversation = forward.conversation;
     let rest = uri.path().strip_prefix("/api/").unwrap_or_default();
     let (name, path) = rest.find('/').map_or((rest, ""), |at| rest.split_at(at));
     let Some(api) = forward.apis.table.get(name) else {

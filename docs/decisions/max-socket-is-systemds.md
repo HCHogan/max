@@ -5,7 +5,14 @@ listens there whether max runs or not. What a guest asks while max restarts
 waits at the socket and is answered by the max that comes; nothing in a
 guest retries. What runs is under
 [A VM outlives max](../design/vm.md#a-vm-outlives-max) and
-[A VM's forwarder](../design/vm.md#a-vms-forwarder).
+[A guest's calls reach max](../design/vm.md#a-guests-calls-reach-max).
+
+The forwarders are gone since
+([A guest's calls come straight to max](guests-reach-max-directly.md)):
+each VM's port for the host is a link to this socket, cloud-hypervisor is
+what closes a connection whose caller went, and a guest that finds nothing
+listening has its connection closed, where a forwarder answered
+`unreachable`. The rest stands.
 
 ## Context
 

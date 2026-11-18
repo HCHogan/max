@@ -55,18 +55,11 @@ one with the same number runs on. A change an older guest goes on
 working with, such as a field more in what a route answers, needs no new
 number.
 
-A VM's forwarder (`max forward`, a unit beside the VM's, see "A VM's
-forwarder" in docs/design/vm.md) outlives max as the VM does, and is as old as
-its VM's boot. It reads the configuration the newest max names it, and
-of that only `[llm]`, `[api]` and `[log]`
-(`config::Forwarded`): a key added to those is one an older forwarder
-can't read, and it goes on with the configuration it had until its VM
-boots again. Raise the number too when the forwarders must be new at
-once: with a change to what a forwarder and max say to each other
-(`max.sock` and the header that names the conversation, the link
-`forward.config`, the routes passed on), or to
-those parts of the configuration that the ones that run mustn't go on
-without. Its tests are `crates/max/src/forwarder/tests.rs` and the
+What a guest asks comes to max at one socket, which each VM's port for
+the host is a link to (see "A guest's calls reach max" in
+docs/design/vm.md). The link is made when a VM boots, so raise the number
+too with a change to where it leads or how max tells whose VM a call is
+from. The tests of that are in `crates/max/src/service/http.rs` and the
 nested test.
 
 ## Queries

@@ -2,10 +2,15 @@
 
 A VM's forwarder passes the models' calls and the keyed APIs' on without
 counting them in anything it shares or keeps: a model call's usage isn't
-recorded, and an API's hourly limit is each chat's own. What runs is in
-[A VM's forwarder](../design/vm.md#a-vms-forwarder), under
+recorded, and an API's hourly limit is each chat's own. What runs is under
 [Background agents](../design/jobs.md#background-agents) and in
 [Host-keyed APIs](../design/tools.md#host-keyed-apis).
+
+The forwarder is gone since, and max passes these calls on itself
+([A guest's calls come straight to max](guests-reach-max-directly.md)). A
+model call from a VM is still not counted, for the reasons here. An API's
+`per_hour` is all the chats' together again, counted in max's memory: with
+one process there is nothing to share.
 
 ## Context
 

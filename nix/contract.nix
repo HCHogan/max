@@ -47,4 +47,11 @@
 # guest's client asks once, and max-host@ is one socat. A forwarder from
 # before would still answer 503 with max-away, which a guest's client no
 # longer reads.
-8
+#
+# 9 (2026-11-19): no forwarder. The guest's port on the host is max's own
+# socket, by a link max makes in the VM's directory when it boots the VM,
+# and max answers /llm and /api itself; whose VM a call is from is the
+# process's that made its connection. The guest says nothing new. A VM
+# from before has a forwarder's socket where the link would be, and a
+# forwarder max doesn't know for a VM's: it boots again.
+9

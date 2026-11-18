@@ -7,10 +7,11 @@
 # ffmpeg made, calls max's service with maxx from a command, and keeps a
 # unit in
 # /work/.max/systemd, which the next boot starts again, and wakes Max with
-# maxx wake. A VM outlives max, and so does its forwarder: what the guest
-# asks of max while max restarts waits at max's socket, which is
-# systemd's, and a model's answer that streams while max is stopped comes
-# whole. Then a VM on the
+# maxx wake. A VM outlives max: its port for the host is a link to max's
+# socket, which is systemd's, so what the guest asks of max while max
+# restarts waits there, and max knows whose VM a call is from by the
+# process that made its connection. A model's answer streams to the guest
+# through max. Then a VM on the
 # operations network reaches a stand-in for the tailnet through its
 # namespace, where an ordinary VM can't, its ip rule having outlived
 # networkd.
@@ -185,10 +186,8 @@ pkgs.testers.runNixOSTest {
     machine.succeed("systemctl start maxx-vm-check.service")
     again = machine.succeed("journalctl -u maxx-vm-check.service -o cat")
     assert "开机时：active" in again and "记下了 2 次开机" in again, again
-    # vm-check's VM was a unit of its own, and vm-check stopped it; its
-    # forwarder went with it.
+    # vm-check's VM was a unit of its own, and vm-check stopped it.
     machine.fail("systemctl is-active maxx-vm@check-0.service")
-    machine.fail("systemctl is-active maxx-forward@check-0.service")
 
     # A VM outlives max. Conversation 7 has a unit, so max keeps its VM
     # on: the unit asks the VM service how it is every second, and notes
@@ -227,12 +226,13 @@ pkgs.testers.runNixOSTest {
     assert machine.succeed("maxx-ssh 7 'hostname; id -un; pwd' < /dev/null").split() == ["max", "root", "/work"]
     # What the VM booted is rooted for as long as it runs.
     machine.succeed("readlink /nix/var/nix/gcroots/per-user/maxx/7 | grep -q max-guest.json")
-    # Its forwarder is a unit beside it, where the guest reaches the
-    # host: what is max's it passes on, and the models' calls it carries
-    # itself.
-    machine.succeed("systemctl is-active maxx-forward@7.service")
-    # max restarts, as at a deploy. The socket the forwarders reach it at
-    # is systemd's, which goes on listening: what the unit asks meanwhile
+    # Where the guest reaches the host is a link to max's socket, and max
+    # took every call there for a VM's: the unit's 200s are conversation
+    # 7's, which systemd says the process at the other end is of.
+    assert machine.succeed("readlink /var/lib/maxx/vm/7/notify.vsock_7777").strip() == "../max.sock"
+    machine.fail("journalctl -u maxx.service -u maxx-vm-check.service -o cat | grep \"that no VM's process made\"")
+    # max restarts, as at a deploy. The socket the guests reach it at is
+    # systemd's, which goes on listening: what the unit asks meanwhile
     # waits there, and the max that comes attaches to the VM and answers.
     # Nothing in the guest hears of it: every answer is a 200, in the same
     # boot of the same VM.
@@ -262,22 +262,22 @@ pkgs.testers.runNixOSTest {
     assert machine.succeed("systemctl show -P MainPID maxx.service").strip() not in ("0", before)
     since = machine.succeed(f"tail -n +{asked + 1} {work}/probe.log").splitlines()
     assert all(line.split()[1] == "200" for line in since), since
-    # A program in the VM asks the agents' model for an answer that takes
-    # eight seconds to come.
+    # max says what the models are, and a program in the VM asks the
+    # agents' model through it for an answer that takes eight seconds to
+    # come: it comes as it is said, and whole.
+    assert machine.succeed("maxx-ssh 7 'curl -s -m 10 http://127.0.0.1:7777/llm | jq -r .model' < /dev/null").strip() == "slow/slow"
     machine.succeed("maxx-ssh 7 'systemd-run --collect --unit=asks /bin/sh /work/asks.sh' < /dev/null")
     machine.wait_until_succeeds(f"grep -q 'piece 0' {work}/answer.txt", timeout=30)
-    # Stopped with its socket, max isn't there to wait for: the guest is
-    # told it can't be reached, and the VM runs on. (With the socket left,
-    # the next thing the unit asked would start max again.)
-    machine.succeed("systemctl stop maxx.socket maxx.service")
-    machine.wait_until_succeeds(f"{last} | grep -q ' 503 first$'", timeout=60)
-    machine.succeed("systemctl is-active maxx-vm@7.service")
-    # The forwarder runs on too: it says what the models are with max
-    # gone, and the answer that was on its way comes whole.
-    assert machine.succeed("maxx-ssh 7 'curl -s -m 10 http://127.0.0.1:7777/llm | jq -r .model' < /dev/null").strip() == "slow/slow"
     machine.wait_until_succeeds(f"grep -q 'DONE' {work}/answer.txt", timeout=60)
     answer = machine.succeed(f"cat {work}/answer.txt")
     assert answer.count("piece ") == 8, answer
+    # Stopped with its socket, max isn't there to wait for: nothing
+    # listens where the guest's port leads, its connection only closes,
+    # and the VM runs on. (With the socket left, the next thing the unit
+    # asked would start max again.)
+    machine.succeed("systemctl stop maxx.socket maxx.service")
+    machine.wait_until_succeeds(f"{last} | grep -q ' 000 first$'", timeout=60)
+    machine.succeed("systemctl is-active maxx-vm@7.service")
     # The max that comes back, its socket with it, attaches to the VM
     # again.
     machine.succeed("systemctl start maxx.service")
@@ -296,13 +296,6 @@ pkgs.testers.runNixOSTest {
     machine.wait_until_succeeds(f"{last} | grep -q ' 200 newer$'", timeout=120)
     assert machine.succeed("systemctl show -P MainPID maxx-vm@7.service").strip() == pid
     assert machine.succeed(f"{last} | cut -d' ' -f1").strip() == boot
-    # The forwarder was left too, and reads the configuration the new
-    # max named it.
-    machine.wait_until_succeeds(
-        "journalctl -u maxx-forward@7.service -o cat | grep -q \"a VM's forwarder reads the configuration max named it anew\"",
-        timeout=30,
-    )
-    assert machine.succeed("systemctl show -P NRestarts maxx-forward@7.service").strip() == "0"
     # Both images are rooted: the one it booted, whose kernel it runs,
     # and the one it is on.
     roots = machine.succeed("readlink /nix/var/nix/gcroots/per-user/maxx/7 /nix/var/nix/gcroots/per-user/maxx/7.*").split()

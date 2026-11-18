@@ -16,7 +16,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tokio::process::Command;
 
-use super::{Context, Services, router, serve, testing};
+use super::{Context, Services, router, testing};
 use crate::conversation::ingest;
 use crate::conversation::testing::{from_xiaoming, group, offset, text};
 use crate::scope::Scope;
@@ -37,8 +37,8 @@ async fn served(scope: &mut Scope, context: Context) -> String {
     let calls = testing::answering(scope, context);
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
-    let app = testing::named(conversation, router(calls, axum::Router::new()));
-    scope.spawn(move |stop| serve(listener, app, stop));
+    let app = router(calls, axum::Router::new());
+    scope.spawn(move |stop| testing::serve(conversation, listener, app, stop));
     url
 }
 

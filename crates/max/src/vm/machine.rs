@@ -24,7 +24,6 @@ use tracing::warn;
 
 use super::ssh::{self, Connection};
 use crate::config::{self, Slot};
-use crate::forwarder;
 
 /// How long the guest has to boot and let max in.
 pub const BOOT: Duration = Duration::from_secs(60);
@@ -39,6 +38,10 @@ const ENV: &str = "boot.env";
 const RECORD: &str = "boot.json";
 /// The key max logs in with, made for the boot.
 const KEY: &str = "ssh.key";
+/// Where the guest's calls arrive: the hybrid vsock's port 7777, as
+/// cloud-hypervisor names the socket it connects to when the guest
+/// connects to the host's port. A link to max's own socket ([`calls`]).
+const CALLS: &str = "notify.vsock_7777";
 
 /// What the flake's `guest` package says to boot.
 #[derive(Debug, Deserialize)]
@@ -299,6 +302,39 @@ fn conversation(name: &str, prefix: &str) -> Option<ConversationId> {
     instance.parse().ok().map(ConversationId)
 }
 
+/// Makes the guest's port for the host, in the VM's directory `dir`, max's
+/// socket: a link to the one socket beside the VMs' directories
+/// (`super::SOCKET`), which systemd listens at whether max runs or not.
+/// What a guest asks comes to max itself, and waits there while max
+/// restarts. Which VM a connection is from is [`whose`] to say.
+async fn calls(dir: &Path) -> std::io::Result<()> {
+    let link = dir.join(CALLS);
+    // An earlier boot's.
+    let _ = fs::remove_file(&link).await;
+    fs::symlink(Path::new("..").join(super::SOCKET), &link).await
+}
+
+/// The conversation whose VM the process `pid` is of, if it is one's:
+/// systemd says which unit a process belongs to, and a VM's unit is
+/// named for its conversation. A guest's connection to max is made by
+/// its VM's cloud-hypervisor, the unit's main process, so this is whose
+/// guest a connection at max's socket is from. /proc doesn't say: each
+/// unit is in a user namespace of its own, and with `ProtectProc=invisible`
+/// sees none of another's processes.
+pub async fn whose(config: &config::Vm, pid: i32) -> Option<ConversationId> {
+    let asked = Command::new(&config.systemctl)
+        .args(["whoami", &pid.to_string()])
+        .stdin(Stdio::null())
+        .output()
+        .await
+        .ok()?;
+    if !asked.status.success() {
+        return None;
+    }
+    let prefix = format!("{}{}", config.unit, config.instances);
+    conversation(String::from_utf8_lossy(&asked.stdout).trim(), &prefix)
+}
+
 /// A VM max can use: its unit, and the SSH connection.
 pub struct Booted {
     pub machine: Machine,
@@ -319,11 +355,9 @@ pub async fn boot(
     let dir = &machine.dir;
     fs::create_dir_all(dir.join("work")).await?;
     disk(config, &dir.join("nix.img")).await?;
-    // The VM's forwarder, which starts with the VM's unit, is told which
-    // configuration to read.
-    forwarder::configure(dir, &config.configuration)
+    calls(dir)
         .await
-        .wrap_err("naming the configuration to the VM's forwarder")?;
+        .wrap_err("linking the guest's port to max's socket")?;
 
     let key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519)?;
     let public = key.public_key().to_openssh()?;
@@ -417,11 +451,6 @@ pub async fn attach(config: &config::Vm, conversation: ConversationId) -> Result
     let dir = &machine.dir;
     let key = fs::read(dir.join(KEY)).await.wrap_err("reading its key")?;
     let key = Arc::new(PrivateKey::from_openssh(key)?);
-    // This max's configuration, for the forwarder that has run since
-    // the VM booted: a deploy's models and keys reach it so.
-    forwarder::configure(dir, &config.configuration)
-        .await
-        .wrap_err("naming the configuration to the VM's forwarder")?;
     let connection = match let_in(&dir.join("notify.vsock"), &key, ATTACH).await {
         Ok(connection) => connection,
         // It ended while max tried.
