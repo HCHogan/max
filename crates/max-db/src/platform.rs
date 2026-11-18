@@ -9,23 +9,11 @@ use max_core::message::{Platform, Role};
 use sqlx::types::Json;
 use sqlx::{Connection, PgConnection};
 
-use crate::unknown;
+use crate::{named, unknown};
 
-pub(crate) fn platform_name(platform: Platform) -> &'static str {
-    match platform {
-        Platform::Qq => "qq",
-        Platform::QqLegacy => "qq_legacy",
-    }
-}
-
+/// A sender's role as its column has it; none in a private chat.
 pub(crate) fn role(name: Option<String>) -> sqlx::Result<Option<Role>> {
-    name.map(|name| match name.as_str() {
-        "owner" => Ok(Role::Owner),
-        "admin" => Ok(Role::Admin),
-        "member" => Ok(Role::Member),
-        _ => Err(unknown("role", &name)),
-    })
-    .transpose()
+    name.as_deref().map(named).transpose()
 }
 
 /// A platform account and the person behind it, after merges.
@@ -46,7 +34,7 @@ pub async fn account(
     native_user_id: &str,
     name: &str,
 ) -> sqlx::Result<Account> {
-    let platform = platform_name(platform);
+    let platform = platform.as_str();
     if let Some(account) = find_account(conn, platform, native_user_id).await? {
         return Ok(account);
     }
@@ -133,12 +121,10 @@ pub enum ConversationKind {
     Direct,
 }
 
-fn kind_name(kind: ConversationKind) -> &'static str {
-    match kind {
-        ConversationKind::Group => "group",
-        ConversationKind::Direct => "direct",
-    }
-}
+max_core::names!(ConversationKind, "conversation kind", {
+    Group => "group",
+    Direct => "direct",
+});
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Endpoint {
@@ -156,7 +142,7 @@ pub async fn endpoint(
     kind: ConversationKind,
     title: Option<&str>,
 ) -> sqlx::Result<Endpoint> {
-    let platform = platform_name(platform);
+    let platform = platform.as_str();
     let mut tx = conn.begin().await?;
     sqlx::query!(
         "select pg_advisory_xact_lock(hashtextextended('endpoint:' || $1 || ':' || $2 || ':' || $3, 0))",
@@ -178,7 +164,7 @@ pub async fn endpoint(
     let (id, conversation) = match found {
         Some(row) => (row.id, row.conversation_id),
         None => {
-            let kind = kind_name(kind);
+            let kind = kind.as_str();
             let row = sqlx::query!(
                 r#"
                 with conversation as (
@@ -217,7 +203,7 @@ pub async fn find_endpoint(
     let row = sqlx::query!(
         "select id, conversation_id from endpoints
          where platform = $1 and self_identity_id = $2 and native_id = $3",
-        platform_name(platform),
+        platform.as_str(),
         me.0,
         native_id
     )
@@ -238,7 +224,7 @@ pub async fn conversation_of(
 ) -> sqlx::Result<Option<ConversationId>> {
     let id = sqlx::query_scalar!(
         "select conversation_id from endpoints where platform = $1 and native_id = $2 limit 1",
-        platform_name(platform),
+        platform.as_str(),
         native_id
     )
     .fetch_optional(conn)
@@ -257,7 +243,7 @@ pub async fn endpoint_on(
     sqlx::query_scalar!(
         "select native_id from endpoints where conversation_id = $1 and platform = $2 limit 1",
         conversation.0,
-        platform_name(platform)
+        platform.as_str()
     )
     .fetch_optional(conn)
     .await
@@ -279,7 +265,7 @@ pub async fn attach(
         None => {
             sqlx::query_scalar!(
                 "insert into conversations (kind) values ($1) returning id",
-                kind_name(kind)
+                kind.as_str()
             )
             .fetch_one(&mut *tx)
             .await?
@@ -289,7 +275,7 @@ pub async fn attach(
         "insert into endpoints (conversation_id, platform, native_id, self_identity_id)
          values ($1, $2, $3, $4) returning id",
         conversation,
-        platform_name(platform),
+        platform.as_str(),
         native_id,
         me.0
     )
@@ -312,11 +298,7 @@ pub async fn conversation_kind(
     )
     .fetch_one(conn)
     .await?;
-    match kind.as_str() {
-        "group" => Ok(ConversationKind::Group),
-        "direct" => Ok(ConversationKind::Direct),
-        other => Err(unknown("conversation kind", other)),
-    }
+    named(&kind)
 }
 
 /// What a conversation is called from now on, where another one names
@@ -472,7 +454,7 @@ pub async fn gateway_session(
 ) -> sqlx::Result<Option<(String, u64)>> {
     let row = sqlx::query!(
         "select session_id, seq from gateway_sessions where platform = $1",
-        platform_name(platform)
+        platform.as_str()
     )
     .fetch_optional(conn)
     .await?;
@@ -498,7 +480,7 @@ pub async fn save_gateway_session(
         on conflict (platform) do update set
             session_id = excluded.session_id, seq = excluded.seq, saved_at = excluded.saved_at
         "#,
-        platform_name(platform),
+        platform.as_str(),
         session_id,
         seq,
         at
