@@ -583,7 +583,11 @@ async fn serve(config: Config) -> Result<()> {
         Some(embedding) => {
             let key = embedding.api_key()?;
             let model = embedding.model.clone();
-            Some(Arc::new(Embedder::new(&embedding.base_url, model, key)?))
+            Some(Arc::new(Embedder::new(
+                embedding.base_url.as_str(),
+                model,
+                key,
+            )?))
         }
         None => {
             info!("no embedding model: find_stickers says so, and history matches words only");

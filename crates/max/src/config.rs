@@ -105,7 +105,7 @@ impl Limits {
 #[serde(deny_unknown_fields)]
 pub struct Embedding {
     /// An OpenAI-compatible API's, ending in `/v1`.
-    pub base_url: String,
+    pub base_url: BaseUrl,
     pub model: String,
     pub api_key_file: Option<PathBuf>,
 }
@@ -170,7 +170,7 @@ impl GitHub {
 #[serde(deny_unknown_fields)]
 pub struct Api {
     /// What follows `/api/<name>` in a VM's call follows this.
-    pub base_url: String,
+    pub base_url: BaseUrl,
     pub secret_file: PathBuf,
     /// Headers every call carries, `{secret}` in them standing for the
     /// secret, such as `Authorization = "Bearer {secret}"`.
@@ -193,14 +193,14 @@ impl Api {
     }
 
     fn check(&self) -> Result<()> {
-        let url = reqwest::Url::parse(&self.base_url).wrap_err("in base_url")?;
+        let url = self.base_url.url();
         ensure!(
             matches!(url.scheme(), "https" | "http")
                 && url.host().is_some()
                 && url.query().is_none()
                 && url.fragment().is_none(),
             "{:?} isn't an API's base URL",
-            self.base_url
+            self.base_url.as_str()
         );
         ensure!(
             self.headers
@@ -314,6 +314,51 @@ pub struct Author {
 pub struct Media {
     /// The content store is `objects/` in here.
     pub dir: PathBuf,
+}
+
+/// A URL the file gives, kept as it is written there, which is how a
+/// request is made of it and how the model is told of it.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "String")]
+pub struct BaseUrl {
+    text: String,
+    url: reqwest::Url,
+}
+
+/// Text that isn't a URL, and why: serde says the whole of it as the
+/// file's error.
+#[derive(Debug, thiserror::Error)]
+#[error("{text:?} isn't a URL: {why}")]
+pub struct NotAUrl {
+    text: String,
+    why: <reqwest::Url as FromStr>::Err,
+}
+
+impl BaseUrl {
+    pub fn as_str(&self) -> &str {
+        &self.text
+    }
+
+    pub fn url(&self) -> &reqwest::Url {
+        &self.url
+    }
+}
+
+impl TryFrom<String> for BaseUrl {
+    type Error = NotAUrl;
+
+    fn try_from(text: String) -> Result<Self, NotAUrl> {
+        match text.parse() {
+            Ok(url) => Ok(Self { text, url }),
+            Err(why) => Err(NotAUrl { text, why }),
+        }
+    }
+}
+
+impl fmt::Display for BaseUrl {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.text)
+    }
 }
 
 /// One of Max's owners, by an account of theirs.
@@ -445,7 +490,7 @@ impl fmt::Display for ModelRef {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Provider {
-    pub base_url: String,
+    pub base_url: BaseUrl,
     pub protocol: ProtocolName,
     pub api_key_file: Option<PathBuf>,
     #[serde(default)]

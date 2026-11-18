@@ -176,7 +176,7 @@ impl Models {
     pub fn new(llm: &config::Llm) -> Result<Self> {
         Self::with_callers(llm, |name, provider| {
             let client = max_llm::Client::new(max_llm::Provider {
-                base_url: provider.base_url.clone(),
+                base_url: provider.base_url.as_str().to_owned(),
                 api_key: provider.api_key()?,
                 headers: provider
                     .headers
@@ -243,7 +243,7 @@ impl Models {
                 let upstream = Upstream {
                     provider: name.clone(),
                     protocol: provider.protocol.into(),
-                    base_url: provider.base_url.clone(),
+                    base_url: provider.base_url.as_str().to_owned(),
                     api_key: api_key.clone(),
                     headers: provider
                         .headers
