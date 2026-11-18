@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use max_core::ids::ConversationId;
 use max_core::item::ItemKind;
-use max_core::message::{Content, Node};
+use max_core::message::{Content, Draft, DraftNode, Node};
 use max_core::run::Outcome;
 use max_db::PgPool;
 use tokio::sync::{mpsc, oneshot};
@@ -14,7 +14,7 @@ use tokio::sync::{mpsc, oneshot};
 use super::*;
 use crate::command;
 use crate::conversation::testing::{from_xiaohong, from_xiaoming, group, shared, text};
-use crate::conversation::{Heard, Poster};
+use crate::conversation::{Act, Heard, Post, Poster, Refused};
 use crate::inbound::InNode;
 use crate::llm::testing::{Answer, Script};
 
