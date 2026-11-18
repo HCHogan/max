@@ -17,6 +17,7 @@ use tracing::info;
 
 use super::tool::Tool;
 use super::{Context, Failure};
+use crate::qq;
 
 /// QQ's longest mute: 30 days.
 const LONGEST: i64 = 30 * DAY;
@@ -76,7 +77,7 @@ async fn mute(context: &Context, Args { member, seconds }: Args) -> Result<Muted
         return Err(Failure::new("unavailable", "nobody can be muted from here"));
     };
     let refused = |why: &str| Err(Failure::new("refused", why));
-    let Some(group) = place.native_id.strip_prefix("group:") else {
+    let Some(group) = qq::group(&place.native_id) else {
         return refused("there is no muting in a private chat");
     };
     if PrincipalId(member) == place.me.principal {

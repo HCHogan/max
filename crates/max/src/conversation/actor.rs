@@ -41,6 +41,7 @@ use crate::config::Limits;
 use crate::inbound::Inbound;
 use crate::llm::{self, Chosen, Models};
 use crate::media::pictures::Pictures;
+use crate::qq;
 use crate::scope::Scope;
 use crate::service;
 use crate::tokens;
@@ -230,7 +231,7 @@ impl Conversation {
         let (Some(qq), Platform::Qq) = (&self.shared.services.groups, self.place.platform) else {
             return;
         };
-        let Some(group) = self.place.native_id.strip_prefix("group:") else {
+        let Some(group) = qq::group(&self.place.native_id) else {
             return;
         };
         let (qq, group) = (Arc::clone(qq), group.to_owned());

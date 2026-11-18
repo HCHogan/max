@@ -12,6 +12,7 @@ use max_db::platform::ConversationKind;
 use qqbot::event::{Attachment, Element, User};
 use qqbot::{Dispatch, Event};
 
+use super::native_id;
 use crate::inbound::{Chat, InNode, Inbound, Person, Quote};
 
 /// A message someone sent Max, or None for every other event.
@@ -19,14 +20,14 @@ pub fn inbound(dispatch: &mut Dispatch, now: DateTime<Utc>) -> Option<Inbound> {
     let (chat, message) = match &dispatch.event {
         Event::Group { message, .. } => (
             Chat {
-                native_id: format!("group:{}", message.group_openid.as_deref()?),
+                native_id: native_id(qqbot::Chat::Group(message.group_openid.as_deref()?)),
                 kind: ConversationKind::Group,
             },
             message,
         ),
         Event::Private(message) => (
             Chat {
-                native_id: format!("c2c:{}", message.author.user_openid.as_deref()?),
+                native_id: native_id(qqbot::Chat::User(message.author.user_openid.as_deref()?)),
                 kind: ConversationKind::Direct,
             },
             message,
