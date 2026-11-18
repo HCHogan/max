@@ -17,6 +17,7 @@ pub fn client() -> reqwest::Result<Client> {
 }
 
 /// A download's body, read as it comes, up to a limit.
+#[derive(Debug)]
 pub struct Body {
     response: Response,
     most: u64,

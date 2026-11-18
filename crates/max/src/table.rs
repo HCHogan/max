@@ -41,6 +41,7 @@ pub struct Me {
     pub name: String,
 }
 
+#[derive(Debug)]
 pub struct Table {
     shared: Arc<Shared>,
     me: HashMap<Platform, Me>,

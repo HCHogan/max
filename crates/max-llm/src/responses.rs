@@ -7,6 +7,7 @@
 //! is said while it streams.
 
 use std::borrow::Cow;
+use std::fmt;
 
 use max_core::ids::CallId;
 use max_core::item::{Image, Item, ItemKind, ModelOutput, ModelTag, ToolCall, ToolOutput, Usage};
@@ -47,6 +48,16 @@ pub struct Body<'a> {
     tools: Vec<Tool<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_choice: Option<&'static str>,
+}
+
+/// By its model: the input holds the pictures' bytes.
+impl fmt::Debug for Body<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Body")
+            .field("model", &self.model)
+            .field("input", &self.input.len())
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Serialize)]

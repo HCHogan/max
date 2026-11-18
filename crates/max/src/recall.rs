@@ -35,6 +35,7 @@ const PAGE: i64 = 16;
 /// it is about, and a request stays well inside the service's time limit.
 const MOST_CHARS: usize = 2000;
 
+#[derive(Debug)]
 pub struct Vectors {
     pub pool: PgPool,
     pub embedder: Arc<Embedder>,

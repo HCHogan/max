@@ -11,6 +11,7 @@
 //! docs/design/tools.md.
 
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -87,6 +88,14 @@ pub struct Waited {
     whose: Whose,
 }
 
+impl fmt::Debug for Waited {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Waited")
+            .field("listener", &self.listener)
+            .finish_non_exhaustive()
+    }
+}
+
 impl Waited {
     pub fn new(listener: UnixListener, whose: Whose) -> Self {
         Self { listener, whose }
@@ -156,6 +165,7 @@ pub async fn serve(listener: Waited, app: axum::Router, stop: CancellationToken)
 
 /// The conversation whose VM a request comes from, by its connection
 /// ([`Caller`]). One from no VM is nobody's call.
+#[derive(Debug)]
 pub struct Calling(pub ConversationId);
 
 impl<S: Sync> FromRequestParts<S> for Calling {

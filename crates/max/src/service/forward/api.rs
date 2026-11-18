@@ -6,6 +6,7 @@
 //! redirect too. See "Host-keyed APIs" in docs/design/tools.md.
 
 use std::collections::{BTreeMap, VecDeque};
+use std::fmt;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -61,6 +62,13 @@ const UNANSWERED: [HeaderName; 4] = [
 pub struct Apis {
     table: BTreeMap<String, Api>,
     prompt: String,
+}
+
+/// By name: an API's headers and query carry its secret.
+impl fmt::Debug for Apis {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_set().entries(self.table.keys()).finish()
+    }
 }
 
 struct Api {

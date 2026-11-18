@@ -65,6 +65,7 @@ impl From<std::io::Error> for Failed {
     }
 }
 
+#[derive(Debug)]
 pub struct Download {
     pub pool: PgPool,
     pub http: Client,

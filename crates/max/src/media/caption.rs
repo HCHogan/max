@@ -48,6 +48,7 @@ const STICKER: &str = "你在给群聊里的表情包写简介，用来在表情
 （比如嘲讽、幸灾乐祸、无语、赞同、开心、贴贴、催促）。直接写简介，不要开场白，也不要加引号。\
 这张图要是不适合拿来当表情包发（真人生活照、带个人信息的聊天截图、普通照片），在简介前面加上“SKIP：”。";
 
+#[derive(Debug)]
 pub struct Captioner {
     pub pool: PgPool,
     pub chosen: Chosen,

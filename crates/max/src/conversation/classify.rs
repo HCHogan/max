@@ -36,6 +36,7 @@ const CALL: Duration = Duration::from_secs(60);
 /// Rows of context the classifier reads before the ones it judges.
 pub const CONTEXT_LINES: i64 = 15;
 
+#[derive(Debug)]
 pub struct Job {
     pub pool: PgPool,
     pub place: Arc<Place>,

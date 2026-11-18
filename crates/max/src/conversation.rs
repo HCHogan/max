@@ -339,6 +339,7 @@ pub struct Configured {
 pub type Receipt = oneshot::Sender<Result<MessageId, Refused>>;
 
 /// Something handed to the conversation to say or do, on its way.
+#[derive(Debug)]
 pub struct Sending(oneshot::Receiver<Result<MessageId, Refused>>);
 
 impl Sending {

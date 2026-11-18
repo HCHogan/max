@@ -24,7 +24,7 @@ use super::ingest::{self, By};
 use crate::tokens;
 
 /// What a projection reads besides the ledger.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Projection<'a> {
     pub place: &'a Place,
     pub system: String,

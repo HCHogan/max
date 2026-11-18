@@ -4,6 +4,7 @@
 //! for the turn.
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -46,6 +47,15 @@ pub struct Models {
     callers: BTreeMap<String, Arc<dyn Caller>>,
 }
 
+/// By the providers it has clients for.
+impl fmt::Debug for Models {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Models")
+            .field("providers", &self.callers.keys())
+            .finish_non_exhaustive()
+    }
+}
+
 /// A model and how to call it, for one turn or one classification.
 #[derive(Clone)]
 pub struct Chosen {
@@ -64,9 +74,20 @@ pub struct Chosen {
     pub caller: Arc<dyn Caller>,
 }
 
+/// Without its caller.
+impl fmt::Debug for Chosen {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Chosen")
+            .field("provider", &self.provider)
+            .field("tag", &self.tag)
+            .field("options", &self.options)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Where a model call from a VM goes. The service to its VM forwards it there
 /// with the provider's key, which never enters the VM.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Upstream {
     pub provider: String,
     pub protocol: Protocol,
@@ -79,6 +100,18 @@ pub struct Upstream {
     pub max_output: Option<u32>,
     /// How long the provider may keep quiet, before its answer or within it.
     pub idle: Duration,
+}
+
+/// Without the key, and the headers, which may carry one.
+impl fmt::Debug for Upstream {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Upstream")
+            .field("provider", &self.provider)
+            .field("protocol", &self.protocol)
+            .field("base_url", &self.base_url)
+            .field("model", &self.model)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Upstream {

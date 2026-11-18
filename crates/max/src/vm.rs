@@ -12,6 +12,7 @@ mod owner;
 pub mod ssh;
 
 use std::collections::BTreeSet;
+use std::fmt;
 use std::os::fd::AsFd;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -45,7 +46,7 @@ const UNIT_KINDS: [&str; 5] = ["service", "socket", "timer", "path", "target"];
 const SOCKET: &str = "max.sock";
 
 /// What `maxx units stop-all` says: the units it stopped.
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 pub struct Stopped {
     pub stopped: Vec<String>,
 }
@@ -118,7 +119,7 @@ fn idle(config: &config::Vm) -> Duration {
 }
 
 /// A handle to the VM service; it stops once every handle is gone.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Vms {
     requests: UnboundedSender<Request>,
     apis: Arc<Apis>,
@@ -166,6 +167,15 @@ pub struct Vm {
     closes: Closes,
     work: Arc<Path>,
     _lent: Arc<()>,
+}
+
+/// By the /work it is the VM of.
+impl fmt::Debug for Vm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Vm")
+            .field("work", &self.work)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Vms {

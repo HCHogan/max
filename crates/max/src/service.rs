@@ -26,6 +26,7 @@ pub use mute_member::MuteMember;
 #[cfg(test)]
 mod runner_tests;
 
+use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -58,11 +59,25 @@ pub struct Services {
     pub groups: Option<Arc<dyn Groups>>,
 }
 
+/// By what there is of each: QQ's client says nothing of itself.
+impl fmt::Debug for Services {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Services")
+            .field("offset", &self.offset)
+            .field("search", &self.search)
+            .field("store", &self.store)
+            .field("embedder", &self.embedder)
+            .field("groups", &self.groups.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
 /// Where a call comes from: the conversation whose VM made it. Every
 /// call from a VM has every tool, whatever made it there: a turn's
 /// program, a background command, an agent or a unit of Max's own. Max
 /// decides what its programs do (2026-11-05), and the host doesn't tell
 /// them apart (2026-11-12).
+#[derive(Debug)]
 pub struct Context {
     pub services: Arc<Services>,
     pub place: Arc<Place>,

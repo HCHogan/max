@@ -3,6 +3,7 @@
 //! back as events.
 
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -74,6 +75,7 @@ impl Does {
 }
 
 /// What every conversation's actor shares.
+#[derive(Debug)]
 pub struct Shared {
     /// The database, and what the tools reach.
     pub services: Arc<service::Services>,
@@ -141,6 +143,17 @@ pub struct Conversation {
     /// What the group's programs said lately.
     /// Every row committed, for the programs following the timeline.
     subscribers: broadcast::Sender<Arc<Message>>,
+}
+
+/// By its conversation and where its timeline has come to.
+impl fmt::Debug for Conversation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Conversation")
+            .field("conversation", &self.place.conversation)
+            .field("head", &self.head)
+            .field("running", &self.core.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 struct Active {
