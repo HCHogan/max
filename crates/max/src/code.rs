@@ -12,7 +12,19 @@ const VALID: Duration = Duration::from_secs(600);
 
 /// The codes out, and what each is for.
 pub struct Codes<T> {
-    codes: Mutex<HashMap<String, (T, Instant)>>,
+    codes: Mutex<HashMap<String, Issued<T>>>,
+}
+
+/// A code's meaning: what it is for, and when it was issued.
+struct Issued<T> {
+    what: T,
+    at: Instant,
+}
+
+impl<T> Issued<T> {
+    fn valid(&self, now: Instant) -> bool {
+        now < self.at + VALID
+    }
 }
 
 impl<T> Default for Codes<T> {
@@ -30,7 +42,7 @@ impl<T: Clone> Codes<T> {
             .codes
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        codes.retain(|_, (_, at)| now < *at + VALID);
+        codes.retain(|_, issued| issued.valid(now));
         loop {
             // RandomState's keys come from the OS: enough for a code that
             // is said once and lives ten minutes.
@@ -41,7 +53,7 @@ impl<T: Clone> Codes<T> {
             hasher.write_u128(clock.as_nanos());
             let code = format!("{:06}", hasher.finish() % 1_000_000);
             if !codes.contains_key(&code) {
-                codes.insert(code.clone(), (what, now));
+                codes.insert(code.clone(), Issued { what, at: now });
                 return code;
             }
         }
@@ -53,8 +65,8 @@ impl<T: Clone> Codes<T> {
             .codes
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let (what, at) = codes.remove(code.trim())?;
-        (now < at + VALID).then_some(what)
+        let issued = codes.remove(code.trim())?;
+        issued.valid(now).then_some(issued.what)
     }
 
     /// What the code is for, without using it.
@@ -63,8 +75,8 @@ impl<T: Clone> Codes<T> {
             .codes
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let (what, at) = codes.get(code.trim())?;
-        (now < *at + VALID).then(|| what.clone())
+        let issued = codes.get(code.trim())?;
+        issued.valid(now).then(|| issued.what.clone())
     }
 }
 

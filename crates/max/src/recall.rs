@@ -167,13 +167,13 @@ impl Vectors {
         }
         let inputs: Vec<&str> = texts
             .iter()
-            .map(|(_, _, text)| prefix(text, MOST_CHARS))
+            .map(|text| prefix(&text.what, MOST_CHARS))
             .collect();
         let embedded = self.embedder.embed(&inputs).await?;
         let written: Vec<Of<Vec<f32>>> = texts
-            .into_iter()
+            .iter()
             .zip(embedded)
-            .map(|((key, conversation, _), vector)| (key, conversation, vector))
+            .map(|(text, vector)| text.with(vector))
             .collect();
         let mut conn = self.pool.acquire().await?;
         vectors::write(&mut conn, model, &written, Utc::now()).await?;
