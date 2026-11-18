@@ -102,13 +102,13 @@ fn parse(handle: &str) -> Option<(MessageId, u16)> {
         return None;
     }
     let (message, ordinal) = numbers.split_once('.')?;
-    Some((MessageId(message.parse().ok()?), ordinal.parse().ok()?))
+    Some((MessageId::new(message.parse().ok()?), ordinal.parse().ok()?))
 }
 
 /// `123.0-周报.pdf` for a file with a name, `123.0.jpg` for the rest: the
 /// handle's numbers first, so that no two clash.
 fn file_name(message: MessageId, ordinal: u16, stored: &Stored) -> String {
-    let numbers = format!("{}.{ordinal}", message.0);
+    let numbers = format!("{}.{ordinal}", message.get());
     let name = stored.name.as_deref().map(cleaned).unwrap_or_default();
     if !name.is_empty() {
         return format!("{numbers}-{name}");

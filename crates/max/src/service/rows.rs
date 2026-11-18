@@ -73,8 +73,8 @@ impl Tool for Rows {
     async fn run(context: &Context, args: Args) -> Result<Read, Failure> {
         let conversation = context.place.conversation;
         let limit = i64::try_from(args.limit.unwrap_or(DEFAULT)).unwrap_or(i64::MAX);
-        let from = args.after.map(|id| MessageId(id.saturating_add(1)));
-        let until = args.before.map(MessageId);
+        let from = args.after.map(|id| MessageId::new(id.saturating_add(1)));
+        let until = args.before.map(MessageId::new);
         let mut conn = context.services.pool.acquire().await?;
         // On from a row, or the newest there are.
         let newest = args.after.is_none();
@@ -90,7 +90,7 @@ impl Tool for Rows {
                 .flat_map(|row| known(&row.message, &people))
                 .collect(),
             rows: rows.iter().map(data).collect(),
-            head: head.map_or(0, |id| id.0),
+            head: head.map_or(0, |id| id.get()),
         })
     }
 }
@@ -154,6 +154,6 @@ pub(crate) fn known(
     });
     std::iter::once(message.sender.identity)
         .chain(mentioned)
-        .filter_map(|identity| Some((identity.0.to_string(), people.get(&identity)?.0)))
+        .filter_map(|identity| Some((identity.to_string(), people.get(&identity)?.get())))
         .collect()
 }

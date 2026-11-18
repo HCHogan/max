@@ -188,7 +188,7 @@ impl Conversation {
         let mut conn = shared.services.pool.acquire().await?;
         let head = ledger::head(&mut conn, place.conversation)
             .await?
-            .unwrap_or(MessageId(0));
+            .unwrap_or(MessageId::new(0));
         let settings = platform::settings(&mut conn, place.conversation).await?;
         let mut intent = Intent::new();
         intent.set_proactive(settings.proactive);
@@ -411,7 +411,7 @@ impl Conversation {
 
     async fn inbound(&mut self, inbound: Inbound, bound: bool) -> Result<()> {
         // A group bound to an old conversation goes on from its history.
-        let continued = self.head > MessageId(0);
+        let continued = self.head > MessageId::new(0);
         let mut conn = self.shared.services.pool.acquire().await?;
         // A platform may say a message twice, as QQ does when it replays
         // a resumed session.
@@ -676,7 +676,7 @@ impl Conversation {
                 Step::CallModel(request) => {
                     self.seen = self.head;
                     self.next_task += 1;
-                    let task = TaskId(self.next_task);
+                    let task = TaskId::new(self.next_task);
                     a.live.insert(task);
                     let chosen = a.chosen.clone();
                     let mailbox = self.mailbox.clone();
@@ -689,7 +689,7 @@ impl Conversation {
                 Step::RunTools(calls) => {
                     for call in calls {
                         self.next_task += 1;
-                        let task = TaskId(self.next_task);
+                        let task = TaskId::new(self.next_task);
                         a.live.insert(task);
                         let vms = self.shared.vms.clone();
                         let context = crate::tools::Context {

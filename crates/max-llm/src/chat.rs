@@ -579,7 +579,7 @@ impl Parser {
                 .filter(|id| !id.is_empty())
                 .unwrap_or_else(|| format!("call_{index}"));
             let kind = ItemKind::ToolCall(ToolCall {
-                id: CallId(id),
+                id: CallId::new(id),
                 name: call.name,
                 arguments: call.arguments,
             });

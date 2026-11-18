@@ -148,7 +148,7 @@ fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
         // vm-check's conversation, 0, is one of its groups.
         Some(ops) if operations => {
             ops.slots.drain(..ops.slots.len() - 1);
-            ops.conversations = vec![ConversationId(0)];
+            ops.conversations = vec![ConversationId::new(0)];
         }
         Some(ops) => ops.conversations.clear(),
         None if operations => bail!("the configuration has no [vm.operations]"),
@@ -202,14 +202,14 @@ fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
                 groups: None,
             }),
             place: Arc::new(Place {
-                conversation: ConversationId(0),
+                conversation: ConversationId::new(0),
                 kind: ConversationKind::Group,
-                endpoint: EndpointId(0),
+                endpoint: EndpointId::new(0),
                 platform: Platform::Qq,
                 native_id: "vm-check".into(),
                 me: Account {
-                    identity: IdentityId(0),
-                    principal: PrincipalId(0),
+                    identity: IdentityId::new(0),
+                    principal: PrincipalId::new(0),
                 },
                 my_name: "maxx".into(),
             }),
@@ -259,7 +259,7 @@ fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
         });
         // A model that watches what the calls show it.
         let context = tools::Context {
-            conversation: ConversationId(0),
+            conversation: ConversationId::new(0),
             store: Some(store),
             video: true,
         };
@@ -397,7 +397,7 @@ fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
 /// and how its systemd has Max's units, which here is the one the step
 /// before installed.
 async fn about(vms: &Vms) -> ToolOutput {
-    let Some(vm) = vms.running(ConversationId(0)).await else {
+    let Some(vm) = vms.running(ConversationId::new(0)).await else {
         return ToolOutput::text("客户机没在跑".to_owned(), true, 0);
     };
     match vm.about(&max::vm::units(vm.work())).await {

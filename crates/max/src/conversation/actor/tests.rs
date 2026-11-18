@@ -133,7 +133,7 @@ impl Harness {
             .unwrap();
         let mut out = Vec::new();
         for id in ids {
-            let turn = TurnId(id);
+            let turn = TurnId::new(id);
             out.push((turn, turns::outcome(&mut conn, turn).await.unwrap()));
         }
         out
@@ -399,7 +399,7 @@ async fn a_program_says_things_marked_as_its_own(pool: PgPool) {
         );
         assert_eq!(row.turn, None);
         outgoing.receipt.unwrap().send(Ok(row.id)).unwrap();
-        ids.push(row.id.0);
+        ids.push(row.id.get());
     }
     let result = tokio::time::timeout(PATIENCE, result).await.unwrap();
     assert_eq!(result.unwrap(), Ok(serde_json::json!({ "messages": ids })));
@@ -482,7 +482,7 @@ async fn stop_ends_the_turn_and_nothing_starts_until_start(pool: PgPool) {
     h.mailbox.send(call).unwrap();
     let refused = service::Failure::new("refused", stopped.to_string());
     assert_eq!(muted.await.unwrap().unwrap_err(), refused);
-    let asked = h.poster().ask(ConversationId(9), "在吗".into()).await;
+    let asked = h.poster().ask(ConversationId::new(9), "在吗".into()).await;
     assert_eq!(asked.unwrap_err(), stopped);
     assert_eq!(h.turns().await.len(), 1);
 

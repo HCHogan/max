@@ -82,7 +82,7 @@ pub async fn link(
     sqlx::query!(
         "insert into message_media (message_id, ordinal, sha256) values ($1, $2, $3)
          on conflict do nothing",
-        message.0,
+        message.get(),
         i16::try_from(ordinal).unwrap_or(i16::MAX),
         sha256.as_str()
     )
@@ -120,7 +120,7 @@ pub async fn stored(
         join media md on md.sha256 = mm.sha256
         where m.id = $1 and mm.ordinal = $2
         "#,
-        message.0,
+        message.get(),
         i16::try_from(ordinal).unwrap_or(i16::MAX)
     )
     .fetch_optional(conn)
@@ -132,7 +132,7 @@ pub async fn stored(
         return Ok(None);
     };
     Ok(Some(Stored {
-        conversation: ConversationId(row.conversation_id),
+        conversation: ConversationId::new(row.conversation_id),
         kind: meta.kind,
         name: meta.name.clone(),
         sha256: named(&row.sha256)?,
@@ -148,7 +148,7 @@ pub async fn downloaded(
 ) -> sqlx::Result<Vec<(u16, Sha256)>> {
     let rows = sqlx::query!(
         "select ordinal, sha256 from message_media where message_id = $1 order by ordinal",
-        message.0
+        message.get()
     )
     .fetch_all(conn)
     .await?;
@@ -166,7 +166,7 @@ pub async fn for_model(
     conn: &mut PgConnection,
     messages: &[MessageId],
 ) -> sqlx::Result<BTreeMap<MessageId, (DateTime<Utc>, BTreeMap<u16, Sha256>)>> {
-    let ids: Vec<i64> = messages.iter().map(|id| id.0).collect();
+    let ids: Vec<i64> = messages.iter().map(|id| id.get()).collect();
     let rows = sqlx::query!(
         r#"
         select m.id as "id!", m.received_at as "received_at!", mm.ordinal as "ordinal?",
@@ -183,7 +183,7 @@ pub async fn for_model(
     let mut found = BTreeMap::new();
     for row in rows {
         let (_, pictures) = found
-            .entry(MessageId(row.id))
+            .entry(MessageId::new(row.id))
             .or_insert_with(|| (row.received_at, BTreeMap::new()));
         if let (Some(ordinal), Some(sha256)) = (row.ordinal, row.model_sha256) {
             pictures.insert(u16::try_from(ordinal).unwrap_or_default(), named(&sha256)?);
@@ -219,7 +219,7 @@ pub async fn pending(conn: &mut PgConnection, since: DateTime<Utc>) -> sqlx::Res
                 })
                 .collect();
             (!remote.is_empty()).then_some(Pending {
-                message: MessageId(row.id),
+                message: MessageId::new(row.id),
                 remote,
             })
         })

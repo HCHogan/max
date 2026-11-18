@@ -11,7 +11,6 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use max_core::ids::CallId;
 use max_core::item::{Item, ItemKind, ModelOutput, ModelTag, Protocol, ToolOutput};
 use max_core::run::Request;
 use max_core::tools::TOOLS;
@@ -93,7 +92,7 @@ async fn exchange(model: &ModelTag, name: &str) -> (ModelOutput, Value) {
     items.extend(first.output.items.iter().cloned());
     items.push(Item::new(
         ItemKind::ToolResult {
-            call: CallId(call.id.0.clone()),
+            call: call.id.clone(),
             output: ToolOutput::text("18446744073709551616", false, 8),
         },
         8,

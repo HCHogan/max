@@ -188,7 +188,7 @@ mod tests {
         let mut out = segmenter.push("### 总结\n两样都行。\n\n[reply#7] 至于你");
         out.extend(segmenter.finish());
         let quoted: Vec<_> = out.iter().map(|s| s.draft.reply_to).collect();
-        assert_eq!(quoted, [None, Some(crate::ids::MessageId(7))]);
+        assert_eq!(quoted, [None, Some(crate::ids::MessageId::new(7))]);
     }
 
     #[test]
@@ -245,7 +245,7 @@ mod tests {
     fn segmenter() {
         use crate::ids::MessageId;
 
-        let mut segmenter = Segmenter::new([PrincipalId(12)].into());
+        let mut segmenter = Segmenter::new([PrincipalId::new(12)].into());
         let mut out =
             segmenter.push("[reply#3] 第一条\n\n[silence]\n\n[mention#12] 第二[sticker#4.0]");
         out.extend(segmenter.finish());
@@ -255,14 +255,14 @@ mod tests {
             ["[reply#3] 第一条", "[mention#12] 第二", "[sticker#4.0]"]
         );
         let picture = DraftNode::Picture {
-            message: MessageId(4),
+            message: MessageId::new(4),
             ordinal: 0,
         };
         assert_eq!(out[2].draft.nodes, [picture]);
         assert_eq!(
             out[0].draft,
             Draft {
-                reply_to: Some(MessageId(3)),
+                reply_to: Some(MessageId::new(3)),
                 nodes: vec![DraftNode::Text {
                     text: "第一条".into()
                 }],

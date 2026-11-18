@@ -21,19 +21,19 @@ fn request(chosen: &Chosen) -> Request {
 async fn run(script: &Arc<Script>) -> (Vec<String>, Result<(), String>) {
     let chosen = models(script).turn(None, None).unwrap();
     let (tx, mut rx) = mpsc::unbounded_channel();
-    call(chosen.clone(), None, request(&chosen), TaskId(1), tx).await;
+    call(chosen.clone(), None, request(&chosen), TaskId::new(1), tx).await;
     let mut said = Vec::new();
     while let Ok(event) = rx.try_recv() {
         match event {
             Event::Said { task, segment } => {
-                assert_eq!(task, TaskId(1));
+                assert_eq!(task, TaskId::new(1));
                 let [DraftNode::Text { text }] = &segment.draft.nodes[..] else {
                     panic!("{segment:?}");
                 };
                 said.push(text.clone());
             }
             Event::ModelDone { task, out } => {
-                assert_eq!(task, TaskId(1));
+                assert_eq!(task, TaskId::new(1));
                 assert!(rx.try_recv().is_err(), "an event after ModelDone");
                 let out = out.map(|_| ()).map_err(|error| error.to_string());
                 return (said, out);

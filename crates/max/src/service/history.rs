@@ -163,7 +163,7 @@ async fn filters(context: &Context, args: &Args) -> Result<Filters, Failure> {
         Some(bound) => Some(
             first(&mut conn, conversation, bound, false)
                 .await?
-                .unwrap_or(MessageId(i64::MAX)),
+                .unwrap_or(MessageId::new(i64::MAX)),
         ),
         None => None,
     };
@@ -192,7 +192,7 @@ fn bound(text: &str, offset: FixedOffset) -> Result<Bound, Failure> {
     if let Some(id) = text.strip_prefix('#') {
         return id
             .parse()
-            .map(|id| Bound::Row(MessageId(id)))
+            .map(|id| Bound::Row(MessageId::new(id)))
             .map_err(|_| wrong());
     }
     let local = |at: NaiveDateTime| {
@@ -244,7 +244,7 @@ fn next_args(args: &Args, next: &Next) -> Map<String, Value> {
     }
     match next {
         Next::After(last) => {
-            more.insert("from".into(), json!(format!("#{}", last.0 + 1)));
+            more.insert("from".into(), json!(format!("#{}", last.get() + 1)));
             if let Some(to) = &args.to {
                 more.insert("to".into(), json!(to));
             }

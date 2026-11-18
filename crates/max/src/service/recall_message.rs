@@ -64,7 +64,7 @@ async fn recall(context: &Context, id: i64) -> Result<(), Failure> {
             "messages can't be recalled from here",
         ));
     };
-    let target = MessageId(id);
+    let target = MessageId::new(id);
     let refused = |why: &str| Err(Failure::new("refused", why));
     let mut conn = context.services.pool.acquire().await?;
     let row = ledger::row(&mut conn, place.conversation, target).await?;

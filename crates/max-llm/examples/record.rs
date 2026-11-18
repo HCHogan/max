@@ -20,7 +20,6 @@ use std::env::var;
 use std::path::Path;
 use std::sync::Arc;
 
-use max_core::ids::CallId;
 use max_core::item::{Item, ItemKind, ModelOutput, ModelTag, Protocol, ToolOutput};
 use max_core::run::Request;
 use max_core::tools::TOOLS;
@@ -78,7 +77,7 @@ async fn main() -> Result<(), Failure> {
         if let ItemKind::ToolCall(call) = &item.kind {
             request.items.push(Arc::new(Item::new(
                 ItemKind::ToolResult {
-                    call: CallId(call.id.0.clone()),
+                    call: call.id.clone(),
                     output: ToolOutput::text("18446744073709551616", false, 8),
                 },
                 8,

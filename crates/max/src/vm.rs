@@ -76,7 +76,7 @@ pub struct Stopped {
 /// Where `conversation`'s /work is on the host, under the VMs' `dir`,
 /// whether or not its VM runs.
 pub fn work(dir: &Path, conversation: ConversationId) -> PathBuf {
-    dir.join(conversation.0.to_string()).join("work")
+    dir.join(conversation.to_string()).join("work")
 }
 
 /// Listens where the VMs' guests reach max: `max.sock` in `dir`, beside
@@ -1036,7 +1036,7 @@ fn with_units(dir: &Path) -> Vec<ConversationId> {
     let mut found: Vec<ConversationId> = entries
         .filter_map(|entry| entry.ok()?.file_name().to_str()?.parse::<i64>().ok())
         .filter(|&id| id != 0)
-        .map(ConversationId)
+        .map(ConversationId::new)
         .filter(|&conversation| has_units(&work(dir, conversation)))
         .collect();
     found.sort();

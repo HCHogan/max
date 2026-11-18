@@ -31,15 +31,15 @@ pub async fn start(
         from turns where conversation_id = $1
         returning id, ordinal
         "#,
-        conversation.0,
+        conversation.get(),
         Json(trigger) as _,
-        from.0,
+        from.get(),
         at
     )
     .fetch_one(conn)
     .await?;
     Ok(Started {
-        turn: TurnId(row.id),
+        turn: TurnId::new(row.id),
         ordinal: row.ordinal,
     })
 }
@@ -86,7 +86,7 @@ async fn insert(
     sqlx::query!(
         "insert into turn_outcomes (turn_id, outcome, failure, error, run, finished_at)
          values ($1, $2, $3, $4, $5, $6)",
-        turn.0,
+        turn.get(),
         outcome,
         failure,
         error,
@@ -101,7 +101,7 @@ async fn insert(
 pub async fn outcome(conn: &mut PgConnection, turn: TurnId) -> sqlx::Result<Option<Outcome>> {
     let Some(row) = sqlx::query!(
         "select outcome, failure, error from turn_outcomes where turn_id = $1",
-        turn.0
+        turn.get()
     )
     .fetch_optional(conn)
     .await?
@@ -133,11 +133,11 @@ pub async fn unfinished(
          where ($1::bigint is null or conversation_id = $1)
            and not exists (select from turn_outcomes o where o.turn_id = t.id)
          order by id",
-        conversation.map(|conversation| conversation.0)
+        conversation.map(|conversation| conversation.get())
     )
     .fetch_all(conn)
     .await?;
-    Ok(ids.into_iter().map(TurnId).collect())
+    Ok(ids.into_iter().map(TurnId::new).collect())
 }
 
 /// Where a turn's tail ended: its snapshot position, and the first row it
@@ -167,17 +167,17 @@ pub async fn tail_ends(
            from turns t
            where t.conversation_id = $1 and t.from_id > $2 and t.from_id <= $3
            order by t.id"#,
-        conversation.0,
-        after.map_or(0, |id| id.0),
-        upto.0
+        conversation.get(),
+        after.map_or(0, |id| id.get()),
+        upto.get()
     )
     .fetch_all(conn)
     .await?;
     Ok(rows
         .into_iter()
         .map(|row| TailEnd {
-            from: MessageId(row.from_id),
-            woken: row.woken.map(MessageId),
+            from: MessageId::new(row.from_id),
+            woken: row.woken.map(MessageId::new),
         })
         .collect())
 }
@@ -192,7 +192,7 @@ pub async fn running_since(
         r#"select trigger as "trigger: Json<Vec<Input>>" from turns t
            where conversation_id = $1
              and not exists (select from turn_outcomes o where o.turn_id = t.id)"#,
-        conversation.0
+        conversation.get()
     )
     .fetch_all(conn)
     .await?;

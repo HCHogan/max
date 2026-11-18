@@ -77,14 +77,14 @@ fn columns(content: &Content, command: bool) -> Columns<'_> {
         kind: "event",
         event: Some(event),
         reply_to: None,
-        target: target.map(|id| id.0),
+        target: target.map(|id| id.get()),
         nodes,
     };
     match content {
         Content::Message { reply_to, nodes } => Columns {
             kind: if command { "command" } else { "chat" },
             event: None,
-            reply_to: reply_to.map(|id| id.0),
+            reply_to: reply_to.map(|id| id.get()),
             target: None,
             nodes,
         },
@@ -111,12 +111,12 @@ fn content(
 ) -> sqlx::Result<Content> {
     let target = || {
         target
-            .map(MessageId)
+            .map(MessageId::new)
             .ok_or_else(|| unknown("event target", "none"))
     };
     Ok(match event {
         None => Content::Message {
-            reply_to: reply_to.map(MessageId),
+            reply_to: reply_to.map(MessageId::new),
             nodes,
         },
         Some("edit") => Content::Edit {
@@ -141,9 +141,9 @@ pub async fn insert(conn: &mut PgConnection, new: &NewMessage<'_>) -> sqlx::Resu
         )
         returning id
         "#,
-        new.conversation.0,
-        new.endpoint.0,
-        new.sender.identity.0,
+        new.conversation.get(),
+        new.endpoint.get(),
+        new.sender.identity.get(),
         new.sender.name,
         new.sender.role.map(Role::as_str),
         new.native_id,
@@ -157,12 +157,12 @@ pub async fn insert(conn: &mut PgConnection, new: &NewMessage<'_>) -> sqlx::Resu
         Json(columns.nodes) as _,
         new.raw,
         new.text,
-        new.turn.map(|turn| turn.0),
+        new.turn.map(|turn| turn.get()),
         new.segment
     )
     .fetch_one(conn)
     .await?;
-    Ok(MessageId(id))
+    Ok(MessageId::new(id))
 }
 
 /// The last row of the conversation's timeline.
@@ -172,11 +172,11 @@ pub async fn head(
 ) -> sqlx::Result<Option<MessageId>> {
     let id = sqlx::query_scalar!(
         "select max(id) from messages where conversation_id = $1",
-        conversation.0
+        conversation.get()
     )
     .fetch_one(conn)
     .await?;
-    Ok(id.map(MessageId))
+    Ok(id.map(MessageId::new))
 }
 
 struct Raw {
@@ -202,10 +202,10 @@ impl Raw {
         let delivery = self.delivery.as_deref().map(named).transpose()?;
         Ok(Row {
             message: Message {
-                id: MessageId(self.id),
-                conversation: ConversationId(self.conversation_id),
+                id: MessageId::new(self.id),
+                conversation: ConversationId::new(self.conversation_id),
                 sender: Sender {
-                    identity: IdentityId(self.sender_identity_id),
+                    identity: IdentityId::new(self.sender_identity_id),
                     name: self.sender_name,
                     role: role(self.sender_role)?,
                 },
@@ -216,13 +216,13 @@ impl Raw {
                     self.target_id,
                     self.nodes.0,
                 )?,
-                turn: self.turn_id.map(TurnId),
+                turn: self.turn_id.map(TurnId::new),
                 raw: self.said_by.map_or(
                     serde_json::Value::Null,
                     |by| serde_json::json!({ SAID_BY: by }),
                 ),
             },
-            endpoint: EndpointId(self.endpoint_id),
+            endpoint: EndpointId::new(self.endpoint_id),
             command: self.kind == "command",
             delivery,
         })
@@ -248,9 +248,9 @@ pub async fn rows(
         where m.conversation_id = $1 and m.id > $2 and m.id <= $3
         order by m.id
         "#,
-        conversation.0,
-        after.map_or(0, |id| id.0),
-        upto.0
+        conversation.get(),
+        after.map_or(0, |id| id.get()),
+        upto.get()
     )
     .fetch_all(&mut *conn)
     .await?
@@ -282,8 +282,8 @@ pub async fn recent(
         order by m.id desc
         limit $3
         "#,
-        conversation.0,
-        before.0,
+        conversation.get(),
+        before.get(),
         limit
     )
     .fetch_all(&mut *conn)
@@ -343,14 +343,14 @@ pub async fn latest_texts(
         "select id, text from messages
          where conversation_id = $1 and kind <> 'event'
          order by id desc limit $2",
-        conversation.0,
+        conversation.get(),
         limit
     )
     .fetch_all(conn)
     .await?;
     Ok(rows
         .into_iter()
-        .map(|row| (MessageId(row.id), row.text))
+        .map(|row| (MessageId::new(row.id), row.text))
         .collect())
 }
 
@@ -375,13 +375,13 @@ pub async fn by_file_name(
             'type', 'media', 'meta', jsonb_build_object('name', $2::text)))
         order by id desc limit 1
         "#,
-        conversation.0,
+        conversation.get(),
         name,
         limit
     )
     .fetch_optional(conn)
     .await?;
-    Ok(id.map(MessageId))
+    Ok(id.map(MessageId::new))
 }
 
 /// One row, if it is on this conversation's timeline.
@@ -390,7 +390,7 @@ pub async fn row(
     conversation: ConversationId,
     id: MessageId,
 ) -> sqlx::Result<Option<Row>> {
-    let previous = MessageId(id.0 - 1);
+    let previous = MessageId::new(id.get() - 1);
     Ok(rows(conn, conversation, Some(previous), id).await?.pop())
 }
 
@@ -401,7 +401,7 @@ pub async fn picked(
     conversation: ConversationId,
     ids: &[MessageId],
 ) -> sqlx::Result<Vec<Row>> {
-    let ids: Vec<i64> = ids.iter().map(|id| id.0).collect();
+    let ids: Vec<i64> = ids.iter().map(|id| id.get()).collect();
     let mut rows = sqlx::query_as!(
         Raw,
         r#"
@@ -414,7 +414,7 @@ pub async fn picked(
         where m.conversation_id = $1 and m.id = any($2)
         order by m.id
         "#,
-        conversation.0,
+        conversation.get(),
         &ids
     )
     .fetch_all(&mut *conn)
@@ -446,14 +446,14 @@ pub async fn around(
              order by id limit $4)
         ) near order by id
         "#,
-        conversation.0,
-        id.0,
+        conversation.get(),
+        id.get(),
         before,
         after + 1
     )
     .fetch_all(conn)
     .await?;
-    Ok(ids.into_iter().map(MessageId).collect())
+    Ok(ids.into_iter().map(MessageId::new).collect())
 }
 
 /// The first row of the conversation sent at or after `at`.
@@ -465,12 +465,12 @@ pub async fn first_since(
     let id = sqlx::query_scalar!(
         "select id from messages where conversation_id = $1 and sent_at >= $2
          order by sent_at, id limit 1",
-        conversation.0,
+        conversation.get(),
         at
     )
     .fetch_optional(conn)
     .await?;
-    Ok(id.map(MessageId))
+    Ok(id.map(MessageId::new))
 }
 
 /// Up to `limit` ids of the conversation's rows from `from` and before
@@ -485,7 +485,7 @@ pub async fn stretch(
     newest: bool,
     limit: i64,
 ) -> sqlx::Result<Vec<MessageId>> {
-    let (from, until) = (from.map(|id| id.0), until.map(|id| id.0));
+    let (from, until) = (from.map(|id| id.get()), until.map(|id| id.get()));
     let ids = if newest {
         sqlx::query_scalar!(
             "select id from messages
@@ -493,7 +493,7 @@ pub async fn stretch(
                and ($3::bigint is null or id < $3)
                and ($4::text is null or lower(sender_name) like $4)
              order by id desc limit $5",
-            conversation.0,
+            conversation.get(),
             from,
             until,
             sender,
@@ -508,7 +508,7 @@ pub async fn stretch(
                and ($3::bigint is null or id < $3)
                and ($4::text is null or lower(sender_name) like $4)
              order by id limit $5",
-            conversation.0,
+            conversation.get(),
             from,
             until,
             sender,
@@ -517,7 +517,7 @@ pub async fn stretch(
         .fetch_all(conn)
         .await?
     };
-    Ok(ids.into_iter().map(MessageId).collect())
+    Ok(ids.into_iter().map(MessageId::new).collect())
 }
 
 /// The row a platform id names in this endpoint: someone's message, or
@@ -534,12 +534,12 @@ pub async fn by_native_id(
         select message_id from deliveries where endpoint_id = $1 and native_id = $2
         limit 1
         "#,
-        endpoint.0,
+        endpoint.get(),
         native_id
     )
     .fetch_optional(conn)
     .await?;
-    Ok(id.map(MessageId))
+    Ok(id.map(MessageId::new))
 }
 
 /// The row a quote id names in this endpoint: someone's message by its
@@ -556,12 +556,12 @@ pub async fn by_quote_id(
         select message_id from deliveries where endpoint_id = $1 and quote_id = $2
         limit 1
         "#,
-        endpoint.0,
+        endpoint.get(),
         quote_id
     )
     .fetch_optional(conn)
     .await?;
-    Ok(id.map(MessageId))
+    Ok(id.map(MessageId::new))
 }
 
 /// A row's platform id in an endpoint, and since when it has been on the
@@ -581,8 +581,8 @@ pub async fn native(
         where message_id = $1 and endpoint_id = $2 and native_id is not null
         limit 1
         "#,
-        message.0,
-        endpoint.0
+        message.get(),
+        endpoint.get()
     )
     .fetch_optional(conn)
     .await?;
@@ -600,7 +600,7 @@ pub async fn unsent(conn: &mut PgConnection, message: MessageId) -> sqlx::Result
             where m.target_id = $1 and m.event = 'unsend' and d.status is distinct from 'failed'
         ) as "unsent!"
         "#,
-        message.0
+        message.get()
     )
     .fetch_one(conn)
     .await?;
@@ -616,7 +616,7 @@ pub async fn quote_id(conn: &mut PgConnection, message: MessageId) -> sqlx::Resu
         left join deliveries d on d.message_id = m.id and d.endpoint_id = m.endpoint_id
         where m.id = $1
         "#,
-        message.0
+        message.get()
     )
     .fetch_optional(conn)
     .await?;
@@ -659,8 +659,8 @@ pub async fn record_delivery(
     sqlx::query!(
         "insert into deliveries (message_id, endpoint_id, status, native_id, quote_id, error, at)
          values ($1, $2, $3, $4, $5, $6, $7)",
-        message.0,
-        endpoint.0,
+        message.get(),
+        endpoint.get(),
         status.as_str(),
         native_id,
         quote_id,

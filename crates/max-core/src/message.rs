@@ -305,19 +305,19 @@ mod tests {
     #[test]
     fn stored_shape() {
         let message = Message {
-            id: MessageId(7405),
-            conversation: ConversationId(3),
+            id: MessageId::new(7405),
+            conversation: ConversationId::new(3),
             sender: Sender {
-                identity: IdentityId(12),
+                identity: IdentityId::new(12),
                 name: "小明".into(),
                 role: Some(Role::Admin),
             },
             at: Utc.with_ymd_and_hms(2026, 10, 28, 12, 30, 0).unwrap(),
             content: Content::Message {
-                reply_to: Some(MessageId(7400)),
+                reply_to: Some(MessageId::new(7400)),
                 nodes: vec![
                     Node::Mention {
-                        target: MentionTarget::Identity(IdentityId(1)),
+                        target: MentionTarget::Identity(IdentityId::new(1)),
                         display: "Max".into(),
                     },
                     Node::Text {

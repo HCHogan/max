@@ -119,7 +119,8 @@ fn not_found(id: i64) -> Failure {
 /// One row's whole line, cut evenly into pages.
 async fn row(context: &Context, id: i64) -> Result<Vec<String>, Failure> {
     let mut conn = context.services.pool.acquire().await?;
-    let Some(row) = ledger::row(&mut conn, context.place.conversation, MessageId(id)).await? else {
+    let Some(row) = ledger::row(&mut conn, context.place.conversation, MessageId::new(id)).await?
+    else {
         return Err(not_found(id));
     };
     let people = people(&mut conn, std::iter::once(&row.message), &context.place).await?;
@@ -137,12 +138,12 @@ async fn rows(context: &Context, id: i64, before: u8, after: u8) -> Result<Vec<S
     let ids = ledger::around(
         &mut conn,
         context.place.conversation,
-        MessageId(id),
+        MessageId::new(id),
         before.into(),
         after.into(),
     )
     .await?;
-    if !ids.contains(&MessageId(id)) {
+    if !ids.contains(&MessageId::new(id)) {
         return Err(not_found(id));
     }
     Ok(lines(&mut conn, context, &ids).await?)

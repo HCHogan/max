@@ -190,7 +190,7 @@ async fn row_hits(
             time: moment(message.at, context.services.offset),
             text: format!("{name}：{}", snippet(&body, &chosen(terms, &found.has))),
             read: Around {
-                around: message.id.0,
+                around: message.id.get(),
             },
             score: found.score,
             at: message.at,

@@ -47,8 +47,8 @@ pub async fn record(conn: &mut PgConnection, call: &Call<'_>) -> sqlx::Result<()
             first_ms, took_ms, quiet_ms, at
         ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
         "#,
-        call.conversation.map(|conversation| conversation.0),
-        call.turn.map(|turn| turn.0),
+        call.conversation.map(|conversation| conversation.get()),
+        call.turn.map(|turn| turn.get()),
         call.purpose.as_str(),
         call.provider,
         call.model,
@@ -101,7 +101,7 @@ pub async fn used(
         group by provider, model
         order by provider, model
         "#,
-        conversation.0,
+        conversation.get(),
         since
     )
     .fetch_all(conn)

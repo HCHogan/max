@@ -126,7 +126,7 @@ async fn events(
     };
     let head = subscription.head;
     let backlog = match after {
-        Some(after) if after < head.0 => match backlog(&subscription, after).await {
+        Some(after) if after < head.get() => match backlog(&subscription, after).await {
             Ok(backlog) => backlog,
             Err(error) => {
                 warn!(%conversation, %error, "couldn't read the rows a program missed");
@@ -136,7 +136,7 @@ async fn events(
         _ => VecDeque::new(),
     };
     let following = Following {
-        last: after.map_or(head, MessageId),
+        last: after.map_or(head, MessageId::new),
         subscription,
         backlog,
         full,
@@ -144,7 +144,7 @@ async fn events(
     };
     Response::builder()
         .header(header::CONTENT_TYPE, "application/x-ndjson")
-        .header(HEAD, head.0)
+        .header(HEAD, head.get())
         .body(Body::from_stream(following.lines()))
         .unwrap_or_else(|_| {
             refuse(
@@ -173,8 +173,8 @@ fn asked(query: Option<&str>) -> Option<Asked> {
 async fn backlog(subscription: &Subscription, after: i64) -> sqlx::Result<VecDeque<MessageId>> {
     let mut conn = subscription.services.pool.acquire().await?;
     let between = (
-        Some(MessageId(after + 1)),
-        Some(MessageId(subscription.head.0 + 1)),
+        Some(MessageId::new(after + 1)),
+        Some(MessageId::new(subscription.head.get() + 1)),
     );
     let conversation = subscription.place.conversation;
     let mut ids = ledger::stretch(
@@ -275,17 +275,19 @@ impl Following {
                 None
             };
             let reply_to = match &message.content {
-                Content::Message { reply_to, .. } => reply_to.map(|id| id.0),
+                Content::Message { reply_to, .. } => reply_to.map(|id| id.get()),
                 _ => None,
             };
             let line = Line {
-                id: message.id.0,
+                id: message.id.get(),
                 at: message
                     .at
                     .with_timezone(&render.offset)
                     .to_rfc3339_opts(SecondsFormat::Secs, true),
                 sender: &message.sender.name,
-                person: people.get(&message.sender.identity).map(|person| person.0),
+                person: people
+                    .get(&message.sender.identity)
+                    .map(|person| person.get()),
                 by,
                 reply_to,
                 text: render.body(message),

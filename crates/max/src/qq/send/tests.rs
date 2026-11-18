@@ -166,7 +166,7 @@ impl Setup {
             .unwrap();
         let (native_id, quote_id) =
             sqlx::query_as("select native_id, quote_id from deliveries where message_id = $1")
-                .bind(message.id.0)
+                .bind(message.id.get())
                 .fetch_one(&mut *conn)
                 .await
                 .unwrap();
