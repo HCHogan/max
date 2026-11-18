@@ -19,10 +19,11 @@ pub enum Command {
     /// `/stop`: Max records messages but doesn't reply, until `/start`.
     Stop,
     Start,
-    /// `/model`, `/model list`, or `/model <provider/model>`.
+    /// `/model` or `/model list`, which show the models, or `/model
+    /// <provider/model>`.
     Model(Option<String>),
     /// `/effort`, `/effort default`, or `/effort <level>`.
-    Effort(Option<String>),
+    Effort(Option<Choice>),
     /// `/proactive`, or on, off, default.
     Proactive(Option<bool>),
     Persona(Persona),
@@ -32,12 +33,8 @@ pub enum Command {
     },
     /// `/unclear`: takes `/clear --all` back.
     Unclear,
-    /// `/config`, `/config <name>`, or `/config <name> <value|default>`:
-    /// the limits the conversation sets for itself.
-    Config {
-        name: Option<String>,
-        value: Option<String>,
-    },
+    /// The limits the conversation sets for itself.
+    Config(Config),
     /// `/bind`, `/bind <legacy group>` in a private chat, `/bind <code>` in
     /// a group.
     Bind(Option<String>),
@@ -68,6 +65,35 @@ pub enum Persona {
     Show,
     Reset,
     Set(String),
+}
+
+/// What a command sets something to: `default`, or what it says.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Choice {
+    Default,
+    To(String),
+}
+
+impl From<&str> for Choice {
+    fn from(word: &str) -> Self {
+        match word {
+            "default" => Self::Default,
+            _ => Self::To(word.to_owned()),
+        }
+    }
+}
+
+/// `/config`, `/config <name>`, or `/config <name> <value|default>`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Config {
+    /// Every limit as it is.
+    All,
+    /// The one of this name.
+    One(String),
+    Set {
+        name: String,
+        value: Choice,
+    },
 }
 
 /// The command a message gives Max, if any: in a group, only one that
@@ -118,8 +144,8 @@ impl FromStr for Command {
             "kill" => Command::Kill,
             "stop" => Command::Stop,
             "start" => Command::Start,
-            "model" => Command::Model(argument),
-            "effort" => Command::Effort(argument),
+            "model" => Command::Model(argument.filter(|argument| argument != "list")),
+            "effort" => Command::Effort(argument.as_deref().map(Choice::from)),
             "proactive" => Command::Proactive(match argument.as_deref() {
                 None => None,
                 Some("on" | "default") => Some(true),
@@ -137,20 +163,16 @@ impl FromStr for Command {
                 all: argument.as_deref() == Some("--all"),
             },
             "unclear" => Command::Unclear,
-            "config" => {
-                let (name, value) = match argument.as_deref().map(|argument| {
-                    argument
-                        .split_once(char::is_whitespace)
-                        .map_or((argument, ""), |(name, value)| (name, value.trim()))
-                }) {
-                    None => (None, None),
-                    Some((name, value)) => (
-                        Some(name.to_owned()),
-                        (!value.is_empty()).then(|| value.to_owned()),
-                    ),
-                };
-                Command::Config { name, value }
-            }
+            "config" => Command::Config(match argument.as_deref() {
+                None => Config::All,
+                Some(argument) => match argument.split_once(char::is_whitespace) {
+                    None => Config::One(argument.to_owned()),
+                    Some((name, value)) => Config::Set {
+                        name: name.to_owned(),
+                        value: value.trim().into(),
+                    },
+                },
+            }),
             "bind" => Command::Bind(argument),
             "link" => Command::Link(argument),
             "unlink" => Command::Unlink(argument),
@@ -176,7 +198,12 @@ mod tests {
             parse("/model test/big"),
             Some(Command::Model(Some("test/big".into())))
         );
+        assert_eq!(parse("/model list"), Some(Command::Model(None)));
         assert_eq!(parse("/effort"), Some(Command::Effort(None)));
+        assert_eq!(
+            parse("/effort default"),
+            Some(Command::Effort(Some(Choice::Default)))
+        );
         assert_eq!(
             parse("/proactive off"),
             Some(Command::Proactive(Some(false)))
@@ -199,24 +226,29 @@ mod tests {
         assert_eq!(parse("/clear"), Some(Command::Clear { all: false }));
         assert_eq!(parse("/clear --all"), Some(Command::Clear { all: true }));
         assert_eq!(parse("/unclear"), Some(Command::Unclear));
-        let config = |name: Option<&str>, value: Option<&str>| {
-            Some(Command::Config {
-                name: name.map(str::to_owned),
-                value: value.map(str::to_owned),
+        let config = |config| Some(Command::Config(config));
+        let set = |name: &str, value: Choice| {
+            config(Config::Set {
+                name: name.to_owned(),
+                value,
             })
         };
-        assert_eq!(parse("/config"), config(None, None));
+        assert_eq!(parse("/config"), config(Config::All));
         assert_eq!(
             parse("/config call_time_secs"),
-            config(Some("call_time_secs"), None)
+            config(Config::One("call_time_secs".into()))
         );
         assert_eq!(
             parse("/config  idle_window_secs   1800 "),
-            config(Some("idle_window_secs"), Some("1800"))
+            set("idle_window_secs", Choice::To("1800".into()))
         );
         assert_eq!(
             parse("/config call_time_secs 90 or so"),
-            config(Some("call_time_secs"), Some("90 or so"))
+            set("call_time_secs", Choice::To("90 or so".into()))
+        );
+        assert_eq!(
+            parse("/config call_time_secs default"),
+            set("call_time_secs", Choice::Default)
         );
         assert_eq!(
             parse("/bind 123456"),
