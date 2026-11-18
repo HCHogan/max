@@ -39,7 +39,7 @@ impl Budgets {
         Self {
             tail_high,
             tail_low: tail_high / 2,
-            single: (u64::from(window) * 15 / 100).clamp(2_000, 25_000) as u32,
+            single: (window.saturating_mul(15) / 100).clamp(2_000, 25_000),
         }
     }
 }
@@ -207,7 +207,7 @@ pub fn attach<'m>(item: &mut Item, messages: impl IntoIterator<Item = &'m Messag
                     message: message.id,
                     ordinal,
                 });
-                item.tokens += PICTURE_TOKENS;
+                item.tokens = item.tokens.saturating_add(PICTURE_TOKENS);
             }
         }
     }

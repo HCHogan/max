@@ -216,6 +216,13 @@ pub struct Fill {
     pub limit: u32,
 }
 
+/// Counts of tokens, added up. A provider says what it likes of its
+/// usage: a sum past what a `u32` holds stays there, and the run is over
+/// its limit.
+fn total(tokens: impl IntoIterator<Item = u32>) -> u32 {
+    tokens.into_iter().fold(0, u32::saturating_add)
+}
+
 /// Where the run is. Each phase holds what only it has.
 #[derive(Clone, Debug)]
 enum Phase {
@@ -237,7 +244,7 @@ impl Run {
     /// `first` is already rendered in `base`; its wakes are the run's
     /// first to handle.
     pub fn new(spec: RunSpec, base: Context, first: Vec<Input>) -> Self {
-        let base_tokens = base.items.iter().map(|item| item.tokens).sum();
+        let base_tokens = total(base.items.iter().map(|item| item.tokens));
         let roster = base.roster.clone();
         let unhandled = first
             .into_iter()
@@ -312,7 +319,7 @@ impl Run {
         // would drop everything before it from the size.
         if out.usage.input > 0 {
             self.measured = Some(Measured {
-                tokens: out.usage.input + out.usage.output,
+                tokens: out.usage.input.saturating_add(out.usage.output),
                 covered: self.transcript.len() + out.items.len(),
             });
         }
@@ -365,7 +372,7 @@ impl Run {
     /// next step calls the model again, with what came since shown too.
     pub fn retract(&mut self) -> Result<(), Rejected> {
         self.calling()?;
-        self.round -= 1;
+        self.round = self.round.saturating_sub(1);
         self.phase = Phase::ModelDue;
         Ok(())
     }
@@ -403,7 +410,7 @@ impl Run {
             output.parts.push(Part::Text {
                 text: reminder(self.quiet),
             });
-            output.tokens += REMINDER_TOKENS;
+            output.tokens = output.tokens.saturating_add(REMINDER_TOKENS);
             self.quiet = 0;
         }
         let tokens = output.tokens;
@@ -441,7 +448,7 @@ impl Run {
     /// the run there.
     pub fn at_limit(&self) -> bool {
         let limit = self.spec.limit(self.base_tokens);
-        limit == 0 || (self.warned && self.size() > self.base_tokens + limit)
+        limit == 0 || (self.warned && self.size() > self.base_tokens.saturating_add(limit))
     }
 
     /// Transcript and waiting inputs are past nine tenths of the limit: the
@@ -449,14 +456,16 @@ impl Run {
     /// nothing to do, so that the next trigger starts afresh.
     pub fn near_limit(&self) -> bool {
         let limit = self.spec.limit(self.base_tokens);
-        self.size() > self.base_tokens + limit / 10 * 9
+        self.size() > self.base_tokens.saturating_add(limit / 10 * 9)
     }
 
     /// How full the context is: what `at_limit` compares.
     pub fn fill(&self) -> Fill {
         Fill {
             tokens: self.size(),
-            limit: self.base_tokens + self.spec.limit(self.base_tokens),
+            limit: self
+                .base_tokens
+                .saturating_add(self.spec.limit(self.base_tokens)),
         }
     }
 
@@ -561,7 +570,7 @@ impl Run {
                     images.extend(more);
                 }
             }
-            let tokens = items.iter().map(|item| item.tokens).sum();
+            let tokens = total(items.iter().map(|item| item.tokens));
             self.push(Item::new(ItemKind::User { text, images }, tokens));
         }
         self.pending.clear();
@@ -595,19 +604,13 @@ impl Run {
             tokens: self.base_tokens,
             covered: 0,
         });
-        let after: u32 = self.transcript[covered..]
-            .iter()
-            .map(|item| item.tokens)
-            .sum();
-        let pending: u32 = self
-            .pending
-            .iter()
-            .map(|input| match input {
-                Input::Messages { item, .. } => item.tokens,
-                Input::Wake(wake) => wake.item.as_ref().map_or(0, |item| item.tokens),
-            })
-            .sum();
-        measured + after + pending
+        let after = self.transcript.get(covered..).unwrap_or_default();
+        let after = after.iter().map(|item| item.tokens);
+        let pending = self.pending.iter().map(|input| match input {
+            Input::Messages { item, .. } => item.tokens,
+            Input::Wake(wake) => wake.item.as_ref().map_or(0, |item| item.tokens),
+        });
+        total([measured].into_iter().chain(after).chain(pending))
     }
 
     /// Whether anything the model wrote went out.
