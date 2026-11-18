@@ -2,9 +2,9 @@
 //! shows, once per file. Rows show it where their node came without a
 //! description, and the sticker library searches it. See "Media".
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::BTreeSet;
 use std::fmt;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{TimeDelta, Utc};
@@ -23,6 +23,7 @@ use tracing::{debug, warn};
 use super::pictures::Pictures;
 use crate::llm::Chosen;
 use crate::scope::Scope;
+use crate::worker::Busy;
 
 /// How long one call to the model may take.
 const CALL: Duration = Duration::from_secs(120);
@@ -89,24 +90,18 @@ impl Captioner {
         let slots = Arc::new(Semaphore::new(AT_ONCE));
         // The files being captioned: a sticker sent again meanwhile isn't
         // shown to the model twice.
-        let busy = Arc::new(Mutex::new(HashSet::new()));
+        let busy = Busy::default();
         let mut captioning = Scope::new();
         let mut start = |picture: Picture| {
-            let mut files = busy.lock().unwrap_or_else(PoisonError::into_inner);
-            if !files.insert(picture.sha256.clone()) {
+            let Some(claim) = busy.claim(&picture.sha256) else {
                 return;
-            }
-            let (captioner, slots, busy) = (
-                Arc::clone(&captioner),
-                Arc::clone(&slots),
-                Arc::clone(&busy),
-            );
+            };
+            let (captioner, slots) = (Arc::clone(&captioner), Arc::clone(&slots));
             captioning.spawn(move |_| async move {
+                let _claim = claim;
                 if let Err(error) = captioner.tries(&picture, &slots, RETRY).await {
                     warn!(unit = ?picture, "couldn't caption: {error:#}");
                 }
-                let mut files = busy.lock().unwrap_or_else(PoisonError::into_inner);
-                files.remove(&picture.sha256);
             });
         };
         match captioner.scan().await {
