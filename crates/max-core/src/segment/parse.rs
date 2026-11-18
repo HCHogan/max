@@ -115,7 +115,7 @@ impl Parsed {
         let at = line.len() - line.trim_start().len();
         match chunk::placeholder(line.as_bytes(), at) {
             Some(p) if p.kind == Kind::Reply => {
-                self.reply_to.get_or_insert(MessageId(p.id));
+                self.reply_to.get_or_insert(MessageId::new(p.id));
                 &line[at + p.len..]
             }
             _ => line,
@@ -232,16 +232,16 @@ fn token(s: &str) -> Option<(Token<'_>, usize)> {
 fn placeholder(s: &str) -> Option<(Token<'_>, usize)> {
     let p = chunk::placeholder(s.as_bytes(), 0)?;
     let token = match p.kind {
-        Kind::Reply => Token::Reply(MessageId(p.id)),
+        Kind::Reply => Token::Reply(MessageId::new(p.id)),
         Kind::Mention => {
             let (from, to) = p.description;
             let description = s[from..to].trim();
             Token::Mention(
-                PrincipalId(p.id),
+                PrincipalId::new(p.id),
                 (!description.is_empty()).then_some(description),
             )
         }
-        Kind::Picture => Token::Picture(MessageId(p.id), p.ordinal),
+        Kind::Picture => Token::Picture(MessageId::new(p.id), p.ordinal),
         Kind::Display => Token::Display,
     };
     Some((token, p.len))
@@ -290,12 +290,12 @@ mod tests {
     use super::*;
 
     fn parsed(chunk: &str) -> Option<Draft> {
-        parse(chunk, &[PrincipalId(12)].into()).map(|(draft, _)| draft)
+        parse(chunk, &[PrincipalId::new(12)].into()).map(|(draft, _)| draft)
     }
 
     /// The markers in `chunk` whose id isn't one.
     fn unfilled_in(chunk: &str) -> Vec<String> {
-        parse(chunk, &[PrincipalId(12)].into())
+        parse(chunk, &[PrincipalId::new(12)].into())
             .map(|(_, unfilled)| unfilled)
             .unwrap_or_default()
     }
@@ -328,7 +328,7 @@ mod tests {
     #[test]
     fn the_first_reply_wins_and_all_go() {
         let draft = say("[reply#7405] 好的 [reply#7406]");
-        assert_eq!(draft.reply_to, Some(MessageId(7405)));
+        assert_eq!(draft.reply_to, Some(MessageId::new(7405)));
         assert_eq!(draft.nodes, vec![text("好的")]);
     }
 
@@ -339,7 +339,7 @@ mod tests {
             draft.nodes,
             vec![
                 DraftNode::Mention {
-                    principal: PrincipalId(12)
+                    principal: PrincipalId::new(12)
                 },
                 text(" 你看 @小红 和")
             ]

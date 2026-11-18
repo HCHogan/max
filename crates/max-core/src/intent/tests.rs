@@ -1,7 +1,7 @@
 use super::*;
 
-const XIAOMING: IdentityId = IdentityId(20);
-const XIAOHONG: IdentityId = IdentityId(21);
+const XIAOMING: IdentityId = IdentityId::new(20);
+const XIAOHONG: IdentityId = IdentityId::new(21);
 
 struct Clock(Instant);
 
@@ -13,7 +13,7 @@ impl Clock {
 
 fn entry(id: i64, sender: IdentityId, kind: EntryKind, text: &str) -> Entry {
     Entry {
-        id: MessageId(id),
+        id: MessageId::new(id),
         sender,
         kind,
         text: text.into(),
@@ -26,7 +26,7 @@ fn chat(id: i64) -> Entry {
 
 fn direct(ids: &[i64]) -> Decision {
     Decision::Wake {
-        ids: ids.iter().copied().map(MessageId).collect(),
+        ids: ids.iter().copied().map(MessageId::new).collect(),
         reason: Reason::Direct,
     }
 }

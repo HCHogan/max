@@ -20,7 +20,7 @@ pub async fn unembedded(
     after: Option<MessageId>,
     limit: i64,
 ) -> sqlx::Result<Vec<MessageId>> {
-    let before = after.map_or(i64::MAX, |id| id.0);
+    let before = after.map_or(i64::MAX, |id| id.get());
     let ids = sqlx::query_scalar!(
         "select m.id from messages m
          where m.id < $2 and m.kind = 'chat' and char_length(recall_text(m.text)) >= 4
@@ -34,7 +34,7 @@ pub async fn unembedded(
     )
     .fetch_all(&mut *conn)
     .await?;
-    Ok(ids.into_iter().map(MessageId).collect())
+    Ok(ids.into_iter().map(MessageId::new).collect())
 }
 
 /// What to embed of `ids`: the rows that should have a vector by `model`
@@ -44,7 +44,7 @@ pub async fn to_embed(
     model: &str,
     ids: &[MessageId],
 ) -> sqlx::Result<Vec<Of<String>>> {
-    let rows: Vec<i64> = ids.iter().map(|id| id.0).collect();
+    let rows: Vec<i64> = ids.iter().map(|id| id.get()).collect();
     let mut texts = Vec::new();
     if !rows.is_empty() {
         let found = sqlx::query!(
@@ -62,8 +62,8 @@ pub async fn to_embed(
         .fetch_all(&mut *conn)
         .await?;
         texts.extend(found.into_iter().map(|row| {
-            let id = MessageId(row.id);
-            (id, ConversationId(row.conversation_id), row.text)
+            let id = MessageId::new(row.id);
+            (id, ConversationId::new(row.conversation_id), row.text)
         }));
     }
     Ok(texts)
@@ -85,8 +85,8 @@ pub async fn write(
              on conflict (message_id) do update
              set model = excluded.model, embedding = excluded.embedding,
                  created_at = excluded.created_at",
-            id.0,
-            conversation.0,
+            id.get(),
+            conversation.get(),
             model,
             vector.as_slice() as &[f32],
             at

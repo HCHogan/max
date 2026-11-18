@@ -75,7 +75,7 @@ impl Tool for Ask {
             return Err(Failure::new("bad_arguments", "question is empty"));
         }
         let asked = conversation(context)?
-            .ask(ConversationId(to), question)
+            .ask(ConversationId::new(to), question)
             .await
             .map_err(|why| Failure::new("not_asked", why.to_string()))?;
         Ok(Asked { asked })

@@ -122,11 +122,11 @@ pub struct Machine {
 
 impl Machine {
     pub fn of(config: &config::Vm, conversation: ConversationId) -> Self {
-        let instance = format!("{}{}", config.instances, conversation.0);
+        let instance = format!("{}{}", config.instances, conversation.get());
         Self {
             systemctl: config.systemctl.clone(),
             unit: format!("{}{instance}.service", config.unit),
-            dir: config.dir.join(conversation.0.to_string()),
+            dir: config.dir.join(conversation.to_string()),
             root: config.roots.as_ref().map(|roots| roots.join(instance)),
         }
     }
@@ -288,7 +288,7 @@ fn unroot_but(roots: &Path, instances: &str, running: &[ConversationId]) {
             .to_str()
             .and_then(|name| name.strip_prefix(instances))
             .and_then(|rest| rest.split('.').next()?.parse().ok());
-        if id.is_some_and(|id| !running.contains(&ConversationId(id))) {
+        if id.is_some_and(|id| !running.contains(&ConversationId::new(id))) {
             let _ = std::fs::remove_file(entry.path());
         }
     }
@@ -299,7 +299,7 @@ fn unroot_but(roots: &Path, instances: &str, running: &[ConversationId]) {
 /// max's, isn't.
 fn conversation(name: &str, prefix: &str) -> Option<ConversationId> {
     let instance = name.strip_prefix(prefix)?.strip_suffix(".service")?;
-    instance.parse().ok().map(ConversationId)
+    instance.parse().ok().map(ConversationId::new)
 }
 
 /// Makes the guest's port for the host, in the VM's directory `dir`, max's

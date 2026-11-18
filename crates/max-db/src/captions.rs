@@ -118,7 +118,7 @@ pub async fn uncaptioned(
         let sha256: Sha256 = named(&row.sha256)?;
         if Kind::of(kind).is_some() && seen.insert(sha256.clone()) {
             uncaptioned.push(Uncaptioned {
-                message: MessageId(row.message_id),
+                message: MessageId::new(row.message_id),
                 ordinal,
                 sha256,
                 kind,
@@ -134,7 +134,7 @@ pub async fn of_messages(
     conn: &mut PgConnection,
     messages: &[MessageId],
 ) -> sqlx::Result<BTreeMap<(MessageId, u16), String>> {
-    let ids: Vec<i64> = messages.iter().map(|id| id.0).collect();
+    let ids: Vec<i64> = messages.iter().map(|id| id.get()).collect();
     let rows = sqlx::query!(
         "select mm.message_id, mm.ordinal, c.text
          from message_media mm join media_captions c on c.sha256 = mm.sha256
@@ -147,7 +147,7 @@ pub async fn of_messages(
         .into_iter()
         .filter_map(|row| {
             let ordinal = u16::try_from(row.ordinal).ok()?;
-            Some(((MessageId(row.message_id), ordinal), row.text))
+            Some(((MessageId::new(row.message_id), ordinal), row.text))
         })
         .collect())
 }

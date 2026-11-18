@@ -88,7 +88,7 @@ pub fn mentioned(text: &str) -> BTreeSet<PrincipalId> {
             let digits = rest
                 .find(|c: char| !c.is_ascii_digit())
                 .unwrap_or(rest.len());
-            rest[..digits].parse().ok().map(PrincipalId)
+            rest[..digits].parse().ok().map(PrincipalId::new)
         })
         .collect()
 }

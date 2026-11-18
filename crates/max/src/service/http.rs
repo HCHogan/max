@@ -313,7 +313,7 @@ mod tests {
 
     /// Every process is of `conversation`'s VM, or of none's.
     fn all(conversation: Option<i64>) -> Whose {
-        Arc::new(move |_| Box::pin(async move { conversation.map(ConversationId) }))
+        Arc::new(move |_| Box::pin(async move { conversation.map(ConversationId::new) }))
     }
 
     /// A call is the VM's whose process made its connection, whatever the
@@ -328,8 +328,9 @@ mod tests {
         // VM's.
         let (mine, nobodys) = (dir.join("mine.sock"), dir.join("nobodys.sock"));
         let me = i32::try_from(std::process::id()).unwrap();
-        let whose: Whose =
-            Arc::new(move |pid| Box::pin(async move { (pid == me).then_some(ConversationId(9)) }));
+        let whose: Whose = Arc::new(move |pid| {
+            Box::pin(async move { (pid == me).then_some(ConversationId::new(9)) })
+        });
         for (socket, whose) in [(&mine, whose), (&nobodys, all(None))] {
             let _ = std::fs::remove_file(socket);
             let listener = Waited::new(UnixListener::bind(socket).unwrap(), whose);
@@ -355,7 +356,7 @@ mod tests {
             else {
                 panic!("no call came");
             };
-            let _ = reply.send(Ok(json!({ "of": conversation.0 })));
+            let _ = reply.send(Ok(json!({ "of": conversation.get() })));
         };
         let (reply, ()) = tokio::join!(asked(&mine), actor);
         assert!(

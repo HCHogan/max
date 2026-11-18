@@ -318,7 +318,7 @@ fn kind(raw: &Value) -> Option<ItemKind> {
             })
         }
         "function_call" => Some(ItemKind::ToolCall(ToolCall {
-            id: CallId(raw["call_id"].as_str().unwrap_or_default().to_owned()),
+            id: CallId::new(raw["call_id"].as_str().unwrap_or_default().to_owned()),
             name: raw["name"].as_str().unwrap_or_default().to_owned(),
             arguments: raw["arguments"].as_str().unwrap_or_default().to_owned(),
         })),

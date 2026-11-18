@@ -180,7 +180,7 @@ mod tests {
 
     fn call(name: &str, arguments: &str) -> ToolCall {
         ToolCall {
-            id: CallId("c1".into()),
+            id: CallId::new("c1"),
             name: name.into(),
             arguments: arguments.into(),
         }

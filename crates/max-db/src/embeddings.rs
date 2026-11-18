@@ -121,7 +121,7 @@ pub async fn nearest(
         .into_iter()
         .filter_map(|row| {
             Some(Sticker {
-                message: MessageId(row.message_id),
+                message: MessageId::new(row.message_id),
                 ordinal: u16::try_from(row.ordinal).ok()?,
                 caption: row.text,
             })

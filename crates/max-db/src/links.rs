@@ -47,7 +47,7 @@ pub fn named(handle: &str) -> Option<ConversationId> {
         .unwrap_or(handle);
     let all_digits = !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit());
     let id = number.parse().ok().filter(|_| all_digits)?;
-    Some(ConversationId(id))
+    Some(ConversationId::new(id))
 }
 
 /// A conversation as another one names it, if there is such a
@@ -58,7 +58,7 @@ pub async fn peer(
 ) -> sqlx::Result<Option<Peer>> {
     let found = sqlx::query!(
         "select title from conversations where id = $1",
-        conversation.0
+        conversation.get()
     )
     .fetch_optional(conn)
     .await?;
@@ -79,8 +79,8 @@ pub async fn link(
     let made = sqlx::query!(
         "insert into links (asker_id, asked_id, made_at) values ($1, $2, $3)
          on conflict do nothing",
-        asker.0,
-        asked.0,
+        asker.get(),
+        asked.get(),
         at
     )
     .execute(conn)
@@ -98,8 +98,8 @@ pub async fn unlink(
     let removed = sqlx::query!(
         "delete from links
          where (asker_id = $1 and asked_id = $2) or (asker_id = $2 and asked_id = $1)",
-        one.0,
-        other.0
+        one.get(),
+        other.get()
     )
     .execute(conn)
     .await?;
@@ -114,8 +114,8 @@ pub async fn linked(
 ) -> sqlx::Result<bool> {
     sqlx::query_scalar!(
         r#"select exists (select 1 from links where asker_id = $1 and asked_id = $2) as "linked!""#,
-        asker.0,
-        asked.0
+        asker.get(),
+        asked.get()
     )
     .fetch_one(conn)
     .await
@@ -126,14 +126,14 @@ pub async fn asked(conn: &mut PgConnection, asker: ConversationId) -> sqlx::Resu
     let rows = sqlx::query!(
         "select c.id, c.title from links l join conversations c on c.id = l.asked_id
          where l.asker_id = $1 order by c.id",
-        asker.0
+        asker.get()
     )
     .fetch_all(conn)
     .await?;
     Ok(rows
         .into_iter()
         .map(|row| Peer {
-            conversation: ConversationId(row.id),
+            conversation: ConversationId::new(row.id),
             title: row.title,
         })
         .collect())
@@ -144,14 +144,14 @@ pub async fn askers(conn: &mut PgConnection, asked: ConversationId) -> sqlx::Res
     let rows = sqlx::query!(
         "select c.id, c.title from links l join conversations c on c.id = l.asker_id
          where l.asked_id = $1 order by c.id",
-        asked.0
+        asked.get()
     )
     .fetch_all(conn)
     .await?;
     Ok(rows
         .into_iter()
         .map(|row| Peer {
-            conversation: ConversationId(row.id),
+            conversation: ConversationId::new(row.id),
             title: row.title,
         })
         .collect())

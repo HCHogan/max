@@ -23,13 +23,13 @@ fn base(tokens: u32) -> Context {
         )]
         .map(Arc::new)
         .into(),
-        roster: [PrincipalId(12)].into(),
+        roster: [PrincipalId::new(12)].into(),
     }
 }
 
 fn wake(id: i64) -> Wake {
     Wake {
-        ids: vec![MessageId(id)],
+        ids: vec![MessageId::new(id)],
         reason: Reason::Direct,
         item: None,
     }
@@ -38,7 +38,7 @@ fn wake(id: i64) -> Wake {
 fn messages(id: i64, tokens: u32) -> Input {
     let text = format!("[10:00 小明 #{id}]: 消息{id}");
     Input::Messages {
-        ids: vec![MessageId(id)],
+        ids: vec![MessageId::new(id)],
         item: Item::new(ItemKind::user(text), tokens),
         people: Vec::new(),
     }
@@ -74,7 +74,7 @@ fn calls(calls: &[(&str, &str)]) -> ModelOutput {
         .map(|(id, name)| {
             let arguments = r#"{"command": "ls", "code": "return 1"}"#.into();
             let call = ToolCall {
-                id: CallId((*id).into()),
+                id: CallId::new(*id),
                 name: (*name).into(),
                 arguments,
             };
@@ -173,16 +173,13 @@ fn inputs_wait_for_the_tool_batch() {
     call_model(&mut run);
     run.model_output(calls(&[("a", "shell"), ("b", "run_code")]))
         .unwrap();
-    assert_eq!(
-        run_tools(&mut run),
-        [CallId("a".into()), CallId("b".into())]
-    );
+    assert_eq!(run_tools(&mut run), [CallId::new("a"), CallId::new("b")]);
     run.input(messages(2, 5)).unwrap();
     run.input(Input::Wake(wake(2))).unwrap();
-    run.tool_result(CallId("b".into()), result(5)).unwrap();
+    run.tool_result(CallId::new("b"), result(5)).unwrap();
     assert!(run.busy());
     assert_idle(&mut run);
-    run.tool_result(CallId("a".into()), result(5)).unwrap();
+    run.tool_result(CallId::new("a"), result(5)).unwrap();
     let request = call_model(&mut run);
     assert_eq!(
         texts(&request)[1..],
@@ -202,8 +199,8 @@ fn malformed_calls_get_an_error_and_never_run() {
     call_model(&mut run);
     run.model_output(calls(&[("a", "send_message"), ("b", "shell")]))
         .unwrap();
-    assert_eq!(run_tools(&mut run), [CallId("b".into())]);
-    run.tool_result(CallId("b".into()), result(5)).unwrap();
+    assert_eq!(run_tools(&mut run), [CallId::new("b")]);
+    run.tool_result(CallId::new("b"), result(5)).unwrap();
     let request = call_model(&mut run);
     assert_eq!(
         texts(&request)[1..],
@@ -225,7 +222,7 @@ fn the_record_is_what_the_model_saw_and_said() {
     call_model(&mut run);
     run.model_output(calls(&[("a", "shell")])).unwrap();
     run_tools(&mut run);
-    run.tool_result(CallId("a".into()), result(5)).unwrap();
+    run.tool_result(CallId::new("a"), result(5)).unwrap();
     run.input(messages(2, 5)).unwrap();
     let request = call_model(&mut run);
     let record = run.record();
@@ -245,7 +242,7 @@ fn a_trigger_is_handled_at_the_next_output_without_tools() {
     run.input(Input::Wake(wake(2))).unwrap();
     run.model_output(calls(&[("a", "shell")])).unwrap();
     run_tools(&mut run);
-    run.tool_result(CallId("a".into()), result(5)).unwrap();
+    run.tool_result(CallId::new("a"), result(5)).unwrap();
     call_model(&mut run);
     // The model has seen both but hasn't finished with them.
     assert_eq!(run.unhandled().len(), 2);
@@ -262,14 +259,14 @@ fn interrupt_closes_open_calls() {
     run.model_output(calls(&[("a", "shell"), ("b", "shell")]))
         .unwrap();
     run_tools(&mut run);
-    run.tool_result(CallId("a".into()), result(5)).unwrap();
+    run.tool_result(CallId::new("a"), result(5)).unwrap();
     run.interrupt().unwrap();
     assert!(!run.busy());
     assert_idle(&mut run);
     assert_eq!(run.outcome(), Outcome::Interrupted);
     assert_eq!(run.input(messages(2, 5)), Err(Rejected::Ended));
     let transcript = run.transcript.iter().filter_map(|item| match &item.kind {
-        ItemKind::ToolResult { call, output } => Some((call.0.as_str(), output.error)),
+        ItemKind::ToolResult { call, output } => Some((call.as_str(), output.error)),
         _ => None,
     });
     assert_eq!(transcript.collect::<Vec<_>>(), [("a", false), ("b", true)]);

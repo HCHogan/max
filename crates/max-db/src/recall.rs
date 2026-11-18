@@ -87,10 +87,10 @@ pub async fn messages(
         order by cardinality(terms) desc, id desc
         limit $5
         "#,
-        query.conversation.0,
+        query.conversation.get(),
         query.patterns,
-        query.from.map(|id| id.0),
-        query.until.map(|id| id.0),
+        query.from.map(|id| id.get()),
+        query.until.map(|id| id.get()),
         query.limit,
         query.sender
     )
@@ -99,7 +99,7 @@ pub async fn messages(
     tx.commit().await?;
     Ok(rows
         .into_iter()
-        .map(|row| (MessageId(row.id), indexes(&row.terms)))
+        .map(|row| (MessageId::new(row.id), indexes(&row.terms)))
         .collect())
 }
 
@@ -139,11 +139,11 @@ pub async fn near_messages(
         order by e.embedding <=> $3::float4[]::halfvec
         limit $6
         "#,
-        query.conversation.0,
+        query.conversation.get(),
         model,
         vector as &[f32],
-        query.from.map(|id| id.0),
-        query.until.map(|id| id.0),
+        query.from.map(|id| id.get()),
+        query.until.map(|id| id.get()),
         query.limit,
         query.sender
     )
@@ -152,7 +152,7 @@ pub async fn near_messages(
     tx.commit().await?;
     Ok(rows
         .into_iter()
-        .map(|row| (MessageId(row.id), row.similarity))
+        .map(|row| (MessageId::new(row.id), row.similarity))
         .collect())
 }
 

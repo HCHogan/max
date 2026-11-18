@@ -294,8 +294,8 @@ mod tests {
 
     fn people() -> BTreeMap<IdentityId, PrincipalId> {
         [
-            (IdentityId(1), PrincipalId(1)),
-            (IdentityId(20), PrincipalId(12)),
+            (IdentityId::new(1), PrincipalId::new(1)),
+            (IdentityId::new(20), PrincipalId::new(12)),
         ]
         .into()
     }
@@ -312,10 +312,10 @@ mod tests {
     fn message(id: i64, utc: (u32, u32, u32), name: &str, content: Content) -> Message {
         let (day, hour, minute) = utc;
         Message {
-            id: MessageId(id),
-            conversation: ConversationId(1),
+            id: MessageId::new(id),
+            conversation: ConversationId::new(1),
             sender: Sender {
-                identity: IdentityId(20),
+                identity: IdentityId::new(20),
                 name: name.into(),
                 role: Some(Role::Member),
             },
@@ -363,12 +363,12 @@ mod tests {
                 "小红\n换行名",
                 said(vec![
                     Node::Mention {
-                        target: MentionTarget::Identity(IdentityId(1)),
+                        target: MentionTarget::Identity(IdentityId::new(1)),
                         display: "Max".into(),
                     },
                     text(" 第一行\n第二行 "),
                     Node::Mention {
-                        target: MentionTarget::Identity(IdentityId(99)),
+                        target: MentionTarget::Identity(IdentityId::new(99)),
                         display: "路人".into(),
                     },
                     Node::Mention {
@@ -382,7 +382,7 @@ mod tests {
                 (28, 1, 3),
                 "Max",
                 Content::Message {
-                    reply_to: Some(MessageId(101)),
+                    reply_to: Some(MessageId::new(101)),
                     nodes: vec![
                         text("在"),
                         Node::Emote(Emote {
@@ -421,7 +421,7 @@ mod tests {
                 (28, 4, 31),
                 "小明",
                 Content::Edit {
-                    target: MessageId(103),
+                    target: MessageId::new(103),
                     nodes: vec![text("改了")],
                 },
             ),
@@ -430,7 +430,7 @@ mod tests {
                 (28, 4, 31),
                 "小明",
                 Content::Unsend {
-                    target: MessageId(103),
+                    target: MessageId::new(103),
                 },
             ),
         ];

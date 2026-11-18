@@ -99,7 +99,7 @@ async fn a_turn_ends_once(pool: PgPool) -> sqlx::Result<()> {
     assert!(again.is_err());
     let runs = sqlx::query_scalar!(
         r#"select count(run) as "n!" from turn_outcomes where turn_id = $1"#,
-        turn.0
+        turn.get()
     )
     .fetch_one(&mut *conn)
     .await?;

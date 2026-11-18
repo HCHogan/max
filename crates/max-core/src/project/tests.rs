@@ -86,7 +86,7 @@ fn the_base_context() {
             "[09:00 小明 #8]: 早\n".into(),
             volatile,
         ],
-        [PrincipalId(12)].into(),
+        [PrincipalId::new(12)].into(),
         |text| u32::try_from(text.chars().count()).unwrap(),
     );
     let kinds: Vec<(&str, u32)> = context
@@ -102,5 +102,5 @@ fn the_base_context() {
         kinds,
         [("system", 6), ("user", 22), ("user", 17), ("user", 115)]
     );
-    assert_eq!(context.roster, [PrincipalId(12)].into());
+    assert_eq!(context.roster, [PrincipalId::new(12)].into());
 }

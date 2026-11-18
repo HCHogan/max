@@ -97,7 +97,7 @@ async fn programs_call_max_tools_and_return(pool: PgPool) {
     drop(conn);
     let mut scope = Scope::new();
     let url = served(&mut scope, Context::check(Services::bare(pool), place)).await;
-    let id = hello.message.id.0;
+    let id = hello.message.id.get();
 
     let ran = run(&url, "return args.n + 1").await;
     assert_eq!(

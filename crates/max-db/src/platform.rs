@@ -66,8 +66,8 @@ pub async fn account(
     .await?;
     tx.commit().await?;
     Ok(Account {
-        identity: IdentityId(row.id),
-        principal: PrincipalId(row.principal_id),
+        identity: IdentityId::new(row.id),
+        principal: PrincipalId::new(row.principal_id),
     })
 }
 
@@ -88,8 +88,8 @@ async fn find_account(
     .fetch_optional(conn)
     .await?;
     Ok(row.map(|row| Account {
-        identity: IdentityId(row.id),
-        principal: PrincipalId(row.principal),
+        identity: IdentityId::new(row.id),
+        principal: PrincipalId::new(row.principal),
     }))
 }
 
@@ -98,7 +98,7 @@ pub async fn principals(
     conn: &mut PgConnection,
     identities: &[IdentityId],
 ) -> sqlx::Result<BTreeMap<IdentityId, PrincipalId>> {
-    let ids: Vec<i64> = identities.iter().map(|identity| identity.0).collect();
+    let ids: Vec<i64> = identities.iter().map(|identity| identity.get()).collect();
     let rows = sqlx::query!(
         r#"
         select i.id, coalesce(p.merged_into, p.id) as "principal!"
@@ -111,7 +111,7 @@ pub async fn principals(
     .await?;
     Ok(rows
         .into_iter()
-        .map(|row| (IdentityId(row.id), PrincipalId(row.principal)))
+        .map(|row| (IdentityId::new(row.id), PrincipalId::new(row.principal)))
         .collect())
 }
 
@@ -147,7 +147,7 @@ pub async fn endpoint(
     sqlx::query!(
         "select pg_advisory_xact_lock(hashtextextended('endpoint:' || $1 || ':' || $2 || ':' || $3, 0))",
         platform,
-        me.0.to_string(),
+        me.to_string(),
         native_id
     )
     .execute(&mut *tx)
@@ -156,7 +156,7 @@ pub async fn endpoint(
         "select id, conversation_id from endpoints
          where platform = $1 and self_identity_id = $2 and native_id = $3",
         platform,
-        me.0,
+        me.get(),
         native_id
     )
     .fetch_optional(&mut *tx)
@@ -176,7 +176,7 @@ pub async fn endpoint(
                 "#,
                 platform,
                 native_id,
-                me.0,
+                me.get(),
                 kind,
                 title
             )
@@ -187,8 +187,8 @@ pub async fn endpoint(
     };
     tx.commit().await?;
     Ok(Endpoint {
-        id: EndpointId(id),
-        conversation: ConversationId(conversation),
+        id: EndpointId::new(id),
+        conversation: ConversationId::new(conversation),
     })
 }
 
@@ -204,14 +204,14 @@ pub async fn find_endpoint(
         "select id, conversation_id from endpoints
          where platform = $1 and self_identity_id = $2 and native_id = $3",
         platform.as_str(),
-        me.0,
+        me.get(),
         native_id
     )
     .fetch_optional(conn)
     .await?;
     Ok(row.map(|row| Endpoint {
-        id: EndpointId(row.id),
-        conversation: ConversationId(row.conversation_id),
+        id: EndpointId::new(row.id),
+        conversation: ConversationId::new(row.conversation_id),
     }))
 }
 
@@ -229,7 +229,7 @@ pub async fn conversation_of(
     )
     .fetch_optional(conn)
     .await?;
-    Ok(id.map(ConversationId))
+    Ok(id.map(ConversationId::new))
 }
 
 /// The conversation's endpoint on a platform, by its native id, if it has
@@ -242,7 +242,7 @@ pub async fn endpoint_on(
 ) -> sqlx::Result<Option<String>> {
     sqlx::query_scalar!(
         "select native_id from endpoints where conversation_id = $1 and platform = $2 limit 1",
-        conversation.0,
+        conversation.get(),
         platform.as_str()
     )
     .fetch_optional(conn)
@@ -261,7 +261,7 @@ pub async fn attach(
 ) -> sqlx::Result<Endpoint> {
     let mut tx = conn.begin().await?;
     let conversation = match conversation {
-        Some(conversation) => conversation.0,
+        Some(conversation) => conversation.get(),
         None => {
             sqlx::query_scalar!(
                 "insert into conversations (kind) values ($1) returning id",
@@ -277,14 +277,14 @@ pub async fn attach(
         conversation,
         platform.as_str(),
         native_id,
-        me.0
+        me.get()
     )
     .fetch_one(&mut *tx)
     .await?;
     tx.commit().await?;
     Ok(Endpoint {
-        id: EndpointId(id),
-        conversation: ConversationId(conversation),
+        id: EndpointId::new(id),
+        conversation: ConversationId::new(conversation),
     })
 }
 
@@ -294,7 +294,7 @@ pub async fn conversation_kind(
 ) -> sqlx::Result<ConversationKind> {
     let kind = sqlx::query_scalar!(
         "select kind from conversations where id = $1",
-        conversation.0
+        conversation.get()
     )
     .fetch_one(conn)
     .await?;
@@ -310,7 +310,7 @@ pub async fn set_title(
 ) -> sqlx::Result<()> {
     sqlx::query!(
         "update conversations set title = $2 where id = $1",
-        conversation.0,
+        conversation.get(),
         title
     )
     .execute(conn)
@@ -330,8 +330,8 @@ pub async fn merge(
     }
     sqlx::query!(
         "update principals set merged_into = $2 where id = $1 and merged_into is null",
-        merged.0,
-        into.0
+        merged.get(),
+        into.get()
     )
     .execute(conn)
     .await?;
@@ -345,7 +345,7 @@ pub async fn native_user_id(
 ) -> sqlx::Result<Option<String>> {
     sqlx::query_scalar!(
         "select native_user_id from identities where id = $1",
-        identity.0
+        identity.get()
     )
     .fetch_optional(conn)
     .await
@@ -379,14 +379,14 @@ pub async fn speaker(
         where coalesce(p.merged_into, p.id) = $2
         order by m.id desc limit 1
         "#,
-        endpoint.0,
-        principal.0
+        endpoint.get(),
+        principal.get()
     )
     .fetch_optional(conn)
     .await?;
     row.map(|row| {
         Ok(Speaker {
-            identity: IdentityId(row.id),
+            identity: IdentityId::new(row.id),
             native_user_id: row.native_user_id,
             name: row.sender_name,
             role: role(row.sender_role)?,
@@ -409,7 +409,7 @@ pub async fn roster(
     endpoint: EndpointId,
     people: &[PrincipalId],
 ) -> sqlx::Result<Vec<Known>> {
-    let ids: Vec<i64> = people.iter().map(|principal| principal.0).collect();
+    let ids: Vec<i64> = people.iter().map(|principal| principal.get()).collect();
     let rows = sqlx::query!(
         r#"
         select p.id, coalesce(latest.sender_name, p.display_name) as "name!",
@@ -430,7 +430,7 @@ pub async fn roster(
         where p.id = any($2)
         order by p.id
         "#,
-        endpoint.0,
+        endpoint.get(),
         &ids
     )
     .fetch_all(conn)
@@ -438,7 +438,7 @@ pub async fn roster(
     rows.into_iter()
         .map(|row| {
             Ok(Known {
-                principal: PrincipalId(row.id),
+                principal: PrincipalId::new(row.id),
                 name: row.name,
                 role: role(row.role)?,
             })
@@ -525,7 +525,7 @@ pub async fn settings(
     let row = sqlx::query!(
         "select model, effort, persona, proactive, cleared_upto, stopped, overrides
          from conversation_settings where conversation_id = $1",
-        conversation.0
+        conversation.get()
     )
     .fetch_optional(conn)
     .await?;
@@ -534,7 +534,7 @@ pub async fn settings(
         effort: row.effort,
         persona: row.persona,
         proactive: row.proactive,
-        cleared_upto: row.cleared_upto.map(MessageId),
+        cleared_upto: row.cleared_upto.map(MessageId::new),
         stopped: row.stopped,
         // Only Max writes it; what it can't read, it doesn't hold on to.
         overrides: serde_json::from_value(row.overrides).unwrap_or_default(),
@@ -548,11 +548,11 @@ pub async fn tail_after(
 ) -> sqlx::Result<Option<MessageId>> {
     let after = sqlx::query_scalar!(
         "select tail_after from conversations where id = $1",
-        conversation.0
+        conversation.get()
     )
     .fetch_optional(conn)
     .await?;
-    Ok(after.flatten().map(MessageId))
+    Ok(after.flatten().map(MessageId::new))
 }
 
 pub async fn set_tail_after(
@@ -562,8 +562,8 @@ pub async fn set_tail_after(
 ) -> sqlx::Result<()> {
     sqlx::query!(
         "update conversations set tail_after = $2 where id = $1",
-        conversation.0,
-        after.0
+        conversation.get(),
+        after.get()
     )
     .execute(conn)
     .await?;
@@ -588,12 +588,12 @@ pub async fn save_settings(
             stopped = excluded.stopped, overrides = excluded.overrides,
             updated_at = excluded.updated_at
         "#,
-        conversation.0,
+        conversation.get(),
         settings.model,
         settings.effort,
         settings.persona,
         settings.proactive,
-        settings.cleared_upto.map(|id| id.0),
+        settings.cleared_upto.map(|id| id.get()),
         settings.stopped,
         Json(&settings.overrides) as _,
         at

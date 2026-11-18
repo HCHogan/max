@@ -450,7 +450,14 @@ impl Poster {
 /// An I/O task, numbered within its conversation and never reused: an
 /// event from a task the actor no longer waits for is dropped.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct TaskId(pub u64);
+pub struct TaskId(u64);
+
+impl TaskId {
+    /// The `n`th task of its conversation.
+    pub const fn new(n: u64) -> Self {
+        Self(n)
+    }
+}
 
 impl fmt::Display for TaskId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

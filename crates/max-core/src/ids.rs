@@ -10,7 +10,19 @@ macro_rules! ids {
         $(#[$doc])*
         #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
         #[serde(transparent)]
-        pub struct $name(pub $inner);
+        pub struct $name($inner);
+
+        impl $name {
+            /// The id a row has in the database.
+            pub const fn new(id: $inner) -> Self {
+                Self(id)
+            }
+
+            /// As the database has it.
+            pub const fn get(self) -> $inner {
+                self.0
+            }
+        }
 
         impl fmt::Display for $name {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -38,7 +50,17 @@ ids! {
 /// The id a provider gave a tool call; opaque to us.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct CallId(pub String);
+pub struct CallId(String);
+
+impl CallId {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 
 impl fmt::Display for CallId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

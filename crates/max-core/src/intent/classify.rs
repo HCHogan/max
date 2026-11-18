@@ -54,7 +54,7 @@ pub fn named(text: &str, names: &BTreeMap<PrincipalId, String>) -> String {
         let digits = after
             .find(|c: char| !c.is_ascii_digit())
             .unwrap_or(after.len());
-        let principal = after[..digits].parse().ok().map(PrincipalId);
+        let principal = after[..digits].parse().ok().map(PrincipalId::new);
         match principal {
             Some(principal) if after[digits..].starts_with(']') => {
                 let name = names.get(&principal).map_or("某人", String::as_str);

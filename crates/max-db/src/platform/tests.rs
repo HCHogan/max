@@ -12,7 +12,7 @@ async fn an_account_is_created_once(pool: PgPool) -> sqlx::Result<()> {
     assert_ne!(first.principal, elsewhere.principal);
     let name = sqlx::query_scalar!(
         "select display_name from principals where id = $1",
-        first.principal.0
+        first.principal.get()
     )
     .fetch_one(&mut *conn)
     .await?;

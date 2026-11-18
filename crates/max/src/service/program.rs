@@ -91,7 +91,7 @@ impl Tool for Say {
                 Err(why) => Err(why),
             };
             match outcome {
-                Ok(id) => messages.push(id.0),
+                Ok(id) => messages.push(id.get()),
                 Err(reason) => {
                     unsent += 1;
                     why.get_or_insert(reason);

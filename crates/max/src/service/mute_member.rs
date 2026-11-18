@@ -80,11 +80,11 @@ async fn mute(context: &Context, Args { member, seconds }: Args) -> Result<Muted
     let Some(group) = qq::group(&place.native_id) else {
         return refused("there is no muting in a private chat");
     };
-    if PrincipalId(member) == place.me.principal {
+    if PrincipalId::new(member) == place.me.principal {
         return refused("you can't mute yourself");
     }
     let mut conn = context.services.pool.acquire().await?;
-    let speaker = platform::speaker(&mut conn, place.endpoint, PrincipalId(member)).await?;
+    let speaker = platform::speaker(&mut conn, place.endpoint, PrincipalId::new(member)).await?;
     drop(conn);
     let Some(speaker) = speaker else {
         return Err(Failure::new(

@@ -29,7 +29,7 @@ fn from(model: &ModelTag, kind: ItemKind, raw: Option<Value>) -> Item {
 
 fn call(id: &str, arguments: &str) -> ToolCall {
     ToolCall {
-        id: CallId(id.into()),
+        id: CallId::new(id),
         name: "run_code".into(),
         arguments: arguments.into(),
     }
@@ -38,7 +38,7 @@ fn call(id: &str, arguments: &str) -> ToolCall {
 fn result(id: &str) -> Item {
     Item::new(
         ItemKind::ToolResult {
-            call: CallId(id.into()),
+            call: CallId::new(id),
             output: ToolOutput::text("1", false, 1),
         },
         1,
