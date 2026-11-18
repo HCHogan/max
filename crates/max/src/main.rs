@@ -794,11 +794,11 @@ async fn serve(config: Config) -> Result<()> {
 async fn owners(pool: &PgPool, config: &Config) -> Result<BTreeSet<PrincipalId>> {
     let mut conn = pool.acquire().await?;
     let mut owners = BTreeSet::new();
-    for (name, native_id) in config.owners()? {
-        let platform = match name.as_str() {
-            "qq" => Platform::Qq,
-            other => bail!("an owner on a platform Max isn't on: {other:?}"),
-        };
+    for config::Owner {
+        platform,
+        native_id,
+    } in config.owners()?
+    {
         // A name until they first write.
         let account = platform::account(&mut conn, platform, &native_id, "主人").await?;
         owners.insert(account.principal);

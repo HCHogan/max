@@ -12,10 +12,11 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use chrono::FixedOffset;
-use color_eyre::eyre::{Result, WrapErr, ensure, eyre};
+use color_eyre::eyre::{Result, WrapErr, bail, ensure, eyre};
 use max_core::ids::ConversationId;
 use max_core::item::Protocol;
 use max_core::limits::{self, Setting};
+use max_core::message::Platform;
 use serde::Deserialize;
 use tracing::level_filters::LevelFilter;
 
@@ -231,11 +232,16 @@ pub struct Rule {
     segments: Vec<String>,
 }
 
-impl TryFrom<String> for Rule {
-    type Error = String;
+/// Text that isn't a [`Rule`].
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("{0:?} isn't a call like `POST /emails`")]
+pub struct NotARule(String);
 
-    fn try_from(text: String) -> Result<Self, String> {
-        let wrong = || format!("{text:?} isn't a call like `POST /emails`");
+impl TryFrom<String> for Rule {
+    type Error = NotARule;
+
+    fn try_from(text: String) -> Result<Self, NotARule> {
+        let wrong = || NotARule(text.clone());
         let (method, path) = text.split_once(' ').ok_or_else(wrong)?;
         let method = match method {
             "*" => None,
@@ -308,6 +314,13 @@ pub struct Author {
 pub struct Media {
     /// The content store is `objects/` in here.
     pub dir: PathBuf,
+}
+
+/// One of Max's owners, by an account of theirs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Owner {
+    pub platform: Platform,
+    pub native_id: String,
 }
 
 fn china() -> FixedOffset {
@@ -710,8 +723,8 @@ impl Config {
         Ok(config)
     }
 
-    /// The owners' accounts, as `(platform, native id)`.
-    pub fn owners(&self) -> Result<Vec<(String, String)>> {
+    /// The owners' accounts, as the owners file lists them.
+    pub fn owners(&self) -> Result<Vec<Owner>> {
         let Some(path) = &self.owners_file else {
             return Ok(Vec::new());
         };
@@ -721,7 +734,17 @@ impl Config {
                 let (platform, id) = line
                     .split_once(':')
                     .ok_or_else(|| eyre!("{}: {line:?} isn't platform:id", path.display()))?;
-                Ok((platform.trim().to_owned(), id.trim().to_owned()))
+                // The QQ of before is a platform too, which nobody is on.
+                let Ok(platform @ Platform::Qq) = platform.trim().parse() else {
+                    bail!(
+                        "{}: an owner on a platform Max isn't on: {platform:?}",
+                        path.display()
+                    );
+                };
+                Ok(Owner {
+                    platform,
+                    native_id: id.trim().to_owned(),
+                })
             })
             .collect()
     }
