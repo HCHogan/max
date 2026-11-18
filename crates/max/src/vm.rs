@@ -121,7 +121,7 @@ enum Internal {
     Units {
         conversation: ConversationId,
         count: u32,
-        reply: oneshot::Sender<Result<String, String>>,
+        reply: oneshot::Sender<String>,
     },
     /// The guest says something of Max's runs in it: a background command,
     /// which no call of max's waits for.
@@ -157,10 +157,28 @@ enum Request {
         conversation: ConversationId,
         /// Whether to start it if it isn't running.
         boot: bool,
-        reply: oneshot::Sender<Result<Vm, String>>,
+        reply: oneshot::Sender<Result<Vm, NoVm>>,
     },
     /// Stop every VM, and say once they have stopped.
     Shut { reply: oneshot::Sender<()> },
+}
+
+/// Why there is no VM for a call to use, as its caller is told.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum NoVm {
+    /// The service has ended, as Max stops.
+    #[error("the VM service has stopped")]
+    Stopped,
+    /// It was asked for only if it runs.
+    #[error("the VM isn't running")]
+    NotRunning,
+    /// Every slot has a VM that can't be stopped for this one.
+    #[error("too many VMs are running at once; try again in a while")]
+    Full,
+    /// It didn't boot, or its guest didn't let max in: why, with the
+    /// causes. Everyone who waited for the boot is told.
+    #[error("the VM didn't start: {0}")]
+    Failed(String),
 }
 
 /// A running VM, lent to a tool call. It isn't idle while one is held.
@@ -266,7 +284,7 @@ impl Vms {
 
     /// The conversation's VM, started if it isn't running; or why there
     /// isn't one.
-    pub async fn get(&self, conversation: ConversationId) -> Result<Vm, String> {
+    pub async fn get(&self, conversation: ConversationId) -> Result<Vm, NoVm> {
         self.ask(conversation, true).await
     }
 
@@ -276,16 +294,15 @@ impl Vms {
         self.ask(conversation, false).await.ok()
     }
 
-    async fn ask(&self, conversation: ConversationId, boot: bool) -> Result<Vm, String> {
+    async fn ask(&self, conversation: ConversationId, boot: bool) -> Result<Vm, NoVm> {
         let (reply, answer) = oneshot::channel();
-        let gone = || "the VM service has stopped".to_owned();
         let request = Request::Vm {
             conversation,
             boot,
             reply,
         };
-        self.requests.send(request).map_err(|_| gone())?;
-        answer.await.map_err(|_| gone())?
+        self.requests.send(request).map_err(|_| NoVm::Stopped)?;
+        answer.await.map_err(|_| NoVm::Stopped)?
     }
 
     /// Stops every VM and waits until they have stopped. The VMs outlive
@@ -353,7 +370,7 @@ enum State {
     /// Booting, or being attached to.
     Booting {
         slot: usize,
-        waiting: Vec<oneshot::Sender<Result<Vm, String>>>,
+        waiting: Waiting,
         /// With Max's units.
         units: bool,
         /// Booted by a max before this one, which attaches to it; and if
@@ -440,7 +457,7 @@ impl Running {
     }
 }
 
-type Waiting = Vec<oneshot::Sender<Result<Vm, String>>>;
+type Waiting = Vec<oneshot::Sender<Result<Vm, NoVm>>>;
 
 /// Why a boot or an attach left no VM to use.
 enum Unusable {
@@ -535,7 +552,7 @@ async fn run(
             Some((conversation, result)) = booted_rx.recv() => service.booted(conversation, result),
             Some(internal) = internal_rx.recv() => match internal {
                 Internal::Units { conversation, count, reply } => {
-                    let _ = reply.send(Ok(service.units(conversation, count)));
+                    let _ = reply.send(service.units(conversation, count));
                 }
                 Internal::Busy { conversation } => service.busy(conversation),
                 Internal::Switched { conversation, stale } => {
@@ -556,7 +573,7 @@ impl Service {
         &mut self,
         conversation: ConversationId,
         boot: bool,
-        reply: oneshot::Sender<Result<Vm, String>>,
+        reply: oneshot::Sender<Result<Vm, NoVm>>,
     ) {
         match self.vms.get_mut(&conversation) {
             Some(State::Running(running)) => {
@@ -576,7 +593,7 @@ impl Service {
         if boot {
             self.start(conversation, vec![reply]);
         } else {
-            let _ = reply.send(Err("the VM isn't running".to_owned()));
+            let _ = reply.send(Err(NoVm::NotRunning));
         }
     }
 
@@ -601,9 +618,7 @@ impl Service {
             })
         }) else {
             for reply in waiting {
-                let _ = reply.send(Err(
-                    "too many VMs are running at once; try again in a while".into(),
-                ));
+                let _ = reply.send(Err(NoVm::Full));
             }
             return;
         };
@@ -791,7 +806,7 @@ impl Service {
                         // to runs.
                         self.stopping.insert(conversation, machine.stop().boxed());
                         for reply in waiting {
-                            let _ = reply.send(Err(format!("the VM didn't start: {error}")));
+                            let _ = reply.send(Err(NoVm::Failed(error.clone())));
                         }
                     }
                     Unusable::Gone => {

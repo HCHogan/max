@@ -116,7 +116,7 @@ async fn call(tool: Tool, vms: Option<&Vms>, context: &Context) -> ToolOutput {
     };
     let vm = match vms.get(context.conversation).await {
         Ok(vm) => vm,
-        Err(error) => return text(error, true),
+        Err(error) => return text(error.to_string(), true),
     };
     if let Tool::Shell {
         command,
