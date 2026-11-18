@@ -65,10 +65,14 @@ impl From<std::io::Error> for Failed {
     }
 }
 
+/// The download worker: what it needs.
 #[derive(Debug)]
 pub struct Download {
+    /// The database.
     pub pool: PgPool,
+    /// The client it fetches with.
     pub http: Client,
+    /// Where what it fetches is kept.
     pub store: Arc<Store>,
     /// Where each picture goes on to once stored, when there is a
     /// caption worker.
@@ -79,9 +83,13 @@ pub struct Download {
 /// addresses carry a key.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Medium {
+    /// The message.
     pub message: MessageId,
+    /// Which of the message's media it is.
     pub ordinal: u16,
+    /// What it was sent as.
     pub kind: MediaKind,
+    /// Where the platform has it.
     pub url: String,
 }
 

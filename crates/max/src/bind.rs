@@ -15,4 +15,5 @@ pub struct Pending {
     pub owner: PrincipalId,
 }
 
+/// The codes of `/bind` that are out.
 pub type Binds = Codes<Pending>;

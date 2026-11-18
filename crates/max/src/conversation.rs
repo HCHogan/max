@@ -35,6 +35,7 @@ use crate::service;
 /// conversation, in the order the actor handles it.
 #[derive(Debug)]
 pub enum Event {
+    /// A message someone sent.
     Inbound(Inbound),
     /// The `/bind <码>` that just bound this group, from the table.
     Bound(Inbound),
@@ -43,18 +44,27 @@ pub enum Event {
     Post(Post),
     /// The model call's segmenter cut a message out of the stream.
     Said {
+        /// The model call that said it.
         task: TaskId,
+        /// The message.
         segment: Segment,
     },
     /// The model call ended. An error once something was said is not
     /// retried.
     ModelDone {
+        /// The model call.
         task: TaskId,
+        /// What the model produced, and how long the call took; or why it gave
+        /// nothing.
         out: Result<(ModelOutput, Timing), ModelFailed>,
     },
+    /// A tool call ended.
     ToolDone {
+        /// The task that ran it.
         task: TaskId,
+        /// The call.
         call: CallId,
+        /// What it gave.
         out: ToolOutput,
     },
     /// The classifier's answer; None if it failed.
@@ -67,8 +77,11 @@ pub enum Event {
     /// Something in the group's VM calls a tool, and waits for the
     /// result.
     Call {
+        /// The tool's name.
         tool: String,
+        /// Its arguments.
         args: serde_json::Value,
+        /// Where the result goes.
         reply: oneshot::Sender<Result<serde_json::Value, service::Failure>>,
     },
     /// A program in the group's VM follows the timeline: `maxx events`.
@@ -98,19 +111,27 @@ pub enum Signal {
     /// Something in the VM calls a tool: the conversation's actor runs
     /// it, and says how it went.
     Call {
+        /// Whose VM calls.
         conversation: ConversationId,
+        /// The tool's name.
         tool: String,
+        /// Its arguments.
         args: serde_json::Value,
+        /// Where the result goes.
         reply: oneshot::Sender<Result<serde_json::Value, service::Failure>>,
     },
     /// Something from outside the chat that Max there is to hear.
     Heard {
+        /// Whose Max is to hear it.
         conversation: ConversationId,
+        /// What there is to hear.
         heard: Heard,
     },
     /// A program in the VM follows the conversation's timeline.
     Subscribe {
+        /// Whose timeline.
         conversation: ConversationId,
+        /// Where the subscription goes.
         reply: oneshot::Sender<Subscription>,
     },
 }
@@ -134,9 +155,13 @@ pub enum Heard {
 /// up to `head` are in the database; a conversation without a row has
 /// none.
 pub struct Subscription {
+    /// The conversation's place.
     pub place: Arc<Place>,
+    /// The last row committed when the subscription was made, if any.
     pub head: Option<MessageId>,
+    /// Each row committed after `head`.
     pub rows: broadcast::Receiver<Arc<Message>>,
+    /// The database, and what the tools reach.
     pub services: Arc<service::Services>,
 }
 
@@ -171,6 +196,7 @@ pub enum Refused {
     /// The actor went with the request in its hands.
     #[error("the conversation stopped before answering")]
     Abandoned,
+    /// The stop rule: Max is stopped here, or stopping.
     #[error(transparent)]
     Rule(#[from] Refusal),
     /// `ask`: no edge leads to that conversation, or there is none. The
@@ -207,27 +233,43 @@ pub enum Request {
     /// Set the conversation's limits, None back to the default: what
     /// each is now.
     Configure {
+        /// Each limit to set, and what to.
         changes: Vec<(Setting, Option<u64>)>,
+        /// Where the limits as they are then go.
         reply: Reply<Vec<Configured>>,
     },
     /// Ask Max in conversation `to`: whom it went to.
     Ask {
+        /// The conversation asked.
         to: ConversationId,
+        /// What is asked.
         question: String,
+        /// Where the name of whom it went to goes.
         reply: Reply<String>,
     },
     /// Answer question `to`, as it was numbered here, which Max in
     /// another conversation asked: whom the answer went to.
     Answer {
+        /// The question's number here.
         to: u32,
+        /// The answer.
         text: String,
+        /// Where the name of whom it went to goes.
         reply: Reply<String>,
     },
     /// Wake Max with a program's `text`: what the program is told.
-    Wake { text: String, reply: Reply<String> },
+    Wake {
+        /// What the program says.
+        text: String,
+        /// Where what it is told goes.
+        reply: Reply<String>,
+    },
     /// Whether the tool may go on to act in the chat by itself, as a mute
     /// does, not through the actor: it may unless Max is stopped here.
-    Act { reply: Reply<()> },
+    Act {
+        /// Where the leave, or the refusal, goes.
+        reply: Reply<()>,
+    },
 }
 
 impl Request {
@@ -252,6 +294,7 @@ pub struct Question {
     pub from: Peer,
     /// The conversation asked, as the asker names it.
     pub to: Peer,
+    /// The question.
     pub text: String,
 }
 
@@ -274,6 +317,7 @@ pub enum Unanswered {
     /// `/stop` stopped Max there.
     #[error("Max is stopped there (/stop)")]
     Stopped,
+    /// Max is shutting down there.
     #[error("Max is restarting there")]
     Restarting,
     /// The core that read the question ended with it still there: its
@@ -309,13 +353,16 @@ impl Question {
 /// doesn't know what in the VM called. See "Sending via `Post`".
 #[derive(Debug)]
 pub struct Post {
+    /// What to say or do.
     pub act: Act,
     /// Told how the sending went.
     pub receipt: Option<Receipt>,
 }
 
+/// What a tool has Max's account say or do.
 #[derive(Debug)]
 pub enum Act {
+    /// Say it, and tell the receipt once it is sent.
     Say(Draft),
     /// Say, but the receipt hears once the row is committed: it goes out
     /// after what was said before it, and the records show if it didn't.
@@ -329,8 +376,11 @@ pub enum Act {
 /// would be had nobody set it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Configured {
+    /// The limit.
     pub setting: Setting,
+    /// What is in force.
     pub value: u64,
+    /// What it would be had nobody set it.
     pub default: u64,
 }
 
@@ -345,6 +395,11 @@ pub struct Sending(oneshot::Receiver<Result<MessageId, Refused>>);
 impl Sending {
     /// Waits until it is sent, or only committed for [`Act::Queue`]: the
     /// row, or why it didn't go out.
+    ///
+    /// # Errors
+    ///
+    /// [`Refused`], which says why it didn't go out; [`Refused::Abandoned`]
+    /// if the conversation stopped first.
     pub async fn sent(self) -> Result<MessageId, Refused> {
         self.0.await.map_err(|_| Refused::Abandoned)?
     }
@@ -358,6 +413,7 @@ pub struct Poster {
 }
 
 impl Poster {
+    /// A poster into the conversation whose mailbox this is.
     #[must_use]
     pub fn new(mailbox: UnboundedSender<Event>) -> Self {
         Self { mailbox }
@@ -365,34 +421,61 @@ impl Poster {
 
     /// Wakes Max with a program's `text`: what the program is told, or
     /// why not.
+    ///
+    /// # Errors
+    ///
+    /// [`Refused`]: the conversation is gone, or Max is stopped or stopping.
     pub async fn wake(&self, text: String) -> Result<String, Refused> {
         self.request(|reply| Request::Wake { text, reply }).await
     }
 
     /// Says `draft`, and waits until it is sent.
+    ///
+    /// # Errors
+    ///
+    /// [`Refused`]: the conversation is gone or stopped, nothing in the draft
+    /// could be said, or the platform didn't take it.
     pub async fn post(&self, draft: Draft) -> Result<MessageId, Refused> {
         self.say(draft)?.sent().await
     }
 
     /// Hands `draft` to the conversation, which says it whether or not
     /// anyone waits: what comes back is how the sending went.
+    ///
+    /// # Errors
+    ///
+    /// [`Refused::Gone`] if the conversation's actor has stopped.
     pub fn say(&self, draft: Draft) -> Result<Sending, Refused> {
         self.act(Act::Say(draft))
     }
 
     /// Hands `draft` to the conversation, and waits only until it is
     /// committed, not sent: the row.
+    ///
+    /// # Errors
+    ///
+    /// [`Refused`]: the conversation is gone or stopped, or nothing in the
+    /// draft could be said.
     pub async fn queue(&self, draft: Draft) -> Result<MessageId, Refused> {
         self.act(Act::Queue(draft))?.sent().await
     }
 
     /// Takes back `target`, and waits until the platform has.
+    ///
+    /// # Errors
+    ///
+    /// [`Refused`]: the conversation is gone or stopped, the row isn't one of
+    /// its, or the platform didn't take it back.
     pub async fn unsend(&self, target: MessageId) -> Result<MessageId, Refused> {
         self.act(Act::Unsend(target))?.sent().await
     }
 
     /// Sets the conversation's limits, None back to the default: what
     /// each is now, or why not.
+    ///
+    /// # Errors
+    ///
+    /// [`Refused`] if the conversation is gone.
     pub async fn configure(
         &self,
         changes: Vec<(Setting, Option<u64>)>,
@@ -403,6 +486,11 @@ impl Poster {
 
     /// Asks Max in conversation `to`: whom the question went to, or why
     /// it wasn't asked.
+    ///
+    /// # Errors
+    ///
+    /// [`Refused`]: the conversation is gone, Max is stopped or stopping, or
+    /// no link leads to `to`.
     pub async fn ask(&self, to: ConversationId, question: String) -> Result<String, Refused> {
         let ask = |reply| Request::Ask {
             to,
@@ -414,6 +502,11 @@ impl Poster {
 
     /// Answers question `to`, which Max in another conversation asked:
     /// whom it went to, or why it wasn't taken.
+    ///
+    /// # Errors
+    ///
+    /// [`Refused`]: the conversation is gone or stopped, or no question has
+    /// that number.
     pub async fn answer(&self, to: u32, text: String) -> Result<String, Refused> {
         self.request(|reply| Request::Answer { to, text, reply })
             .await
@@ -421,6 +514,10 @@ impl Poster {
 
     /// Asks whether the tool may act in the chat by itself: `/stop`
     /// forbids it.
+    ///
+    /// # Errors
+    ///
+    /// [`Refused`]: the conversation is gone, or Max is stopped here.
     pub async fn act_alone(&self) -> Result<(), Refused> {
         self.request(|reply| Request::Act { reply }).await
     }
@@ -474,13 +571,18 @@ impl fmt::Display for TaskId {
 /// mirror will make this a list.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Place {
+    /// The conversation.
     pub conversation: ConversationId,
+    /// A group or a private chat.
     pub kind: ConversationKind,
+    /// Its endpoint.
     pub endpoint: EndpointId,
+    /// The platform the endpoint is on.
     pub platform: Platform,
     /// The adapter's id for the endpoint, such as `group:<group_openid>`.
     pub native_id: String,
     /// Max's account there.
     pub me: Account,
+    /// What Max is called there.
     pub my_name: String,
 }

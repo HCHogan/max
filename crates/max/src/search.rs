@@ -11,6 +11,7 @@ use serde_json::json;
 use tokio::sync::Semaphore;
 use tracing::warn;
 
+/// Exa's search endpoint.
 pub const EXA: &str = "https://api.exa.ai/search";
 /// Searches at once, from every conversation.
 const AT_ONCE: usize = 4;
@@ -18,6 +19,7 @@ const AT_ONCE: usize = 4;
 const TITLE: usize = 200;
 const SNIPPET: usize = 800;
 
+/// A client for web search.
 pub struct Search {
     http: Client,
     url: String,
@@ -37,34 +39,29 @@ impl fmt::Debug for Search {
 /// A result, as the program gets it.
 #[derive(Debug, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct Found {
+    /// The page's title.
     pub title: String,
+    /// Its address.
     pub url: String,
+    /// An excerpt of it.
     pub snippet: String,
     /// The day it was published, if Exa knows.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub published: Option<String>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+/// Why a search gave nothing.
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
     /// Exa says too many, too fast.
+    #[error("searching too fast: wait a while and search again")]
     RateLimited,
     /// Exa turned the query down.
+    #[error("the search service doesn't take this query: {0}")]
     BadQuery(String),
     /// Exa is down or out of reach, or the key is wrong.
+    #[error("the search service can't be used right now: {0}")]
     Unavailable(String),
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::RateLimited => write!(f, "searching too fast: wait a while and search again"),
-            Self::BadQuery(why) => write!(f, "the search service doesn't take this query: {why}"),
-            Self::Unavailable(why) => {
-                write!(f, "the search service can't be used right now: {why}")
-            }
-        }
-    }
 }
 
 #[derive(Deserialize)]
@@ -88,6 +85,10 @@ struct Exa {
 
 impl Search {
     /// Searches through `url`: Exa's, or a test's.
+    ///
+    /// # Errors
+    ///
+    /// If the HTTP client can't be made.
     pub fn new(url: &str, key: String) -> reqwest::Result<Self> {
         let http = Client::builder()
             .connect_timeout(Duration::from_secs(10))
@@ -101,6 +102,10 @@ impl Search {
     }
 
     /// The first `limit` results for `query`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`], which says why Exa gave nothing.
     pub async fn search(&self, query: &str, limit: u8) -> Result<Vec<Found>, Error> {
         let _slot = self.slots.acquire().await;
         let body = json!({

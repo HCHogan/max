@@ -37,10 +37,13 @@ use crate::service;
 /// Max's account on a platform.
 #[derive(Clone, Debug)]
 pub struct Me {
+    /// The account.
     pub account: Account,
+    /// What it is called.
     pub name: String,
 }
 
+/// The conversation table: see the module.
 #[derive(Debug)]
 pub struct Table {
     shared: Arc<Shared>,
@@ -53,6 +56,7 @@ pub struct Table {
 }
 
 impl Table {
+    /// A table with no actors yet. `me` is Max's account on each platform.
     #[must_use]
     pub fn new(shared: Arc<Shared>, me: HashMap<Platform, Me>) -> Self {
         Self {
@@ -339,6 +343,10 @@ fn unbegun(signal: Signal) {
 
 /// Before any actor starts: the turns the last process left without an
 /// outcome, which were running when it crashed, are lost.
+///
+/// # Errors
+///
+/// If a query fails.
 pub async fn close_unfinished(pool: &PgPool) -> Result<()> {
     let mut conn = pool.acquire().await?;
     let now = Utc::now();

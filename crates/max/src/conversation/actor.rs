@@ -79,12 +79,15 @@ impl Does {
 pub struct Shared {
     /// The database, and what the tools reach.
     pub services: Arc<service::Services>,
+    /// The configured models.
     pub models: Arc<Models>,
+    /// To the platform's sender: what the conversations say.
     pub outbound: UnboundedSender<Outgoing>,
     /// How long a core may go on when Max stops, before it is interrupted.
     pub stop_grace: Duration,
     /// Max's owners, who may run every command.
     pub owners: BTreeSet<PrincipalId>,
+    /// The codes of `/bind`.
     pub binds: Arc<Binds>,
     /// The codes of `/link`: each is for the conversation whose Max is to
     /// ask.
@@ -112,12 +115,16 @@ pub struct Shared {
 /// Something Max said, committed, for the platform's sender.
 #[derive(Debug)]
 pub struct Outgoing {
+    /// Where it goes.
     pub place: Arc<Place>,
+    /// The row.
     pub message: Arc<Message>,
     /// Told once it is sent or failed, for a `Post` that waits.
     pub receipt: Option<Receipt>,
 }
 
+/// A conversation's actor: its state, and the loop that is its one
+/// writer. See the module.
 pub struct Conversation {
     shared: Arc<Shared>,
     place: Arc<Place>,
@@ -186,6 +193,12 @@ enum End {
 }
 
 impl Conversation {
+    /// The actor of the conversation at `place`, as the ledger and its
+    /// settings have it; `mailbox` is its own, for the tasks it starts.
+    ///
+    /// # Errors
+    ///
+    /// If the database can't be read.
     pub async fn new(
         shared: Arc<Shared>,
         place: Arc<Place>,
@@ -217,6 +230,11 @@ impl Conversation {
 
     /// Until `Event::Stop` and the core is done with; or until an error,
     /// when it gives up.
+    ///
+    /// # Errors
+    ///
+    /// What the actor gave up on, a failed query for the most part: its
+    /// turns are closed as lost before it returns.
     pub async fn run(mut self, mut mailbox: UnboundedReceiver<Event>) -> Result<()> {
         self.learn_title();
         let served = self.serve(&mut mailbox).await;

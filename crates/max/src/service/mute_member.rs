@@ -23,6 +23,7 @@ use crate::qq;
 const LONGEST: i64 = 30 * DAY;
 const DAY: i64 = 24 * 3600;
 
+/// The `mute_member` tool.
 #[derive(Debug)]
 pub struct MuteMember;
 

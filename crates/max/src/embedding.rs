@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 /// For one request, answer included: the vectors are small.
 const TIMEOUT: Duration = Duration::from_secs(30);
 
+/// A client for the embedding model.
 pub struct Embedder {
     http: Client,
     url: String,
@@ -30,6 +31,7 @@ impl fmt::Debug for Embedder {
     }
 }
 
+/// Why no vector came.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
     /// The service is down, out of reach, too slow, or said no.
@@ -61,6 +63,10 @@ struct Ask<'a> {
 
 impl Embedder {
     /// Embeds with `model` at `base_url`, which ends in `/v1`.
+    ///
+    /// # Errors
+    ///
+    /// If the HTTP client can't be made.
     pub fn new(base_url: &str, model: String, key: Option<String>) -> reqwest::Result<Self> {
         let http = Client::builder()
             .connect_timeout(Duration::from_secs(10))
@@ -75,6 +81,12 @@ impl Embedder {
     }
 
     /// A vector of [`DIMENSIONS`] numbers for each text, in order.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unavailable`] when the service is down, out of reach, too
+    /// slow or says no, and [`Error::Malformed`] when what it answers isn't a
+    /// vector of the model's length for each text.
     pub async fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, Error> {
         let body = Ask {
             model: &self.model,
@@ -132,6 +144,10 @@ impl Embedder {
     }
 
     /// One text's vector.
+    ///
+    /// # Errors
+    ///
+    /// As [`Embedder::embed`].
     pub async fn one(&self, text: &str) -> Result<Vec<f32>, Error> {
         let mut vectors = self.embed(&[text]).await?;
         vectors

@@ -11,6 +11,7 @@ use super::send::Answer;
 pub trait Groups: Send + Sync + 'static {
     /// Who is muted in a group now.
     fn muted<'a>(&'a self, group: &'a str) -> Answer<'a, Vec<Muted>>;
+    /// Mutes someone in a group, or lifts a mute.
     fn mute<'a>(&'a self, group: &'a str, mute: &'a Mute<'a>) -> Answer<'a, ()>;
     /// A group's name, and what else QQ says of it.
     fn info<'a>(&'a self, group: &'a str) -> Answer<'a, GroupInfo>;

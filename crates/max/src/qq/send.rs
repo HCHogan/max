@@ -43,8 +43,11 @@ pub type Answer<'a, T> = Pin<Box<dyn Future<Output = Result<T, api::Error>> + Se
 /// Sends messages, uploads pictures and files, and recalls messages. QQ's
 /// client in service; a recorder in tests.
 pub trait Api: Send + Sync + 'static {
+    /// Sends a message to a chat.
     fn send<'a>(&'a self, chat: Chat<'a>, message: &'a Message) -> Answer<'a, Sent>;
+    /// Uploads a picture, a voice message or a file for a chat.
     fn upload<'a>(&'a self, chat: Chat<'a>, media: Media<'a>) -> Answer<'a, Uploaded>;
+    /// Recalls a message from a chat.
     fn recall<'a>(&'a self, chat: Chat<'a>, message_id: &'a str) -> Answer<'a, ()>;
 }
 
@@ -110,6 +113,10 @@ struct Kept {
 
 /// Before anything is said: what the last process committed and never
 /// heard back about may or may not have gone out. It isn't sent again.
+///
+/// # Errors
+///
+/// If the query fails.
 pub async fn recover(pool: &PgPool) -> sqlx::Result<u64> {
     let mut conn = pool.acquire().await?;
     ledger::mark_unknown(&mut conn, Platform::Qq, Utc::now()).await

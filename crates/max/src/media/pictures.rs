@@ -28,9 +28,12 @@ const WAIT: Duration = Duration::from_secs(10);
 /// Between looks while waiting.
 const POLL: Duration = Duration::from_millis(250);
 
+/// Reads the pictures a model call is sent.
 #[derive(Debug)]
 pub struct Pictures {
+    /// The database, which says which file a row's picture is.
     pub pool: PgPool,
+    /// The content store, which has the files.
     pub store: Arc<Store>,
 }
 

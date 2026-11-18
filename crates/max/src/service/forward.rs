@@ -56,6 +56,11 @@ struct Forward {
 
 /// `/llm` and `/llm/…` for the VMs: the `models` they may call, if the
 /// agents have one.
+///
+/// # Panics
+///
+/// If the HTTP client can't be made, which a connect timeout alone
+/// doesn't bring about.
 pub fn router(models: Option<Arc<Upstreams>>) -> Router {
     let client = reqwest::Client::builder()
         .connect_timeout(CONNECT)

@@ -97,6 +97,7 @@ impl fmt::Debug for Waited {
 }
 
 impl Waited {
+    /// A listener at `listener`, which `whose` tells each connection's VM.
     pub fn new(listener: UnixListener, whose: Whose) -> Self {
         Self { listener, whose }
     }

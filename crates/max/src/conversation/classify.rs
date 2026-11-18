@@ -36,17 +36,27 @@ const CALL: Duration = Duration::from_secs(60);
 /// Rows of context the classifier reads before the ones it judges.
 pub const CONTEXT_LINES: i64 = 15;
 
+/// One classification: what its task needs.
 #[derive(Debug)]
 pub struct Job {
+    /// The database.
     pub pool: PgPool,
+    /// The conversation's place.
     pub place: Arc<Place>,
+    /// The classifier's model.
     pub chosen: Chosen,
+    /// The conversation's persona, of which the classifier reads the start.
     pub persona: String,
+    /// The rows to judge.
     pub batch: Vec<MessageId>,
+    /// How many rows before them it is shown.
     pub context_lines: i64,
+    /// Local time, for the lines' clocks.
     pub offset: FixedOffset,
 }
 
+/// Judges `job`'s batch and sends the verdict to `mailbox`; None if it
+/// couldn't.
 pub async fn classify(job: Job, mailbox: UnboundedSender<Event>) {
     // None if the task never got there.
     let report = Report::new(mailbox, || Event::Verdict(None));

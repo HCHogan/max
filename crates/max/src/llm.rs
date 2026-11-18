@@ -23,6 +23,7 @@ use crate::config::{self, ModelRef};
 
 /// Starts a model call. A provider's client in service; a script in tests.
 pub trait Caller: Send + Sync {
+    /// Sends `request` and waits for the response to begin.
     fn call<'a>(
         &'a self,
         request: &'a Request,
@@ -42,6 +43,7 @@ impl Caller for max_llm::Client {
     }
 }
 
+/// The configured models, and a client for each provider.
 pub struct Models {
     llm: config::Llm,
     callers: BTreeMap<String, Arc<dyn Caller>>,
@@ -59,18 +61,23 @@ impl fmt::Debug for Models {
 /// A model and how to call it, for one turn or one classification.
 #[derive(Clone)]
 pub struct Chosen {
+    /// Its provider's name in the configuration.
     pub provider: String,
     /// The protocol, and the id sent to the API.
     pub tag: ModelTag,
+    /// Its context window, in tokens.
     pub window: u32,
+    /// Its output limit, if it has one.
     pub max_output: Option<u32>,
     /// Whether it watches videos.
     pub video: bool,
     /// The effort among them.
     pub options: Options,
+    /// Attempts after the first, while nothing has been said.
     pub retries: u32,
     /// How long a core on this model waits idle before it ends.
     pub idle_window: Duration,
+    /// Its provider's client.
     pub caller: Arc<dyn Caller>,
 }
 
@@ -89,14 +96,21 @@ impl fmt::Debug for Chosen {
 /// with the provider's key, which never enters the VM.
 #[derive(Clone)]
 pub struct Upstream {
+    /// The provider's name in the configuration.
     pub provider: String,
+    /// The protocol it speaks.
     pub protocol: Protocol,
+    /// Its API, up to and including `/v1`.
     pub base_url: String,
+    /// Its key, which the host adds to the call.
     pub api_key: Option<String>,
+    /// Headers every request to it carries.
     pub headers: Vec<(String, String)>,
     /// The id sent to the API.
     pub model: String,
+    /// Its context window, in tokens.
     pub window: u32,
+    /// Its output limit, if it has one.
     pub max_output: Option<u32>,
     /// How long the provider may keep quiet, before its answer or within it.
     pub idle: Duration,
@@ -129,6 +143,7 @@ impl Upstream {
 pub struct Upstreams {
     /// The agents' own, `llm.job`, and how hard it is asked to think.
     pub default: Arc<Upstream>,
+    /// How hard the agents' own model is asked to think.
     pub effort: Option<String>,
     /// Each by its `provider/model`, the agents' own among them.
     pub all: BTreeMap<String, Arc<Upstream>>,
@@ -154,6 +169,10 @@ impl Chosen {
 
     /// A whole answer, for work outside a turn: what the model wrote, its
     /// usage recorded as `purpose`'s. Given up after `limit`; not retried.
+    ///
+    /// # Errors
+    ///
+    /// If the call fails, or gives no answer within `limit`.
     pub async fn complete(
         &self,
         pool: &PgPool,
@@ -210,6 +229,10 @@ impl Chosen {
 
 impl Models {
     /// Reads each provider's key and makes its client.
+    ///
+    /// # Errors
+    ///
+    /// If a provider's key can't be read, or its client can't be made.
     pub fn new(llm: &config::Llm) -> Result<Self> {
         Self::with_callers(llm, |name, provider| {
             let client = max_llm::Client::new(max_llm::Provider {
@@ -227,6 +250,12 @@ impl Models {
         })
     }
 
+    /// As [`Models::new`], with `caller` making each provider's client: a
+    /// script's, in tests.
+    ///
+    /// # Errors
+    ///
+    /// What `caller` fails with.
     pub fn with_callers(
         llm: &config::Llm,
         caller: impl Fn(&str, &config::Provider) -> Result<Arc<dyn Caller>>,
@@ -244,6 +273,11 @@ impl Models {
 
     /// What a turn uses: the conversation's choices where it made them,
     /// the defaults elsewhere.
+    ///
+    /// # Errors
+    ///
+    /// If the conversation's choice isn't `provider/model`, or names no
+    /// configured model.
     pub fn turn(&self, model: Option<&str>, effort: Option<&str>) -> Result<Chosen> {
         let default = &self.llm.default;
         let effort = effort.or(default.effort.as_deref());
@@ -253,6 +287,11 @@ impl Models {
         }
     }
 
+    /// The classifier's model.
+    ///
+    /// # Errors
+    ///
+    /// If `llm.intent` names no configured model.
     pub fn intent(&self) -> Result<Chosen> {
         let intent = &self.llm.intent;
         self.chosen(&intent.model, intent.effort.as_deref())
@@ -347,6 +386,10 @@ impl Models {
 
     /// The model `reference` names, as `/model` and a conversation's
     /// setting have it.
+    ///
+    /// # Errors
+    ///
+    /// If `reference` isn't `provider/model`, or names no configured model.
     pub fn choose(&self, reference: &str, effort: Option<&str>) -> Result<Chosen> {
         self.chosen(&reference.parse()?, effort)
     }

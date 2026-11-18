@@ -34,6 +34,7 @@ use super::{Context, Failure, arguments, internal};
 
 /// A Max tool: what a program calls as `tools.<name>(args)`.
 pub trait Tool: 'static {
+    /// What a program calls it by.
     const NAME: &'static str;
     /// One line for the list of tools, which is what `maxx` shows of it,
     /// with its arguments' descriptions.
@@ -45,13 +46,16 @@ pub trait Tool: 'static {
     /// docs/rust-rewrite.md.
     const TURN: bool = true;
 
+    /// Its arguments, whose schema is made of this type.
     type Args: DeserializeOwned + JsonSchema;
+    /// Its result, whose schema is made of this type.
     type Output: Serialize + JsonSchema;
 
     /// How it is used: the comment over its declaration in the system
     /// prompt, lines after the first indented by two spaces.
     fn guide() -> String;
 
+    /// Does it, for a call from the conversation of `context`.
     fn run(
         context: &Context,
         args: Self::Args,
@@ -62,14 +66,18 @@ pub trait Tool: 'static {
 /// what the system prompt declares.
 #[derive(Debug)]
 pub struct Spec {
+    /// What a program calls it by.
     pub name: &'static str,
+    /// One line for the list of tools.
     pub description: &'static str,
     /// How it is used, as its declaration says it: `maxx <name> --help`
     /// shows it, which is all an agent is told of a tool.
     pub guide: String,
+    /// Whether the system prompt declares it.
     pub turn: bool,
     /// JSON Schemas.
     pub input: Map<String, Value>,
+    /// Its result's JSON Schema.
     pub output: Map<String, Value>,
     /// TypeScript, for the system prompt.
     pub declaration: String,
@@ -105,6 +113,7 @@ pub static TOOLS: LazyLock<Vec<Spec>> = LazyLock::new(|| {
 /// declares them with the host's.
 #[derive(Debug, Deserialize)]
 pub struct Local {
+    /// What a program calls it by.
     pub name: String,
     /// Whether the system prompt declares it, as [`Tool::TURN`] says of
     /// one of the host's.
@@ -156,12 +165,18 @@ pub static DECLARATIONS: LazyLock<String> = LazyLock::new(|| {
     host.chain(guest).collect::<Vec<_>>().join("\n\n")
 });
 
+/// The tool of this name, if there is one.
 pub fn find(name: &str) -> Option<&'static Spec> {
     TOOLS.iter().find(|spec| spec.name == name)
 }
 
 impl Spec {
     /// Runs it, once its arguments keep to its schema's bounds.
+    ///
+    /// # Errors
+    ///
+    /// `bad_arguments` when the arguments aren't the tool's, or are out of
+    /// its schema's bounds; else the tool's own [`Failure`].
     pub async fn call(&self, context: &Context, args: Value) -> Result<Value, Failure> {
         bounded(&self.input, &args, "")
             .map_err(|wrong| Failure::new("bad_arguments", format!("{}: {wrong}", self.name)))?;

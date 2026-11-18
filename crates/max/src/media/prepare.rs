@@ -17,7 +17,9 @@ const QUALITY: u8 = 85;
 /// A picture's size, and its copy for the model.
 #[derive(Debug)]
 pub struct Prepared {
+    /// Its width in pixels.
     pub width: u32,
+    /// Its height in pixels.
     pub height: u32,
     /// None when the original will do.
     pub copy: Option<Vec<u8>>,
@@ -45,6 +47,11 @@ fn format(bytes: &[u8]) -> Option<ImageFormat> {
 /// None when the bytes aren't PNG, JPEG, GIF or WebP; an error when they
 /// say they are and don't decode. Blocking: a large picture takes a
 /// while, bounded by the limits.
+///
+/// # Errors
+///
+/// If the bytes say they are a picture and don't decode, or its copy
+/// can't be written.
 pub fn prepare(bytes: &[u8]) -> ImageResult<Option<Prepared>> {
     let Some(format) = format(bytes) else {
         return Ok(None);
@@ -78,6 +85,10 @@ pub fn prepare(bytes: &[u8]) -> ImageResult<Option<Prepared>> {
 }
 
 /// A picture as PNG, which QQ takes where it doesn't take WebP. Blocking.
+///
+/// # Errors
+///
+/// If the bytes don't decode, or the PNG can't be written.
 pub fn png(bytes: &[u8]) -> ImageResult<Vec<u8>> {
     let mut reader = ImageReader::new(Cursor::new(bytes)).with_guessed_format()?;
     reader.limits(limits());

@@ -9,6 +9,10 @@ use reqwest::{Client, Response, header};
 pub const TIMEOUT: Duration = Duration::from_secs(60);
 
 /// The client downloads go through.
+///
+/// # Errors
+///
+/// If the HTTP client can't be made.
 pub fn client() -> reqwest::Result<Client> {
     Client::builder()
         .connect_timeout(Duration::from_secs(10))
@@ -24,6 +28,7 @@ pub struct Body {
     read: u64,
 }
 
+/// Why a download failed.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
     /// More than the limit: only what QQ said about it is kept.
@@ -52,6 +57,12 @@ impl Error {
 
 /// Starts downloading `url`, and says what the server said it is. One
 /// the server says is over `most` bytes is refused.
+///
+/// # Errors
+///
+/// [`Error::Status`] for an answer that isn't a success,
+/// [`Error::TooLarge`] for one the server says is over `most`, and
+/// [`Error::Failed`] when the connection fails.
 pub async fn open(http: &Client, url: &str, most: u64) -> Result<(Body, Option<String>), Error> {
     let response = http.get(url).send().await.map_err(failed)?;
     let status = response.status();
@@ -82,6 +93,11 @@ pub async fn open(http: &Client, url: &str, most: u64) -> Result<(Body, Option<S
 impl Body {
     /// The next piece, None at the end. Past the limit, the download is
     /// too large.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::TooLarge`] once more than the limit has come, and
+    /// [`Error::Failed`] when the connection breaks.
     pub async fn chunk(&mut self) -> Result<Option<Bytes>, Error> {
         let Some(chunk) = self.response.chunk().await.map_err(failed)? else {
             return Ok(None);
@@ -94,6 +110,10 @@ impl Body {
     }
 
     /// The whole body: `head`, what was read of it already, and the rest.
+    ///
+    /// # Errors
+    ///
+    /// As [`Body::chunk`].
     pub async fn rest(mut self, mut head: Vec<u8>) -> Result<Vec<u8>, Error> {
         // As long as the server says, which is within the limit.
         let length = self.response.content_length().unwrap_or(0);

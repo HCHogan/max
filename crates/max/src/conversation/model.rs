@@ -20,6 +20,9 @@ use crate::media::pictures::Pictures;
 /// The longest wait before a retry.
 const MAX_BACKOFF: Duration = Duration::from_secs(8);
 
+/// Calls the model with `request`, again while it fails with nothing
+/// said, and reports to `mailbox`: each message as `Said`, then
+/// `ModelDone`.
 pub async fn call(
     chosen: Chosen,
     pictures: Option<Arc<Pictures>>,
