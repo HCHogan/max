@@ -38,6 +38,7 @@ ids! {
     /// A row in the ledger. Within a conversation, id order is the order the
     /// conversation actor committed them: the timeline.
     MessageId(i64);
+    /// A conversation: one timeline, whichever chats it is in.
     ConversationId(i64);
     /// Where a conversation lives on one platform.
     EndpointId(i64);
@@ -46,6 +47,7 @@ ids! {
     /// A platform account. The ledger stores these; rendering maps them to
     /// principals.
     IdentityId(i64);
+    /// A turn: one run of the core, from its trigger to its outcome.
     TurnId(i64);
 }
 
@@ -55,10 +57,12 @@ ids! {
 pub struct CallId(String);
 
 impl CallId {
+    /// Of the id as the provider gave it.
     pub fn new(id: impl Into<String>) -> Self {
         Self(id.into())
     }
 
+    /// As the provider gave it.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0

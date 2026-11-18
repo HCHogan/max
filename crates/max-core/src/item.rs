@@ -10,8 +10,10 @@ use serde::{Deserialize, Serialize};
 use crate::ids::{CallId, MessageId};
 use crate::message::{MediaKind, MediaRef};
 
+/// One thing the model is shown or says, with what it costs.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Item {
+    /// What it is.
     pub kind: ItemKind,
     /// For items the model produced: which protocol and model. An adapter
     /// drops `opaque` from another source.
@@ -24,30 +26,41 @@ pub struct Item {
     pub tokens: u32,
 }
 
+/// What an item is.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ItemKind {
+    /// The system prompt.
     System {
+        /// The prompt.
         text: String,
     },
     /// What Max is shown: context blocks and new inputs, and the pictures
     /// among them, after the text.
     User {
+        /// What Max is shown.
         text: String,
+        /// The pictures among it.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         images: Vec<Image>,
     },
     /// What the model wrote.
     Assistant {
+        /// As the model wrote it.
         text: String,
     },
     /// The readable part of reasoning, if any; the rest is in `opaque`.
     Reasoning {
+        /// What of the reasoning can be read, if any.
         text: Option<String>,
     },
+    /// A tool call the model wrote.
     ToolCall(ToolCall),
+    /// What a tool call came to.
     ToolResult {
+        /// The call it answers.
         call: CallId,
+        /// What the tool gave.
         output: ToolOutput,
     },
 }
@@ -58,8 +71,11 @@ pub enum ItemKind {
 /// when the row is shown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Image {
+    /// A picture or a sticker.
     pub kind: MediaKind,
+    /// The row it is in.
     pub message: MessageId,
+    /// Which of the row's media it is, from 0.
     pub ordinal: u16,
 }
 
@@ -98,20 +114,27 @@ impl Item {
 /// text, which may not be valid; see `tools`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolCall {
+    /// The provider's id for the call.
     pub id: CallId,
+    /// The tool it names.
     pub name: String,
+    /// The arguments, as the model wrote them.
     pub arguments: String,
 }
 
+/// What a tool call gave the model.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolOutput {
+    /// Its text, and the pictures and videos it shows.
     pub parts: Vec<Part>,
+    /// Whether the call failed.
     pub error: bool,
     /// Estimated by `max`.
     pub tokens: u32,
 }
 
 impl ToolOutput {
+    /// An output that is text alone.
     pub fn text(text: impl Into<String>, error: bool, tokens: u32) -> Self {
         Self {
             parts: vec![Part::Text { text: text.into() }],
@@ -121,39 +144,54 @@ impl ToolOutput {
     }
 }
 
+/// A piece of a tool's output.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Part {
+    /// Text.
     Text {
+        /// As the tool gave it.
         text: String,
     },
+    /// A picture.
     Media {
+        /// The file.
         media: MediaRef,
     },
     /// An MP4 the model watches, sound and all; `seconds` long.
     Video {
+        /// The file.
         media: MediaRef,
+        /// How long it runs.
         seconds: u32,
     },
 }
 
+/// Which model said something, and in which protocol.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ModelTag {
+    /// How it is spoken to.
     pub protocol: Protocol,
+    /// The id sent to the API.
     pub model: String,
 }
 
+/// A provider's wire protocol.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Protocol {
+    /// OpenAI's Responses.
     Responses,
+    /// Chat Completions.
     Chat,
 }
 
 /// One model call's result.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ModelOutput {
+    /// What the model produced, in order.
     pub items: Vec<Item>,
+    /// What the call used.
     pub usage: Usage,
 }
 
@@ -162,9 +200,11 @@ pub struct ModelOutput {
 pub struct Usage {
     /// The whole request.
     pub input: u32,
+    /// Of the input, how much the provider read from its cache.
     pub cached: u32,
     /// Including reasoning.
     pub output: u32,
+    /// Of the output, how much was reasoning.
     pub reasoning: u32,
 }
 

@@ -16,6 +16,7 @@ pub const PERSONA_CHARS: usize = 500;
 /// `[判定 …]` line.
 pub const NOTE_CHARS: usize = 40;
 
+/// The classifier's system prompt, with the start of `persona`.
 #[must_use]
 pub fn system(persona: &str) -> String {
     let persona: String = persona.chars().take(PERSONA_CHARS).collect();

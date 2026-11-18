@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ids::{ConversationId, IdentityId, MessageId, PrincipalId, TurnId};
 
+/// Where a message came from, and where an account is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Platform {
@@ -34,10 +35,15 @@ crate::names!(Platform, "platform", {
 /// One row of a conversation's timeline.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Message {
+    /// Its row in the ledger, and its place in the timeline.
     pub id: MessageId,
+    /// The conversation it is a row of.
     pub conversation: ConversationId,
+    /// Who sent it.
     pub sender: Sender,
+    /// When it was sent.
     pub at: DateTime<Utc>,
+    /// What it says, or what it does to an earlier row.
     pub content: Content,
     /// For what Max said: the turn that said it.
     pub turn: Option<TurnId>,
@@ -51,17 +57,23 @@ pub struct Message {
 /// snapshots, so a rename doesn't rewrite old lines.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Sender {
+    /// Their account.
     pub identity: IdentityId,
+    /// What they were called then.
     pub name: String,
     /// None in private chats.
     pub role: Option<Role>,
 }
 
+/// A sender's standing in a group.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Role {
+    /// The group's owner.
     Owner,
+    /// One of its administrators.
     Admin,
+    /// Anyone else in it.
     Member,
 }
 
@@ -76,40 +88,67 @@ crate::names!(Role, "role", {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Content {
+    /// Something said.
     Message {
+        /// The row it replies to, if it quotes one.
         reply_to: Option<MessageId>,
+        /// What it says, in order.
         nodes: Vec<Node>,
     },
     /// The new content of an earlier message.
-    Edit { target: MessageId, nodes: Vec<Node> },
+    Edit {
+        /// The row it changes.
+        target: MessageId,
+        /// What that row says from now on.
+        nodes: Vec<Node>,
+    },
     /// The earlier message was recalled or redacted.
-    Unsend { target: MessageId },
+    Unsend {
+        /// The row taken back.
+        target: MessageId,
+    },
 }
 
+/// A piece of what a message says.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Node {
+    /// Plain text.
     Text {
+        /// As it was written.
         text: String,
     },
+    /// An @ of someone, or of everyone.
     Mention {
+        /// Whom.
         target: MentionTarget,
+        /// The name the @ showed, for where the account isn't known.
         display: String,
     },
+    /// A face.
     Emote(Emote),
+    /// A picture, a sticker, a video, a recording or a file.
     Media {
+        /// Where its bytes are, if there is anywhere to get them.
         media: Option<MediaRef>,
+        /// What is known of it.
         meta: MediaMeta,
     },
+    /// A share card.
     Card(Card),
+    /// A forwarded chat record.
     Forward(ForwardRef),
+    /// What the normaliser didn't understand.
     Unsupported(Unsupported),
 }
 
+/// Whom a mention is of.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MentionTarget {
+    /// One account.
     Identity(IdentityId),
+    /// Everyone in the chat.
     All,
 }
 
@@ -117,8 +156,11 @@ pub enum MentionTarget {
 /// platform it came from.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Emote {
+    /// The platform it is a face of.
     pub platform: Platform,
+    /// The platform's id for it.
     pub id: String,
+    /// What the platform calls it, where it says.
     pub name: Option<String>,
 }
 
@@ -153,6 +195,7 @@ impl Sha256 {
         Self(hex)
     }
 
+    /// The 64 hex digits.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
@@ -189,26 +232,38 @@ impl fmt::Display for Sha256 {
 pub enum MediaRef {
     /// In the content store.
     Blob(Sha256),
+    /// At an address of the platform's, not downloaded.
     Remote(String),
 }
 
+/// What is known of a medium besides where it is.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MediaMeta {
+    /// What it was sent as.
     pub kind: MediaKind,
+    /// Its MIME type, where the platform says.
     pub mime: Option<String>,
+    /// Its size in bytes, where the platform says.
     pub size: Option<u64>,
+    /// Its file name, where it has one.
     pub name: Option<String>,
     /// The caption or summary. Never blank: no caption is None.
     pub description: Option<String>,
 }
 
+/// What a medium is sent as.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MediaKind {
+    /// A picture.
     Image,
+    /// A picture sent as a sticker.
     Sticker,
+    /// A video.
     Video,
+    /// A voice message or a recording.
     Audio,
+    /// Any other file.
     File,
 }
 
@@ -226,15 +281,20 @@ crate::names!(MediaKind, "media kind", {
 pub struct Card {
     /// Where it's from, such as "哔哩哔哩".
     pub tag: Option<String>,
+    /// Its title.
     pub title: Option<String>,
+    /// The line under its title.
     pub subtitle: Option<String>,
+    /// Where it leads.
     pub url: Option<String>,
 }
 
 /// A forwarded chat record. Its messages are rows of their own.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ForwardRef {
+    /// The platform's id for the record.
     pub native_id: String,
+    /// How many messages it holds, where the platform says.
     pub count: Option<u32>,
 }
 
@@ -252,46 +312,62 @@ pub struct Unsupported {
 /// them.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Draft {
+    /// The row it quotes, if any.
     pub reply_to: Option<MessageId>,
+    /// What it says, in order.
     pub nodes: Vec<DraftNode>,
 }
 
+/// A piece of what the model writes.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DraftNode {
+    /// Plain text.
     Text {
+        /// As it goes out.
         text: String,
     },
     /// Resolved to the person's account on the destination platform when
     /// sent; plain `@名字` where they have none.
     Mention {
+        /// Whom.
         principal: PrincipalId,
     },
     /// A row's picture or sticker sent again, by its handle
     /// (`[sticker#123.0]`). Whether Max may send it is checked when it is
     /// committed.
     Picture {
+        /// The row the picture is in.
         message: MessageId,
+        /// Which of the row's media it is, from 0.
         ordinal: u16,
     },
     /// A picture a tool made, in the content store already. The model
     /// can't write it.
     Made {
+        /// The file.
         sha256: Sha256,
+        /// Its MIME type.
         mime: String,
+        /// Its size in bytes.
         size: u64,
     },
     /// A file a tool sends, in the content store already, shown under
     /// `name`. The model can't write it.
     File {
+        /// The file.
         sha256: Sha256,
+        /// The name it is shown under.
         name: String,
+        /// Its size in bytes.
         size: u64,
     },
     /// A voice message a tool sends, in the content store already. The
     /// model can't write it.
     Voice {
+        /// The file.
         sha256: Sha256,
+        /// Its size in bytes.
         size: u64,
     },
 }

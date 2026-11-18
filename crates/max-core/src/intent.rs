@@ -24,7 +24,10 @@ pub enum Reason {
     /// An @, a reply to Max, or a private message.
     Direct,
     /// The classifier judged that Max should join in, and said why.
-    Judged { note: String },
+    Judged {
+        /// Its reason, which the model is shown.
+        note: String,
+    },
     /// A program in the group's VM ran `maxx wake`, as a background
     /// command and a background agent do when they end, or the VM service
     /// has something to say about the VM: the wake's item says what.
@@ -54,14 +57,18 @@ const BURST: Duration = Duration::from_secs(5);
 /// A committed row, as intent sees it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Entry {
+    /// The row.
     pub id: MessageId,
+    /// Whose account sent it.
     pub sender: IdentityId,
+    /// How it bears on Max.
     pub kind: EntryKind,
     /// What the sender wrote, without the mention of Max: what the
     /// mid-sentence check reads.
     pub text: String,
 }
 
+/// What a row is to intent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EntryKind {
     /// An @ of Max, a reply to Max, or a private message.
@@ -72,21 +79,33 @@ pub enum EntryKind {
     Chatter,
 }
 
+/// What intent has the actor do.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Decision {
     /// Wake the core: feed it an `Input::Wake`, or start one.
-    Wake { ids: Vec<MessageId>, reason: Reason },
+    Wake {
+        /// The rows it is about.
+        ids: Vec<MessageId>,
+        /// Why.
+        reason: Reason,
+    },
     /// Run the classifier on these, newest last.
-    Classify { batch: Vec<MessageId> },
+    Classify {
+        /// The rows to judge.
+        batch: Vec<MessageId>,
+    },
 }
 
 /// What the classifier said, parsed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Verdict {
+    /// Whether Max should join in.
     pub trigger: bool,
+    /// Why, in a few words.
     pub reason: String,
 }
 
+/// Decides when to wake the core: see the module.
 #[derive(Debug)]
 pub struct Intent {
     proactive: bool,
@@ -116,6 +135,7 @@ impl Default for Intent {
 }
 
 impl Intent {
+    /// With proactivity on and nothing held.
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -128,6 +148,9 @@ impl Intent {
         }
     }
 
+    /// A committed row: what it has the actor do now. A direct trigger
+    /// wakes, or is held while its sender seems to be mid-sentence; chatter
+    /// joins the classifier's next batch.
     pub fn observe(&mut self, entry: &Entry, now: Instant) -> Vec<Decision> {
         let burst = self.burst(entry.sender, now);
         if let Some(hold) = self

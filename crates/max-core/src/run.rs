@@ -20,6 +20,7 @@ use crate::tools::{self, Call, TOOLS, ToolSpec};
 /// What a run is allowed: fixed for the turn.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RunSpec {
+    /// The model, and the protocol it is called in.
     pub model: ModelTag,
     /// The model's context window, C.
     pub window: u32,
@@ -46,6 +47,7 @@ impl RunSpec {
 /// with every request that shows them.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Context {
+    /// The system prompt and the blocks after it.
     pub items: Vec<Arc<Item>>,
     /// The people its roster shows; see [`Segmenter`].
     pub roster: BTreeSet<PrincipalId>,
@@ -58,7 +60,9 @@ pub struct Context {
 pub enum Input {
     /// New rows on the timeline.
     Messages {
+        /// The rows.
         ids: Vec<MessageId>,
+        /// The rows as the model is shown them.
         item: Item,
         /// People the core hasn't seen yet; `item` carries their roster
         /// lines. Once the model sees them, it can mention them.
@@ -74,16 +78,20 @@ pub enum Input {
 pub struct Wake {
     /// The rows it is about.
     pub ids: Vec<MessageId>,
+    /// Why.
     pub reason: Reason,
     /// What the model is shown, such as `[判定：在追问]`. None for a
     /// direct trigger, whose rows are marked already.
     pub item: Option<Item>,
 }
 
+/// Why a run failed.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum FailReason {
+    /// The model call failed.
     Model {
+        /// What it said, with its causes.
         error: String,
     },
     /// The core grew past its limit, or its first inputs alone are over
@@ -91,34 +99,47 @@ pub enum FailReason {
     ContextExhausted,
 }
 
+/// How a run ended.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Outcome {
+    /// Something it wrote went out.
     Answered,
+    /// It ended having said nothing.
     Silent,
+    /// It was stopped: `/kill`, or Max shutting down.
     Interrupted,
+    /// It gave up.
     Failed {
+        /// Why.
         reason: FailReason,
     },
     /// Running when the process crashed.
     Lost,
 }
 
+/// What the actor is to do next for a run.
 #[derive(Debug)]
 pub enum Step {
     /// The request is complete; nothing changes it afterwards.
     CallModel(Request),
+    /// Run these calls, parsed already.
     RunTools(Vec<Call>),
     /// Nothing to do until something arrives. Whether to wait or end is the
     /// actor's call.
     Idle,
 }
 
+/// A model call, whole.
 #[derive(Debug)]
 pub struct Request {
+    /// The model to call.
     pub model: ModelTag,
+    /// The base context and the transcript.
     pub items: Vec<Arc<Item>>,
+    /// The tools it may call.
     pub tools: &'static [ToolSpec],
+    /// The model's output limit, if it has one.
     pub max_output: Option<u32>,
     /// For the segmenter in the model call.
     pub roster: BTreeSet<PrincipalId>,
@@ -127,10 +148,13 @@ pub struct Request {
 /// A call that doesn't fit the core's state. Nothing changes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Rejected {
+    /// The run was interrupted or failed.
     #[error("the run has ended")]
     Ended,
+    /// A model's output came with no call in flight.
     #[error("no model call is in flight")]
     NoModelCall,
+    /// A result came for a call the run doesn't wait for.
     #[error("no such tool call is in flight")]
     UnknownCall,
 }
@@ -140,8 +164,11 @@ pub enum Rejected {
 /// call's output.
 #[derive(Debug, Serialize)]
 pub struct RunRecord<'a> {
+    /// What the run was allowed.
     pub spec: &'a RunSpec,
+    /// What it started from.
     pub base: &'a Context,
+    /// What was said and done after.
     pub transcript: &'a [Arc<Item>],
 }
 
@@ -173,6 +200,7 @@ const WARNING: &str = "[maxx 提醒] 这一轮的上下文快用完了，再调�
 
 const WARNING_TOKENS: u32 = 150;
 
+/// A turn's state machine: see the module.
 #[derive(Clone, Debug)]
 pub struct Run {
     spec: RunSpec,
@@ -278,6 +306,8 @@ impl Run {
         matches!(self.phase, Phase::Calling | Phase::Running(_))
     }
 
+    /// What to do next. Starting a model call or a batch of tools changes the
+    /// phase with it.
     pub fn next_step(&mut self) -> Step {
         match std::mem::replace(&mut self.phase, Phase::Waiting) {
             Phase::ToolsDue(calls) => {
@@ -316,6 +346,12 @@ impl Run {
 
     /// The model's output joins the transcript. Its well-formed calls are
     /// due next, and a malformed one gets an error result here.
+    ///
+    /// # Errors
+    ///
+    /// [`Rejected::Ended`] once the run has ended, and
+    /// [`Rejected::NoModelCall`] when no model call is in flight. Nothing
+    /// changes then.
     pub fn model_output(&mut self, out: ModelOutput) -> Result<(), Rejected> {
         self.calling()?;
         // No request is empty: a count of nothing is no count, and taking it
@@ -373,6 +409,11 @@ impl Run {
 
     /// Takes back the model call in flight, which hasn't said anything: the
     /// next step calls the model again, with what came since shown too.
+    ///
+    /// # Errors
+    ///
+    /// [`Rejected::Ended`] once the run has ended, and
+    /// [`Rejected::NoModelCall`] when no model call is in flight.
     pub fn retract(&mut self) -> Result<(), Rejected> {
         self.calling()?;
         self.round = self.round.saturating_sub(1);
@@ -381,6 +422,11 @@ impl Run {
     }
 
     /// The model call was cut off; `text` had already been said.
+    ///
+    /// # Errors
+    ///
+    /// [`Rejected::Ended`] once the run has ended, and
+    /// [`Rejected::NoModelCall`] when no model call is in flight.
     pub fn partial_output(&mut self, text: String, tokens: u32) -> Result<(), Rejected> {
         self.calling()?;
         if self.speaks(&text) {
@@ -395,6 +441,11 @@ impl Run {
 
     /// A tool's result. The batch's last one carries a reminder when the
     /// model has gone [`QUIET_CALLS`] calls without a word to the group.
+    ///
+    /// # Errors
+    ///
+    /// [`Rejected::Ended`] once the run has ended, and
+    /// [`Rejected::UnknownCall`] for a call the run doesn't wait for.
     pub fn tool_result(&mut self, call: CallId, mut output: ToolOutput) -> Result<(), Rejected> {
         self.open()?;
         let Phase::Running(open) = &mut self.phase else {
@@ -423,6 +474,10 @@ impl Run {
 
     /// New rows or a wake, at any time. The core decides when they take
     /// effect: after the tool batch in flight, before the next model call.
+    ///
+    /// # Errors
+    ///
+    /// [`Rejected::Ended`] once the run has ended.
     pub fn input(&mut self, input: Input) -> Result<(), Rejected> {
         self.open()?;
         match &input {
@@ -438,10 +493,21 @@ impl Run {
         Ok(())
     }
 
+    /// Ends the run as interrupted: the calls in flight get a result that
+    /// says so.
+    ///
+    /// # Errors
+    ///
+    /// [`Rejected::Ended`] if it has ended already.
     pub fn interrupt(&mut self) -> Result<(), Rejected> {
         self.end(Phase::Interrupted)
     }
 
+    /// Ends the run as failed, for `reason`.
+    ///
+    /// # Errors
+    ///
+    /// [`Rejected::Ended`] if it has ended already.
     pub fn fail(&mut self, reason: FailReason) -> Result<(), Rejected> {
         self.end(Phase::Failed(reason))
     }
@@ -508,6 +574,7 @@ impl Run {
         matches!(self.phase, Phase::Waiting)
     }
 
+    /// How many model calls it has made.
     #[must_use]
     pub fn round(&self) -> u32 {
         self.round
@@ -520,6 +587,7 @@ impl Run {
         &self.roster
     }
 
+    /// What the run leaves behind, borrowed from it.
     #[must_use]
     pub fn record(&self) -> RunRecord<'_> {
         RunRecord {

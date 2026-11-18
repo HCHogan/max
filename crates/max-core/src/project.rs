@@ -28,12 +28,14 @@ pub struct Budgets {
     /// The tail grows to this before it is cut, back to `tail_low` or a
     /// little more.
     pub tail_high: u32,
+    /// Where a cut leaves the tail.
     pub tail_low: u32,
     /// One message, notice or tool result; longer ones show an excerpt.
     pub single: u32,
 }
 
 impl Budgets {
+    /// The budgets of a model with this window.
     #[must_use]
     pub fn for_window(window: u32) -> Self {
         let tail_high = (window / 8).min(64_000);
@@ -92,6 +94,7 @@ pub fn mentioned(text: &str) -> BTreeSet<PrincipalId> {
 /// The volatile block: what changes from one core to the next.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Volatile {
+    /// The time, for the clock line.
     pub now: DateTime<Utc>,
     /// Roster lines, one per person in the context.
     pub roster: Vec<String>,
@@ -108,6 +111,7 @@ pub struct Volatile {
 }
 
 impl Volatile {
+    /// The block as the model reads it, its clock in local time.
     #[must_use]
     pub fn render(&self, offset: FixedOffset) -> String {
         let mut out = now_line(self.now, offset);
