@@ -11,6 +11,10 @@ use crate::ids::CallId;
 use crate::item::ToolCall;
 use crate::limits::{BACKGROUND_TIME, BACKGROUND_TIME_MAX, RUN_TIME, RUN_TIME_MAX, SHOWN_BYTES};
 
+/// The tools' names, as the model calls them.
+pub const RUN_CODE: &str = "run_code";
+pub const SHELL: &str = "shell";
+
 #[derive(Debug)]
 pub struct ToolSpec {
     pub name: &'static str,
@@ -29,7 +33,7 @@ pub static TOOLS: LazyLock<[ToolSpec; 2]> = LazyLock::new(|| {
     let background_max = BACKGROUND_TIME_MAX.as_millis();
     [
         ToolSpec {
-            name: "run_code",
+            name: RUN_CODE,
             description: format!(
                 "Runs JavaScript with Node in this chat's VM. code is the body of an async function: \
                 what it returns is the result, and console output comes back beside it. The program calls \
@@ -40,7 +44,7 @@ pub static TOOLS: LazyLock<[ToolSpec; 2]> = LazyLock::new(|| {
             parameters: r#"{"type":"object","properties":{"code":{"type":"string","description":"the body of an async function"},"args":{"description":"what the program reads as args"},"timeout_ms":{"type":"integer","minimum":1}},"required":["code"]}"#,
         },
         ToolSpec {
-            name: "shell",
+            name: SHELL,
             description: format!(
                 "Runs a command with bash -lc in this chat's VM: its exit status and its output, stdout and \
                 stderr together. {run} seconds by default, timeout_ms at most {run_max}. An output over \
@@ -95,19 +99,49 @@ struct ShellArgs {
     background: bool,
 }
 
-/// The call, or what to tell the model about its mistake. A malformed call
-/// gets that as its result and is never run.
-pub fn parse(call: &ToolCall) -> Result<Call, String> {
-    let malformed = |e: serde_json::Error| format!("{}'s arguments are wrong: {e}", call.name);
+impl Tool {
+    /// The name the model calls it by.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::RunCode { .. } => RUN_CODE,
+            Self::Shell { .. } => SHELL,
+        }
+    }
+}
+
+/// What is wrong with a tool call, worded for the model: a malformed call
+/// gets it as its result and is never run.
+#[derive(Debug, thiserror::Error)]
+pub enum Malformed {
+    /// The arguments aren't the tool's: what serde says of them.
+    #[error("{tool}'s arguments are wrong: {error}")]
+    Arguments {
+        tool: &'static str,
+        error: serde_json::Error,
+    },
+    /// The code or the command is blank.
+    #[error("{tool}: {field} is empty")]
+    Empty {
+        tool: &'static str,
+        field: &'static str,
+    },
+    #[error("there is no tool named {0}: only {RUN_CODE} and {SHELL}")]
+    Unknown(String),
+}
+
+/// The call, or what is wrong with it.
+pub fn parse(call: &ToolCall) -> Result<Call, Malformed> {
+    let arguments = |tool| move |error| Malformed::Arguments { tool, error };
+    let empty = |tool, field| Malformed::Empty { tool, field };
     let tool = match call.name.as_str() {
-        "run_code" => {
+        RUN_CODE => {
             let RunCodeArgs {
                 code,
                 args,
                 timeout_ms,
-            } = serde_json::from_str(&call.arguments).map_err(malformed)?;
+            } = serde_json::from_str(&call.arguments).map_err(arguments(RUN_CODE))?;
             if code.trim().is_empty() {
-                return Err("run_code: code is empty".to_owned());
+                return Err(empty(RUN_CODE, "code"));
             }
             Tool::RunCode {
                 code,
@@ -115,15 +149,15 @@ pub fn parse(call: &ToolCall) -> Result<Call, String> {
                 timeout_ms,
             }
         }
-        "shell" => {
+        SHELL => {
             let ShellArgs {
                 command,
                 workdir,
                 timeout_ms,
                 background,
-            } = serde_json::from_str(&call.arguments).map_err(malformed)?;
+            } = serde_json::from_str(&call.arguments).map_err(arguments(SHELL))?;
             if command.trim().is_empty() {
-                return Err("shell: command is empty".to_owned());
+                return Err(empty(SHELL, "command"));
             }
             Tool::Shell {
                 command,
@@ -132,11 +166,7 @@ pub fn parse(call: &ToolCall) -> Result<Call, String> {
                 background,
             }
         }
-        other => {
-            return Err(format!(
-                "there is no tool named {other}: only run_code and shell"
-            ));
-        }
+        other => return Err(Malformed::Unknown(other.to_owned())),
     };
     Ok(Call {
         id: call.id.clone(),
@@ -207,7 +237,7 @@ mod tests {
             ("send_message", "{}"),
         ] {
             let error = parse(&call(name, arguments)).unwrap_err();
-            assert!(!error.is_empty());
+            assert!(!error.to_string().is_empty());
         }
     }
 }

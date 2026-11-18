@@ -74,11 +74,11 @@ const LINE_KEPT: usize = 16 * SHOWN_BYTES;
 pub async fn run(tool: Tool, vms: Option<&Vms>, context: &Context) -> ToolOutput {
     let conversation = context.conversation;
     let (name, browser) = match &tool {
-        Tool::RunCode { code, .. } => ("run_code", browses(code)),
+        Tool::RunCode { code, .. } => (tool.name(), browses(code)),
         Tool::Shell {
             background: true, ..
         } => ("background", false),
-        Tool::Shell { .. } => ("shell", false),
+        Tool::Shell { .. } => (tool.name(), false),
     };
     let started = Instant::now();
     let output = call(tool, vms, context).await;
@@ -107,10 +107,9 @@ async fn call(tool: Tool, vms: Option<&Vms>, context: &Context) -> ToolOutput {
         let tokens = tokens::count(&text);
         ToolOutput::text(text, error, tokens)
     };
-    let (name, timeout_ms) = match &tool {
-        Tool::RunCode { timeout_ms, .. } => ("run_code", *timeout_ms),
-        Tool::Shell { timeout_ms, .. } => ("shell", *timeout_ms),
-    };
+    let name = tool.name();
+    let (Tool::RunCode { timeout_ms, .. } | Tool::Shell { timeout_ms, .. }) = &tool;
+    let timeout_ms = *timeout_ms;
     let Some(vms) = vms else {
         return text(format!("there are no VMs here, so {name} can't run"), true);
     };

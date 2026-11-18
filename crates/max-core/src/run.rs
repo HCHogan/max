@@ -306,7 +306,7 @@ impl Run {
             if let ItemKind::ToolCall(call) = &item.kind {
                 match tools::parse(call) {
                     Ok(call) => due.push(call),
-                    Err(error) => errors.push((call.id.clone(), error)),
+                    Err(error) => errors.push((call.id.clone(), error.to_string())),
                 }
             }
         }
