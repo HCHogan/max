@@ -5,11 +5,13 @@
 //! Max starts.
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
 use chrono::FixedOffset;
-use color_eyre::eyre::{Result, WrapErr, bail, ensure, eyre};
+use color_eyre::eyre::{Result, WrapErr, ensure, eyre};
 use max_core::item::Protocol;
 use max_core::limits::{self, Setting};
 use serde::Deserialize;
@@ -374,13 +376,55 @@ pub struct Llm {
     pub providers: BTreeMap<String, Provider>,
 }
 
-/// A model by `provider/model`, split at the first `/`, and how hard it
-/// should think.
+/// A model and how hard it should think.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Selection {
-    pub model: String,
+    pub model: ModelRef,
     pub effort: Option<String>,
+}
+
+/// A model as the configuration and `/model` name it: `provider/model`,
+/// split at the first `/`.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "String")]
+pub struct ModelRef {
+    pub provider: String,
+    /// The id sent to the API, which may have a `/` of its own.
+    pub model: String,
+}
+
+/// Text that names no model.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("{0:?} isn't provider/model")]
+pub struct NotAModel(String);
+
+impl FromStr for ModelRef {
+    type Err = NotAModel;
+
+    fn from_str(text: &str) -> Result<Self, NotAModel> {
+        let (provider, model) = text
+            .split_once('/')
+            .ok_or_else(|| NotAModel(text.to_owned()))?;
+        Ok(Self {
+            provider: provider.to_owned(),
+            model: model.to_owned(),
+        })
+    }
+}
+
+impl TryFrom<String> for ModelRef {
+    type Error = NotAModel;
+
+    fn try_from(text: String) -> Result<Self, NotAModel> {
+        text.parse()
+    }
+}
+
+impl fmt::Display for ModelRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}/{}", self.provider, self.model)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -660,20 +704,19 @@ impl Llm {
         Ok(())
     }
 
-    /// The provider and the model a `provider/model` reference names.
-    pub fn model(&self, reference: &str) -> Result<(&str, &Provider, &str, &Model)> {
-        let Some((provider_name, model_name)) = reference.split_once('/') else {
-            bail!("{reference:?} isn't provider/model");
-        };
-        let (provider_name, provider) = self
+    /// The provider and the model `reference` names, as they are
+    /// configured.
+    pub fn model(&self, reference: &ModelRef) -> Result<(&Provider, &Model)> {
+        let ModelRef { provider, model } = reference;
+        let configured = self
             .providers
-            .get_key_value(provider_name)
-            .ok_or_else(|| eyre!("no provider {provider_name:?}"))?;
-        let (model_name, model) = provider
+            .get(provider)
+            .ok_or_else(|| eyre!("no provider {provider:?}"))?;
+        let settings = configured
             .models
-            .get_key_value(model_name)
-            .ok_or_else(|| eyre!("{provider_name:?} has no model {model_name:?}"))?;
-        Ok((provider_name, provider, model_name, model))
+            .get(model)
+            .ok_or_else(|| eyre!("{provider:?} has no model {model:?}"))?;
+        Ok((configured, settings))
     }
 }
 

@@ -18,7 +18,7 @@ use max_db::{PgPool, usage};
 use max_llm::{Call, Options, Pictures};
 use tracing::warn;
 
-use crate::config;
+use crate::config::{self, ModelRef};
 
 /// Starts a model call. A provider's client in service; a script in tests.
 pub trait Caller: Send + Sync {
@@ -209,19 +209,22 @@ impl Models {
     /// the defaults elsewhere.
     pub fn turn(&self, model: Option<&str>, effort: Option<&str>) -> Result<Chosen> {
         let default = &self.llm.default;
-        let reference = model.unwrap_or(&default.model);
-        self.choose(reference, effort.or(default.effort.as_deref()))
+        let effort = effort.or(default.effort.as_deref());
+        match model {
+            Some(reference) => self.choose(reference, effort),
+            None => self.chosen(&default.model, effort),
+        }
     }
 
     pub fn intent(&self) -> Result<Chosen> {
         let intent = &self.llm.intent;
-        self.choose(&intent.model, intent.effort.as_deref())
+        self.chosen(&intent.model, intent.effort.as_deref())
     }
 
     /// The caption worker's model, when one is configured.
     pub fn caption(&self) -> Option<Result<Chosen>> {
         let caption = self.llm.caption.as_ref()?;
-        Some(self.choose(&caption.model, caption.effort.as_deref()))
+        Some(self.chosen(&caption.model, caption.effort.as_deref()))
     }
 
     /// Where model calls from the VMs go, when background agents have a
@@ -256,8 +259,8 @@ impl Models {
             }
         }
         let default = all
-            .get(&job.model)
-            .ok_or_else(|| eyre!("llm.job names no configured model: {:?}", job.model))?;
+            .get(&job.model.to_string())
+            .ok_or_else(|| eyre!("llm.job names no configured model: {}", job.model))?;
         Ok(Upstreams {
             default: Arc::clone(default),
             effort: job.effort.clone(),
@@ -275,12 +278,12 @@ impl Models {
     /// provider's window, or the default model's when it is None or no
     /// longer configured.
     pub fn idle_window(&self, model: Option<&str>) -> Duration {
-        let window = |reference: &str| {
-            let (_, provider, _, _) = self.llm.model(reference).ok()?;
+        let window = |reference: &ModelRef| {
+            let (provider, _) = self.llm.model(reference).ok()?;
             Some(provider.idle_window_secs)
         };
         let secs = model
-            .and_then(window)
+            .and_then(|reference| window(&reference.parse().ok()?))
             .or_else(|| window(&self.llm.default.model))
             .unwrap_or(config::IDLE_WINDOW_SECS);
         Duration::from_secs(secs)
@@ -300,13 +303,19 @@ impl Models {
             .collect()
     }
 
+    /// The model `reference` names, as `/model` and a conversation's
+    /// setting have it.
     pub fn choose(&self, reference: &str, effort: Option<&str>) -> Result<Chosen> {
-        let (name, provider, model, settings) = self.llm.model(reference)?;
+        self.chosen(&reference.parse()?, effort)
+    }
+
+    fn chosen(&self, reference: &ModelRef, effort: Option<&str>) -> Result<Chosen> {
+        let (provider, settings) = self.llm.model(reference)?;
         Ok(Chosen {
-            provider: name.to_owned(),
+            provider: reference.provider.clone(),
             tag: ModelTag {
                 protocol: provider.protocol.into(),
-                model: model.to_owned(),
+                model: reference.model.clone(),
             },
             window: settings.context_window,
             max_output: settings.max_output,
@@ -319,7 +328,7 @@ impl Models {
             },
             retries: provider.retries,
             idle_window: Duration::from_secs(provider.idle_window_secs),
-            caller: Arc::clone(&self.callers[name]),
+            caller: Arc::clone(&self.callers[&reference.provider]),
         })
     }
 }
