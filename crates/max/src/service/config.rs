@@ -83,7 +83,7 @@ impl Tool for Config {
                     "bad_arguments",
                     format!(
                         "{} is either 0 (back to the default) or from {} to {}",
-                        setting.name(),
+                        setting.as_str(),
                         range.start(),
                         range.end()
                     ),

@@ -104,20 +104,12 @@ pub enum Setting {
     CallTimeSecs,
 }
 
+crate::names!(Setting, "setting", {
+    IdleWindowSecs => "idle_window_secs",
+    CallTimeSecs => "call_time_secs",
+});
+
 impl Setting {
-    pub const ALL: [Self; 2] = [Self::IdleWindowSecs, Self::CallTimeSecs];
-
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::IdleWindowSecs => "idle_window_secs",
-            Self::CallTimeSecs => "call_time_secs",
-        }
-    }
-
-    pub fn find(name: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|setting| setting.name() == name)
-    }
-
     /// What a conversation, or the configuration file's `[limits]`, may
     /// set it to.
     pub const fn range(self) -> RangeInclusive<u64> {
@@ -165,7 +157,7 @@ mod tests {
     fn settings_are_stored_by_their_names() {
         let mut overrides = Overrides::default();
         for setting in Setting::ALL {
-            assert_eq!(Setting::find(setting.name()), Some(setting));
+            assert_eq!(setting.as_str().parse(), Ok(setting));
             assert!(overrides.get(setting).is_none());
             overrides.set(setting, Some(*setting.range().start()));
         }
@@ -177,7 +169,10 @@ mod tests {
             .map(String::as_str)
             .collect();
         keys.sort_unstable();
-        let mut names: Vec<&str> = Setting::ALL.iter().map(|setting| setting.name()).collect();
+        let mut names: Vec<&str> = Setting::ALL
+            .iter()
+            .map(|setting| setting.as_str())
+            .collect();
         names.sort_unstable();
         assert_eq!(keys, names);
         overrides.set(Setting::CallTimeSecs, None);
