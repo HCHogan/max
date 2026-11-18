@@ -16,7 +16,7 @@ use max_core::message::{Content, Draft, DraftNode, Message, Node, Platform};
 use max_core::project::{Budgets, MEMORY_FILE};
 use max_core::prompt;
 use max_core::render::Mark;
-use max_core::run::{FailReason, Input, Outcome, Run, RunSpec, Step, Wake};
+use max_core::run::{FailReason, Fill, Input, Outcome, Run, RunSpec, Step, Wake};
 use max_db::platform::{self, Settings};
 use max_db::{ledger, turns, usage};
 use tokio::sync::broadcast;
@@ -796,7 +796,7 @@ impl Conversation {
         let why = match how {
             End::Failed(FailReason::Model { error }) => failure("the model call failed", &error),
             End::Failed(FailReason::ContextExhausted) => {
-                let (tokens, limit) = a.run.context_tokens();
+                let Fill { tokens, limit } = a.run.fill();
                 let reason = format!("{tokens} tokens, limit {limit}");
                 failure("the context is full", &reason)
             }

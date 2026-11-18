@@ -182,10 +182,9 @@ pub struct Run {
     pending: Vec<Input>,
     phase: Phase,
     round: u32,
-    /// The provider's count for the last request and its output, and how
-    /// much of the transcript that covers. A provider that doesn't count
-    /// leaves the one before.
-    measured: Option<(u32, usize)>,
+    /// The provider's count for the last request and its output. A
+    /// provider that doesn't count leaves the one before.
+    measured: Option<Measured>,
     /// The wakes since the run was last waiting, the first ones included:
     /// the model hasn't finished with them.
     unhandled: Vec<Wake>,
@@ -198,6 +197,23 @@ pub struct Run {
     /// The model has been shown [`WARNING`]. Until then, a run over its
     /// limit isn't at it: it gets the call that shows the warning.
     warned: bool,
+}
+
+/// What a provider counted: a request and its output.
+#[derive(Clone, Copy, Debug)]
+struct Measured {
+    tokens: u32,
+    /// How many of the transcript's items the count covers.
+    covered: usize,
+}
+
+/// How full a run's context is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Fill {
+    /// Its tokens now.
+    pub tokens: u32,
+    /// How many it may grow to.
+    pub limit: u32,
 }
 
 /// Where the run is. Each phase holds what only it has.
@@ -295,10 +311,10 @@ impl Run {
         // No request is empty: a count of nothing is no count, and taking it
         // would drop everything before it from the size.
         if out.usage.input > 0 {
-            self.measured = Some((
-                out.usage.input + out.usage.output,
-                self.transcript.len() + out.items.len(),
-            ));
+            self.measured = Some(Measured {
+                tokens: out.usage.input + out.usage.output,
+                covered: self.transcript.len() + out.items.len(),
+            });
         }
         let mut due = Vec::new();
         let mut errors = Vec::new();
@@ -436,11 +452,12 @@ impl Run {
         self.size() > self.base_tokens + limit / 10 * 9
     }
 
-    /// The context's tokens, and how many it may grow to: what
-    /// `at_limit` compares.
-    pub fn context_tokens(&self) -> (u32, u32) {
-        let limit = self.spec.limit(self.base_tokens);
-        (self.size(), self.base_tokens + limit)
+    /// How full the context is: what `at_limit` compares.
+    pub fn fill(&self) -> Fill {
+        Fill {
+            tokens: self.size(),
+            limit: self.base_tokens + self.spec.limit(self.base_tokens),
+        }
     }
 
     /// Whether the model has been warned that the run is near its limit.
@@ -571,7 +588,13 @@ impl Run {
     /// The provider's last count plus everything after it, waiting inputs
     /// included; before the first call, the estimates alone.
     fn size(&self) -> u32 {
-        let (measured, covered) = self.measured.unwrap_or((self.base_tokens, 0));
+        let Measured {
+            tokens: measured,
+            covered,
+        } = self.measured.unwrap_or(Measured {
+            tokens: self.base_tokens,
+            covered: 0,
+        });
         let after: u32 = self.transcript[covered..]
             .iter()
             .map(|item| item.tokens)

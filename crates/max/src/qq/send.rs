@@ -75,15 +75,38 @@ struct Shared {
     /// Where the pictures, voice messages and files Max sends are, if
     /// anywhere.
     store: Option<Arc<Store>>,
-    /// When proactive messages went out, per chat and (None) for the bot.
-    sent: Mutex<HashMap<Option<String>, VecDeque<Instant>>>,
+    /// When proactive messages went out, for each thing QQ's rates count.
+    sent: Mutex<HashMap<Rated, VecDeque<Instant>>>,
     uploads: Mutex<Uploads>,
 }
 
-/// Pictures, voice messages and files uploaded, by chat, SHA-256 and what
-/// each goes out as: the `file_info` and until when it is used, if not
-/// for good. Lost when Max stops.
-type Uploads = HashMap<(String, Attached), (String, Option<Instant>)>;
+/// What a rate of QQ's counts the proactive messages of.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum Rated {
+    /// The whole bot.
+    Bot,
+    /// One chat, by its native id.
+    Chat(String),
+}
+
+/// Pictures, voice messages and files uploaded. Lost when Max stops.
+type Uploads = HashMap<Upload, Kept>;
+
+/// What was uploaded where: QQ keeps an upload for the chat it was made
+/// to.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct Upload {
+    /// The chat's native id.
+    chat: String,
+    attached: Attached,
+}
+
+/// An upload as QQ keeps it.
+struct Kept {
+    file_info: String,
+    /// Until when it is used, if not for good.
+    until: Option<Instant>,
+}
 
 /// Before anything is said: what the last process committed and never
 /// heard back about may or may not have gone out. It isn't sent again.
@@ -265,9 +288,12 @@ impl Shared {
         caption: Option<String>,
         quote: Option<String>,
     ) -> Result<Sent, Unsent> {
-        let key = (native_id.to_owned(), attached);
+        let key = Upload {
+            chat: native_id.to_owned(),
+            attached,
+        };
         let file_info = self.upload(chat, &key).await.map_err(|error| {
-            let sha256 = &key.1.sha256;
+            let sha256 = &key.attached.sha256;
             warn!(message = %id, %sha256, %error, "couldn't upload what a message attaches");
             Unsent::Refused(error)
         })?;
@@ -289,20 +315,19 @@ impl Shared {
 
     /// The `file_info` of the picture, voice message or file `key` names,
     /// uploaded unless it was lately.
-    async fn upload(&self, chat: Chat<'_>, key: &(String, Attached)) -> Result<String, String> {
+    async fn upload(&self, chat: Chat<'_>, key: &Upload) -> Result<String, String> {
         let now = Instant::now();
-        let fresh = |until: &Option<Instant>| until.is_none_or(|until| now < until);
         {
             let mut uploads = self.uploads.lock().unwrap_or_else(|p| p.into_inner());
-            uploads.retain(|_, (_, until)| fresh(until));
-            if let Some((file_info, _)) = uploads.get(key) {
-                return Ok(file_info.clone());
+            uploads.retain(|_, kept| kept.until.is_none_or(|until| now < until));
+            if let Some(kept) = uploads.get(key) {
+                return Ok(kept.file_info.clone());
             }
         }
         let Some(store) = &self.store else {
             return Err("no content store".to_owned());
         };
-        let Attached { sha256, kind } = &key.1;
+        let Attached { sha256, kind } = &key.attached;
         // Read as it is uploaded: a file can be hundreds of MiB.
         let path = store.path(sha256);
         let content = api::Content::Path(&path);
@@ -318,10 +343,13 @@ impl Shared {
             .map_err(|error| error.to_string())?;
         let until = (uploaded.ttl > 0)
             .then(|| Instant::now() + Duration::from_secs(uploaded.ttl).saturating_sub(EARLY));
-        let file_info = uploaded.file_info;
+        let kept = Kept {
+            file_info: uploaded.file_info.clone(),
+            until,
+        };
         let mut uploads = self.uploads.lock().unwrap_or_else(|p| p.into_inner());
-        uploads.insert(key.clone(), (file_info.clone(), until));
-        Ok(file_info)
+        uploads.insert(key.clone(), kept);
+        Ok(uploaded.file_info)
     }
 
     /// Waits until a proactive message to `chat` is within QQ's rates.
@@ -331,8 +359,12 @@ impl Shared {
             let wait = {
                 let mut sent = self.sent.lock().unwrap_or_else(|p| p.into_inner());
                 let mut until = None;
-                for (key, rate) in [(None, BOT_RATE), (Some(chat.to_owned()), CHAT_RATE)] {
-                    let times = sent.entry(key).or_default();
+                let rates = [
+                    (Rated::Bot, BOT_RATE),
+                    (Rated::Chat(chat.to_owned()), CHAT_RATE),
+                ];
+                for (rated, rate) in rates {
+                    let times = sent.entry(rated).or_default();
                     while times.front().is_some_and(|at| now >= *at + MINUTE) {
                         times.pop_front();
                     }
@@ -341,8 +373,8 @@ impl Shared {
                     }
                 }
                 if until.is_none() {
-                    for key in [None, Some(chat.to_owned())] {
-                        sent.entry(key).or_default().push_back(now);
+                    for rated in [Rated::Bot, Rated::Chat(chat.to_owned())] {
+                        sent.entry(rated).or_default().push_back(now);
                     }
                 }
                 until

@@ -7,8 +7,25 @@ use chrono::{DateTime, Utc};
 use max_core::ids::{ConversationId, MessageId};
 use sqlx::{Connection, PgConnection};
 
-/// A text to embed, or a vector of it: the row's, and its conversation.
-pub type Of<T> = (MessageId, ConversationId, T);
+/// Something of a row's, with the row and its conversation: its text to
+/// embed, or the vector of it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Of<T> {
+    pub message: MessageId,
+    pub conversation: ConversationId,
+    pub what: T,
+}
+
+impl<T> Of<T> {
+    /// `what` of the same row.
+    pub fn with<U>(&self, what: U) -> Of<U> {
+        Of {
+            message: self.message,
+            conversation: self.conversation,
+            what,
+        }
+    }
+}
 
 /// Up to `limit` chat rows, newest first from before `after`, that should
 /// have a vector by `model` and have none: those whose text, without the
@@ -61,9 +78,10 @@ pub async fn to_embed(
         )
         .fetch_all(&mut *conn)
         .await?;
-        texts.extend(found.into_iter().map(|row| {
-            let id = MessageId::new(row.id);
-            (id, ConversationId::new(row.conversation_id), row.text)
+        texts.extend(found.into_iter().map(|row| Of {
+            message: MessageId::new(row.id),
+            conversation: ConversationId::new(row.conversation_id),
+            what: row.text,
         }));
     }
     Ok(texts)
@@ -77,7 +95,12 @@ pub async fn write(
     at: DateTime<Utc>,
 ) -> sqlx::Result<()> {
     let mut tx = conn.begin().await?;
-    for (id, conversation, vector) in vectors {
+    for Of {
+        message,
+        conversation,
+        what: vector,
+    } in vectors
+    {
         sqlx::query!(
             "insert into message_embeddings
                  (message_id, conversation_id, model, embedding, created_at)
@@ -85,7 +108,7 @@ pub async fn write(
              on conflict (message_id) do update
              set model = excluded.model, embedding = excluded.embedding,
                  created_at = excluded.created_at",
-            id.get(),
+            message.get(),
             conversation.get(),
             model,
             vector.as_slice() as &[f32],

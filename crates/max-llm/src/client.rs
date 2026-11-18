@@ -125,7 +125,8 @@ impl Client {
             request.model.clone(),
             Box::pin(events),
             idle,
-            (sent, headed),
+            sent,
+            headed,
         ))
     }
 }
@@ -147,10 +148,15 @@ pub struct Call {
 }
 
 impl Call {
-    /// `at`: when the request was sent, and when the response's headers
-    /// came.
-    fn new(model: ModelTag, events: Events, idle: Duration, at: (Instant, Instant)) -> Self {
-        let (sent, headed) = at;
+    /// `sent` is when the request was, and `headed` when the response's
+    /// headers came.
+    fn new(
+        model: ModelTag,
+        events: Events,
+        idle: Duration,
+        sent: Instant,
+        headed: Instant,
+    ) -> Self {
         let parser = match model.protocol {
             Protocol::Responses => Parser::Responses(responses::Parser::new(model)),
             Protocol::Chat => Parser::Chat(chat::Parser::new(model)),
@@ -172,7 +178,7 @@ impl Call {
         let body = stream::iter([Ok::<_, io::Error>(VecDeque::from(recorded))]);
         let events = SseStream::from_bytes_stream(body);
         let now = Instant::now();
-        Self::new(model, Box::pin(events), Duration::MAX, (now, now))
+        Self::new(model, Box::pin(events), Duration::MAX, now, now)
     }
 
     /// The next text the model wrote, to be said, or `None` once no more

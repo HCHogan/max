@@ -64,7 +64,7 @@ impl Run {
     pub fn fail(&mut self, reason: FailReason) -> Result<(), Rejected>;
     pub fn at_limit(&self) -> bool;
     pub fn near_limit(&self) -> bool;
-    pub fn context_tokens(&self) -> (u32, u32); // what at_limit compares
+    pub fn fill(&self) -> Fill;          // the context's tokens and their limit: what at_limit compares
     pub fn warned(&self) -> bool;
     pub fn unhandled(&self) -> Vec<Wake>;
     pub fn idle(&self) -> bool;
