@@ -103,7 +103,7 @@ impl Conversation {
             Command::Kill => return self.kill(committed, "kill").await,
             Command::Stop => self.stop_replying(committed).await?,
             Command::Start => self.start_replying().await?,
-            Command::Model(argument) => self.model(argument.as_deref()).await?,
+            Command::Model(argument) => self.model(argument).await?,
             Command::Effort(argument) => self.effort(argument).await?,
             Command::Proactive(on) => self.proactive(on).await?,
             Command::Persona(persona) => self.persona(persona).await?,
@@ -403,23 +403,35 @@ impl Conversation {
         Ok(spent)
     }
 
-    async fn model(&mut self, argument: Option<&str>) -> Result<String> {
+    async fn model(&mut self, argument: Option<Choice>) -> Result<String> {
         let models = &self.shared.models;
         let list = models.references().join(", ");
         let current = self.settings.model.clone();
-        let Some(reference) = argument else {
+        let Some(choice) = argument else {
             let current = match models.turn(current.as_deref(), None) {
                 Ok(chosen) => chosen.reference(),
                 Err(_) => current.unwrap_or_default(),
             };
             return Ok(format!("current: {current}\navailable: {list}"));
         };
-        if let Err(error) = models.choose(reference, None) {
-            return Ok(format!("error: no such model ({error})\navailable: {list}"));
-        }
-        self.settings.model = Some(reference.to_owned());
+        let answer = match choice {
+            // The conversation's own choice goes: it has whatever the
+            // configuration's default is from then on.
+            Choice::Default => {
+                self.settings.model = None;
+                format!("switched to the default, {}", models.default_model())
+            }
+            Choice::To(reference) => {
+                if let Err(error) = models.choose(&reference, None) {
+                    return Ok(format!("error: no such model ({error})\navailable: {list}"));
+                }
+                let answer = format!("switched to {reference}");
+                self.settings.model = Some(reference);
+                answer
+            }
+        };
         self.save_settings().await?;
-        Ok(format!("switched to {reference}; {}", self.takes_effect()))
+        Ok(format!("{answer}; {}", self.takes_effect()))
     }
 
     async fn effort(&mut self, argument: Option<Choice>) -> Result<String> {

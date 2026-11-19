@@ -369,6 +369,13 @@ impl Models {
         Duration::from_secs(secs)
     }
 
+    /// What turns use where a conversation chose no model of its own:
+    /// `llm.default`.
+    #[must_use]
+    pub fn default_model(&self) -> &ModelRef {
+        &self.llm.default.model
+    }
+
     /// Every `provider/model`, for `/model` to list.
     #[must_use]
     pub fn references(&self) -> Vec<String> {
