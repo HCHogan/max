@@ -1859,7 +1859,7 @@ checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
 
 [[package]]
 name = "max"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "axum",
  "chrono",
@@ -1892,7 +1892,7 @@ dependencies = [
 
 [[package]]
 name = "max-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "chrono",
  "insta",
@@ -1903,7 +1903,7 @@ dependencies = [
 
 [[package]]
 name = "max-db"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "chrono",
  "max-core",
@@ -1914,7 +1914,7 @@ dependencies = [
 
 [[package]]
 name = "max-llm"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "base64 0.23.1",
  "futures-util",
