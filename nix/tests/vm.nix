@@ -14,7 +14,8 @@
 # through max. Then a VM on the
 # operations network reaches a stand-in for the tailnet through its
 # namespace, where an ordinary VM can't, its ip rule having outlived
-# networkd.
+# networkd; and the namespace's client keeps its resolvers when
+# resolved rewrites its stub.
 {
   pkgs,
   module,
@@ -122,8 +123,10 @@ pkgs.testers.runNixOSTest {
     specialisation.newer.configuration.services.maxx.vm.guest = newer;
     boot.kernel.sysctl."net.ipv4.ip_forward" = 1;
     # As on tank: networkd, which removes the ip rules its .network files
-    # don't name, and eth1's names the operations network's.
+    # don't name, and eth1's names the operations network's; and resolved,
+    # whose stub /etc/resolv.conf leads to.
     networking.useNetworkd = true;
+    services.resolved.enable = true;
     systemd.network.networks."40-eth1".routingPolicyRules = [
       {
         From = "10.236.0.0/24";
@@ -353,6 +356,19 @@ pkgs.testers.runNixOSTest {
     # The operations network. The tailnet's stand-in: a namespace behind a
     # veth from maxx-ops, where tailscale0 would be.
     machine.wait_for_unit("maxx-ops-network.service")
+    # Its client keeps the resolvers it was given when resolved renames a
+    # new stub over the one /etc/resolv.conf leads to, as it does when
+    # the host's DNS changes; the host's 127.0.0.53 isn't in the namespace.
+    machine.succeed("test $(readlink -f /etc/resolv.conf) = /run/systemd/resolve/stub-resolv.conf")
+    machine.wait_until_succeeds(
+        "p=$(systemctl show -P MainPID maxx-ops-tailscaled.service) && test $p != 0"
+        + " && i=$(stat -c %i /run/systemd/resolve/stub-resolv.conf)"
+        + " && resolvectl domain eth1 renamed-$RANDOM.test && sleep 1"
+        + " && test $(stat -c %i /run/systemd/resolve/stub-resolv.conf) != $i"
+        + " && nsenter -t $p -m cat /etc/resolv.conf | grep -q '^nameserver 223.5.5.5'"
+        + " && test $(systemctl show -P MainPID maxx-ops-tailscaled.service) = $p",
+        timeout=120,
+    )
     machine.succeed("systemctl stop maxx-ops-tailscaled.service")
     # The rule that sends the VMs into the namespace outlives networkd
     # configuring a link, when it removes rules no .network names (a

@@ -75,6 +75,17 @@ let
   resolver = pkgs.writeText "${name}-ops-resolv.conf" (
     lib.concatMapStrings (server: "nameserver ${server}\n") cfg.vm.dns
   );
+  # Where the namespace's client finds `resolver`. systemd binds a file
+  # at the end of /etc/resolv.conf's links, which with resolved is its
+  # stub; resolved renames a new one over it whenever the host's DNS
+  # changes, and the mount goes with the old file, leaving the client
+  # the host's 127.0.0.53, which the namespace hasn't. resolved keeps its
+  # directory (RuntimeDirectoryPreserve), so one bound there stays.
+  resolverDir = pkgs.runCommand "${name}-ops-resolve" { } ''
+    mkdir $out
+    cp ${resolver} $out/stub-resolv.conf
+    cp ${resolver} $out/resolv.conf
+  '';
   forwards =
     key:
     lib.elem (config.boot.kernel.sysctl.${key} or null) [
@@ -726,7 +737,11 @@ in
         RuntimeDirectory = "${name}-ops-tailscale";
         RuntimeDirectoryMode = "0700";
         # The host's resolver isn't reachable from the namespace.
-        BindReadOnlyPaths = [ "${resolver}:/etc/resolv.conf" ];
+        BindReadOnlyPaths =
+          if config.services.resolved.enable then
+            [ "${resolverDir}:/run/systemd/resolve" ]
+          else
+            [ "${resolver}:/etc/resolv.conf" ];
         Slice = "${name}.slice";
         Restart = "on-failure";
         RestartSec = 5;

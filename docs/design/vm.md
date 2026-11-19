@@ -269,6 +269,15 @@ the Haskell version's `nix/operations.nix`, on cloud-hypervisor taps.
   or the module's assertion refuses to build; `maxx-ops-network` deletes
   every identical rule and adds it back with `proto static`, the same rule
   networkd adds, since networkd compares rules with their protocol.
+- **The namespace's resolvers**: its tailscaled can't reach the host's
+  resolver, so it is given `vm.dns` as its /etc/resolv.conf. systemd
+  binds a file at the end of /etc/resolv.conf's links, which on a host
+  with resolved is resolved's stub, and resolved renames a new stub over
+  the old one whenever the host's DNS changes; the mount goes with the old
+  file, and the client is left with the host's 127.0.0.53. It keeps the
+  connection to Headscale it has, and fails only when it must look the
+  server up again. So on such a host a directory with both of resolved's
+  files is bound over `/run/systemd/resolve`, which resolved keeps.
 - **Logging in without keys**: the fleet runs Tailscale SSH, and
   Headscale's policy admits `group:imdomestic` (which includes `max@`) by
   tailnet identity. Each machine has a `max` user with passwordless sudo
@@ -361,10 +370,13 @@ with no process between them. Why is in
   it, which needs nested KVM: CI's runners can't give it, so it isn't in
   `checks` and is run on tank. It also covers a guest's calls across a
   restart and a stop of max, a model's answer streamed through max, a
-  switch to a second image, `maxx-ssh` and the machined registration, and the operations network against a fake tailnet (a veth
-  in `maxx-ops` to 100.64.0.2 in another namespace: the operations VM
-  reaches it, an ordinary VM can't and has no ssh_config), with networkd
-  checked to keep the rule. On a Mac it runs too slowly to pass; see
+  switch to a second image, `maxx-ssh` and the machined registration,
+  and the operations network against a fake tailnet (a veth in
+  `maxx-ops` to 100.64.0.2 in another namespace: the operations VM
+  reaches it, an ordinary VM can't and has no ssh_config),
+  with networkd checked to keep the rule and the namespace's client its
+  resolvers when resolved rewrites its stub. On a Mac it runs too slowly
+  to pass; see
   [research/nested-test-on-mac.md](../research/nested-test-on-mac.md).
 - The guest's jobs have a NixOS test of their own, `.#checks.<system>.jobs`;
   when to run which is in AGENTS.md.
