@@ -22,9 +22,9 @@ pub enum Command {
     Stop,
     /// `/start`: Max replies again.
     Start,
-    /// `/model` or `/model list`, which show the models, or `/model
-    /// <provider/model>`.
-    Model(Option<String>),
+    /// `/model` or `/model list`, which show the models, `/model default`,
+    /// or `/model <provider/model>`.
+    Model(Option<Choice>),
     /// `/effort`, `/effort default`, or `/effort <level>`.
     Effort(Option<Choice>),
     /// `/proactive`, or on, off, default.
@@ -162,7 +162,12 @@ impl FromStr for Command {
             "kill" => Self::Kill,
             "stop" => Self::Stop,
             "start" => Self::Start,
-            "model" => Self::Model(argument.filter(|argument| argument != "list")),
+            "model" => Self::Model(
+                argument
+                    .as_deref()
+                    .filter(|argument| *argument != "list")
+                    .map(Choice::from),
+            ),
             "effort" => Self::Effort(argument.as_deref().map(Choice::from)),
             "proactive" => Self::Proactive(match argument.as_deref() {
                 None => None,
@@ -214,9 +219,13 @@ mod tests {
         assert_eq!(parse("/START"), Some(Command::Start));
         assert_eq!(
             parse("/model test/big"),
-            Some(Command::Model(Some("test/big".into())))
+            Some(Command::Model(Some(Choice::To("test/big".into()))))
         );
         assert_eq!(parse("/model list"), Some(Command::Model(None)));
+        assert_eq!(
+            parse("/model default"),
+            Some(Command::Model(Some(Choice::Default)))
+        );
         assert_eq!(parse("/effort"), Some(Command::Effort(None)));
         assert_eq!(
             parse("/effort default"),

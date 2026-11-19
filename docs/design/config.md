@@ -165,10 +165,11 @@ context_window = 32768
   cost, which then reads `≥ $…`. Tiers for long prompts are ignored.
 - `video = true` marks a model that can watch video; `tools.video` exists
   only on such models (see [Multimodal results](tools.md#multimodal-results)).
-- `/model` picks a `provider/model`, and `/effort` only the effort; there
-  are no profiles that differ only in effort. (The Haskell version folded
-  the three layers into one: of tank's 23 profiles, 7 had distinct
-  addresses.)
+- `/model` picks a `provider/model`, or with `default` drops the
+  conversation's choice, so that it follows `llm.default` again; `/effort`
+  picks only the effort; there are no profiles that differ only in
+  effort. (The Haskell version folded the three layers into one: of
+  tank's 23 profiles, 7 had distinct addresses.)
 - Intent has no options; its constants are in `max-core` (see
   [Intent](intent.md)).
 

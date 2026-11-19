@@ -119,8 +119,10 @@ only`. The ranks themselves are in [Permissions](identity.md#permissions).
 - **`/stop`** and **`/start`** leave Max in the chat without replying, and
   bring it back; see [Commands](context.md#commands) in the context's
   design, where what they change is described.
-- **`/model`** picks a `provider/model`, `/model list` lists them; **`/effort`**
-  sets only the reasoning effort; see [Models](config.md#models).
+- **`/model`** picks a `provider/model`, `/model list` lists them, and
+  `/model default` goes back to the configuration's default; **`/effort`**
+  sets only the reasoning effort, and `default` unsets it; see
+  [Models](config.md#models).
 - **`/proactive on|off`** switches classification of chatter; see
   [Intent](intent.md).
 - **`/persona`** shows the persona; with text it sets it; `clear`, `reset`
