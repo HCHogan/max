@@ -104,6 +104,7 @@ fn a_request() {
     };
     let options = Options {
         effort: Some("xhigh".into()),
+        session: Some("max-7".into()),
         ..Options::default()
     };
     let body = sent(&request, &options, &Pictures::default());
@@ -122,6 +123,7 @@ fn a_request() {
     assert_eq!(body["stream"], true);
     assert_eq!(body["include"], json!(["reasoning.encrypted_content"]));
     assert_eq!(body["max_output_tokens"], 8000);
+    assert_eq!(body["prompt_cache_key"], "max-7");
     assert_eq!(
         body["reasoning"],
         json!({ "effort": "xhigh", "summary": "auto" })

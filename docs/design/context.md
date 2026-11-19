@@ -126,6 +126,13 @@ messages are split.
 - **One turn per conversation at a time**, so trigger messages in flight
   needn't be hidden.
 - Everything that changes is in the volatile block.
+- **A turn's calls name their conversation** as their session, `max-<id>`:
+  an `X-Session-Id` header, and in Responses `prompt_cache_key` as well. A
+  gateway keeps a session's calls together on one account and one cache:
+  agy-proxy passes it on as Antigravity's `sessionId`, where without one
+  it makes up a new session for every call, and OpenAI routes by
+  `prompt_cache_key`. Calls outside a turn (the classifier, captions)
+  have none.
 
 ## Budget
 

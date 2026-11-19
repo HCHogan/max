@@ -167,6 +167,15 @@ impl Chosen {
         format!("{}/{}", self.provider, self.tag.model)
     }
 
+    /// For `conversation`'s turns: their calls name it as their session,
+    /// `max-<id>`, so that a gateway keeps them on one cache. Without one,
+    /// agy-proxy makes up a new session for every call.
+    #[must_use]
+    pub fn in_conversation(mut self, conversation: ConversationId) -> Self {
+        self.options.session = Some(format!("max-{conversation}"));
+        self
+    }
+
     /// A whole answer, for work outside a turn: what the model wrote, its
     /// usage recorded as `purpose`'s. Given up after `limit`; not retried.
     ///
@@ -417,6 +426,7 @@ impl Models {
                 temperature: settings.temperature,
                 top_p: settings.top_p,
                 cache_breakpoints: provider.cache_breakpoints,
+                session: None,
             },
             retries: provider.retries,
             idle_window: Duration::from_secs(provider.idle_window_secs),

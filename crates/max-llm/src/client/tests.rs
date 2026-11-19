@@ -86,6 +86,7 @@ async fn a_streamed_call() {
         assert!(head.starts_with("post /v1/chat/completions "), "{head}");
         assert!(head.contains("authorization: bearer sk-test"));
         assert!(head.contains("x-team: max"));
+        assert!(head.contains("x-session-id: max-7"));
         assert_eq!(body["stream"], true);
         respond(&mut socket, "200 OK", "text/event-stream").await;
         // A keep-alive comment, a pause, then an event split across writes.
@@ -101,8 +102,12 @@ async fn a_streamed_call() {
         send(&mut socket, "data: [DONE]\n\n").await;
     };
     let call = async {
+        let options = Options {
+            session: Some("max-7".into()),
+            ..Options::default()
+        };
         let mut call = client
-            .call(&request(), &Options::default(), &Pictures::default())
+            .call(&request(), &options, &Pictures::default())
             .await
             .unwrap();
         let mut events = Vec::new();

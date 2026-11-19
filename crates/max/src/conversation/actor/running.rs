@@ -69,7 +69,8 @@ impl Conversation {
         let chosen = self
             .shared
             .models
-            .turn(settings.model.as_deref(), settings.effort.as_deref())?;
+            .turn(settings.model.as_deref(), settings.effort.as_deref())?
+            .in_conversation(self.place.conversation);
         let now = Utc::now();
         let persona = settings.persona.as_deref().unwrap_or(prompt::PERSONA);
         let vms = self.shared.vms.as_ref();

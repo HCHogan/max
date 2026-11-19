@@ -48,6 +48,8 @@ pub struct Body<'a> {
     tools: Vec<Tool<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_choice: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prompt_cache_key: Option<&'a str>,
 }
 
 /// By its model: the input holds the pictures' bytes.
@@ -190,6 +192,7 @@ pub fn body<'a>(request: &'a Request, options: &'a Options, pictures: &'a Pictur
         top_p: options.top_p,
         tool_choice: (!tools.is_empty()).then_some("auto"),
         tools,
+        prompt_cache_key: options.session.as_deref(),
     }
 }
 

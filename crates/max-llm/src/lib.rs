@@ -38,6 +38,10 @@ pub struct Options {
     /// Mark where each stable block of the context ends, for servers that
     /// cache a prefix only where told to (NInfer). Chat only.
     pub cache_breakpoints: bool,
+    /// What the call is part of, for a provider or a gateway to keep such
+    /// calls together, on one cache or one account: an `X-Session-Id`
+    /// header, and in Responses `prompt_cache_key` as well.
+    pub session: Option<String>,
 }
 
 /// The media a request's items name, which `max` reads before the call.

@@ -95,6 +95,9 @@ impl Client {
         if let Some(key) = &self.provider.api_key {
             http = http.bearer_auth(key);
         }
+        if let Some(session) = &options.session {
+            http = http.header("x-session-id", session);
+        }
         for (name, value) in &self.provider.headers {
             http = http.header(name, value);
         }
