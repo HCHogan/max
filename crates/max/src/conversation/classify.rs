@@ -24,6 +24,7 @@ use tracing::warn;
 use super::project::{direct_mark, people, shown_line};
 use super::report::Report;
 use super::{Event, Place};
+use crate::causes;
 use crate::llm::Chosen;
 
 /// Enough for the one line of JSON, and for a model that reasons a
@@ -63,7 +64,7 @@ pub async fn classify(job: Job, mailbox: UnboundedSender<Event>) {
     match run(&job).await {
         Ok(verdict) => report.send(Event::Verdict(verdict)),
         Err(error) => {
-            let error = format!("{error:#}");
+            let error = causes::chain(&*error);
             warn!(conversation = %job.place.conversation, error, "classifying failed");
         }
     }
