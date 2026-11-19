@@ -298,10 +298,16 @@ the Haskell version's `nix/operations.nix`, on cloud-hypervisor taps.
   so with the namespace down it never falls through to the host's own
   tailnet node; traffic leaving the namespace reaches only the internet,
   not the LAN, other VMs, the host's tailnet or its services; the namespace
-  accepts no new connections from the VMs. The host itself can't be reached
-  over ssh: its tailnet address is local, so a VM's packets are delivered
-  to its input chain and refused. The machine running max and every VM
-  mustn't let a group get root.
+  accepts no new connections from the VMs. An ordinary group mustn't get
+  root on the machine running max or on any VM.
+- **The host, as any other machine**: its own tailnet address is local, so
+  the host would take a VM's packets for it and refuse them at its input
+  chain. With `vm.operations.hostAddress` set, the host sends them to the
+  namespace's end of the uplink instead, which hands them on to that
+  address over the tailnet, and the host's Tailscale SSH lets them in as
+  max, as every other machine does. An operations group then has root on
+  the machine running max as well: its keys, its database, every group's
+  VM.
 - **Slots**: operations groups use only the operations taps, others only
   the ordinary ones, each class evicting its own by idle time. A changed
   list takes effect at a VM's next boot.
@@ -373,10 +379,10 @@ with no process between them. Why is in
   switch to a second image, `maxx-ssh` and the machined registration,
   and the operations network against a fake tailnet (a veth in
   `maxx-ops` to 100.64.0.2 in another namespace: the operations VM
-  reaches it, an ordinary VM can't and has no ssh_config),
-  with networkd checked to keep the rule and the namespace's client its
-  resolvers when resolved rewrites its stub. On a Mac it runs too slowly
-  to pass; see
+  reaches it and the machine's own tailnet address, an ordinary VM
+  can't and has no ssh_config), with networkd checked to keep the rule
+  and the namespace's client its resolvers when resolved rewrites its
+  stub. On a Mac it runs too slowly to pass; see
   [research/nested-test-on-mac.md](../research/nested-test-on-mac.md).
 - The guest's jobs have a NixOS test of their own, `.#checks.<system>.jobs`;
   when to run which is in AGENTS.md.

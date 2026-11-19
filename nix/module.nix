@@ -436,6 +436,20 @@ in
           type = lib.types.str;
           description = "The tailnet's MagicDNS domain; a short host name is one under it.";
         };
+
+        hostAddress = lib.mkOption {
+          type = lib.types.nullOr (lib.types.strMatching "[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+");
+          default = null;
+          example = "100.64.0.4";
+          description = ''
+            The host's own address on the tailnet (`tailscale ip -4`), for
+            these VMs to reach the host as they reach any other machine.
+            Without it the host takes their packets for that address as its
+            own and refuses them. With it, the host's Tailscale SSH lets
+            them in as it would from anywhere else: as max, who has root on
+            the machine running max.
+          '';
+        };
       };
     };
   };
@@ -686,6 +700,14 @@ in
         table ip ${netns}
         delete table ip ${netns}
         table ip ${netns} {
+          ${lib.optionalString (ops.hostAddress != null) ''
+            # The host's tailnet address, which the host sends here as
+            # this end of the uplink's.
+            chain prerouting {
+              type nat hook prerouting priority dstnat; policy accept;
+              iifname "uplink" ip saddr ${ops.subnet}.0/24 ip daddr ${peer} dnat to ${ops.hostAddress}
+            }
+          ''}
           chain input {
             type filter hook input priority filter; policy accept;
             iifname "uplink" ct state { established, related } accept
@@ -860,6 +882,16 @@ in
             oifname "${uplink}" iifname != "${opsTaps}" ct state != { established, related } counter drop
           ''}
         }
+        ${lib.optionalString (operations && ops.hostAddress != null) ''
+          # The host's own tailnet address is local, so the host would take
+          # these VMs' packets for it itself. Sent to the namespace's end of
+          # the uplink instead, they go its way, and it hands them on to the
+          # tailnet.
+          chain prerouting {
+            type nat hook prerouting priority dstnat; policy accept;
+            iifname "${opsTaps}" ip daddr ${ops.hostAddress} dnat ip to ${peer}
+          }
+        ''}
         chain postrouting {
           type nat hook postrouting priority srcnat; policy accept;
           ip saddr ${cfg.vm.subnet}.0/24 oifname != "${taps}" masquerade
