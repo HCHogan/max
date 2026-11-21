@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Checks that the pinned pi keeps what Max rests on when it runs the
+# guest's pi, nix/pi.sh, in a background command, against a fake /llm
+# (check-pi.js). Run it after moving the llm-agents pin, or after
+# changing pi.sh or pi-system.md. Runs in the dev shell, which has Node
+# and jq; PI=path/to/pi runs another pi. What surrounds pi in the guest
+# has the NixOS test, checks.<system>.jobs.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+pi=${PI:-$(nix build --no-link --print-out-paths --inputs-from . 'llm-agents#pi')/bin/pi}
+node scripts/check-pi.js "$pi"

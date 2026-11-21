@@ -3,32 +3,26 @@
 # Max does, with options: a call's line, a background command's notice,
 # and what becomes of each when it is stopped, when max is away, and when
 # its caller is; a call of maxx's made while max restarts, which is made
-# again; a background agent (nix/max-agent.sh), pi itself against a
-# model that says what the test has it say, and one that goes on from
-# another's conversation; and a unit that
-# /work/.max/systemd keeps (nix/max-units.sh). The machine has the
-# guest's jobs without a VM's shares; a fake max at 127.0.0.1:7777 keeps
-# what wakes it and answers for the agents' model.
+# again; a background agent, the guest's pi (nix/pi.sh) in a background
+# command against a model that says what the test has it say, and the
+# same agent going on; and a unit that /work/.max/systemd keeps
+# (nix/max-units.sh). The machine has the guest's jobs without a VM's
+# shares; a fake max at 127.0.0.1:7777 keeps what wakes it and answers
+# for the agents' model.
 { pkgs, pi }:
 let
   # The machine's own, by the same name: a program requires its tools.
   maxx = import ../maxx.nix {
-    inherit pkgs pi;
+    inherit pkgs;
     inherit (pkgs) systemd;
   };
   host = pkgs.writeText "fake-max.js" ''
     const http = require("node:http");
     const fs = require("node:fs");
     const wake = { name: "wake", description: "Wakes Max.", inputSchema: { type: "object", properties: { text: { type: "string" } }, required: ["text"] } };
-    // What the agents' model says, by the task and by how far it is: a
-    // tool call, or its last words.
-    const said = (task, n) => {
-      if (task.includes("口味")) {
-        return [{ tool: "maxx agent ask 要哪种口味" }, { content: "等 Max 回答选哪家" }, { content: "订了火锅" }][n] ?? { content: "多说了" };
-      }
-      if (task.includes("很久")) return { content: "开始查", tool: "sleep 300" };
-      return [{ tool: "sleep 3; echo 查过了" }, { content: "报告：做完了" }][n] ?? { content: "多说了" };
-    };
+    // What the agents' model says, by how far it is: a tool call, or its
+    // last words.
+    const said = n => [{ tool: "sleep 3; echo 查过了" }, { content: "报告：做完了" }][n] ?? { content: "多说了" };
     const text = message => (typeof message.content === "string" ? message.content : (message.content ?? []).map(part => part.text ?? "").join(""));
     // The models max says a call can name: the agents' own, and another.
     const own = { api: "openai-completions", model: "test/m", window: 100000, max_output: null };
@@ -40,7 +34,7 @@ let
       // The model the call names, and how hard it asks it to think.
       fs.appendFileSync("/run/llm-asked", JSON.stringify([model, reasoning_effort ?? null]) + "\n");
       const n = messages.filter(message => message.role === "assistant").length;
-      const { content, tool } = said(users[0] ?? "", n);
+      const { content, tool } = said(n);
       const delta = { role: "assistant", content };
       if (tool) {
         const call = { name: "bash", arguments: JSON.stringify({ command: tool }) };
@@ -60,7 +54,6 @@ let
         // host, and the max that comes answers.
         while (fs.existsSync("/run/away")) await new Promise(resolve => setTimeout(resolve, 200));
         // The models: what max says of them, and their calls.
-        if (req.url === "/llm" && fs.existsSync("/run/no-model")) return res.writeHead(404).end();
         if (req.url === "/llm") {
           res.writeHead(200, { "content-type": "application/json" });
           return res.end(JSON.stringify({ ...own, effort: null, models: [own, wide] }));
@@ -87,7 +80,6 @@ pkgs.testers.runNixOSTest {
     { pkgs, ... }:
     {
       imports = [ ../jobs.nix ];
-      _module.args.pi = pi;
       # pi and what it runs take more than the default.
       virtualisation.memorySize = 2048;
       # As the guest: units find the system's commands.
@@ -97,6 +89,8 @@ pkgs.testers.runNixOSTest {
         pkgs.jq
         # A program of Max's own.
         pkgs.nodejs
+        # The background agents' harness, as the guest has it.
+        (import ../pi.nix { inherit pkgs pi; })
       ];
       systemd.services.fake-max = {
         wantedBy = [ "multi-user.target" ];
@@ -210,7 +204,7 @@ pkgs.testers.runNixOSTest {
             ({"command": ["true"]}, "command is text"),
             ({"limit": 30}, "there is no command to run"),
             ({"command": "true", "limit": 90000}, "limit is a day at most, 86400 seconds"),
-            ({"command": "true", "unit": "mine"}, "--unit is max-job-… or max-agent-…, not 'mine'"),
+            ({"command": "true", "unit": "mine"}, "--unit is max-job-…, not 'mine'"),
             (
                 {"command": "true", "timeout_ms": 5000},
                 "there is no argument timeout_ms; there are: command, title, workdir, limit, unit, split, shown, input",
@@ -225,8 +219,6 @@ pkgs.testers.runNixOSTest {
             ("units list", {"all": True}, "maxx units: list takes no arguments"),
             ("units stop-all", {"force": True}, "maxx units: stop-all takes no arguments"),
             ("units apply", {"dry": True}, "maxx units apply: it takes no arguments"),
-            ("agent models", {"all": True}, "it takes no arguments"),
-            ("agent steer", {"name": "max-agent-1", "text": "好", "now": True}, "there is no argument now; there are: name, text"),
         ]:
             status, refused = machine.execute(maxx(words, **arguments) + " 2>&1")
             assert status == 2 and refused.strip() == why, (words, status, refused)
@@ -391,124 +383,42 @@ pkgs.testers.runNixOSTest {
         machine.wait_until_succeeds(f"test $(wc -l < /run/wakes) -ge {count}", timeout=180)
         return wakes()[count - 1]
 
-    with subtest("an agent works on its task, is told more, and its report wakes Max"):
-        # As Max starts one: with options, and the task on standard input.
-        said = json.loads(machine.succeed("maxx agent start --title 试试 --workdir proj --task - <<< '查一下明天的天气'"))
-        assert said["name"] == "max-agent-1", said
-        assert said["said"].startswith("max-agent-1 started in /work/proj on test/m, for at most 6 hours."), said
-        assert "maxx agent steer max-agent-1" in said["said"], said
-        listed = running()
-        assert [(unit["name"], unit["kind"], unit["title"]) for unit in listed] == [("max-agent-1", "agent", "试试")], listed
-        machine.wait_until_succeeds("test -s /run/llm-heard", timeout=120)
-        told = json.loads(machine.succeed("maxx agent steer max-agent-1 --text - <<< '顺便看后天'"))
-        assert told == {"said": "max-agent-1 will read it at the end of the step it is in."}, told
+    with subtest("an agent is pi in a background command, whose last words wake Max and whose session goes on"):
+        # As Max runs one: in its directory, by a name, the task on
+        # standard input. The notice names it by the command's first line.
+        machine.succeed("mkdir -p /work/proj")
+        first = "cd /work/proj && pi -p --session-id weather <<'EOF'"
+        start("agent", f"{first}\n查一下明天的天气\nEOF", limit=600, title=f"$ {first}")
         notice = woken(5)
-        print(notice)
-        assert notice == "[max-agent-1 完成] 试试\n报告：做完了\n（全文在 /work/.max/jobs/max-agent-1.md）", notice
-        assert machine.succeed("cat /work/.max/jobs/max-agent-1.md") == "# max-agent-1 试试\n\n报告：做完了\n"
-        heard = machine.succeed("tail -n 1 /run/llm-heard")
-        assert "查一下明天的天气" in heard and "顺便看后天" in heard, heard
-        # On the agents' own model, by max's name for it.
+        assert notice.startswith(f"[max-job-agent 完成] $ {first}\nexit status 0, ran for "), notice
+        assert "报告：做完了" in notice, notice
+        # On the agents' own model, by max's name for it, asked for no
+        # effort: max says it has none.
         assert machine.succeed("sort -u /run/llm-asked") == '["test/m",null]\n'
-        machine.wait_until_fails("test -e /run/max/jobs/max-agent-1")
-        # Its notes are its directory's, and it was told where.
-        assert machine.succeed("ls /work/.max/projects /work/proj") == "/work/.max/projects:\n\n/work/proj:\n"
-
-    with subtest("an agent that asks its Max waits for the answer"):
-        machine.succeed(maxx("agent start", task="订个餐，问问口味"))
-        asked = woken(6)
-        assert asked.startswith("[max-agent-2 问] 订个餐，问问口味\n要哪种口味\n（回答它用 maxx agent steer max-agent-2 '回答'"), asked
-        # By position, as that says.
-        machine.succeed("maxx agent steer max-agent-2 火锅")
-        notice = woken(7)
-        assert notice.startswith("[max-agent-2 完成] 订个餐，问问口味\n订了火锅\n"), notice
-        assert "火锅" in machine.succeed("tail -n 1 /run/llm-heard")
-        # Nobody but an agent asks.
-        refused = machine.fail("maxx agent ask 在吗 2>&1")
-        assert "ask is for an agent to ask its Max" in refused, refused
-
-    with subtest("a stopped agent tells nobody, and is gone"):
-        machine.succeed("maxx agent start --title 久 --task 这个要查很久")
-        machine.wait_until_succeeds("grep -q 很久 /run/llm-heard", timeout=120)
-        machine.succeed("sleep 2; systemctl stop max-agent-3.service")
-        machine.wait_until_fails("test -e /run/max/jobs/max-agent-3", timeout=60)
-        refused = machine.fail("maxx agent steer max-agent-3 算了 2>&1")
-        assert refused.strip() == "agent steer: max-agent-3 isn't running: it ended, was stopped, or never was (failed)", refused
-        # What it had written is kept, though nobody is woken for it.
-        assert "开始查" in machine.succeed("cat /work/.max/jobs/max-agent-3.md")
-        machine.succeed("sleep 3")
-        assert len(wakes()) == 7, wakes()
-
-    with subtest("an agent runs on the model Max names, and thinks as hard as told"):
-        listed = json.loads(machine.succeed("maxx agent models"))
-        assert listed == {"models": [
-            {"model": "test/m", "window": 100000, "default": True},
-            {"model": "test/team/wide", "window": 200000, "default": False},
-        ]}, listed
-        said = json.loads(machine.succeed("maxx agent start --model test/team/wide --effort xhigh --title 换个模型 --task - <<< '查一下后天的天气'"))
-        assert said["said"].startswith("max-agent-4 started in /work on test/team/wide, for at most 6 hours."), said
-        notice = woken(8)
-        assert notice.startswith("[max-agent-4 完成] 换个模型\n报告：做完了\n"), notice
-        assert machine.succeed("tail -n 1 /run/llm-asked") == '["test/team/wide","xhigh"]\n'
-        # One max doesn't have starts nothing, and takes no number.
-        refused = machine.fail("maxx agent start --model test/nope --task 查一下 2>&1")
-        assert "there is no model test/nope: maxx agent models lists them" in refused, refused
-        refused = machine.fail("maxx agent start --effort hard --task 查一下 2>&1")
-        assert "effort is one of off, minimal, low, medium, high, xhigh and max, not hard" in refused, refused
-        assert machine.succeed("cat /work/.max/jobs/.count").strip() == "4"
-
-    with subtest("an agent goes on from an ended one's conversation, which is left as it was"):
-        # pi keeps an agent's session under its unit's name.
-        earlier = machine.succeed("ls /work/.max/jobs/*_max-agent-1.jsonl").strip()
-        kept = machine.succeed(f"sha256sum {earlier}")
-        said = json.loads(machine.succeed("maxx agent start --resume max-agent-1 --task - <<< '再查一下大后天'"))
-        # In the earlier one's directory, under its title.
-        assert said["said"].startswith("max-agent-5 started in /work/proj on test/m, continuing max-agent-1's conversation, for at most 6 hours."), said
-        notice = woken(9)
-        assert notice.startswith("[max-agent-5 完成] 试试\n"), notice
-        # All the earlier one was told, then the new task.
+        # The same name in the same directory goes on with all of it, on
+        # the model and effort named.
+        start("again", "cd /work/proj && pi -p --session-id weather --model test/team/wide --thinking xhigh 顺便看后天", limit=600, title="$ again")
+        notice = woken(6)
+        assert notice.startswith("[max-job-again 完成] $ again\nexit status 0, "), notice
         heard = json.loads(machine.succeed("tail -n 1 /run/llm-heard"))
-        assert "查一下明天的天气" in heard[0] and "顺便看后天" in "".join(heard) and "再查一下大后天" in heard[-1], heard
-        header = json.loads(machine.succeed("head -n 1 /work/.max/jobs/*_max-agent-5.jsonl"))
-        assert header["parentSession"] == earlier and header["cwd"] == "/work/proj", header
-        assert machine.succeed(f"sha256sum {earlier}") == kept
-        # One that runs is told more with steer, and what has no
-        # conversation, or isn't an agent's name, starts nothing.
-        calls = int(machine.succeed("wc -l < /run/llm-heard"))
-        machine.succeed("maxx agent start --title 久 --task 这个要查很久")
-        refused = machine.fail("maxx agent start --resume max-agent-6 --task 接着 2>&1")
-        assert "max-agent-6 is still running: tell it more with maxx agent steer max-agent-6" in refused, refused
-        # Stopped once its plugin is there to take the signal, it wakes nobody.
-        machine.wait_until_succeeds(f"test $(wc -l < /run/llm-heard) -gt {calls}", timeout=120)
-        machine.succeed("systemctl stop max-agent-6.service")
-        machine.wait_until_fails("test -e /run/max/jobs/max-agent-6", timeout=60)
-        refused = machine.fail(maxx("agent start", task="接着", resume="max-agent-9") + " 2>&1")
-        assert "there is no conversation of max-agent-9 to go on from" in refused, refused
-        refused = machine.fail("maxx agent start --resume ../max-agent-1 --task 接着 2>&1")
-        assert "resume takes an earlier agent's name, max-agent-N, not ../max-agent-1" in refused, refused
-        assert machine.succeed("cat /work/.max/jobs/.count").strip() == "6"
-        assert len(wakes()) == 9, wakes()
-
-    with subtest("without a model for them there are no agents"):
-        machine.succeed("touch /run/no-model")
-        refused = machine.fail("maxx agent start --task 查一下 2>&1")
-        assert "no model is configured for background agents" in refused, refused
-        machine.succeed("rm /run/no-model")
-        assert "there is no task" in machine.fail("maxx agent start < /dev/null 2>&1")
-        # What isn't text is a wrong command line.
-        status, refused = machine.execute(maxx("agent start", task=5) + " 2>&1")
-        assert status == 2 and refused.strip() == "task is text", (status, refused)
+        assert "查一下明天的天气" in heard[0] and "顺便看后天" in heard[-1], heard
+        assert machine.succeed("tail -n 1 /run/llm-asked") == '["test/team/wide","xhigh"]\n'
+        # In another directory it is refused, before any call.
+        calls = machine.succeed("wc -l < /run/llm-heard")
+        said = call("elsewhere", "pi -p --session-id weather 接着", limit=60)
+        assert said["status"] == "2" and "the session weather is in /work/proj, not /work" in said["out"]["head"], said
+        assert machine.succeed("wc -l < /run/llm-heard") == calls
 
     with subtest("a background command that removes its own directory is still told of"):
         machine.succeed("mkdir -p /work/tmp/gone")
         start("gone", "echo going; cd / && rm -rf /work/tmp/gone", limit=60, title="$ rm", workdir="/work/tmp/gone")
-        notice = woken(10)
+        notice = woken(7)
         assert notice.startswith("[max-job-gone 完成] $ rm\nexit status 0, ran for "), notice
         machine.wait_until_fails("test -e /run/max/jobs/max-job-gone")
 
     with subtest("a background command that ends itself with SIGTERM is told of, as nobody asked"):
         start("self", "echo bye; kill -TERM $$", limit=60, title="$ kill")
-        notice = woken(11)
+        notice = woken(8)
         assert notice.startswith("[max-job-self 完成] $ kill\nended by SIGTERM, after "), notice
 
     with subtest("one name is one unit's, and a text in braces is a command"):
@@ -559,6 +469,6 @@ pkgs.testers.runNixOSTest {
         assert applied["removed"] == ["keep.service"] and applied["skipped"] == [], applied
         machine.fail("systemctl is-active keep.service")
         machine.succeed("sleep 2")
-        assert len(wakes()) == 11, wakes()
+        assert len(wakes()) == 8, wakes()
   '';
 }

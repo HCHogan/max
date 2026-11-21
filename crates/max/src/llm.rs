@@ -138,7 +138,7 @@ impl Upstream {
 }
 
 /// The models what runs in a VM may call: every configured one, and the
-/// one background agents run on unless they are started on another.
+/// one background agents run on unless they are run on another.
 #[derive(Clone, Debug)]
 pub struct Upstreams {
     /// The agents' own, `llm.job`, and how hard it is asked to think.

@@ -2,8 +2,8 @@
 # which systemd starts, limits, stops and sees end: `maxx units`' run,
 # start, list and stop-all, which bin/maxx runs with their arguments as a
 # JSON object (maxx.nix, local.json), and the units' own hooks. The
-# host asks for them so, and so does anything in the VM. See "Lifetimes
-# move to systemd" in docs/rust-rewrite.md.
+# host asks for them so, and so does anything in the VM. See "Background
+# commands" in docs/design/jobs.md.
 #
 #   maxx units run JSON
 #       A call: runs .command as a unit, waits for its end, and prints
@@ -18,11 +18,6 @@
 #   maxx units list JSON       the units that run, and those
 #                              /work/.max/systemd keeps
 #   maxx units stop-all JSON   stops the first of those, and prints which
-#   maxx units agent OPTIONS -- COMMAND...
-#                              a background agent's unit, which `maxx
-#                              agent start` asks for (max-agent.sh): pi,
-#                              which is stopped with SIGUSR2 and given a
-#                              while to report
 #   maxx units ended UNIT      the unit's ExecStopPost=
 #   maxx units notify UNIT     max-notify@UNIT.service's
 #   maxx units idle SECONDS    max-trim.service's: succeeds if none runs,
@@ -42,8 +37,8 @@
 # carries them, and the host reads the files. What isn't a call has no
 # MAX_CALL, and nobody to show anything to.
 #
-# A unit is a call, a background command or an agent from its start to
-# its end; none becomes another. A call whose caller went away, as when
+# A unit is a call or a background command from its start to its end;
+# neither becomes the other. A call whose caller went away, as when
 # the turn is killed or max restarts, is stopped, and nobody is told.
 
 jobs=/run/max/jobs
@@ -176,18 +171,16 @@ launch() {
       --workdir) workdir=$2 && shift 2 ;;
       --shown) shown=$2 && shift 2 ;;
       --split) split=1 && shift ;;
-      --agent) kind=agent && shift ;;
       --input) input=$2 && shift 2 ;;
       --) shift && break ;;
       *) usage "$kind takes no $1" ;;
     esac
   done
-  [[ $unit =~ ^max-(job|agent)-[a-z0-9-]+$ ]] || usage "--unit is max-job-… or max-agent-…, not '$unit'"
+  [[ $unit =~ ^max-job-[a-z0-9-]+$ ]] || usage "--unit is max-job-…, not '$unit'"
   # One name, one unit: a second would write over what the first is known
   # by here, fail to start, and take that away with it, so that the
-  # first's end was told to nobody. An agent's is made for it, with its
-  # task, before it comes here (max-agent.sh).
-  [ "$kind" = agent ] || [ ! -e "$jobs/$unit" ] || usage "there is a unit named $unit already"
+  # first's end was told to nobody.
+  [ ! -e "$jobs/$unit" ] || usage "there is a unit named $unit already"
   [[ $limit =~ ^[0-9]+$ ]] || usage "--limit is in seconds, not '$limit'"
   [[ $input =~ ^[0-9]*$ ]] || usage "--input is in bytes, not '$input'"
   [ $# -gt 0 ] || usage "$kind needs a command after --"
@@ -224,15 +217,6 @@ launch() {
     --property=StandardOutput="append:$out/$unit.txt"
     --property=ExecStopPost="$self ended $unit"
   )
-  if [ "$kind" = agent ]; then
-    # pi exits at once on SIGTERM, with nothing reported: its plugin
-    # takes SIGUSR2, aborts the run and writes the report, in the time
-    # it has before the rest is killed. Its settings are the unit's own.
-    args+=(
-      --property=KillSignal=SIGUSR2 --property=KillMode=mixed
-      --property=TimeoutStopSec=30 --property=RuntimeDirectory="$unit"
-    )
-  fi
   if [ -n "$split" ]; then
     args+=(--property=StandardError="append:$out/$unit.log")
   fi
@@ -358,9 +342,6 @@ ended() {
   elif [ "$kind" = job ] && stopping "$unit"; then
     # Stopped on request: whoever asked knows.
     rm -rf "$dir"
-  elif [ "$kind" = agent ] && [ -e "$dir/stopped" ] && [ "${SERVICE_RESULT:-}" != timeout ]; then
-    # An agent's plugin says it was told to stop, and not by its limit.
-    rm -rf "$dir"
   else
     systemctl start --no-block "max-notify@$unit.service"
   fi
@@ -374,12 +355,6 @@ notify() {
   read -r result code status < "$dir/result"
   title=$(cat "$dir/title")
   limit=$(cat "$dir/limit")
-  if [ "$(cat "$dir/kind")" = agent ]; then
-    agent_notice "$unit" "$result" "$status" "$title" > "$dir/notice.json"
-    maxx wake - < "$dir/notice.json" > /dev/null
-    rm -rf "$dir"
-    return
-  fi
   ran=$(took $(($(cat "$dir/ended") - $(cat "$dir/started"))))
   head="[$unit 完成] $title"
   case "$result" in
@@ -413,46 +388,9 @@ notify() {
   rm -rf "$dir"
 }
 
-# What Max is told of an agent's end: how it ended, its report or the
-# beginning of it, where the whole is, and how many of Max's last words
-# it never read.
-agent_notice() {
-  local unit=$1 result=$2 status=$3 title=$4 dir=$jobs/$1
-  local report=/work/.max/jobs/$unit.md head failed="" left tail=()
-  head="[$unit 完成] $title"
-  if [ "$result" = timeout ]; then
-    head="[$unit 到点了，下面是做到一半的] $title"
-  elif [ -s "$dir/error" ]; then
-    failed=1
-    head="[$unit 失败] $title：$(head -c 300 "$dir/error")"
-  elif [ ! -s "$report" ] && [ "$status" != 0 ]; then
-    failed=1
-    head="[$unit 失败] $title：the agent exited with status $status: $({ tail -n 1 "$out/$unit.txt" 2> /dev/null || true; } | head -c 300)"
-  fi
-  if [ -s "$report" ]; then
-    tail+=("（全文在 $report）")
-  elif [ -z "$failed" ]; then
-    # pi's session is there too, as JSONL.
-    tail+=("（它没留下报告；做的过程在 /work/.max/jobs 里它的会话记录）")
-  fi
-  left=$(find "$dir/inbox" -type f ! -name '.*' ! -name wrap-up 2> /dev/null | wc -l)
-  if [ "$left" = 1 ]; then
-    tail+=("（你最后补充的那条它没收到）")
-  elif [ "$left" -gt 1 ]; then
-    tail+=("（你最后补充的 $left 条它没收到）")
-  fi
-  # The report without the heading the plugin gave its file.
-  { tail -n +3 "$report" 2> /dev/null || true; } \
-    | jq -Rsc --arg head "$head" '$ARGS.positional as $tail
-        | (sub("\\s+$"; "")) as $report
-        | (if ($report | length) > 2000 then $report[:2000] + "…" else $report end) as $shown
-        | {text: ([$head] + (if $shown == "" then [] else [$shown] end) + $tail | join("\n"))}' \
-      --args "${tail[@]}"
-}
-
 running() {
   systemctl list-units --no-legend --plain --state=active,activating,deactivating \
-    'max-job-*.service' 'max-agent-*.service' | awk '{print $1}'
+    'max-job-*.service' | awk '{print $1}'
 }
 
 # What runs, each with what it is and how long it has run, and after
@@ -533,7 +471,6 @@ case "${1:-}" in
     none stop-all "${2-}"
     stop_all
     ;;
-  agent) shift && launch job --agent "$@" ;;
   ended) ended "${2:?maxx units ended needs a unit}" ;;
   notify) notify "${2:?maxx units notify needs a unit}" ;;
   idle) idle "${2:?maxx units idle needs seconds}" ;;

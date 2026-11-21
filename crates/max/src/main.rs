@@ -322,11 +322,11 @@ async fn start(config: Config) -> Result<Running> {
     let asking = signals.clone();
     // What the VMs call besides Max's tools: the APIs the host keeps the
     // keys of, and the models, the background agents' own and any other
-    // an agent is started on.
+    // one is run on.
     let apis = Arc::new(service::api::Apis::load(&config.api)?);
     let agents = models.job().transpose()?.map(Arc::new);
     if agents.is_none() {
-        info!("no model for background agents: maxx agent start starts none");
+        info!("no model for background agents: pi in a VM has none of max's");
     }
     let vms = match config.vm {
         Some(vm) => Some(Vms::start(vm, &mut services, signals, agents, apis)?),

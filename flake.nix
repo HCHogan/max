@@ -20,10 +20,10 @@
       url = "github:microvm-nix/microvm.nix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    # pi, the background agents, in the guest. nix/max-job.ts holds to
-    # this one's (pi 1.5.0's) extension API, which has no version: moving
-    # the pin means running a job with it again (see "Decoupling from the
-    # harness" in docs/rust-rewrite.md).
+    # pi, the background agents, in the guest. nix/pi.sh relies on this
+    # one's (pi 1.5.0's) models.json, settings and sessions: moving the
+    # pin means running scripts/check-pi (see "Background agents" in
+    # docs/design/jobs.md).
     llm-agents.url = "github:numtide/llm-agents.nix/2add2fd83bf01a23357d401ba24155e35d9d93d2";
   };
 

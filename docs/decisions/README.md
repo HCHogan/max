@@ -22,7 +22,8 @@ Why Max is built the way it is: one file for each decision that was a real trade
 - [Resident programs are systemd units Max writes](resident-programs.md)
 - [Programs have every tool, and no caps](no-limits-for-programs.md)
 - [One conversation's Max can ask another's](asking-another-conversation.md)
-- [An ended agent is taken up by a fork](resume-by-fork.md)
+- [A background agent is pi in a background command](agents-are-background-commands.md)
+- [An ended agent is taken up by a fork](resume-by-fork.md) (replaced by the one above)
 
 ## VMs and processes
 

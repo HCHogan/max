@@ -56,9 +56,9 @@ alone:
   needn't quote a message in every segment, and may answer at more length;
   the red lines stay.
 - When someone appears for the first time, a roster line is added.
-- Wakes from outside the chat are lines of their own: a background agent's
-  report as `[max-wake] [max-agent-3 完成] …`, a background command's as
-  `[max-wake] [max-job-… 完成] …`; see [Jobs](jobs.md).
+- Wakes from outside the chat are lines of their own: a background
+  command's end, a background agent's report among them, as `[max-wake]
+  [max-job-… 完成] …`; see [Jobs](jobs.md).
 - **A cap per item**: a message or a wake shows at most
   `min(C × 15%, 25k)` tokens, and at least 2k (`Budgets::single`); the same
   in the tail and in the first inputs. Past it, the first ~2,000

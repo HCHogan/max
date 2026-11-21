@@ -40,7 +40,7 @@ PostgreSQL + pgvector (the ledger)
   a NixOS VM per group (cloud-hypervisor; /work persists and is my home)
   ├── shell and run_code (Node, my tools as tools.*; the maxx CLI)
   ├── headless Chromium (Playwright over CDP; logins persist)
-  ├── pi background agents (max-agent, each a systemd unit)
+  ├── pi background agents (each a background command, a systemd unit)
   └── systemd units in /work/.max/systemd (maxx wake / say / events)
 ```
 
@@ -81,9 +81,11 @@ proxy at `127.0.0.1:7777/api/…` that adds API keys on the host, so the keys
 never touch the guest.
 
 If you ask me for something long, like reviewing a whole repository or
-running a 20-minute build, I don't block the chat: I start a background
-`pi` agent (`maxx agent start`, a systemd unit in the VM that the host keeps
-nothing of), and its report comes back to me as `[max-agent-1 完成]`. To
+running a 20-minute build, I don't block the chat: I run a `pi` agent as a
+background command (`pi -p --session-id …`, a systemd unit in the VM that
+the host keeps nothing of), and its report comes back to me as
+`[max-job-… 完成]`; running it again with the same session goes on with
+it. To
 watch a repo or run something on a timer, I drop a
 `.service` or `.timer` into `/work/.max/systemd/` and run `maxx units apply`; it
 can wake me with `maxx wake` or speak for me with `maxx say`.

@@ -4,7 +4,7 @@
 # host's service (client.js); the guest's own are in local.json: what
 # Node does itself (shown.js, video.js), and what the guest's systemd
 # does, each a script here that takes its arguments as a JSON object
-# (max-jobs.sh, max-agent.sh, max-units.sh). bin/maxx runs those itself
+# (max-jobs.sh, max-units.sh). bin/maxx runs those itself
 # when it is given just that, which is how max calls and how the units'
 # hooks do; anything else goes to Node, which reads the options and
 # calls back.
@@ -17,7 +17,6 @@
 {
   pkgs,
   systemd,
-  pi,
 }:
 let
   inherit (pkgs) lib;
@@ -25,10 +24,8 @@ let
     url = "https://registry.npmjs.org/playwright-core/-/playwright-core-1.59.0.tgz";
     hash = "sha512-PW/X/IoZ6BMUUy8rpwHEZ8Kc0IiLIkgKYGNFaMs5KmQhcfLILNx9yCQD0rnWeWfz1PNeqcFP1BsihQhDOBCwZw==";
   };
-  # pi as one of Max's background agents: what an agent's unit runs.
-  max-pi = import ./max-pi.nix { inherit pkgs pi; };
-  # They call maxx themselves, for a wake and for an agent's unit: by the
-  # PATH, where bin/maxx puts itself first.
+  # They call maxx themselves, for a wake: by the PATH, where bin/maxx
+  # puts itself first.
   scripts = {
     jobs = pkgs.writeShellApplication {
       name = "maxx-jobs";
@@ -41,19 +38,6 @@ let
         systemd
       ];
       text = builtins.readFile ./max-jobs.sh;
-    };
-    agent = pkgs.writeShellApplication {
-      name = "maxx-agent";
-      runtimeInputs = [
-        pkgs.coreutils
-        pkgs.curl
-        pkgs.gnused
-        pkgs.jq
-        pkgs.util-linux
-        systemd
-        max-pi
-      ];
-      text = builtins.readFile ./max-agent.sh;
     };
     units = pkgs.writeShellApplication {
       name = "maxx-units";
@@ -98,8 +82,8 @@ pkgs.runCommand "maxx" { meta.mainProgram = "maxx"; } ''
   export PATH=$out/bin:\$PATH
   run=""
   case "\''${1-} \''${2-}" in
-    # The units' own, and an agent's unit: not tools.
-    "units agent" | "units ended" | "units notify" | "units idle")
+    # The units' own: not tools.
+    "units ended" | "units notify" | "units idle")
       shift
       exec ${lib.getExe scripts.jobs} "\$@"
       ;;

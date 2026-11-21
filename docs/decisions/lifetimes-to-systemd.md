@@ -6,7 +6,10 @@ systemd, and the VMs outlive max. What runs now is in [VMs](../design/vm.md)
 and [Jobs](../design/jobs.md). The guest's commands named here, `max-jobs`,
 `max-agent`, `max-units` and `max-wake`, have since become `maxx units` and
 `maxx agent`; see "One command" under
-[Pure codemode](../design/tools.md#pure-codemode). The five steps it was
+[Pure codemode](../design/tools.md#pure-codemode). An agent has since
+become pi in a background command, with no unit kind, directory or
+command of its own; see
+[agents-are-background-commands.md](agents-are-background-commands.md). The five steps it was
 built in are kept as history in
 [archive/lifetimes-to-systemd-steps.md](../archive/lifetimes-to-systemd-steps.md).
 

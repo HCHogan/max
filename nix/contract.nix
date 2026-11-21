@@ -54,4 +54,11 @@
 # process's that made its connection. The guest says nothing new. A VM
 # from before has a forwarder's socket where the link would be, and a
 # forwarder max doesn't know for a VM's: it boots again.
-9
+#
+# 10 (2026-11-22): no maxx agent. A background agent is the guest's pi,
+# which writes what GET /llm says of the models into its own files, run
+# by Max in a background command; /run/max/jobs keeps no agent's task,
+# inbox or model, and `maxx units agent` is gone. Max's prompt runs pi
+# as the guest's: a guest from before has a pi that knows none of max's
+# models, and an agent there would fail: it boots again.
+10

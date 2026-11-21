@@ -54,7 +54,7 @@ Non-goals:
 | SSH | russh | 0.65 | Calls into the VMs: one connection per VM, one channel per command, straight to the hybrid vsock socket. |
 | Token estimation | tiktoken-rs | 0.12 | Only in `max`; the counts reach the core as data. |
 | Browser | Chromium from nixpkgs, playwright-core | 1.59.0 | Resident in the group VM; programs connect over CDP. See [The browser](design/tools.md#the-browser). |
-| Background agents | pi (`@earendil-works/pi-coding-agent`), `--print` with the plugin `max-agent.ts` | pinned in Nix | A unit of the guest's; see [Background agents](design/jobs.md#background-agents). |
+| Background agents | pi (`@earendil-works/pi-coding-agent`), `--print`, behind a wrapper that tells it of max's models | pinned in Nix | A background command of the guest's; see [Background agents](design/jobs.md#background-agents). |
 | Testing | cargo-nextest, insta, tokio test-util, `#[sqlx::test]` | 0.9.149 / 1.49 |  |
 | Build | crane | — | Dependencies are cached separately. |
 | Toolchain | stable, edition 2024 | pinned in `rust-toolchain.toml` | No nightly; see [Toolchain](../AGENTS.md#toolchain). |
@@ -291,10 +291,9 @@ and a web of dependencies while blocking nothing.
   `expect` with a reason).
 - **Limits live in `max_core::limits`.** Every limit the model is told
   of, or that is used in more than one place, is defined there once; the
-  system prompt's rules, the descriptions of `run_code` and `shell` and
-  the background agent's description are generated
-  from it with `format!`, so changing a number changes what the model
-  reads. How long a VM may idle comes from `vm.idle_minutes` and reaches
+  system prompt's rules and the descriptions of `run_code` and `shell` are
+  generated from it with `format!`, so changing a number changes what the
+  model reads. How long a VM may idle comes from `vm.idle_minutes` and reaches
   `prompt::system` through `Vms::idle`. `webread`'s default length is
   written in Python, and a test checks it against the constant. Not there:
   the ranges of tool arguments (they follow their own schemas), QQ's own

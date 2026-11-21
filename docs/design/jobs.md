@@ -10,26 +10,38 @@ as the turn that read them. Why lifetimes are the guest's is in
 
 Work of many steps runs apart from the turn, as an agent of Max's: pi, in
 the group's VM, on a task Max wrote for it, for hours if need be, while Max
-goes on in the chat. An agent is a unit of the guest's; max keeps nothing
-of it.
+goes on in the chat. An agent is a background command (below) that runs
+pi; it has no tool of its own, and max keeps nothing of it. Why is in
+[decisions/agents-are-background-commands.md](../decisions/agents-are-background-commands.md).
 
-- **A unit.** `maxx agent start` (`nix/max-agent.sh`), which Max runs with
-  `shell`, starts a transient unit `max-agent-<n>` in `max-jobs.slice`
-  through `maxx units agent`: the path of a background command, with
-  `KillSignal=SIGUSR2`, `KillMode=mixed`, `TimeoutStopSec=30` and a
-  `RuntimeDirectory`. The unit runs `max-pi <unit>` (`nix/max-pi.sh`), which
-  execs `pi --print --no-approve` with the plugin `nix/max-agent.ts`. What
-  an agent is, is in its directory, `/run/max/jobs/<unit>/`: `task`,
-  `workdir`, `model.json`, `title`, `limit`, `started`, `resume` for one
-  that goes on from another, the steers in `inbox/`, and the markers
-  `asked`, `stopped` and `error`. The count of
-  those that run and the next number are taken under one lock held until the
-  unit has started. The number comes from `/work/.max/jobs/.count`, so it
-  goes on across restarts of max and boots of the VM.
-- **Limits** are the guest's, in `max-agent.sh`: 3 at once, counted from the
-  units that run, and 6 hours each, as the unit's `RuntimeMaxSec`. The
-  prompt names neither: `maxx agent start` says the time as it starts one,
-  and why when it starts none.
+- **Running one**: Max runs, with `shell` and `background`, `cd <dir> &&
+  pi -p --session-id <name> <<'EOF'`, the task, and `EOF`. pi works in
+  print mode until it settles, and prints its last text, the report. The
+  unit is a background command's, `max-job-…`: its limit (6 hours, or
+  `timeout_ms` up to 24), its output in `/work/.max/out/`, and its line in
+  `maxx units list`. The session's name is Max's, one for each piece of
+  work.
+- **The end** is the background command's notice: `[max-job-… 完成] $ cd
+  /work/max && pi -p --session-id review-pr-25 <<'EOF'`, the exit status,
+  the end of what pi printed (the report, or why its last model call
+  failed) and the output's file. The title is the command's first line, so
+  the notice says which directory and session it was, and a turn that
+  didn't start the agent can go on with it. At its limit or when stopped
+  (`systemctl stop`, `/kill`), pi exits at once with nothing printed: the
+  notice at the limit says it is out of time, and a stop tells nobody.
+- **Going on**: the same `--session-id` in the same directory goes on with
+  the agent's whole conversation, all it read and did, and then the new
+  task: an answer to its question, more to go on, a change of direction, a
+  redo, or work that ran out of time. A running agent can't be told
+  anything: Max stops it and runs it again, and the step it was in is lost.
+  The run may name another model or effort; `--fork <id>` takes the
+  conversation into another directory.
+- **Questions**: an agent stuck on what only Max or the people know decides
+  what it can and says in its report what it assumed; when it can't go on,
+  its last words are the question, and the run ends. Max answers by running
+  it again. Nothing holds an agent for an answer. To ask another
+  conversation, the agent runs `maxx ask` as Max would; the answer wakes
+  Max, who passes it on.
 - **Models.** `job = { model, effort }` in `[llm]` is the agents' default;
   without it there are no agents. pi holds no key: its calls go to
   `http://127.0.0.1:7777/llm/<endpoint>`, where max sends a
@@ -42,20 +54,15 @@ of it.
   - `GET /llm` says what a harness must know before it calls: `{api, model,
     window, max_output, effort}` for the agents' own, and under `models` the
     same for every configured model, without the effort; 404 when there are
-    no agents. `maxx agent start` writes the chosen one into `model.json`.
-  - `maxx agent start --model <name> --effort <level>` starts an agent on
-    another model, and `maxx agent models` lists them with their windows.
-    There is no list of models agents may use: whatever `/model` offers a
-    turn, an agent can run on, priced ones too. The effort is a field of the
-    request max passes on (`reasoning_effort`, or `reasoning.effort` over
-    Responses): `--effort` is one of pi's levels, checked at start, since pi
-    takes a word it doesn't know for `medium`; and `max-pi` has pi send
-    `xhigh` and `max` as they are, which it would otherwise send as `high`
-    to a model it has no list for.
+    no agents. The guest's pi writes it into its own files (below).
+  - `pi --list-models` lists the models with their windows, and `--model
+    <name>` and `--thinking <level>` run an agent on another. There is no
+    list of models agents may use: whatever `/model` offers a turn, an
+    agent can run on, priced ones too.
   - **No sessions**: `/llm` takes any call on a VM's socket, and nothing
     knows which agent called. So anything in the VM can spend on any
     configured model, which is accepted, as the VM is the group's own and
-    its programs could always start an agent.
+    its programs could always run an agent.
 - **Usage** isn't recorded: max (`service/forward.rs`) passes a
   call on and its answer back without reading what it used, and `/status`
   shows what Max's own calls used. What the agents spend is in the
@@ -65,88 +72,25 @@ of it.
   its shell (`maxx history`, `maxx web-search`, `webread`), with no tools of
   its own on the host. It could speak in the chat too; its system text tells
   it not to, and nothing enforces that.
-- **Steers**: `maxx agent steer max-agent-3 '…'`, or `--text -` from stdin,
-  writes a file into the agent's `inbox/`, under a dotted name first and then
-  renamed, so the plugin never reads half of one; its name is the time in
-  nanoseconds, so they sort. The plugin takes them at each `turn_end`, before
-  the next model call; it refuses if the unit isn't running. A steer the agent
-  never took is counted in what Max hears of its end.
-- **Questions**: an agent stuck on what only Max or the people know runs
-  `maxx agent ask '问题'`, a wake: `[max-agent-3 问] 标题`, the question and how
-  to answer, and the marker `asked`. Max answers with `maxx agent steer`. The
-  agent goes on meanwhile; with nothing left to do pi would settle, so the
-  plugin hooks `agent_before_settle`: with `asked` there and the inbox empty,
-  it waits up to 10 minutes, and what comes is one more turn's input. An
-  answer taken at a turn's end removes `asked` too. The question has no
-  number and nothing to decline: unanswered, the agent goes on by its own
-  judgement. To ask another conversation, the agent runs `maxx ask` as Max
-  would; the answer wakes Max, who passes it on.
-- **Results**: once pi has settled, the plugin writes the agent's last text to
-  `/work/.max/jobs/<unit>.md`, and the last model call's error, if any, to
-  `error`. The unit's `ExecStopPost` (`maxx units ended`) starts
-  `max-notify@<unit>`, which wakes Max with `maxx wake`: `[max-agent-3 完成]
-  标题`, `[max-agent-3 到点了，下面是做到一半的] 标题` when the unit ran out of time,
-  or `[max-agent-3 失败] 标题：why`; then the report's first 2,000 characters,
-  `（全文在 …）`, and how many steers it never took. The notice is retried for as
-  long as max doesn't take it. A wake is `Reason::Program`: input to the
-  running core or a new one, and what to say of it in the chat is Max's to
-  decide.
-- **Sessions**: pi keeps the agent's conversation beside its report, in
-  `/work/.max/jobs/<time>_<unit>.jsonl`: `max-pi.sh` names the session after
-  the unit (`--session-id`) and gives it the agent's title (`--name`, a
-  `session_info` entry), so the session says whose it was and what it was for
-  after `/run` is gone, and whether or not a report was written.
-- **Going on from an ended agent**: `maxx agent start --resume max-agent-3`
-  starts a new agent, with its own number, whose conversation is all of
-  max-agent-3's and then its task: work to go on with, redo or ask about,
-  without retelling what the earlier one read and did. `max-agent.sh` takes
-  the newest `*_max-agent-3.jsonl`; it refuses an agent whose unit runs,
-  which is steered instead, and one without such a session. The new agent
-  keeps the session's directory (its `cwd`) and title unless it is given
-  others. The session's path goes into `resume`, and `max-pi.sh` gives pi
-  `--fork` with it, beside `--session-id`: pi copies it into the new
-  agent's session, whose header names it (`parentSession`), and leaves it as
-  it was, so one agent can be taken up twice. Otherwise the new one is an
-  agent like any other: its limits, report and wake are its own, and so are
-  its model and effort, the agents' default unless `--model` and `--effort`
-  say otherwise, whatever the earlier ran on. Its system text is built anew,
-  with the notes as they are now. Why a fork and a new number is in
-  [decisions/resume-by-fork.md](../decisions/resume-by-fork.md).
-- **Stopping**: `systemctl stop max-agent-3`, or `/kill` and `/stop`, which
-  have the guest stop everything that was started (`maxx units stop-all`).
-  pi exits at once on SIGTERM with nothing written, so the unit's
-  `KillSignal` is SIGUSR2: the plugin leaves `stopped`, aborts the run, and
-  the report is written as pi settles. One stopped on request wakes nobody;
-  one stopped by its limit does. Five minutes before the limit the plugin
-  steers the agent itself, to update its notes and report.
-- **What max shows**: `/status` lists no agents; `maxx units list` shows them
-  with the background commands. `agent#3`, as the host once named them, is
-  still read from the wakes the ledger kept, as the reason `job`
-  (`Reason::Answered`'s alias).
+- **No limits of their own**: as many run at once as background commands
+  do, and each has its unit's time.
+- **What max shows**: `/status` lists no agents; `maxx units list` shows
+  them with the other background commands, by their command lines.
+  `agent#3` and `max-agent-3`, as agents were once named, are still read
+  from the wakes the ledger kept, as the reason `job` (`Reason::Answered`'s
+  alias).
 - **When to hand off**: the system prompt says work of many steps goes to an
   agent, not into the turn (reading a whole repository, reviewing or changing
   code, installing, building, testing, opening PRs, reading many pages or
   files); Max says in the chat that it has taken it on and about how long it
-  will take, then starts the agent. What a few steps answer, it does itself.
-  `agent_start`, `agent_steer` and `agent_models` are declared in the prompt
-  with their guides; the prompt says to take up an ended agent's work with
-  `--resume` rather than tell a new one all of it again.
-- **Project directories**: `--workdir` is `/work` by default, or an absolute
-  guest path or one under `/work`, made if missing. The VM, not the
-  directory, is the boundary. pi reads the directory's `AGENTS.md` or
-  `CLAUDE.md`, and its parents', even with `--no-approve`; a project's `.pi/`
-  stays untrusted.
-- **Notes**: agents keep notes for each directory they start in,
-  `/work/.max/projects/<name>.md`, the name being the path with letters and
-  digits kept and the rest `-` (`/work/max` is `work-max.md`). `max-pi.sh`
-  appends it to the agent's system text under `[笔记]`, cut at a line at 16
-  KiB; a link, or a file past 1 MiB, isn't read. The agent updates it before
-  it reports. Max's memory keeps only a project's name, path and one line.
-- **The system text** is `nix/agent-system.md`, after pi's own: it is Max's
-  background agent and doesn't see the chat; `maxx history`, `maxx
-  web-search` and `webread` for looking things up; not to speak in the chat;
-  its last message is its report; `maxx agent ask` for what only Max or the
-  people know; its directory and notes.
+  will take, then runs pi. The prompt says how: the command, a new name for
+  each piece of work, the models, what the task must carry since the agent
+  doesn't see the chat, and going on with the same name and directory,
+  stopping a running one first. What a few steps answer, it does itself.
+- **Project directories**: the directory is the one Max goes into; the VM,
+  not the directory, is the boundary. pi reads the directory's `AGENTS.md`
+  or `CLAUDE.md`, and its parents', and `~/.pi/agent/AGENTS.md`; a
+  project's `.pi/` is trusted only with `--approve`.
 
 ### pi in the VM
 
@@ -169,88 +113,60 @@ without a key:
   and doesn't see the chat; `maxx history`, `maxx web-search` and
   `webread`; not to speak in the chat; its last message is its report; to
   decide what it can and say what it assumed, and to end with its question
-  when it can't go on; the environment.
+  when it can't go on; the environment; that it is stopped at its limit
+  with nothing reported, so long work keeps what it has in files.
 - **Sessions** are a directory's: `--session-id ID` starts a session by
   that name, or goes on with the current directory's. The wrapper refuses
   an id pi keeps only for other directories, with status 2 and where it
   is: pi would start a new session by that name, saying so only on stderr.
-- **Checked** by `scripts/check-pi-job` (`check-pi.js`), with the pinned
-  pi against a fake `/llm`: the default model and effort, the system text,
-  another model by max's name, going on with a session, the refusal, max
-  out of reach, and the rest of pi's files kept.
 
-### What the plugin relies on in pi
+### What the guest's pi relies on in pi
 
-Checked with pi 1.4.0 and 1.5.0:
+Checked with pi 1.5.0:
 
-- A steer doesn't interrupt a running tool. In its `turn_end` handler the
-  plugin calls `pi.sendUserMessage(steer, { deliverAs: "steer" })`; pi takes
-  the queue only after the handlers finish, so the steer goes into the next
-  model call; with `"steeringMode": "all"` several go together. If the last
-  `turn_end` picks one up, pi runs another turn.
-- `ctx.abort()` kills the running tool at once and pi stops. pi exits on
-  SIGTERM with status 143 and reports nothing, and leaves SIGUSR2 to the
-  plugin.
-- `agent_end` isn't the end: automatic retries and queued steers come before
-  `agent_settled`, and pi exits only after its handlers finish, which is
-  where the report is written.
-- An `agent_before_settle` handler that returns `continue: true` with entries
-  added has pi run again with them; it is skipped on abort.
-- When the last message is a failure or an interruption, print mode prints
-  nothing and exits 1, so the report is the plugin's to write.
-- Print mode exits only once the event loop is empty, so the plugin's timer
-  is unref'd.
-- The task comes on stdin: as an argument, a leading `@` would be read as a
+- Print mode writes the last text to stdout and exits 0; when the last
+  model call fails it writes the error to stderr and exits 1. The session
+  is kept either way. A background command's unit writes both to its
+  output file.
+- pi exits at once on SIGTERM, with status 143 and nothing written.
+- Standard input that isn't a terminal goes before the first prompt, so a
+  heredoc is the task; as an argument, a leading `@` would be read as a
   file.
-- `--append-system-prompt` goes after pi's own prompt; a `SYSTEM.md` in the
-  agent directory would replace it, so the file is `agent-system.md`.
-- pi retries a failed model call 3 times by default, about 14 seconds in all;
-  `"retry": {"maxRetries": 8}` gives it longer. A call that a restart of
-  max cuts off fails once: the next try waits at max's socket for the max
-  that comes.
-- `--session-id` names a new session, and with `--fork` names the copy, which
-  is in the current directory whatever the earlier's was. The copy's model
-  and thinking are the command line's, not those the session had. Its system
-  prompt is built anew; pi sends the model the prompt as it is now, once, and
-  records in the session what changed (checked with 1.5.0, whose sessions
-  keep the prompt as system messages).
+- `--session-id ID` takes the current directory's session of that name or
+  makes one, warning on stderr; the id is letters, digits, `-`, `_` and
+  `.`. Sessions are in the agent directory's `sessions/`, a directory for
+  each working directory; with `--session-dir` they are all in that one,
+  and pi still takes an id only for the working directory's. `--session
+  <id>` from another directory asks on standard input whether to fork it,
+  which a background command's empty input answers no, and exits 0 having
+  done nothing; the prompt doesn't use it. `--fork` copies a session into
+  the current directory.
+- A model of `models.json` takes its own `api`. One with `reasoning` is
+  sent `reasoning_effort` as the thinking level says, none for `off`, and
+  `xhigh` and `max` as `thinkingLevelMap` maps them; one without is never
+  sent any. `defaultProvider`, `defaultModel` and `defaultThinkingLevel` in
+  `settings.json` stand when the command line names none, and a model is
+  found by its id alone too.
+- `APPEND_SYSTEM.md` in the agent directory goes after pi's own prompt; a
+  project's `.pi/APPEND_SYSTEM.md` would take its place, but print mode
+  trusts a project's `.pi/` only with `--approve`. Context files load
+  whatever the trust.
+- pi retries a failed model call 3 times by default, about 14 seconds in
+  all; `retry.maxRetries` gives it longer. A call that a restart of max
+  cuts off fails once: the next try waits at max's socket for the max that
+  comes.
 
-pi comes from numtide's llm-agents.nix, pinned in the flake. Its extension
-API has no version, so `scripts/check-pi-job` runs after moving the pin or
-changing `max-agent.ts`, `max-pi.sh` or `agent-system.md`: the pinned pi with
-the real wrapper and plugin against a fake `/llm`, through seven agents
-(steers, a steer in the last turn, a stop by SIGUSR2, an answer that comes
-while it is held, a project with `AGENTS.md` and one with `CLAUDE.md`, and
-one that goes on from another's session on another model). What
-surrounds pi is in the NixOS test `checks.<system>.jobs`, and `max vm-check`
-starts one agent in a real VM against a provider of its own.
+pi comes from numtide's llm-agents.nix, pinned in the flake. So
+`scripts/check-pi` runs after moving the pin or changing `pi.sh` or
+`pi-system.md`: the wrapper with the pinned pi against a fake `/llm`, for
+the default model and effort, the system text, another model by max's
+name, going on with a session, the refusal in another directory, max out
+of reach, and the rest of pi's files kept. What surrounds pi is in the
+NixOS test `checks.<system>.jobs`, and `max vm-check` runs one agent in a
+real VM against a provider of its own.
 
-### What a harness keeps
-
-The host speaks no harness's protocol; what a harness keeps is the guest's,
-in files and a signal:
-
-- **Start**: `maxx agent start` runs the wrapper as a unit with the agent's
-  directory, from which it reads `task`, `workdir` and `model.json`.
-- **Model calls** go to `http://127.0.0.1:7777/llm/<endpoint>`, with any key
-  or none, naming the model as `model.json` does. `/llm` speaks Chat
-  Completions and Responses.
-- **Steers** are the files of `inbox/`, oldest first by name, each removed
-  once taken; a dotted name is still being written.
-- **Stop** is SIGUSR2: leave `stopped`, stop what runs, and write the report
-  within 30 seconds.
-- **The report** is `/work/.max/jobs/<unit>.md`, a heading, an empty line and
-  the text; `error` holds why the last model call failed.
-- **Asking** is `maxx agent ask`, and holding for the answer is the harness's
-  own; `asked` says a question is out.
-- **Going on** is `resume`, the path of the earlier agent's session, which
-  `maxx agent start` found by pi's naming. A harness with sessions of its own
-  needs `maxx agent start` to find those; one without starts from the task
-  alone.
-
-A harness that keeps none of it still runs as an agent: Max hears how it
-exited and that it left no report. Another harness needs a wrapper like
-`max-pi.sh` and whatever of the above it can hook.
+Another harness would need only a wrapper of its own that tells it of
+the models from `GET /llm`: a background command is the rest.
 
 ## Background commands
 
@@ -539,8 +455,8 @@ One function answers what an event may do (`Conversation::refuses`):
 - After `/stop`, what would have Max say or do something is refused with `Max
   is stopped here (/stop), so this wasn't done`: `say`, `send_image`,
   `send_file`, `send_voice` and `recall_message` as their posts reach the actor;
-  `mute_member`, which asks the actor first (`Request::Act`); starting an agent
-  or a background command; `ask`, `answer` and `wake`. VM notices are dropped.
+  `mute_member`, which asks the actor first (`Request::Act`); starting a
+  background command, an agent among them; `ask`, `answer` and `wake`. VM notices are dropped.
   What reads still works: `history`, the searches, `/api`, `maxx events`.
   `/start` lets them through again. See [Commands](context.md#commands).
 - As Max shuts down, what starts work is refused (`Max is restarting, so this
@@ -557,7 +473,7 @@ English, as are the tools' descriptions, guides, argument descriptions,
 checks, results and failures, what the guest's commands print, and what the
 VM service, the sender and the search tell a failed tool; a failure's code
 follows its message in brackets, ` (not_found)`. Chinese stays in the system
-prompt's own prose, the notices Max is shown and their tags (`[max-agent-3
+prompt's own prose, the notices Max is shown and their tags (`[max-job-…
 完成]`, `[ask#5 问]`, which English guides quote as they are), the timeline's
 marks, what stands in for a picture left out, the agent's own prompt, and what
 `vm-check` prints.
@@ -622,7 +538,7 @@ edges and their direction is in
   `ask#N` by its number and returns `{ to: "c#7 <title>" }`. A question or
   answer is at most 2,000 characters (`ASK_CHARS`), and a longer one is
   refused, not cut. A program in the VM can call both, as any tool; an agent
-  asks its own Max with `maxx agent ask`, and another conversation with `maxx
+  asks its own Max with its last words, and another conversation with `maxx
   ask`, whose answer wakes Max.
 - **Neither is said in a chat.** A question and its answer reach the other
   side's Max as a wake's item, shown to the model alone, like an agent's

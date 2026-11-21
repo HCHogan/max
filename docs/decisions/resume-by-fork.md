@@ -1,5 +1,7 @@
 # An ended agent is taken up by a fork
 
+Replaced by [A background agent is pi in a background command](agents-are-background-commands.md): an agent goes on by running pi again with the same session, and there is no `maxx agent start --resume`.
+
 Max can have a new background agent go on from where an ended one stopped: the new agent's session is a fork of the old one's. What runs is "Going on from an ended agent" under [Background agents](../design/jobs.md#background-agents).
 
 ## Context

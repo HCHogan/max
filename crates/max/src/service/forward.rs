@@ -6,9 +6,10 @@
 //! pi takes it for a failed call, and retries.
 //!
 //! A call names its model as the configuration does, `provider/model`,
-//! and any configured model can be named: Max starts an agent on the one
-//! it wants (nix/max-agent.sh). A call that names none, or one that isn't
-//! configured, goes to the agents' own, `llm.job`.
+//! and any configured model can be named: Max runs pi on the one it
+//! wants, which the guest's pi (nix/pi.sh) knows from `GET /llm`. A call
+//! that names none, or one that isn't configured, goes to the agents'
+//! own, `llm.job`.
 //!
 //! max serves this beside its tools, so a call in flight ends with max,
 //! as at a deploy: pi takes that for a failed call too, and its next try
@@ -16,9 +17,9 @@
 //!
 //! Any call at max's socket is taken: nothing in the VM holds a key or
 //! a token, and nothing is counted of what it calls, which is the
-//! provider's to say. An agent is a unit of the guest's, which max keeps
-//! nothing of; `GET /llm` tells it what the models are. See "Background
-//! agents" in docs/design/jobs.md.
+//! provider's to say. An agent is a background command of the guest's,
+//! which max keeps nothing of. See "Background agents" in
+//! docs/design/jobs.md.
 
 use std::sync::Arc;
 use std::time::Duration;

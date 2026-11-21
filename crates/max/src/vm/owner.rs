@@ -40,7 +40,7 @@ struct Listed {
 }
 
 /// One of them: `unit` for one /work/.max/systemd keeps, and for what was
-/// started `call`, `job` or `agent`.
+/// started `call` or `job`.
 #[derive(Deserialize)]
 struct Listing {
     kind: String,

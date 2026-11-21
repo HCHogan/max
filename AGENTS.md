@@ -26,15 +26,14 @@ other project. Without a terminal, start it with `PC_TUI_ENABLED=0 devenv up`.
 
 ## Background agents' harness
 
-After moving pi's pin, or changing `nix/max-pi.sh`, `nix/max-agent.ts`,
-`nix/agent-system.md`, `nix/pi.sh` or `nix/pi-system.md`, run
-`scripts/check-pi-job` in the dev shell as well. It runs the pinned pi against a fake `/llm`, without real model
-calls. `nix/max-agent.sh`, which starts an agent as a unit, is covered
-with the guest's jobs, below.
+After moving pi's pin, or changing `nix/pi.sh` or `nix/pi-system.md`,
+run `scripts/check-pi` in the dev shell as well. It runs the guest's pi
+with the pinned pi against a fake `/llm`, without real model calls. An
+agent in a background command is covered with the guest's jobs, below.
 
 ## The guest's jobs
 
-After changing `nix/max-jobs.sh`, `nix/max-agent.sh`, `nix/max-units.sh`,
+After changing `nix/max-jobs.sh`, `nix/max-units.sh`, `nix/pi.nix`,
 `nix/maxx.nix`, `nix/local.json` or `nix/jobs.nix`, build
 `.#checks.<system>.jobs` for a Linux system (`aarch64-linux` on a Mac
 with a Linux builder): a NixOS test of what Max runs in a VM as units,

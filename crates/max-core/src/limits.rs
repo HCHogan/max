@@ -26,9 +26,8 @@ pub const RUN_TIME: Duration = Duration::from_secs(120);
 pub const RUN_TIME_MAX: Duration = Duration::from_secs(600);
 /// A background command's, unless the call asks for another...
 pub const BACKGROUND_TIME: Duration = Duration::from_secs(6 * 60 * 60);
-/// ...and the most it may ask for. A command costs no model calls while
-/// it runs, only room in the VM, so it may run much longer than an agent,
-/// whose own time is the guest's to say (nix/max-agent.sh).
+/// ...and the most it may ask for. A background agent, pi in such a
+/// command, costs model calls for as long as it runs, and has the same.
 pub const BACKGROUND_TIME_MAX: Duration = Duration::from_secs(24 * 60 * 60);
 /// Output past this many bytes is cut to its head and tail, each half of
 /// it; the whole goes to a file in /work.

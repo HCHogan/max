@@ -474,10 +474,10 @@ pub struct Llm {
     /// The model that says in words what a picture or sticker shows. It
     /// has to see pictures. Without it, nothing is captioned.
     pub caption: Option<Selection>,
-    /// The model background agents run on, unless Max starts one on
-    /// another of the configured models: pi, in the group's VM, which
-    /// reaches them through max's service to the VM. Without it, there are
-    /// no background agents, and nothing in a VM calls a model.
+    /// The model background agents run on, unless Max runs one on another
+    /// of the configured models: pi, in the group's VM, which reaches them
+    /// through max's service to the VM. Without it, there are no
+    /// background agents, and nothing in a VM calls a model.
     pub job: Option<Selection>,
     /// The providers, by the name a `provider/model` begins with.
     pub providers: BTreeMap<String, Provider>,

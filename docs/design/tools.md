@@ -71,26 +71,25 @@ and a program has them all as `tools.<name>`.
   through exit codes. The cost the other way is that each `maxx` starts Node,
   a few tens of milliseconds, so a loop of a hundred calls belongs in
   `run_code`.)
-- **The guest's tools**: `agent start`, `agent steer`, `agent models` and
-  `agent ask`; `units list`, `units apply`, `units start`, `units run` and
-  `units stop-all`; `show`, `video` and `events`. Calls, background
-  commands, agents and resident units are all units: `units list` has what
-  was started, each a `call`, `job` or `agent`, and what
-  `/work/.max/systemd` keeps, each a `unit` with its state; `units stop-all`
-  stops the first kind only, as `/kill` does. A guest tool goes by its words
-  (`maxx agent start`), and in a program by its name (`tools.agent_start`).
-- **Declared in the prompt**: `show`, `video`, `agent_start`, `agent_steer`,
-  `agent_models`, `units_list` and `units_apply`, with the host's tools. The
-  rest can be called without being declared, as `say` and `wake` aren't:
-  `agent_ask` is an agent's, `events` a program's, and `units_start`,
-  `units_run` and `units_stop_all` are what `shell`, `run_code` and `/kill`
-  are made of.
+- **The guest's tools**: `units list`, `units apply`, `units start`,
+  `units run` and `units stop-all`; `show`, `video` and `events`. Calls,
+  background commands (background agents among them) and resident units
+  are all units: `units list` has what was started, each a `call` or `job`,
+  and what `/work/.max/systemd` keeps, each a `unit` with its state; `units
+  stop-all` stops the first kind only, as `/kill` does. A guest tool goes by
+  its words (`maxx units list`), and in a program by its name
+  (`tools.units_list`).
+- **Declared in the prompt**: `show`, `video`, `units_list` and
+  `units_apply`, with the host's tools. The rest can be called without
+  being declared, as `say` and `wake` aren't: `events` is a program's, and
+  `units_start`, `units_run` and `units_stop_all` are what `shell`,
+  `run_code` and `/kill` are made of.
 - **How one runs**: `bin/maxx` is a shell script (`nix/maxx.nix`). Given a
   guest tool's words and one JSON object, it runs the tool's script
-  (`max-jobs.sh`, `max-agent.sh` or `max-units.sh`) and Node never starts;
-  that is how the host calls, `maxx units run '{…}'` for every `shell` and
-  `run_code`. The units' own hooks are there too and are no tools: `maxx
-  units ended`, `notify`, `idle`, and `units agent` for an agent's unit.
+  (`max-jobs.sh` or `max-units.sh`) and Node never starts; that is how the
+  host calls, `maxx units run '{…}'` for every `shell` and `run_code`. The
+  units' own hooks are there too and are no tools: `maxx units ended`,
+  `notify` and `idle`.
   Anything else goes to Node (`maxx.js`), which reads the options against
   the schema and calls `maxx` back with the JSON; a program's `tools.<name>`
   does the same (`tools.js`), so a guest tool runs one way whoever calls.
@@ -103,10 +102,9 @@ and a program has them all as `tools.<name>`.
   it from stdin. Words without a name fill the required parameters in order,
   then the rest. Arguments are converted to the schema's types; repeating an
   array parameter gives several items. A value of `-` for a text argument is
-  stdin: `maxx agent start --title … --task - <<'EOF'`, which is how the
-  prompt has Max start an agent. `maxx` alone lists the tools, and `maxx tool
-  --help` gives the tool's guide (the prompt's) and its result's shape, which
-  is all a background agent is told of. On success JSON goes to stdout; a
+  stdin: `maxx say --text - <<'EOF'`. `maxx` alone lists the tools, and
+  `maxx tool --help` gives the tool's guide (the prompt's) and its result's
+  shape, which is all a background agent is told of. On success JSON goes to stdout; a
   failed tool writes `tool: reason (code)` to stderr and exits 1; a malformed
   command line exits 2.
 - **Arguments are read strictly**:
@@ -116,7 +114,7 @@ and a program has them all as `tools.<name>`.
   - After `--` every word is positional, and `-h` asks for help only in the
     first place.
   - A guest tool refuses a field it doesn't take, as the host's tools do.
-  - A name written another way (`agent-start`, `agent_start`, `stop_all`) is
+  - A name written another way (`units-list`, `units_list`, `stop_all`) is
     told how it is written; only the words run it.
   - `maxx events` reads its arguments as any call does.
   - A host tool given one JSON object is called at once, without asking for
@@ -127,9 +125,9 @@ and a program has them all as `tools.<name>`.
   - `units list` is one `systemctl` and one `jq` for all it lists, and a unit
     that ends as it is read is left out.
 - **Answers are JSON**: `units apply` says each unit's state, the files it
-  skipped and why, and what it removed; `agent start` gives `{name, said}`;
-  `units start` gives `{unit, limit, said}`, `said` being what `shell` with
-  `background` tells the model, the same whoever starts one.
+  skipped and why, and what it removed; `units start` gives `{unit, limit,
+  said}`, `said` being what `shell` with `background` tells the model, the
+  same whoever starts one.
 - **`tools.events({after})`** is what `maxx events` prints, for JS: an async
   iterator of the rows (see [Resident programs](jobs.md#resident-programs)).
   A program of Max's own, not run_code's, has the same `tools` with

@@ -28,7 +28,7 @@ let
   # Max's tools in the guest, with run_code's runner and the SDK its
   # programs drive the browser with.
   maxx = import ./maxx.nix {
-    inherit pkgs pi;
+    inherit pkgs;
     systemd = config.systemd.package;
   };
   # The browser's profile: cookies and logins outlive the VM.

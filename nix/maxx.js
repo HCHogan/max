@@ -10,7 +10,7 @@
 //   maxx history --who 小明 --limit 5       a call: its result as JSON
 //   maxx history 示波器                     the same, by position
 //   maxx history '{"query": "示波器"}'      or as JSON; - reads it from stdin
-//   maxx agent start --task - <<'EOF'      a value of - is standard input
+//   maxx say --text - <<'EOF'              a value of - is standard input
 //   maxx say -- '--help 是什么'            after --, every word is a text
 //   maxx units list                        one of the guest's own, by its words
 //   maxx events --after 123                the group's rows after #123 as
@@ -89,8 +89,8 @@ async function listed(tools) {
 
 class Failed extends Error {}
 
-// A name without what joins its words: agent-start, agent_start and
-// "agent start" are one.
+// A name without what joins its words: units-list, units_list and
+// "units list" are one.
 const plain = text => text.replace(/[-_ ]/g, "");
 
 // --help among the options, or -h in the first place: further on, -h is
@@ -109,7 +109,7 @@ function table(tools) {
 function listing(tools) {
   return [
     "Usage: maxx <tool> --<argument> <value> ..., or maxx <tool> '{\"argument\": value}', or maxx <tool> - to read JSON from standard input.",
-    "A value of - is read from standard input: maxx agent start --task - <<'EOF'.",
+    "A value of - is read from standard input: maxx say --text - <<'EOF'.",
     "The result is JSON, printed to standard output; a failure prints why to standard error and exits with 1. maxx <tool> --help shows a tool's arguments.",
     "Tools:",
     ...table(tools),

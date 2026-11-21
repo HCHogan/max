@@ -356,15 +356,22 @@ impl Check {
         [started, ended]
     }
 
-    /// A background agent: a unit of the guest's too, pi itself, whose
-    /// model calls come through max to vm-check's provider, and whose
-    /// report the guest wakes Max with.
+    /// A background agent: the guest's pi in a background command, whose
+    /// model calls come through max to vm-check's provider, and whose last
+    /// words the guest wakes Max with.
     async fn agent(&mut self) -> [ToolOutput; 3] {
-        let agent = command("maxx agent start --title 检查 --task - <<< '说一句话就行'");
+        let agent = Tool::Shell {
+            command: "pi -p --no-session <<< '说一句话就行'".into(),
+            workdir: None,
+            timeout_ms: Some(180_000),
+            background: true,
+        };
         let started = self.run(agent).await;
-        let report = match told_of(&mut self.told, "[max-agent-", 180).await {
+        let report = match told_of(&mut self.told, "[max-job-", 180).await {
             Some(text) => {
-                let whole = text.contains("完成] 检查\nvm-check 的 agent 说完了");
+                let whole = text.contains("完成] $ pi -p --no-session")
+                    && text.contains("exit status 0")
+                    && text.contains("vm-check 的 agent 说完了");
                 ToolOutput::text(format!("后台 agent 的报告：{text}"), !whole, 0)
             }
             None => ToolOutput::text("后台 agent 结束了没人说".to_owned(), true, 0),

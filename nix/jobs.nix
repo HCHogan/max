@@ -1,18 +1,17 @@
 # What Max runs in a group's VM, as units of the guest's systemd: the
 # slice they are in, the command that starts them and hears them end
-# (maxx, whose `units` and `agent` are max-jobs.sh and max-agent.sh), and
-# the unit that tells Max of a background command's end. A module of its
-# own, so that its test boots it without a VM's shares and command line.
-# See "Lifetimes move to systemd" in docs/rust-rewrite.md.
+# (maxx, whose `units` are max-jobs.sh), and the unit that tells Max of a
+# background command's end. A module of its own, so that its test boots
+# it without a VM's shares and command line. See "Background commands"
+# in docs/design/jobs.md.
 {
   config,
   pkgs,
-  pi,
   ...
 }:
 let
   maxx = import ./maxx.nix {
-    inherit pkgs pi;
+    inherit pkgs;
     systemd = config.systemd.package;
   };
 in
@@ -21,10 +20,11 @@ in
   # the unit.
   environment.systemPackages = [ maxx ];
 
-  # Calls, background commands and agents. No limits of its own: they are
-  # the VM's work, which Max's own units (max-units.slice) yield to.
+  # Calls and background commands, background agents among them. No
+  # limits of its own: they are the VM's work, which Max's own units
+  # (max-units.slice) yield to.
   systemd.slices.max-jobs = {
-    description = "What Max runs: calls, background commands and agents";
+    description = "What Max runs: calls and background commands";
   };
 
   # The caches of a guest that has had nothing of Max's to do for ten
