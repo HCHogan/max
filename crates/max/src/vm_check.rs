@@ -281,6 +281,7 @@ impl Check {
         let history = "const read = await max.raw('history', {around: 1});\n\
                        return {node: process.version, history: read.ok ? 'ok' : read.error.code}";
         let calls = [
+            command(BASHRC),
             command(&asked),
             program(history),
             program(BROWSE),
@@ -435,6 +436,12 @@ async fn told_of(
 const AGENT_SAYS: &str = "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"vm-check 的 agent 说完了\"}}]}\n\n\
      data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":7}}\n\n\
      data: [DONE]\n\n";
+
+/// A ~/.bashrc as a group's Max might leave one. Read by the shell sshd
+/// runs max's own commands in, it would end each before it began: they
+/// have another home (nix/guest.nix), and every step after this one,
+/// and of the next check, runs with it there.
+const BASHRC: &str = "echo 'echo 这一行不该出现; exit 7' > /work/.bashrc";
 
 /// maxx from a command: a call the history refuses, as the program's was,
 /// and the tools it lists.

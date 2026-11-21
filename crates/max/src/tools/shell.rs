@@ -8,7 +8,7 @@ use std::time::Duration;
 use color_eyre::eyre::{Result, WrapErr};
 use serde::{Deserialize, Serialize};
 
-use super::{Call, Ran, Told, jobs, last_line, shown, start_of, wait, with};
+use super::{Call, Ran, Told, jobs, shown, start_of, wait, with};
 use crate::vm::Vm;
 
 /// What the model is told of the command: it failed if it didn't finish.
@@ -79,7 +79,7 @@ pub(super) async fn start(
         command,
     };
     let said = vm.ask(&jobs("start", &asked)).await?;
-    let line = last_line(said.as_bytes());
+    let line = said.trim().as_bytes();
     let Started { unit, out } = serde_json::from_slice(line)
         .wrap_err_with(|| format!("maxx jobs start said {:?}", start_of(line)))?;
     Ok(format!(

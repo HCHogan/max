@@ -202,8 +202,7 @@ woken when it ends.
   line of JSON: how systemd says it ended (`success`, `exit-code`,
   `timeout`…) and what it wrote, all of it, or 8 KiB of its head and as much
   of its tail with the file that has the whole. `tools::wait` reads that
-  line, the last of what came, so whatever a `/work/.bashrc` prints first
-  isn't taken for it. `run_code` is the same with the runner as the command,
+  line. `run_code` is the same with the runner as the command,
   the program on stdin and its stderr apart. The unit writes its own output,
   under `/work/.max/out/`, kept only when the output didn't fit.
 - **A call ends with its caller.** max gives `maxx jobs run` the command's
@@ -306,7 +305,11 @@ tool.
   survives, so `~/.profile`, `~/.gitconfig`, `gh auth` and caches persist and
   stay warm. `bash -lc` reads `~/.profile` every time, so a broken one stops
   `shell` and `run_code` until it is deleted on the host; the prompt says so,
-  and that units don't read it (`Environment=` instead). Packages from `nix
+  and that units don't read it (`Environment=` instead). A `~/.bashrc`
+  can't do the same to max's own commands: sshd runs them in root's shell,
+  and bash reads `~/.bashrc` for a command sshd runs, so the guest's sshd
+  gives its sessions another home (`SetEnv HOME=/var/empty`). What Max runs
+  has its home from systemd. Packages from `nix
   profile add` are in `/nix/var/nix/profiles/default`, persistent and on
   PATH.
 - Only `/work` and the store survive: whatever a unit runs is in `/work`, a

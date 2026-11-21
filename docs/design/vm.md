@@ -148,7 +148,10 @@ is in [decisions/lifetimes-to-systemd.md](../decisions/lifetimes-to-systemd.md).
   `maxx-ssh 7 systemctl status` runs a command there. It goes in as max
   does, with the boot's `ssh.key` to the guest's sshd on the vsock socket,
   through `systemd-ssh-proxy vsock-mux/…`; it is for root, who can read
-  max's files. max doesn't know of the session: a VM not kept on is still
+  max's files. The session starts in `/work`, and its `HOME` is
+  `/var/empty`, as for max's own commands, so nothing in the group's home
+  runs in it (see [Units follow /work](jobs.md#units-follow-work)). max
+  doesn't know of the session: a VM not kept on is still
   stopped after its idle time.
 - **A running VM is a machine of the host's**: the unit's `ExecStartPost`,
   as root, registers it with systemd-machined (`RegisterMachine` on the bus) as

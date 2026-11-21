@@ -300,7 +300,7 @@ async fn wait(vm: &Vm, call: Call<'_>, command: &str, input: Option<&[u8]>) -> R
     let waited = running.wait_or(&mut said, sleep(call.limit + GUEST_MARGIN));
     match waited.await? {
         Waited::Exited(Some(0)) => {
-            let line = last_line(&said.out);
+            let line = said.out.trim_ascii();
             serde_json::from_slice(line)
                 .wrap_err_with(|| format!("maxx jobs run said {:?}", start_of(line)))
         }
@@ -323,13 +323,6 @@ async fn wait(vm: &Vm, call: Call<'_>, command: &str, input: Option<&[u8]>) -> R
     }
 }
 
-/// The line `maxx` printed: the last of what came, since the shell sshd
-/// runs it in writes first if the group's /work/.bashrc does.
-pub(crate) fn last_line(out: &[u8]) -> &[u8] {
-    let out = out.trim_ascii_end();
-    out.rsplit(|&byte| byte == b'\n').next().unwrap_or(out)
-}
-
 /// The start of what `maxx` said, for an error: a line that isn't a
 /// call's may be as long as what is kept of it.
 fn start_of(said: &[u8]) -> String {
@@ -340,8 +333,7 @@ fn start_of(said: &[u8]) -> String {
     }
 }
 
-/// The end of what `maxx` wrote to stderr, where its own words are:
-/// the group's .bashrc may have written before them.
+/// The end of what `maxx` wrote to stderr, where it says why it failed.
 fn end_of(said: &[u8]) -> String {
     let said = String::from_utf8_lossy(said);
     let said = said.trim();

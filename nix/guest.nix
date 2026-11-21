@@ -354,6 +354,12 @@ in
       PermitRootLogin = "prohibit-password";
       # max runs concurrent commands over one connection.
       MaxSessions = 100;
+      # sshd runs a command in root's shell, and bash reads ~/.bashrc
+      # for one sshd runs. Root's home is /work, so a group's .bashrc
+      # would run before every command of max's own, and one that ends
+      # the shell would leave the VM taking none. What Max runs has its
+      # home from systemd, not from here.
+      SetEnv = "HOME=/var/empty";
     };
     authorizedKeysFiles = [ "/run/max/authorized_keys" ];
     # / is a tmpfs, so host keys are generated every boot; RSA takes seconds.
