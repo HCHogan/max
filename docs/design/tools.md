@@ -53,50 +53,53 @@ call. The host's tools are in `crates/max/src/service`, the guest's side in
 ## maxx: one command for everything in the VM
 
 `maxx` is the guest's command for every tool: the host's (by HTTP) and the
-guest's own (its scripts). The host calls the guest's tools through it too,
-and a program has them all as `tools.<name>`.
+guest's own. A program has them all as `tools.<name>`. Beside the tools is
+`maxx jobs`, which is max's own: what the host runs for a call and for a
+background command.
 
 - **One source per tool.** A host tool is written once, on the host
   (`service::tool::TOOLS`); a guest tool is declared once, in
   `nix/local.json`: its name, the words of its command line, what runs it
-  (one of the guest's scripts, or Node), whether the prompt declares it
-  (`turn`), a line for `maxx`'s list, its guide and both schemas. `maxx`
-  reads the host's options from `GET /tools` and the guest's from
-  `local.json`, the runner makes `tools.<name>` from both, and the host reads
-  `local.json` as it is built for the prompt's declarations
-  (`service::tool::LOCAL`).
+  (the guest's script, or Node), whether the prompt declares it (`turn`), a
+  line for `maxx`'s list, its guide and both schemas. `maxx` reads the
+  host's options from `GET /tools` and the guest's from `local.json`, the
+  runner makes `tools.<name>` from both, and the host reads `local.json` as
+  it is built for the prompt's declarations (`service::tool::LOCAL`).
 - **One client**: `nix/client.js`, shared by the runner, `maxx.js` and
   `tools.js`. (The SDK doesn't wrap `maxx`: every `tools.x` would start a
   process, twenty in a `Promise.all`, with errors and pictures relayed
   through exit codes. The cost the other way is that each `maxx` starts Node,
   a few tens of milliseconds, so a loop of a hundred calls belongs in
   `run_code`.)
-- **The guest's tools**: `units list`, `units apply`, `units start`,
-  `units run` and `units stop-all`; `show`, `video` and `events`. Calls,
-  background commands (background agents among them) and resident units
-  are all units: `units list` has what was started, each a `call` or `job`,
-  and what `/work/.max/systemd` keeps, each a `unit` with its state; `units
-  stop-all` stops the first kind only, as `/kill` does. A guest tool goes by
-  its words (`maxx units list`), and in a program by its name
-  (`tools.units_list`).
-- **Declared in the prompt**: `show`, `video`, `units_list` and
-  `units_apply`, with the host's tools. The rest can be called without
-  being declared, as `say` and `wake` aren't: `events` is a program's, and
-  `units_start`, `units_run` and `units_stop_all` are what `shell`,
-  `run_code` and `/kill` are made of.
-- **How one runs**: `bin/maxx` is a shell script (`nix/maxx.nix`). Given a
-  guest tool's words and one JSON object, it runs the tool's script
-  (`max-jobs.sh` or `max-units.sh`) and Node never starts; that is how the
-  host calls, `maxx units run '{…}'` for every `shell` and `run_code`. The
-  units' own hooks are there too and are no tools: `maxx units ended`,
-  `notify` and `idle`.
-  Anything else goes to Node (`maxx.js`), which reads the options against
-  the schema and calls `maxx` back with the JSON; a program's `tools.<name>`
-  does the same (`tools.js`), so a guest tool runs one way whoever calls.
-  Which words go to which script is generated from `local.json` at build. A
-  script answers with one JSON object on stdout, a failure with its reason on
-  stderr and status 1, a wrong command line with status 2, which a program
-  sees as `failed` and `bad_arguments`.
+- **The guest's tools**: `show` and `video`, which leave the model
+  something to see; `events`, the chat's rows as they come; and `units
+  apply`, which makes the units Max keeps the ones that run (see
+  [Resident programs](jobs.md#resident-programs)). A guest tool goes by its
+  words (`maxx units apply`), and in a program by its name
+  (`tools.units_apply`).
+- **Declared in the prompt**: `show`, `video` and `units_apply`, with the
+  host's tools. `events` is a program's, and can be called without being
+  declared, as `say` and `wake` can.
+- **What systemd does needs no tool.** What runs in the VM Max sees and
+  stops with `systemctl`: `systemctl list-units 'max-job-*'` lists its
+  background commands, each with its title for a description, and
+  `systemctl stop <unit>` stops one. Nothing of `maxx` wraps them.
+- **How one runs**: `bin/maxx` is a shell script (`nix/maxx.nix`). `units
+  apply`, given its words alone or with one JSON object, is its script
+  (`max-units.sh`), and Node never starts. Anything else goes to Node
+  (`maxx.js`), which reads the options against the schema; for `units
+  apply` it calls `maxx` back with the JSON, and a program's
+  `tools.units_apply` does the same (`tools.js`), so the tool runs one way
+  whoever calls. The script answers with one JSON object on stdout, a
+  failure with its reason on stderr and status 1, a wrong command line with
+  status 2, which a program sees as `failed` and `bad_arguments`.
+- **`maxx jobs` is max's own, and no tool**: `maxx jobs run '{…}'` for
+  every `shell` and `run_code`, `maxx jobs start '{…}'` for a background
+  command, and the hooks of their units, `ended`, `notify` and `idle`
+  (`nix/max-jobs.sh`; see [Background commands](jobs.md#background-commands)).
+  `bin/maxx` hands them to the script as they are. Each takes one JSON
+  object and nothing else: they aren't listed, and have no schema, options
+  or defaults, since the one that asks is max, of the image's own build.
 - **The command line**: `maxx tool --param value` or `--param=value`; a bare
   `--param` is true and `--no-param` false; or one JSON object, `-` reading
   it from stdin. Words without a name fill the required parameters in order,
@@ -110,34 +113,23 @@ and a program has them all as `tools.<name>`.
 - **Arguments are read strictly**:
   - A word beginning with a brace is the arguments only when it is a JSON
     object, or begins as a program writes one, `{"`; any other is text, so
-    `maxx say '{笑}'` and `maxx units start '{ make; } 2>&1'` work.
+    `maxx say '{笑}'` works.
   - After `--` every word is positional, and `-h` asks for help only in the
     first place.
-  - A guest tool refuses a field it doesn't take, as the host's tools do.
-  - A name written another way (`units-list`, `units_list`, `stop_all`) is
-    told how it is written; only the words run it.
+  - A name written another way (`units-apply`, `units_apply`) is told how it
+    is written; only the words run it.
   - `maxx events` reads its arguments as any call does.
   - A host tool given one JSON object is called at once, without asking for
     the list first. One request to the host costs about 95 ms and Node's
     start 65 ms.
-  - One name is one unit's: `units start` and `units run` refuse a `unit`
-    that exists.
-  - `units list` is one `systemctl` and one `jq` for all it lists, and a unit
-    that ends as it is read is left out.
 - **Answers are JSON**: `units apply` says each unit's state, the files it
-  skipped and why, and what it removed; `units start` gives `{unit, limit,
-  said}`, `said` being what `shell` with `background` tells the model, the
-  same whoever starts one.
+  skipped and why, and what it removed.
 - **`tools.events({after})`** is what `maxx events` prints, for JS: an async
   iterator of the rows (see [Resident programs](jobs.md#resident-programs)).
   A program of Max's own, not run_code's, has the same `tools` with
   `require("/run/max/tools.js")`.
-- **A call's caller is a pipe or a socket**: `units run` takes the end of its
-  stdin for its caller gone only when stdin is one, as max's channel and a
-  program's child's are. Given `/dev/null`, as a command in a unit is, the
-  call runs to its end.
-- **Tests**: `nix/tests/jobs.nix` asks as max does, with JSON, and as Max
-  does, with options, and has a program call `tools.units_list`.
+- **Tests**: `nix/tests/jobs.nix` asks for `units apply` as Max does, by its
+  words, and has a program call `tools.units_apply`.
 
 ## Running in the group's VM
 
@@ -147,7 +139,7 @@ the background agents, so handing over work is leaving files; the browser
 is driven with Playwright directly; and Max maintains no engine, stepping
 protocol or ABI.
 
-- **A new process each run**: the host runs `maxx units run` in the VM over
+- **A new process each run**: the host runs `maxx jobs run` in the VM over
   SSH, which starts the call as a transient unit of the guest's. For
   `run_code` the unit runs `node /run/max/runner.js`, read-only in the guest
   image; stdin carries the program and its arguments; the result and the
@@ -270,7 +262,7 @@ approaches were consulted.
   chat are copied out with `tools.file` first.
 - **How they reach the host**: nothing is asked of it. A call's unit has its
   directory in `MAX_CALL` (`/run/max/jobs/<unit>`), and `show` and `video`
-  append a line to `shown` there (`nix/shown.js`). `maxx units run` gives the
+  append a line to `shown` there (`nix/shown.js`). `maxx jobs run` gives the
   list back on the call's line, and the host reads the files as it builds the
   result (`tools/show.rs`): under `/work` one component at a time without
   following links, at most 10 MiB, made into the model's version as at

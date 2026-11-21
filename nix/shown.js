@@ -2,12 +2,12 @@
 // program hands over with tools.show and tools.video, and a command with
 // maxx show and maxx video. Nothing is asked of the host for it. A call's
 // unit has its directory in MAX_CALL (max-jobs.sh), and each thing to
-// show is a line of its `shown` there: maxx units run gives the list back on
-// the call's line, and the host reads the files from /work as it puts the
-// result together. One it can't show, it says so in the result. What
+// show is a line of its `shown` there: maxx jobs run gives the list back
+// on the call's line, and the host reads the files from /work as it puts
+// the result together. One it can't show, it says so in the result. What
 // isn't part of a call (a background command, an agent, a unit of Max's)
 // has no MAX_CALL, and nobody to show anything to. See "Multimodal
-// results" in docs/rust-rewrite.md.
+// results" in docs/design/tools.md.
 "use strict";
 
 const { randomUUID } = require("node:crypto");

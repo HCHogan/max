@@ -1,6 +1,6 @@
 # What Max runs in a group's VM, as units of the guest's systemd: the
 # slice they are in, the command that starts them and hears them end
-# (maxx, whose `units` are max-jobs.sh), and the unit that tells Max of a
+# (maxx, whose `jobs` are max-jobs.sh), and the unit that tells Max of a
 # background command's end. A module of its own, so that its test boots
 # it without a VM's shares and command line. See "Background commands"
 # in docs/design/jobs.md.
@@ -46,7 +46,7 @@ in
     description = "Drop the caches of a guest with nothing of Max's to do";
     path = [ maxx ];
     script = ''
-      maxx units idle 600 || exit 0
+      maxx jobs idle 600 || exit 0
       sync
       echo 3 > /proc/sys/vm/drop_caches
       echo 1 > /proc/sys/vm/compact_memory
@@ -63,7 +63,7 @@ in
     unitConfig.StartLimitIntervalSec = 0;
     serviceConfig = {
       Type = "oneshot";
-      ExecStart = "${maxx}/bin/maxx units notify %i";
+      ExecStart = "${maxx}/bin/maxx jobs notify %i";
       Restart = "on-failure";
       RestartSec = 2;
       RestartSteps = 5;

@@ -175,7 +175,7 @@ is in [decisions/lifetimes-to-systemd.md](../decisions/lifetimes-to-systemd.md).
   pages the guest frees go back to the host by the balloon's free page
   reporting; the page cache doesn't count as free.
 - **Idle guests drop their caches**: every 10 minutes, if nothing of Max's
-  runs and nothing has begun or ended in the last 10 (`maxx units idle
+  runs and nothing has begun or ended in the last 10 (`maxx jobs idle
   600`, reading the times in `/run/max/jobs`), the guest runs `sync`,
   `drop_caches=3` and `compact_memory` (`max-trim.timer` in `nix/jobs.nix`).
   The page cache, dentries and inodes go (virtiofsd closes the matching

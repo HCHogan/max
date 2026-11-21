@@ -1,9 +1,8 @@
 // maxx: Max's tools on the command line, for shell commands and programs
-// in any language in a group's VM, and for max itself, which runs what
-// the guest's systemd does with it. Its options come from the tools'
+// in any language in a group's VM. Its options come from the tools'
 // schemas, the host's as its service lists them and the guest's own from
 // local.json: nothing here is about one tool. See "maxx" in
-// docs/rust-rewrite.md.
+// docs/design/tools.md.
 //
 //   maxx                                   the tools
 //   maxx history --help                    one tool's arguments
@@ -12,16 +11,17 @@
 //   maxx history '{"query": "示波器"}'      or as JSON; - reads it from stdin
 //   maxx say --text - <<'EOF'              a value of - is standard input
 //   maxx say -- '--help 是什么'            after --, every word is a text
-//   maxx units list                        one of the guest's own, by its words
+//   maxx units apply                       one of the guest's own, by its words
 //   maxx events --after 123                the group's rows after #123 as
 //                                          they come, a JSON line each;
 //                                          --full has each as data too
 //
 // The result goes to stdout; a failure's reason to stderr, with exit
 // status 1. A wrong command line exits with 2. One of the guest's own
-// given its words and a JSON object alone never comes here: bin/maxx
-// runs it itself (maxx.nix), which is how the host calls, and how this
-// does once it has read the options.
+// that a script does, given its words alone or with a JSON object, never
+// comes here: bin/maxx runs the script itself (maxx.nix), which is how
+// this does once it has read the options. Nor does `maxx jobs`, which is
+// max's own and no tool.
 "use strict";
 
 const { once } = require("node:events");
@@ -89,8 +89,8 @@ async function listed(tools) {
 
 class Failed extends Error {}
 
-// A name without what joins its words: units-list, units_list and
-// "units list" are one.
+// A name without what joins its words: units-apply, units_apply and
+// "units apply" are one.
 const plain = text => text.replace(/[-_ ]/g, "");
 
 // --help among the options, or -h in the first place: further on, -h is
@@ -282,9 +282,8 @@ function read(name, text, schema) {
 }
 
 // Whether a word that begins with a brace is the arguments as JSON: it
-// is a JSON object, or begins as a program writes one, {" (bin/maxx
-// takes those for JSON too). Any other is a text: a command in braces,
-// { make; } 2>&1, or a face.
+// is a JSON object, or begins as a program writes one, {". Any other is
+// a text, a face in braces, say.
 function braced(word) {
   if (word.startsWith('{"')) return true;
   try {

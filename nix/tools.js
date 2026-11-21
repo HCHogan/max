@@ -1,11 +1,11 @@
 // Max's tools, for whatever calls them in a group's VM: the runner's
 // tools.<name>(args), maxx on the command line and a program's own
-// require of this file are all this, so none has a tool another lacks. A tool is the host's, called
-// through its service (client.js), or the guest's own, in local.json:
-// one the guest's systemd does, which `maxx <words> <json>` runs, or one
-// of Node's own here, which leaves the model something to see (shown.js,
-// video.js). Nothing here is about one tool but those last. See "maxx"
-// in docs/rust-rewrite.md.
+// require of this file are all this, so none has a tool another lacks. A
+// tool is the host's, called through its service (client.js), or the
+// guest's own, in local.json: one the guest's systemd does, which `maxx
+// <words> <json>` runs, or one of Node's own here, which leaves the
+// model something to see (shown.js, video.js). Nothing here is about one
+// tool but those last. See "maxx" in docs/design/tools.md.
 "use strict";
 
 const { spawn } = require("node:child_process");
@@ -36,16 +36,15 @@ const OWN = {
 };
 
 // One of the guest's commands: maxx with its words and its arguments as
-// JSON, which is how the host asks for it too. Its outcome is what it
-// printed, or why it failed. It has this process for its caller: its
-// input stays open for as long as the call is wanted, and no longer.
+// JSON, which bin/maxx gives the tool's script. Its outcome is the JSON
+// it printed, or why it failed.
 function command(tool, args, signal) {
   return new Promise(resolve => {
     const cancelled = { ok: false, error: { code: "cancelled", message: "the call was cancelled; what it started may run on" } };
     if (signal?.aborted) return resolve(cancelled);
     let child;
     try {
-      child = spawn(process.env.MAXX_COMMAND ?? "maxx", [...tool.words, JSON.stringify(args)], { stdio: ["pipe", "pipe", "pipe"] });
+      child = spawn(process.env.MAXX_COMMAND ?? "maxx", [...tool.words, JSON.stringify(args)], { stdio: ["ignore", "pipe", "pipe"] });
     } catch (error) {
       return resolve(failed("unreachable", `maxx didn't start: ${error.message}`));
     }
@@ -53,11 +52,7 @@ function command(tool, args, signal) {
     const err = [];
     child.stdout.on("data", chunk => out.push(chunk));
     child.stderr.on("data", chunk => err.push(chunk));
-    child.stdin.on("error", () => {});
-    const gone = () => {
-      child.stdin.destroy();
-      resolve(cancelled);
-    };
+    const gone = () => resolve(cancelled);
     signal?.addEventListener("abort", gone, { once: true });
     child.on("error", error => resolve(failed("unreachable", `maxx didn't start: ${error.message}`)));
     child.on("close", status => {
@@ -69,8 +64,7 @@ function command(tool, args, signal) {
         return resolve(failed(status === 2 ? "bad_arguments" : "failed", why || `it ended with status ${status}`));
       }
       try {
-        // The last line: a login shell's own writes come before it.
-        resolve({ ok: true, value: JSON.parse(said.trimEnd().split("\n").pop() || "null") });
+        resolve({ ok: true, value: JSON.parse(said) });
       } catch {
         resolve(failed("failed", `it didn't say how it went: ${said.slice(0, 300)}`));
       }

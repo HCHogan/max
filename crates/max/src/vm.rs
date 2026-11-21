@@ -14,9 +14,8 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::os::fd::AsFd;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, LazyLock};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::Arc;
+use std::time::Duration;
 
 use color_eyre::eyre::{Result, WrapErr};
 use futures_util::FutureExt;
@@ -42,13 +41,14 @@ const UNIT_KINDS: [&str; 5] = ["service", "socket", "timer", "path", "target"];
 /// Where max listens for what the guests ask of it, beside the VMs'
 /// directories: one socket for them all.
 const SOCKET: &str = "max.sock";
-/// The units of what was started in a guest, as its systemctl takes
-/// them: Max's background commands, and the calls.
+/// The units of Max's background commands in a guest, as its systemctl
+/// takes them (nix/max-jobs.sh). A call's is `max-call-…`, which ends
+/// with its caller.
 const JOBS: &str = "'max-job-*.service'";
 
-/// Whether anything that was started runs in the guest at `connection`,
-/// which its systemd says by how systemctl ends: nothing the guest's
-/// shell writes is read. A guest that doesn't answer runs nothing.
+/// Whether a background command runs in the guest at `connection`, which
+/// its systemd says by how systemctl ends: nothing the guest's shell
+/// writes is read. A guest that doesn't answer runs none.
 async fn busy(connection: &Connection) -> bool {
     let asked = format!("systemctl is-active --quiet {JOBS}");
     ssh::ask(connection, &asked).await.is_ok()
@@ -298,7 +298,7 @@ impl Vms {
 }
 
 impl Vm {
-    /// Starts `line`, a call (`maxx units run`), in the guest's shell, and
+    /// Starts `line`, a call (`maxx jobs run`), in the guest's shell, and
     /// gives it `input`. The guest stops the call when what this returns
     /// is dropped, or max's connection goes.
     ///
@@ -330,9 +330,8 @@ impl Vm {
         about::read(&self.ask(&about::line(units)).await?)
     }
 
-    /// Has the guest stop everything that was started in it, the
-    /// background commands with the calls, and waits until it has. One
-    /// stopped on request tells nobody of its end.
+    /// Has the guest stop every background command, and waits until it
+    /// has. One stopped on request tells nobody of its end.
     ///
     /// # Errors
     ///
@@ -340,26 +339,6 @@ impl Vm {
     pub async fn stop_jobs(&self) -> Result<()> {
         self.ask(&format!("systemctl stop {JOBS}")).await?;
         Ok(())
-    }
-
-    /// A name for a command's unit, one `maxx units` takes. A VM outlives
-    /// max, and so do the command's output files in /work, which are
-    /// named after the unit; so the name says which start of max it is
-    /// from, and neither a unit nor a file of an earlier one is in the
-    /// way. A count alone began again at every restart, and a long
-    /// output then failed: its file was already there.
-    pub fn unit() -> String {
-        static NEXT: AtomicU64 = AtomicU64::new(1);
-        static STARTED: LazyLock<u64> = LazyLock::new(|| {
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map_or(0, |since| since.as_secs())
-        });
-        format!(
-            "max-job-{:x}-{}",
-            *STARTED,
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        )
     }
 
     /// The SSH connection to the guest.

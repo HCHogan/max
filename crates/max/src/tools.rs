@@ -1,10 +1,10 @@
-//! What the model's tool calls do; see "Tools and codemode". Both run in the
-//! group's VM, each as a unit of the guest's own that `maxx units` starts and
-//! sees end (nix/max-jobs.sh): `shell` a command, `run_code` a program in
-//! the guest's runner. A call waits for its unit to end, or for the unit's
-//! limit to end it; `shell` with `background` starts one and doesn't wait,
-//! and the guest tells Max when it ends. A unit is one or the other from
-//! its start. See "Lifetimes move to systemd" in docs/rust-rewrite.md.
+//! What the model's tool calls do; see docs/design/tools.md. Both run in
+//! the group's VM, each as a unit of the guest's own that `maxx jobs`
+//! starts and sees end (nix/max-jobs.sh): `shell` a command, `run_code` a
+//! program in the guest's runner. A call waits for its unit to end, or for
+//! the unit's limit to end it; `shell` with `background` starts one and
+//! doesn't wait, and the guest tells Max when it ends. A unit is one or the
+//! other from its start. See "Background commands" in docs/design/jobs.md.
 //!
 //! Both call Max's tools through max's service, as anything in the VM
 //! does: the runner's SDK, and `maxx` from a command. And both can show
@@ -65,7 +65,7 @@ const GUEST_MARGIN: Duration = Duration::from_secs(30);
 /// How much of what `maxx` said is in an error, when it wasn't a call's
 /// line.
 const SAID_SHOWN: usize = 300;
-/// The most of what `maxx units run` writes that is kept: a call's line has
+/// The most of what `maxx jobs run` writes that is kept: a call's line has
 /// what is shown of two outputs, each character of which may be written
 /// as six.
 const LINE_KEPT: usize = 16 * SHOWN_BYTES;
@@ -165,19 +165,22 @@ async fn call(tool: Tool, vms: Option<&Vms>, context: &Context) -> ToolOutput {
     output
 }
 
-/// A call's unit, as `maxx units run` is asked for it.
-struct Unit<'a> {
-    /// What it is, for the guest's list.
-    title: &'a str,
-    /// Its directory in the guest.
-    workdir: &'a str,
+/// A call, as `maxx jobs run` is asked for it.
+struct Call<'a> {
+    /// What it is, in the guest's systemd; the guest's to say without
+    /// one, by the command's first line.
+    title: Option<&'a str>,
+    /// Its directory, a path of the guest's, which the guest resolves:
+    /// one that isn't absolute is under /work, and /work it is without
+    /// one. The VM, not the directory, is the boundary.
+    workdir: Option<&'a str>,
     /// The guest ends it then.
     limit: Duration,
     /// Its stderr apart from its stdout.
     split: bool,
 }
 
-/// How a call's unit ended, as `maxx units run` says in its one line: what
+/// How a call's unit ended, as `maxx jobs run` says in its one line: what
 /// systemd says of the unit, and what the unit wrote.
 #[derive(Debug, Deserialize)]
 struct Ended {
@@ -250,14 +253,15 @@ fn shown(piece: Option<&Piece>) -> String {
     piece.map(Piece::shown).unwrap_or_default()
 }
 
-/// What `maxx units run` is asked for: a call's unit (nix/max-jobs.sh).
+/// What `maxx jobs run` is asked for: a call's unit (nix/max-jobs.sh).
 #[derive(Serialize)]
 struct Asked<'a> {
-    unit: &'a str,
     /// In seconds.
     limit: u64,
-    title: &'a str,
-    workdir: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    workdir: Option<&'a str>,
     /// How many bytes of an output the line carries.
     shown: usize,
     split: bool,
@@ -267,43 +271,42 @@ struct Asked<'a> {
     command: &'a str,
 }
 
-/// `maxx` with `words` and `arguments` as JSON: the line that asks the
-/// guest for one of its own tools, as anything in the VM asks.
-pub(crate) fn maxx(words: &str, arguments: &impl Serialize) -> String {
-    let arguments = serde_json::to_string(arguments).expect("a tool's arguments are JSON");
-    format!("maxx {words} {}", quote(&arguments))
+/// `maxx jobs` with `verb` and `arguments` as JSON: the line that asks the
+/// guest to run something as a unit of its own, `run` a call and `start`
+/// a background command.
+fn jobs(verb: &str, arguments: &impl Serialize) -> String {
+    let arguments = serde_json::to_string(arguments).expect("a job's arguments are JSON");
+    format!("maxx jobs {verb} {}", quote(&arguments))
 }
 
 /// Runs `command` in the guest as a call's unit, with `input` if it reads
 /// any, and waits for it to end: how it did. Dropped while it waits, as
 /// when the turn is killed, the call's channel closes and the guest
 /// stops the unit; it does the same when max's connection goes.
-async fn wait(vm: &Vm, unit: Unit<'_>, command: &str, input: Option<&[u8]>) -> Result<Ended> {
-    let name = Vm::unit();
+async fn wait(vm: &Vm, call: Call<'_>, command: &str, input: Option<&[u8]>) -> Result<Ended> {
     let asked = Asked {
-        unit: &name,
-        limit: unit.limit.as_secs(),
-        title: unit.title,
-        workdir: unit.workdir,
+        limit: call.limit.as_secs(),
+        title: call.title,
+        workdir: call.workdir,
         shown: SHOWN_BYTES,
-        split: unit.split,
+        split: call.split,
         input: input.map(<[u8]>::len),
         command,
     };
-    let line = format!("exec {}", maxx("units run", &asked));
+    let line = format!("exec {}", jobs("run", &asked));
     let running = vm.command(&line, input.unwrap_or_default());
     let mut running = running.await.wrap_err("it didn't start")?;
     let mut said = Said::default();
-    let waited = running.wait_or(&mut said, sleep(unit.limit + GUEST_MARGIN));
+    let waited = running.wait_or(&mut said, sleep(call.limit + GUEST_MARGIN));
     match waited.await? {
         Waited::Exited(Some(0)) => {
             let line = last_line(&said.out);
             serde_json::from_slice(line)
-                .wrap_err_with(|| format!("maxx units run said {:?}", start_of(line)))
+                .wrap_err_with(|| format!("maxx jobs run said {:?}", start_of(line)))
         }
         Waited::Exited(Some(status)) => {
             bail!(
-                "maxx units run ended with status {status}: {}",
+                "maxx jobs run ended with status {status}: {}",
                 end_of(&said.err)
             )
         }
@@ -368,34 +371,6 @@ impl Sink for Said {
     }
 }
 
-/// A command's directory in the guest: `dir` if absolute,
-/// else under /work. A guest path, left to the guest to resolve: the VM,
-/// not the directory, is the boundary.
-#[must_use]
-pub fn guest_dir(dir: Option<&str>) -> String {
-    match dir {
-        Some(dir) if dir.starts_with('/') => dir.to_owned(),
-        Some(dir) => format!("/work/{dir}"),
-        None => "/work".to_owned(),
-    }
-}
-
-/// How much of a command's first line its title keeps: enough to tell
-/// runs of one program apart by their arguments, in a notice and in
-/// `maxx units list`.
-const HEADLINE_CHARS: usize = 200;
-
-/// What a task or a command is, in a line: the first of it, cut short.
-#[must_use]
-pub fn headline(task: &str) -> String {
-    let line = task.trim().lines().next().unwrap_or_default();
-    let mut title: String = line.chars().take(HEADLINE_CHARS).collect();
-    if line.chars().count() > HEADLINE_CHARS {
-        title.push('…');
-    }
-    title
-}
-
 fn with(head: String, shown: &str) -> String {
     if shown.is_empty() {
         format!("{head}; no output")
@@ -430,7 +405,7 @@ mod tests {
 
     #[test]
     fn a_calls_line_is_read_and_a_long_output_shows_its_ends() {
-        let line = r#"{"result":"exit-code","code":"exited","status":"2","seconds":1,
+        let line = r#"{"result":"exit-code","code":"exited","status":"2",
             "out":{"bytes":3,"head":"hi\n","tail":"","file":null},"err":null,
             "shown":[{"kind":"image","path":"/work/a.png"}],"failed":null}"#;
         let ended: Ended = serde_json::from_str(line).unwrap();
@@ -442,14 +417,14 @@ mod tests {
             bytes: SHOWN_BYTES + 100,
             head: "开头\u{fffd}".to_owned(),
             tail: "\u{fffd}结尾".to_owned(),
-            file: Some("/work/.max/out/max-job-1-2.txt".to_owned()),
+            file: Some("/work/.max/out/max-call-1a2b.txt".to_owned()),
         };
         assert_eq!(
             long.shown(),
-            "开头\n… (100 bytes left out here; the whole output is in /work/.max/out/max-job-1-2.txt) …\n结尾"
+            "开头\n… (100 bytes left out here; the whole output is in /work/.max/out/max-call-1a2b.txt) …\n结尾"
         );
         let refused: Ended =
-            serde_json::from_str(r#"{"result":"","code":"","status":"","seconds":0,"out":null,"err":null,"failed":"there is no directory /nowhere"}"#).unwrap();
+            serde_json::from_str(r#"{"result":"","code":"","status":"","out":null,"err":null,"shown":[],"failed":"there is no directory /nowhere"}"#).unwrap();
         assert_eq!(
             refused.failed.as_deref(),
             Some("there is no directory /nowhere")

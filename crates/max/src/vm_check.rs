@@ -321,7 +321,7 @@ impl Check {
         let _ = tokio::time::timeout(waited, self.run(long)).await;
         let left = command(
             "for n in $(seq 30); do \
-             others=$(($(maxx units list | jq '[.units[] | select(.kind != \"unit\")] | length') - 1)); \
+             others=$(($(systemctl list-units --no-legend --plain --state=active,activating,deactivating 'max-call-*.service' | wc -l) - 1)); \
              [ $others = 0 ] && break; sleep 1; done; \
              echo \"放手的调用跑起来过 $(ls /work/.max/let-go | wc -l) 个，还剩 $others 个\"; \
              rm -f /work/.max/let-go",

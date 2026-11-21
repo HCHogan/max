@@ -16,11 +16,12 @@
 # and the end of the log of one that failed; skipped, the files that
 # weren't installed and why; and removed.
 
-# It takes no arguments: one given is a mistake its caller should hear of.
-case "${2-}" in
+# It takes no arguments: one given, as the JSON object bin/maxx passes
+# on, is a mistake its caller should hear of.
+case "${1-}" in
   "" | "{}") ;;
   *)
-    if ! jq -e 'type == "object" and length == 0' <<< "$2" > /dev/null 2>&1; then
+    if ! jq -e 'type == "object" and length == 0' <<< "$1" > /dev/null 2>&1; then
       echo "maxx units apply: it takes no arguments" >&2
       exit 2
     fi

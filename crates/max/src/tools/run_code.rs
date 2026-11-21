@@ -6,7 +6,7 @@ use std::time::Duration;
 use color_eyre::eyre::Result;
 use serde::Serialize;
 
-use super::{Ran, Told, Unit, shell, shown, wait, with};
+use super::{Call, Ran, Told, shell, shown, wait, with};
 use crate::service;
 use crate::vm::Vm;
 
@@ -38,13 +38,13 @@ pub(super) async fn run_code(
         tools: &TOOL_NAMES,
     };
     let input = serde_json::to_vec(&input).expect("the runner's input is JSON");
-    let unit = Unit {
-        title: "run_code",
-        workdir: "/work",
+    let call = Call {
+        title: Some("run_code"),
+        workdir: None,
         limit,
         split: true,
     };
-    let ended = wait(vm, unit, "exec node /run/max/runner.js", Some(&input)).await?;
+    let ended = wait(vm, call, "exec node /run/max/runner.js", Some(&input)).await?;
     if let Some(why) = &ended.failed {
         return Ok(Told {
             text: format!("the program didn't run: {}", why.trim()),

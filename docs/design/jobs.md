@@ -19,8 +19,8 @@ pi; it has no tool of its own, and max keeps nothing of it. Why is in
   print mode until it settles, and prints its last text, the report. The
   unit is a background command's, `max-job-…`: its limit (6 hours, or
   `timeout_ms` up to 24), its output in `/work/.max/out/`, and its line in
-  `maxx units list`. The session's name is Max's, one for each piece of
-  work.
+  `systemctl list-units 'max-job-*'`. The session's name is Max's, one for
+  each piece of work.
 - **The end** is the background command's notice: `[max-job-… 完成] $ cd
   /work/max && pi -p --session-id review-pr-25 <<'EOF'`, the exit status,
   the end of what pi printed (the report, or why its last model call
@@ -74,7 +74,7 @@ pi; it has no tool of its own, and max keeps nothing of it. Why is in
   it not to, and nothing enforces that.
 - **No limits of their own**: as many run at once as background commands
   do, and each has its unit's time.
-- **What max shows**: `/status` lists no agents; `maxx units list` shows
+- **What max shows**: `/status` lists no agents; the guest's systemd lists
   them with the other background commands, by their command lines.
   `agent#3` and `max-agent-3`, as agents were once named, are still read
   from the wakes the ledger kept, as the reason `job` (`Reason::Answered`'s
@@ -176,15 +176,28 @@ other model, but inside the turn it keeps the group waiting. So `shell` has
 woken when it ends.
 
 - **Everything Max runs in the VM is a unit**, a transient one in the guest's
-  `max-jobs.slice`, started by `maxx units` (`nix/max-jobs.sh`,
+  `max-jobs.slice`, started by `maxx jobs` (`nix/max-jobs.sh`,
   `nix/jobs.nix`): systemd limits it (`RuntimeMaxSec=`), stops it and sees it
-  end. A unit is a call or a background command from its start, and neither
-  becomes the other. The host says what it wants as one JSON object
-  (`maxx units run '{…}'`), and the flags are the guest image's. One is
-  `--expand-environment=no`, since systemd would otherwise fill in every
-  `${…}` of a command (and make `$$` a `$`) before bash saw it, heredoc quotes
-  or not.
-- **A call** (`maxx units run`) is `shell` without `background`, and
+  end. A unit is a call or a background command from its start, which its
+  name says, `max-call-…` or `max-job-…` with 16 hex digits of the guest's
+  choosing, and neither becomes the other. The host says what it wants as
+  one JSON object (`maxx jobs run '{…}'`), and the flags are the guest
+  image's. One is `--expand-environment=no`, since systemd would otherwise
+  fill in every `${…}` of a command (and make `$$` a `$`) before bash saw it,
+  heredoc quotes or not.
+- **Each rule has one side.** The host says the limit, in seconds, and how
+  much of an output a call's line carries: they are what the model's tools
+  declare (`RUN_TIME`, `BACKGROUND_TIME`, `SHOWN_BYTES`). The guest names
+  the unit, resolves a working directory that isn't absolute under `/work`,
+  and titles the unit by the command's first line, up to 200 characters,
+  unless the host gives a title, as it does for `run_code`. `maxx jobs` has
+  no defaults: it refuses a call without a limit.
+- **systemd keeps what a unit is**: its title is the unit's description,
+  and when it began and the most it may run are the unit's own
+  (`ActiveEnterTimestampMonotonic`, `RuntimeMaxUSec`). Nothing is written of
+  a unit beside it. `/run/max/jobs` has a call's directory while it runs,
+  and a background command's notice from its end until Max has it.
+- **A call** (`maxx jobs run`) is `shell` without `background`, and
   `run_code`. The guest starts the unit, waits for its end, and prints one
   line of JSON: how systemd says it ended (`success`, `exit-code`,
   `timeout`…) and what it wrote, all of it, or 8 KiB of its head and as much
@@ -193,22 +206,27 @@ woken when it ends.
   isn't taken for it. `run_code` is the same with the runner as the command,
   the program on stdin and its stderr apart. The unit writes its own output,
   under `/work/.max/out/`, kept only when the output didn't fit.
-- **A call ends with its caller.** max gives `maxx units run` the command's
+- **A call ends with its caller.** max gives `maxx jobs run` the command's
   input, as many bytes as `input` says, then holds the channel's input open,
   silent, for as long as it waits. When that input ends, the caller is gone:
-  `maxx units run` stops the unit, removes what it wrote and prints nothing.
-  So a turn killed during a call stops it by closing the channel (dropping
-  `ssh::Command` hands it to the VM's `closer`, since russh closes nothing on
-  drop), and a call whose max restarted, crashed or lost its connection is
-  stopped by the guest alone. If `maxx units run` itself is killed, its unit
-  ends at its limit and the unit's hook clears up.
-- **A background command** (`maxx units start`): the tool returns the unit's
-  name, `max-job-<start>-<n>`, its limit (6 hours, or `timeout_ms` up to 24)
-  and where its output is written as it runs.
-- **When it ends**, the unit's `ExecStopPost=` (`maxx units ended`) writes
-  how, and starts `max-notify@<unit>.service`, a oneshot that calls `maxx
-  wake` with `[<unit> 完成] $ make` (the command's first line, up to 200
-  characters, as `maxx units list` titles it), the exit status and run
+  a reader beside the unit's wait stops the unit, again until it has ended,
+  since it may not have started yet, and `maxx jobs run` removes what the
+  call wrote and prints nothing. So a turn killed during a call stops it by
+  closing the channel (dropping `ssh::Command` hands it to the VM's
+  `closer`, since russh closes nothing on drop), and a call whose max
+  restarted, crashed or lost its connection is stopped by the guest alone.
+  Only a pipe or a socket is somebody's to hold, as max's channel is: given
+  `/dev/null` for its input, a call runs to its end. If `maxx jobs run`
+  itself is killed, its unit ends at its limit and the unit's hook clears
+  up.
+- **A background command** (`maxx jobs start`): the guest answers with the
+  unit's name, `max-job-…`, and the file its output is written to as it
+  runs, and the tool tells the model both with the limit (6 hours, or
+  `timeout_ms` up to 24), in the host's words (`tools/shell.rs`).
+- **When it ends**, the unit's `ExecStopPost=` (`maxx jobs ended`) writes
+  the notice, as a wake's arguments, to `/run/max/jobs/<unit>.json`, and
+  starts `max-notify@<unit>.service`, a oneshot that gives it to `maxx
+  wake`: `[<unit> 完成] $ make` (the unit's title), the exit status and run
   time, the end of the output (a wake takes 4,000 characters) and the
   file's path; `到点了，下面是做到一半的` at its limit. With `Restart=on-failure` systemd retries it until
   max takes it, so a notice isn't lost while max is away, and `systemctl
@@ -218,7 +236,8 @@ woken when it ends.
   systemd's stop job for the unit, still there while the hook runs
   (`systemctl list-jobs`). One that ends by SIGTERM of its own is told, as
   `ended by SIGTERM`.
-- **What Max does with them**: `maxx units list` shows what runs and
+- **What Max does with them**: `systemctl list-units 'max-job-*'` shows what
+  runs, each by its title, and
   `systemctl stop <unit>` stops one. `/kill` has the guest's systemd stop
   them all, `systemctl stop 'max-job-*.service'` (`Vm::stop_jobs`, in a task
   of the actor's `side`), a person's way to stop what runs without asking
@@ -229,19 +248,20 @@ woken when it ends.
   in use and isn't evicted.
 - **A working directory is checked first**, since systemd applies it to the
   unit's hook too and a unit in a missing directory would end without saying
-  how; `maxx units` refuses it. It needn't be there at the end: the unit has
+  how; `maxx jobs` refuses it. It needn't be there at the end: the unit has
   `WorkingDirectory=-…`, so a command that removes its own directory still
   has its hook run.
 - No limit on how many run at once: the VM's room bounds them. A call not
   done at its limit is stopped, and Max runs it again with `background`.
 - **The prompt** says a command that will run for minutes should use
   `background`: a unit whose name comes back at once; in the same output Max
-  tells the group, then stops and waits for `[max-job-… 完成]`; `maxx units
-  list` and `systemctl stop` look at them and stop one.
+  tells the group, then stops and waits for `[max-job-… 完成]`; `systemctl
+  list-units 'max-job-*'` and `systemctl stop` look at them and stop one.
 - **Tests**: `nix/tests/jobs.nix` boots the guest's jobs with a fake max and
   no VM: a call's line, its limit, a long output, its input and environment,
-  a background command's notice, one stopped, the notice that waits while
-  max is away, and a call whose caller is gone. `vm-check` starts a background
+  a background command's notice and its title, the lines max asks the
+  guest's systemd, the notice that waits while max is away, and a call
+  whose caller is gone. `vm-check` starts a background
   command that greps its own output file and waits for its notice. What
   `tools` makes of a call's line has Rust tests.
 
