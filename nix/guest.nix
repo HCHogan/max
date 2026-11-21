@@ -305,13 +305,11 @@ in
   # `maxx units apply` when Max changes them. They run in max-units.slice, which
   # yields to commands and can't take all the memory. max.units=off on the
   # command line leaves them out, for a VM they keep from coming up. See
-  # "Resident programs" in docs/rust-rewrite.md.
+  # "Resident programs" in docs/design/jobs.md.
   systemd.services.max-units = {
     wantedBy = [ "multi-user.target" ];
-    # It tells max how many there are, through max-host.
     after = [
       "max-guest.service"
-      "max-host.socket"
       "network.target"
       "nix-daemon.socket"
     ];

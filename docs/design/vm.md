@@ -344,7 +344,7 @@ with no process between them. Why is in
   connection that no VM's process made is refused, 400. `/proc` doesn't
   say: each unit has a user namespace of its own, and with
   `ProtectProc=invisible` sees none of another's processes.
-- **max answers everything there**: the tools, `/events` and `/units`, and
+- **max answers everything there**: the tools and `/events`, and
   the models' calls and the keyed APIs', `/llm` and `/api`
   (`service/forward.rs`, `forward/api.rs`), with the keys it read at
   startup.

@@ -457,7 +457,7 @@ ExecStart=/bin/sh -c 'cat /proc/sys/kernel/random/boot_id >> /work/.max/boot-not
 [Install]
 WantedBy=multi-user.target
 EOF
-maxx units apply | jq -r '(.units[] | "\(.name)：\(.state)"), .said // empty'
+maxx units apply | jq -r '.units[] | "\(.name)：\(.state)"'
 echo "开机时：$before"
 echo "开机时装的：$(journalctl -b -u max-units.service -t maxx -o cat --no-pager | tail -n 1)"
 echo "记下了 $(sort -u /work/.max/boot-notes | wc -l) 次开机"

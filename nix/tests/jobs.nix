@@ -66,8 +66,6 @@ let
           fs.appendFileSync("/run/wakes", JSON.stringify(JSON.parse(body).text) + "\n");
           answer = { ok: true, value: { said: "woke Max" } };
         }
-        // What max-units says of the units it found.
-        if (req.url === "/units") answer = {};
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify(answer));
       });
@@ -323,6 +321,21 @@ pkgs.testers.runNixOSTest {
         machine.succeed("sleep 3")
         assert len(wakes()) == 2, wakes()
         assert json.loads(machine.succeed("maxx units stop-all")) == {"stopped": []}
+
+    with subtest("max asks the guest's systemd whether any runs, and has it stop them all"):
+        # As max does (vm.rs): by how systemctl ends, with nothing read.
+        busy = "systemctl is-active --quiet 'max-job-*.service'"
+        machine.fail(busy)
+        start("asked", "sleep 60", limit=60)
+        machine.succeed(busy)
+        machine.succeed("systemctl stop 'max-job-*.service'")
+        machine.fail(busy)
+        machine.wait_until_fails("test -e /run/max/jobs/max-job-asked")
+        # With none to stop, it is no failure; and one stopped so is told
+        # to nobody.
+        machine.succeed("systemctl stop 'max-job-*.service'")
+        machine.succeed("sleep 3")
+        assert len(wakes()) == 2, wakes()
 
     with subtest("while max is away the notice waits, and arrives once it is back"):
         machine.succeed("systemctl stop fake-max.service")

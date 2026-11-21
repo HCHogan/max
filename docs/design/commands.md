@@ -112,7 +112,7 @@ only`. The ranks themselves are in [Permissions](identity.md#permissions).
     nothing else of a guest's.
 - **`/kill`** ends the running turn quietly (see
   [Cancellation](actor.md#cancellation)) and has the guest stop every
-  background command, agents among them (`maxx units stop-all`, in a task
+  background command, agents among them (`systemctl stop 'max-job-*.service'`, in a task
   of its own); resident units Max keeps run on. No reply: someone stopped it on
   purpose.
 - **`/stop`** and **`/start`** leave Max in the chat without replying, and

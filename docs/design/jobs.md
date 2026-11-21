@@ -219,12 +219,14 @@ woken when it ends.
   (`systemctl list-jobs`). One that ends by SIGTERM of its own is told, as
   `ended by SIGTERM`.
 - **What Max does with them**: `maxx units list` shows what runs and
-  `systemctl stop <unit>` stops one. `/kill` has the guest stop them all (in
-  a task of the actor's `side`), a person's way to stop what runs without
-  asking Max; `/status` doesn't list them.
+  `systemctl stop <unit>` stops one. `/kill` has the guest's systemd stop
+  them all, `systemctl stop 'max-job-*.service'` (`Vm::stop_jobs`, in a task
+  of the actor's `side`), a person's way to stop what runs without asking
+  Max; `/status` doesn't list them.
 - **The VM stays up** while one runs: every minute the VM service asks the
-  guest `maxx units list` and counts those whose kind isn't `unit`; a VM with
-  any is in use and isn't evicted.
+  guest's systemd whether any is active (`systemctl is-active --quiet
+  'max-job-*.service'`, which answers by its exit status); a VM with any is
+  in use and isn't evicted.
 - **A working directory is checked first**, since systemd applies it to the
   unit's hook too and a unit in a missing directory would end without saying
   how; `maxx units` refuses it. It needn't be there at the end: the unit has
@@ -269,11 +271,10 @@ tool.
   is a link (the host counts only files, since on the host a link could point
   anywhere). It answers with each unit's state, the last 10 log lines of any
   that failed, the files skipped and why, and what it removed, as one JSON
-  object, and whether the VM will be kept on (below). It takes a lock, so the
-  run at boot and Max's can't collide.
+  object. It takes a lock, so the run at boot and Max's can't collide.
 - At boot `max-units.service` runs it once, after `/work`, the network and
-  nix-daemon are up, and after `max-host.socket`; when Max changes the
-  directory, it runs `maxx units apply` itself. Starting never blocks
+  nix-daemon are up; when Max changes the directory, it runs `maxx units
+  apply` itself. Starting never blocks
   (`--no-block`); it waits at most 5 seconds before reporting.
 - **`max-units.slice`**: `CPUWeight=20` and `IOWeight=20`, yielding to
   commands; `MemoryMax=50%`.
@@ -305,12 +306,13 @@ tool.
   conversation id, up to `kept` of those with unit files (the suffixes `maxx
   units apply` accepts; links don't count), booting them at once.
   Conversation 0 is `vm-check`'s, which uses its own directory,
-  `<vm.dir>/check`. After that it follows `maxx units apply`, which POSTs the
-  number of units to `http://127.0.0.1:7777/units` each time it runs: with
-  any, the VM is kept on unless the slots are full; with none, it isn't. The
-  answer comes back as `said`, so Max sees whether its VM will stay up. The
-  prompt doesn't name the number of slots. A kept but idle VM still drops its
-  caches (see [Resources](vm.md#resources)).
+  `<vm.dir>/check`. After that the sweep reads the same directory of every
+  VM that runs, each minute (`Service::sweep`): a group with unit files is
+  kept on if it is already or a slot is free, and one with none isn't. The
+  guest tells max nothing of its units, and nothing tells Max when the
+  slots are full: its VM then stops when idle, its units with it, and they
+  start again at its next boot. A kept but idle VM still drops its caches
+  (see [Resources](vm.md#resources)).
 - **Waking**: `maxx wake '…'` is `Request::Wake`, through the conversation
   table to the actor (started if not running) as `Event::Heard`. The reason
   is `Reason::Program`, and the model sees `[max-wake] …`, cut to one item's
@@ -321,11 +323,11 @@ tool.
   it is; `/status` shows `woken`.
 - **Failing to boot**: each time a group's VM fails to start or stops by
   itself, it is counted, kept or not. Twice within 30 minutes and the next
-  boot adds `max.units=off`, the group is no longer kept, and Max is told
-  (`Heard::Vm`, `[VM] …`). Once Max has fixed it and run `maxx units apply`,
-  the VM is kept again. If it fails even without units, they aren't the
-  cause: it isn't kept, and boots when a tool needs it rather than every
-  minute. The boot-time `maxx units apply` doesn't reset the count.
+  boot adds `max.units=off`, and Max is told (`Heard::Vm`, `[VM] …`). A VM
+  that comes up so is kept on as any other whose `/work` has units, and
+  runs them again once Max has fixed them and run `maxx units apply`. If it
+  fails even without units, they aren't the cause: it isn't kept, and boots
+  when a tool needs it rather than every minute.
 - **The prompt**: an idle VM stops, except in groups with resident programs;
   anything that must keep running, run on a schedule or watch something is a
   unit in `/work/.max/systemd/` followed by `maxx units apply`; `.timer`,
@@ -335,8 +337,8 @@ tool.
 - **Tests**: `vm-check` puts a unit that records the boot id in
   `/work/.max/systemd` and runs `maxx units apply`; the nested test runs it
   twice, checking the unit is active before the second boot's apply and both
-  boots are recorded, that `maxx units apply` says the VM stays up, and that
-  `maxx wake` reached `vm-check`.
+  boots are recorded, and that `maxx wake` reached `vm-check`; a VM whose
+  `/work` has a unit is kept on, and comes back by itself after it ends.
 
 ### Programs call tools
 
@@ -377,8 +379,7 @@ caps, is in
   and voice messages go with `maxx send-image`, `send-file` and `send-voice`.
 - **Tests**: the actor's test has `say` send two messages and return the
   ids only after the receipts, with `raw` marked and the next core seeing
-  `程序发的`; vm-check's background command runs `maxx wake`, and
-  `maxx units apply` reports through `/units`.
+  `程序发的`; vm-check's background command runs `maxx wake`.
 
 ### Following the chat: maxx events
 

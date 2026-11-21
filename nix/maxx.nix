@@ -43,7 +43,6 @@ let
       name = "maxx-units";
       runtimeInputs = [
         pkgs.coreutils
-        pkgs.curl
         pkgs.diffutils
         pkgs.gnugrep
         pkgs.jq

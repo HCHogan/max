@@ -14,7 +14,7 @@ use max_core::message::{Draft, DraftNode, Platform, Role};
 use max_db::platform::{self, ConversationKind};
 use max_db::usage;
 use tokio::time::{Instant, timeout};
-use tracing::{info, warn};
+use tracing::warn;
 
 use super::{Conversation, End};
 use crate::bind::Pending;
@@ -156,22 +156,8 @@ impl Conversation {
             let Some(vm) = vms.running(conversation).await else {
                 return;
             };
-            match vm.ask("maxx units stop-all '{}'").await {
-                Ok(said) => {
-                    // The last line: the group's .bashrc may write first.
-                    let stopped = said
-                        .lines()
-                        .last()
-                        .and_then(|line| serde_json::from_str::<vm::Stopped>(line).ok())
-                        .map(|stopped| stopped.stopped)
-                        .unwrap_or_default();
-                    if !stopped.is_empty() {
-                        info!(%conversation, ?stopped, "the guest's jobs are stopped");
-                    }
-                }
-                Err(error) => {
-                    warn!(%conversation, error = format!("{error:#}"), "couldn't stop the guest's jobs");
-                }
+            if let Err(error) = vm.stop_jobs().await {
+                warn!(%conversation, error = format!("{error:#}"), "couldn't stop the guest's jobs");
             }
         });
     }

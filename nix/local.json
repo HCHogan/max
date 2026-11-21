@@ -75,7 +75,7 @@
     "run": "units",
     "turn": true,
     "description": "Makes the unit files in /work/.max/systemd the ones the VM runs",
-    "guide": "Makes the unit files in /work/.max/systemd the ones the VM runs: new and changed ones are installed and started, and those gone are stopped and removed. Call it after changing the directory. units is each with its state as systemd has it, and the end of the log of one that failed; skipped is the files that weren't installed, and why; said is whether the VM stays on for them.",
+    "guide": "Makes the unit files in /work/.max/systemd the ones the VM runs: new and changed ones are installed and started, and those gone are stopped and removed. Call it after changing the directory. units is each with its state as systemd has it, and the end of the log of one that failed; skipped is the files that weren't installed, and why.",
     "inputSchema": { "type": "object", "properties": {} },
     "outputSchema": {
       "type": "object",
@@ -100,8 +100,7 @@
             "required": ["name", "why"]
           }
         },
-        "removed": { "type": "array", "items": { "type": "string" } },
-        "said": { "type": "string" }
+        "removed": { "type": "array", "items": { "type": "string" } }
       },
       "required": ["units", "skipped", "removed"]
     }

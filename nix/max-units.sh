@@ -1,21 +1,20 @@
 # `maxx units apply`: makes the units in /work/.max/systemd the ones the
 # guest runs, so that what Max keeps running outlives the VM.
 # max-units.service runs it at every boot, and Max runs it after changing
-# the directory. See "Resident programs" in docs/rust-rewrite.md.
+# the directory. See "Resident programs" in docs/design/jobs.md.
 #
 # New and changed files are copied to /run/systemd/system, services with a
 # drop-in that puts them in max-units.slice; those with an [Install]
 # section are enabled for this boot and started, and changed ones that
 # were running are restarted. Files that are gone are stopped and removed.
 # A name a system unit has is skipped: the system's would win anyway. So
-# is a link: max, when it starts, boots the VMs with units to keep, and
-# counts only files, since on the host a link could point anywhere. Last,
-# the VM service hears how many there are: it keeps the VM on while there
-# are any, if it can, and says whether it does.
+# is a link: max keeps a VM on while its /work has units, which it reads
+# on the host's side, and counts only files, since there a link could
+# point anywhere.
 #
 # It prints one JSON object: units, each with its state as systemd has it
 # and the end of the log of one that failed; skipped, the files that
-# weren't installed and why; removed; and said, what the VM service says.
+# weren't installed and why; and removed.
 
 # It takes no arguments: one given is a mistake its caller should hear of.
 case "${2-}" in
@@ -122,11 +121,5 @@ for name in "${wanted[@]}"; do
     jq -nc --arg name "$name" --arg state "$state" '{name: $name, state: $state}' >> "$said/units"
   fi
 done
-report=$(jq -cn --argjson units "${#wanted[@]}" '{units: $units}')
-kept=""
-if answer=$(curl -sf --max-time 15 -H 'content-type: application/json' -d "$report" http://127.0.0.1:7777/units 2> /dev/null); then
-  kept=$(jq -r '.said // empty' <<< "$answer")
-fi
 jq -nc --slurpfile units "$said/units" --slurpfile skipped "$said/skipped" --slurpfile removed "$said/removed" \
-  --arg said "$kept" \
-  '{units: $units, skipped: $skipped, removed: $removed} + (if $said == "" then {} else {said: $said} end)'
+  '{units: $units, skipped: $skipped, removed: $removed}'

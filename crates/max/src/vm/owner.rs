@@ -11,7 +11,6 @@ use std::time::Duration;
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
 use max_core::ids::ConversationId;
-use serde::Deserialize;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot;
 use tokio::time::{Instant, MissedTickBehavior, interval, timeout};
@@ -19,7 +18,7 @@ use tracing::{info, warn};
 
 use super::machine::{self, BOOT, Boot, Booted, Guest, Machine};
 use super::ssh::{self, Closes, Connection};
-use super::{Internal, NoVm, Request, Vm, idle, with_units, work};
+use super::{NoVm, Request, Vm, busy, idle, units, with_units, work};
 use crate::config;
 use crate::conversation::{Heard, Signal};
 use crate::scope::Scope;
@@ -30,18 +29,6 @@ const SWEEP: Duration = Duration::from_secs(60);
 /// A VM that failed to boot, or stopped by itself, twice within this long
 /// boots once without Max's units: one of them may be what stops it.
 const FAILING: Duration = Duration::from_secs(30 * 60);
-/// What `maxx units list` says (nix/max-jobs.sh): what runs in a guest.
-#[derive(Deserialize)]
-struct Listed {
-    units: Vec<Listing>,
-}
-
-/// One of them: `unit` for one /work/.max/systemd keeps, and for what was
-/// started `call` or `job`.
-#[derive(Deserialize)]
-struct Listing {
-    kind: String,
-}
 
 enum State {
     /// Booting, or being attached to.
@@ -124,7 +111,8 @@ struct Service {
     /// The VMs max had systemd stop a moment ago, each done once systemd
     /// has the request: a boot of the same VM waits for that.
     stopping: HashMap<ConversationId, BoxFuture<'static, ()>>,
-    internal: UnboundedSender<Internal>,
+    /// Where a VM's task says that something of Max's runs in its guest.
+    busy: UnboundedSender<ConversationId>,
     /// The groups whose VMs stay on, for the units Max keeps in them.
     kept: BTreeSet<ConversationId>,
     /// When each VM failed to boot or stopped by itself, lately.
@@ -136,9 +124,9 @@ pub(super) async fn run(
     guest: Guest,
     signals: UnboundedSender<Signal>,
     mut requests: UnboundedReceiver<Request>,
-    (internal, mut internal_rx): (UnboundedSender<Internal>, UnboundedReceiver<Internal>),
 ) {
     let (booted, mut booted_rx) = mpsc::unbounded_channel();
+    let (busy, mut busy_rx) = mpsc::unbounded_channel();
     let dir = config.dir.clone();
     let mut service = Service {
         idle: idle(&config),
@@ -150,7 +138,7 @@ pub(super) async fn run(
         boots: Scope::new(),
         booted,
         stopping: HashMap::new(),
-        internal,
+        busy,
         kept: BTreeSet::new(),
         failed: HashMap::new(),
     };
@@ -195,12 +183,7 @@ pub(super) async fn run(
                 None => break,
             },
             Some((conversation, result)) = booted_rx.recv() => service.booted(conversation, result),
-            Some(internal) = internal_rx.recv() => match internal {
-                Internal::Units { conversation, count, reply } => {
-                    let _ = reply.send(service.units(conversation, count));
-                }
-                Internal::Busy { conversation } => service.busy(conversation),
-            },
+            Some(conversation) = busy_rx.recv() => service.busy(conversation),
             _ = sweep.tick() => service.sweep(),
         }
     }
@@ -464,8 +447,10 @@ impl Service {
         let mut tasks = Scope::new();
         tasks.spawn(move |_| ssh::closer(closed));
         // A background command is the guest's, and no call of max's holds
-        // the VM for it: the guest is asked whether any runs.
-        let (asked, internal) = (Arc::clone(&connection), self.internal.clone());
+        // the VM for it: the guest is asked whether any runs. A unit that
+        // /work/.max/systemd keeps isn't work under way: the VM is kept
+        // on for those another way.
+        let (asked, said) = (Arc::clone(&connection), self.busy.clone());
         tasks.spawn(move |stop| async move {
             let mut every = interval(SWEEP);
             every.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -474,24 +459,7 @@ impl Service {
                     () = stop.cancelled() => return,
                     _ = every.tick() => {}
                 }
-                // One that doesn't say isn't kept up for it. What runs
-                // is the last line: the group's .bashrc may write before
-                // it. A unit /work/.max/systemd keeps isn't work under
-                // way: the VM is kept on for those another way.
-                let said = ssh::ask(&asked, "maxx units list '{}'").await;
-                let jobs = said.ok().and_then(|said| {
-                    let listed: Listed = serde_json::from_str(said.lines().last()?).ok()?;
-                    Some(
-                        listed
-                            .units
-                            .iter()
-                            .filter(|unit| unit.kind != "unit")
-                            .count(),
-                    )
-                });
-                if jobs.is_some_and(|jobs| jobs > 0)
-                    && internal.send(Internal::Busy { conversation }).is_err()
-                {
+                if busy(&asked).await && said.send(conversation).is_err() {
                     return;
                 }
             }
@@ -513,13 +481,9 @@ impl Service {
         }
         self.vms
             .insert(conversation, State::Running(Box::new(running)));
-        if !units {
-            // Kept on again once Max runs maxx units apply.
-            self.kept.remove(&conversation);
-        }
         // Max was told when it booted so.
         if !units && !attached {
-            let text = "这个群的 VM 最近两次没开起来，或者开着开着自己停了，这次开机就没装 /work/.max/systemd 里的 unit，VM 也不再常开。多半是哪个 unit 的问题：用 systemctl、journalctl 查清楚、改好，再跑 maxx units apply。".to_owned();
+            let text = "这个群的 VM 最近两次没开起来，或者开着开着自己停了，这次开机就没装 /work/.max/systemd 里的 unit。多半是哪个 unit 的问题：用 systemctl、journalctl 查清楚、改好，再跑 maxx units apply。".to_owned();
             let heard = Heard::Vm(text);
             let _ = self.signals.send(Signal::Heard {
                 conversation,
@@ -528,10 +492,27 @@ impl Service {
         }
     }
 
-    /// Stops idle VMs, but kept ones; attaches again to those whose
+    /// Keeps on the VMs whose groups have units, as their /work says now;
+    /// stops idle VMs, but kept ones; attaches again to those whose
     /// connection is gone; starts kept ones that are down.
     fn sweep(&mut self) {
         let now = Instant::now();
+        // What a group keeps in /work/.max/systemd changes only while its
+        // VM runs. A few small directories, read where they are.
+        for (&conversation, state) in &self.vms {
+            if let State::Running(running) = state {
+                let has = !units(&running.work).is_empty();
+                let was = self.kept.contains(&conversation);
+                match (
+                    was,
+                    keep(&mut self.kept, self.config.kept, conversation, has),
+                ) {
+                    (false, true) => info!(%conversation, "a VM is kept on for its units"),
+                    (true, false) => info!(%conversation, "a VM is no longer kept on"),
+                    _ => {}
+                }
+            }
+        }
         // Those systemd has by now are done with.
         self.stopping
             .retain(|_, stopping| stopping.as_mut().now_or_never().is_none());
@@ -589,53 +570,25 @@ impl Service {
         times.retain(|at| at.elapsed() < FAILING);
         times.len() >= 2
     }
-
-    /// `maxx units apply` says the group has `count` units: what becomes of
-    /// its VM, for it to show. Failures stay counted: it runs at every
-    /// boot, before a unit has had the time to fail.
-    fn units(&mut self, conversation: ConversationId, count: u32) -> String {
-        let idle = self.idle.as_secs() / 60;
-        match keep(&mut self.kept, self.config.kept, conversation, count) {
-            Kept::On => {
-                info!(%conversation, count, "a VM is kept on for its units");
-                "This chat's VM stays on and its units keep running; after a restart or a deploy it starts by itself again.".to_owned()
-            }
-            Kept::Full => format!(
-                "The chats whose VMs stay on are full ({} of them): this chat's VM still stops after idling {idle} minutes, and its units with it; they start again when it next boots.",
-                self.config.kept
-            ),
-            Kept::Off => {
-                format!("There are no units any more: the VM stops after idling {idle} minutes.")
-            }
-        }
-    }
 }
 
-#[derive(Debug, PartialEq, Eq)]
-enum Kept {
-    On,
-    /// Has units, but `most` groups are kept on already.
-    Full,
-    /// Has none.
-    Off,
-}
-
-/// Whether a group with `count` units is kept on: while it has any, if
-/// it is already, or fewer than `most` are.
+/// Keeps a group on while it `has` units, if it is kept already or fewer
+/// than `most` are: whether it is kept now. One past the `most` isn't, and
+/// its VM stops when idle, its units with it, until the next boot.
 fn keep(
     kept: &mut BTreeSet<ConversationId>,
     most: usize,
     conversation: ConversationId,
-    count: u32,
-) -> Kept {
-    if count == 0 {
+    has: bool,
+) -> bool {
+    if !has {
         kept.remove(&conversation);
-        Kept::Off
+        false
     } else if kept.contains(&conversation) || kept.len() < most {
         kept.insert(conversation);
-        Kept::On
+        true
     } else {
-        Kept::Full
+        false
     }
 }
 

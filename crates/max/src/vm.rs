@@ -6,7 +6,6 @@
 
 mod about;
 mod events;
-mod host;
 mod machine;
 mod owner;
 pub mod ssh;
@@ -22,7 +21,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use color_eyre::eyre::{Result, WrapErr};
 use futures_util::FutureExt;
 use max_core::ids::ConversationId;
-use serde::Deserialize;
 use tokio::net::UnixListener;
 use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio::sync::oneshot;
@@ -44,12 +42,16 @@ const UNIT_KINDS: [&str; 5] = ["service", "socket", "timer", "path", "target"];
 /// Where max listens for what the guests ask of it, beside the VMs'
 /// directories: one socket for them all.
 const SOCKET: &str = "max.sock";
+/// The units of what was started in a guest, as its systemctl takes
+/// them: Max's background commands, and the calls.
+const JOBS: &str = "'max-job-*.service'";
 
-/// What `maxx units stop-all` says: the units it stopped.
-#[derive(Debug, Deserialize)]
-pub struct Stopped {
-    /// The units' names.
-    pub stopped: Vec<String>,
+/// Whether anything that was started runs in the guest at `connection`,
+/// which its systemd says by how systemctl ends: nothing the guest's
+/// shell writes is read. A guest that doesn't answer runs nothing.
+async fn busy(connection: &Connection) -> bool {
+    let asked = format!("systemctl is-active --quiet {JOBS}");
+    ssh::ask(connection, &asked).await.is_ok()
 }
 
 /// Where `conversation`'s /work is on the host, under the VMs' `dir`,
@@ -92,20 +94,6 @@ fn given(socket: &Path) -> Option<std::io::Result<UnixListener>> {
         listener.set_nonblocking(true)?;
         UnixListener::from_std(listener)
     })
-}
-
-/// What the VMs' own route asks of the service, and what its tasks tell
-/// it.
-enum Internal {
-    /// `maxx units apply` ran: the group has `count` units.
-    Units {
-        conversation: ConversationId,
-        count: u32,
-        reply: oneshot::Sender<String>,
-    },
-    /// The guest says something of Max's runs in it: a background command,
-    /// which no call of max's waits for.
-    Busy { conversation: ConversationId },
 }
 
 /// How long a VM may idle, by the configuration.
@@ -202,7 +190,7 @@ impl Vms {
                 .collect(),
         );
         // Where every VM's guest reaches max: the tools, the timeline's
-        // rows, the units' count, the models and the keyed APIs. Whose
+        // rows, the models and the keyed APIs. Whose
         // VM a connection is from is systemd's to say, by the process
         // that made it.
         let listener = listen(&config.dir)?;
@@ -213,8 +201,6 @@ impl Vms {
             async move { machine::whose(&units, pid).await }.boxed()
         });
         let listener = service::Waited::new(listener, whose);
-        let (internal, internal_rx) = mpsc::unbounded_channel();
-        let host = host::router(internal.clone());
         let calls = signals.clone();
         // The service's own end, which `stop_listening` brings before
         // the scope's: no more is taken, and the timeline's streams
@@ -223,7 +209,7 @@ impl Vms {
         let ends = listening.clone();
         let carried = service::agents(agents).merge(service::api::router(Arc::clone(&apis)));
         scope.spawn(move |stop| async move {
-            let host = host.merge(events::router(calls.clone(), ends.clone()));
+            let host = events::router(calls.clone(), ends.clone());
             let app = service::router(calls, host).merge(carried);
             let serving = service::serve(listener, app, ends.clone());
             tokio::pin!(serving);
@@ -236,7 +222,7 @@ impl Vms {
             }
         });
         let (requests, rx) = mpsc::unbounded_channel();
-        scope.spawn(move |_| owner::run(config, guest, signals, rx, (internal, internal_rx)));
+        scope.spawn(move |_| owner::run(config, guest, signals, rx));
         Ok(Self {
             requests,
             apis,
@@ -342,6 +328,18 @@ impl Vm {
     /// As [`Vm::ask`], or if what the guest says can't be read.
     pub async fn about(&self, units: &[String]) -> Result<About> {
         about::read(&self.ask(&about::line(units)).await?)
+    }
+
+    /// Has the guest stop everything that was started in it, the
+    /// background commands with the calls, and waits until it has. One
+    /// stopped on request tells nobody of its end.
+    ///
+    /// # Errors
+    ///
+    /// As [`Vm::ask`].
+    pub async fn stop_jobs(&self) -> Result<()> {
+        self.ask(&format!("systemctl stop {JOBS}")).await?;
+        Ok(())
     }
 
     /// A name for a command's unit, one `maxx units` takes. A VM outlives

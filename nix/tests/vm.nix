@@ -23,14 +23,13 @@
   newer,
 }:
 let
-  # A unit Max might keep in a VM: it asks the VM service how it is, at
-  # the port every program reaches max by, and notes the answer's status
-  # with the boot it runs in and the image the guest is on (`newer` has
+  # A unit Max might keep in a VM: it asks max for its tools, at the port
+  # every program reaches max by, and notes the answer's status with the
+  # boot it runs in and the image the guest is on (`newer` has
   # /etc/max-image).
   probe = pkgs.writeText "probe.sh" ''
     while true; do
-      code=$(curl -s -m 60 -o /dev/null -w '%{http_code}' -H 'content-type: application/json' \
-        -d '{"units":1}' http://127.0.0.1:7777/units || true)
+      code=$(curl -s -m 60 -o /dev/null -w '%{http_code}' http://127.0.0.1:7777/tools || true)
       echo "$(cat /proc/sys/kernel/random/boot_id) $code $(cat /etc/max-image 2> /dev/null || echo first)" >> /work/probe.log
       sleep 1
     done
@@ -184,10 +183,8 @@ pkgs.testers.runNixOSTest {
     # Commands and units have /work for a home, and the login shell's PATH
     # is built from it.
     assert "家：/work，unit 的家：/work" in shown and "PATH 里有家里的 profile" in shown, shown
-    # maxx units apply tells the VM service, which keeps the VM on; maxx wake, from
-    # the background command, calls as a program and reaches vm-check,
-    # standing in for the group's actor.
-    assert "This chat's VM stays on" in shown, shown
+    # maxx wake, from the background command, calls as a program and
+    # reaches vm-check, standing in for the group's actor.
     assert "后台起了\n1\nvm-check 收到了" in shown and "叫醒：vm-check 叫醒了自己" in shown, shown
     # The next boot starts it before vm-check runs maxx units apply.
     machine.succeed("systemctl start maxx-vm-check.service")
@@ -196,9 +193,9 @@ pkgs.testers.runNixOSTest {
     # vm-check's VM was a unit of its own, and vm-check stopped it.
     machine.fail("systemctl is-active maxx-vm@check-0.service")
 
-    # A VM outlives max. Conversation 7 has a unit, so max keeps its VM
-    # on: the unit asks the VM service how it is every second, and notes
-    # the answer with the boot it runs in.
+    # A VM outlives max. Conversation 7 has a unit in its /work, so max
+    # keeps its VM on: the unit asks max for its tools every second, and
+    # notes the answer with the boot it runs in.
     work = "/var/lib/maxx/vm/7/work"
     machine.succeed(
         f"install -d -o maxx -g maxx -m 700 /var/lib/maxx/vm/7 {work} {work}/.max {work}/.max/systemd",

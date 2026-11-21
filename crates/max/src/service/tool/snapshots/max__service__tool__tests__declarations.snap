@@ -70,5 +70,5 @@ video(args: { path: string; start?: number | string; end?: number | string }): P
 /** What of yours runs in the VM. kind is job for a background command, a background agent among them, and call for a shell or run_code under way, each with its title, the command's first line, and the seconds it has run; unit is one /work/.max/systemd keeps, with state as systemd has it. systemctl stop <name> stops one. */
 units_list(): Promise<{ units: { name: string; kind: string; title?: string; seconds?: number; state?: string }[] }>;
 
-/** Makes the unit files in /work/.max/systemd the ones the VM runs: new and changed ones are installed and started, and those gone are stopped and removed. Call it after changing the directory. units is each with its state as systemd has it, and the end of the log of one that failed; skipped is the files that weren't installed, and why; said is whether the VM stays on for them. */
-units_apply(): Promise<{ units: { name: string; state: string; log?: string }[]; skipped: { name: string; why: string }[]; removed: string[]; said?: string }>;
+/** Makes the unit files in /work/.max/systemd the ones the VM runs: new and changed ones are installed and started, and those gone are stopped and removed. Call it after changing the directory. units is each with its state as systemd has it, and the end of the log of one that failed; skipped is the files that weren't installed, and why. */
+units_apply(): Promise<{ units: { name: string; state: string; log?: string }[]; skipped: { name: string; why: string }[]; removed: string[] }>;
