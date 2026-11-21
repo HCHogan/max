@@ -1,6 +1,6 @@
 // The run_code runner. max runs it in a group's VM once per run, as
-// `node /run/max/runner.js`; see "Running in the group VM" in
-// docs/rust-rewrite.md.
+// `node /run/max/runner.js`; see "Running in the group's VM" in
+// docs/design/tools.md.
 //
 // stdin is one JSON object: {code, args, tools}. code is an async
 // function body; tools.<name>(args) calls one of Max's tools, the host's

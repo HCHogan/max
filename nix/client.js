@@ -95,7 +95,7 @@ function connect({ url = MAX } = {}) {
 // host's /events sends them, an object each, with the row as data too
 // if `full`; `told` hears why a stream broke and when it opens again. A
 // stream that ends or goes quiet is opened again after the last row, so
-// this never ends. See "Resident programs" in docs/rust-rewrite.md.
+// this never ends. See "Following the chat" in docs/design/jobs.md.
 async function* events({ url = new URL("/events", MAX).href, after, full = false, told = () => {} } = {}) {
   let last = after;
   let wait = RETRY;

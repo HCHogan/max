@@ -4,7 +4,7 @@
 // 640 pixels a side, the sound in mono: ten minutes come to a few MiB,
 // which every model call left in the turn sends again. The copy is left
 // for the host as a picture is (shown.js): the host stores it and reads
-// its length. See "Multimodal results" in docs/rust-rewrite.md.
+// its length. See "Multimodal results" in docs/design/tools.md.
 "use strict";
 
 const { execFile } = require("node:child_process");

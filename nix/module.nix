@@ -336,7 +336,7 @@ in
       description = ''
         max's configuration, written to a TOML file. Secrets go in as paths
         to files, such as `platforms.qq.app_secret_file`. See
-        docs/rust-rewrite.md's section on configuration.
+        docs/design/config.md.
       '';
     };
 
@@ -583,8 +583,8 @@ in
     # outlives max: a restart of max, as at every deploy, leaves the VMs
     # and what runs in them, and max attaches to them when it is back. A
     # deploy that changes this unit doesn't restart them either; a VM gets
-    # the new one when it next boots. See "Lifetimes move to systemd" in
-    # docs/rust-rewrite.md.
+    # the new one when it next boots. See "A VM outlives max" in
+    # docs/design/vm.md.
     systemd.services.${vmUnit} = lib.mkIf vm {
       description = "A group's VM (${name}, %I)";
       partOf = [ "${name}.target" ];
