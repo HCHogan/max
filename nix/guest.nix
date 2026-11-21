@@ -501,10 +501,10 @@ in
     nodejs
     # A page's text, as Markdown; PDFs through pdftotext.
     (import ./webread.nix { inherit pkgs; })
-    # Background agents' harness, which programs can run too. maxx, Max's
-    # tools from shell commands and programs in any language, is with the
-    # jobs (jobs.nix).
-    pi
+    # Background agents' harness, which programs can run too, on the
+    # models max serves the VM (pi.nix). maxx, Max's tools from shell
+    # commands and programs in any language, is with the jobs (jobs.nix).
+    (import ./pi.nix { inherit pkgs pi; })
     # Moves the guest to a new image where it runs; max runs the new
     # image's.
     switch

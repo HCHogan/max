@@ -148,6 +148,37 @@ of it.
   its last message is its report; `maxx agent ask` for what only Max or the
   people know; its directory and notes.
 
+### pi in the VM
+
+`pi` on the guest's PATH is the pinned pi behind a wrapper,
+`nix/pi.sh`, so that anything in the VM can run it on max's models
+without a key:
+
+- **Models**: before each run the wrapper asks `GET /llm` and writes every
+  model max serves into pi's `models.json`, in `~/.pi/agent` under `/work`,
+  as a model of the provider `max`: by max's name for it (`--model
+  cliproxy/gpt-5.6-luna`, or `max/cliproxy/gpt-5.6-luna`), over its
+  protocol, with its window and output limit. Any may be asked to think,
+  and `xhigh` and `max` go as they are. Into `settings.json` go the
+  agents' default model and effort as pi's defaults, `off` without an
+  effort (pi then sends none), and at least 8 retries, to outlast a restart
+  of max. The rest of both files, and of the directory, is whoever's runs
+  pi. With max out of reach a run goes on with what an earlier one wrote.
+- **System text**: `nix/pi-system.md`, as the directory's
+  `APPEND_SYSTEM.md`, after pi's own prompt: it is Max's background agent
+  and doesn't see the chat; `maxx history`, `maxx web-search` and
+  `webread`; not to speak in the chat; its last message is its report; to
+  decide what it can and say what it assumed, and to end with its question
+  when it can't go on; the environment.
+- **Sessions** are a directory's: `--session-id ID` starts a session by
+  that name, or goes on with the current directory's. The wrapper refuses
+  an id pi keeps only for other directories, with status 2 and where it
+  is: pi would start a new session by that name, saying so only on stderr.
+- **Checked** by `scripts/check-pi-job` (`check-pi.js`), with the pinned
+  pi against a fake `/llm`: the default model and effort, the system text,
+  another model by max's name, going on with a session, the refusal, max
+  out of reach, and the rest of pi's files kept.
+
 ### What the plugin relies on in pi
 
 Checked with pi 1.4.0 and 1.5.0:

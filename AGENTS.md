@@ -26,9 +26,9 @@ other project. Without a terminal, start it with `PC_TUI_ENABLED=0 devenv up`.
 
 ## Background agents' harness
 
-After moving pi's pin, or changing `nix/max-pi.sh`, `nix/max-agent.ts` or
-`nix/agent-system.md`, run `scripts/check-pi-job` in the dev shell as
-well. It runs the pinned pi against a fake `/llm`, without real model
+After moving pi's pin, or changing `nix/max-pi.sh`, `nix/max-agent.ts`,
+`nix/agent-system.md`, `nix/pi.sh` or `nix/pi-system.md`, run
+`scripts/check-pi-job` in the dev shell as well. It runs the pinned pi against a fake `/llm`, without real model
 calls. `nix/max-agent.sh`, which starts an agent as a unit, is covered
 with the guest's jobs, below.
 
