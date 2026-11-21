@@ -101,8 +101,7 @@ only`. The ranks themselves are in [Permissions](identity.md#permissions).
     how long it has been in it, the memory its processes hold, how often
     systemd restarted it, and how it failed (`Result`); `not installed` for a
     file `maxx units apply` hasn't run over; `bad-setting` or `error` when
-    systemd couldn't read it. At most 12 units, then `and N more`. Nothing in
-    it is the contract's, so a guest an older max booted answers too.
+    systemd couldn't read it. At most 12 units, then `and N more`.
   - A VM that isn't running isn't started for it: `vm        off`, no
     `memory`, the units by name alone. One that runs and hasn't answered in
     2 seconds is `vm        no answer`.

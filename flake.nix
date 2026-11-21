@@ -138,13 +138,6 @@
                   else
                     "${guest.microvm.kernel.out}/${pkgs.stdenv.hostPlatform.linux-kernel.target}";
                 initrd = guest.microvm.initrdPath;
-                # What max and a guest say to each other; see the file.
-                contract = import ./nix/contract.nix;
-                # The system the guest boots into, and its paths for the
-                # guest's Nix database: what max has a running guest of an
-                # older image switch to.
-                system = "${guest.system.build.toplevel}";
-                registration = "${guest.system.build.registration}/registration";
                 cmdline = "${
                   if x86 then "earlyprintk=ttyS0 console=ttyS0" else "console=ttyAMA0"
                 } reboot=t panic=-1 ${toString guest.microvm.kernelParams}";

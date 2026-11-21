@@ -290,7 +290,7 @@ tool.
   PATH.
 - Only `/work` and the store survive: whatever a unit runs is in `/work`, a
   store path or `nix run`, and its state is written to files, since programs
-  restart at every deploy's switch or boot.
+  start again with every boot, and a deploy that brings a new image is one.
 - **The escape hatch**: with `max.units=off` on the kernel command line
   nothing is installed at boot, the only way out of a unit that stops sshd,
   shuts the machine down or eats the memory, which would come back every boot.
@@ -438,8 +438,8 @@ are.
   `{id, conversation, sender: {identity, name, role}, at, content, turn, raw,
   command, delivery}`, `content` being a `message`, an `edit` or an `unsend`,
   and a message's `nodes` the core's. What the projection reads is what a
-  program reads. A field that goes or changes meaning is a change to the
-  contract with the guests; one more isn't. The tool's schema names a row's
+  program reads. A field that goes or changes meaning breaks the programs
+  the groups keep; one more doesn't. The tool's schema names a row's
   own fields.
 - **`people`** maps each identity among the rows' senders and those they
   mention to the person's number.

@@ -121,8 +121,8 @@ struct Sender {
 
 /// A row as a program reads it: the message as max's core writes it, and
 /// what the ledger knows of the row besides. A guest's programs read
-/// this, so a field that goes or changes its meaning is a change to the
-/// contract with them (nix/contract.nix); one more isn't.
+/// this, so a field that goes or changes its meaning breaks the programs
+/// the groups keep; one more doesn't.
 pub(crate) fn data(row: &Row) -> Value {
     let mut data = serde_json::to_value(&row.message).expect("a message is JSON");
     data["command"] = json!(row.command);

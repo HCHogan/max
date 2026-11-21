@@ -46,8 +46,7 @@ out=/work/.max/out
 # What /work/.max/systemd keeps, as `maxx units apply` installed it
 # (max-units.sh).
 installed=/run/max/units
-# What a unit's hook runs: the system's, so that a job one image started
-# is ended by the image the guest has switched to since.
+# What a unit's hook runs.
 self="/run/current-system/sw/bin/maxx units"
 
 usage() {

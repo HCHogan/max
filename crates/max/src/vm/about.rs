@@ -50,9 +50,7 @@ pub struct Unit {
     pub restarts: u32,
 }
 
-/// The line that asks a guest about itself and about `units`. Nothing in
-/// it is the contract's: every guest has these files and systemctl, so
-/// one that an older max booted answers too.
+/// The line that asks a guest about itself and about `units`.
 pub(super) fn line(units: &[String]) -> String {
     // The version's file ends without a new line: echo gives it a line
     // however it ends, and an empty one without the file.

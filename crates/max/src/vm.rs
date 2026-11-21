@@ -1,8 +1,8 @@
 //! The groups' VMs: one per conversation, started when a tool first needs
 //! it and stopped once it has gone unused for a while, unless the group
 //! keeps units of Max's in it. The VM service owns them all; a tool call
-//! borrows a VM's SSH connection. See "VM processes" and "Resident programs" in
-//! docs/rust-rewrite.md.
+//! borrows a VM's SSH connection. See docs/design/vm.md, and "Resident
+//! programs" in docs/design/jobs.md.
 
 mod about;
 mod events;
@@ -106,12 +106,6 @@ enum Internal {
     /// The guest says something of Max's runs in it: a background command,
     /// which no call of max's waits for.
     Busy { conversation: ConversationId },
-    /// A VM on an older image was switched to the one max boots, where it
-    /// runs; `stale` if it must still boot again, for a kernel.
-    Switched {
-        conversation: ConversationId,
-        stale: Stale,
-    },
 }
 
 /// How long a VM may idle, by the configuration.
@@ -382,9 +376,6 @@ impl Vm {
         &self.work
     }
 }
-
-/// Whether a VM isn't whole on the image max boots.
-type Stale = bool;
 
 /// The conversations whose /work, under `dir`, has units of Max's, in
 /// order; not vm-check's, conversation 0, which keeps one of its own.

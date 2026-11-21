@@ -3,8 +3,8 @@
 //! to it. max makes the VM's directory and disk, writes what the unit and
 //! its own successor need (`boot.env`, `boot.json`, `ssh.key`), and has
 //! systemd start the unit; then SSH once the guest answers. The unit's
-//! processes are the NixOS module's to run (nix/module.nix). See "VM
-//! processes" and "Lifetimes move to systemd" in docs/rust-rewrite.md.
+//! processes are the NixOS module's to run (nix/module.nix). See "Starting
+//! a VM" and "A VM outlives max" in docs/design/vm.md.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -49,13 +49,6 @@ pub(super) struct Guest {
     pub kernel: PathBuf,
     pub initrd: PathBuf,
     pub cmdline: String,
-    /// The contract it keeps with a host: nix/contract.nix.
-    pub contract: u32,
-    /// The system it boots into, which a running guest of an older image
-    /// is switched to...
-    pub system: PathBuf,
-    /// ...and that system's paths, for the guest's Nix database.
-    pub registration: PathBuf,
 }
 
 impl Guest {
@@ -72,16 +65,11 @@ impl Guest {
 pub(super) struct Boot {
     /// Its tap's slot.
     pub slot: usize,
-    /// The contract of the guest it booted.
-    pub contract: u32,
-    /// The image it runs: the configuration's `guest` when it booted, or
-    /// the one it was switched to since.
+    /// The image it booted: the configuration's `guest` then. A max that
+    /// boots another doesn't attach to it.
     pub guest: PathBuf,
     /// Whether with Max's units.
     pub units: bool,
-    /// What it booted, which no switch changes.
-    pub kernel: PathBuf,
-    pub initrd: PathBuf,
 }
 
 impl Boot {
@@ -98,25 +86,17 @@ impl Boot {
         fs::write(dir.join(RECORD), serde_json::to_vec(self)?).await?;
         Ok(())
     }
-
-    /// Whether a VM of this boot has to boot again to run `guest`'s image
-    /// whole: a switch gives it the system, and leaves the kernel and the
-    /// initrd it booted.
-    pub(super) fn reboots_for(&self, guest: &Guest) -> bool {
-        self.kernel != guest.kernel || self.initrd != guest.initrd
-    }
 }
 
 /// A conversation's VM: its unit, and what goes with it on the host.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(super) struct Machine {
     systemctl: PathBuf,
     unit: String,
     /// The VM's files.
     pub dir: PathBuf,
-    /// The link that keeps what it booted from the garbage collector;
-    /// those beside it, named after it with a dot and an image's name,
-    /// keep each image it was switched to since.
+    /// The link that keeps the image it booted from the garbage
+    /// collector.
     root: Option<PathBuf>,
 }
 
@@ -152,55 +132,24 @@ impl Machine {
         }
     }
 
-    /// What it ran is the collector's again: a VM that has ended. A few
-    /// unlinks, done before this returns: left for later, they could take
+    /// What it ran is the collector's again: a VM that has ended. An
+    /// unlink, done before this returns: left for later, it could take
     /// the link of the boot that comes next.
     pub(super) fn unroot(&self) {
-        for root in self.roots() {
+        if let Some(root) = &self.root {
             let _ = std::fs::remove_file(root);
         }
     }
 
-    /// Its links among the collector's roots: what it booted, and each
-    /// image it was switched to since.
-    fn roots(&self) -> Vec<PathBuf> {
-        let Some(root) = &self.root else {
-            return Vec::new();
-        };
-        let mut roots = vec![root.clone()];
-        let name = root.file_name().and_then(|name| name.to_str());
-        if let (Some(dir), Some(name)) = (root.parent(), name)
-            && let Ok(entries) = std::fs::read_dir(dir)
-        {
-            let switched = format!("{name}.");
-            roots.extend(
-                entries
-                    .filter_map(|entry| Some(entry.ok()?.path()))
-                    .filter(|path| {
-                        let name = path.file_name().and_then(|name| name.to_str());
-                        name.is_some_and(|name| name.starts_with(&switched))
-                    }),
-            );
-        }
-        roots
-    }
-
-    /// Roots `image`, which the VM boots.
+    /// Roots `image`, which the VM boots, in place of what it booted
+    /// before.
     async fn keep(&self, image: &Path) {
-        if let Some(root) = &self.root {
-            link(image, root).await;
-        }
-    }
-
-    /// Roots `image`, which its guest is switched to, beside what it
-    /// booted and what it was switched to before: what started under
-    /// each of those may run on from it.
-    async fn keep_too(&self, image: &Path) {
-        let name = image.file_name().and_then(|name| name.to_str());
-        if let (Some(root), Some(name)) = (&self.root, name) {
-            let mut beside = root.clone().into_os_string();
-            beside.push(format!(".{name}"));
-            link(image, Path::new(&beside)).await;
+        let Some(root) = &self.root else {
+            return;
+        };
+        let _ = fs::remove_file(root).await;
+        if let Err(error) = fs::symlink(image, root).await {
+            warn!(root = %root.display(), %error, "couldn't root a VM's image");
         }
     }
 
@@ -283,11 +232,10 @@ fn unroot_but(roots: &Path, instances: &str, running: &[ConversationId]) {
     };
     for entry in entries.filter_map(Result::ok) {
         let name = entry.file_name();
-        // `7`, or `7.` and an image's name.
         let id = name
             .to_str()
             .and_then(|name| name.strip_prefix(instances))
-            .and_then(|rest| rest.split('.').next()?.parse().ok());
+            .and_then(|id| id.parse().ok());
         if id.is_some_and(|id| !running.contains(&ConversationId::new(id))) {
             let _ = std::fs::remove_file(entry.path());
         }
@@ -402,15 +350,11 @@ pub(super) async fn boot(
     fs::write(dir.join(ENV), environment(&env)).await?;
     let record = Boot {
         slot: index,
-        contract: guest.contract,
         guest: config.guest.clone(),
         units,
-        kernel: guest.kernel.clone(),
-        initrd: guest.initrd.clone(),
     };
     record.write(dir).await?;
     // What the guest reads from the host's store, for as long as it runs.
-    machine.unroot();
     machine.keep(&config.guest).await;
     machine.run(&["start"]).await?;
 
@@ -486,41 +430,6 @@ async fn let_in(socket: &Path, key: &Arc<PrivateKey>, within: Duration) -> Resul
         .wrap_err(format!("the guest didn't let max in within {within:?}")))
 }
 
-/// Has the guest of a VM that runs an older image switch to `guest`'s
-/// system where it runs, with what runs in it left running: whether the
-/// VM must still boot again for the image, its kernel or initrd being
-/// another's. The new image's own `max-switch` does it (nix/guest.nix),
-/// so a guest older than that command is switched too.
-pub(super) async fn switch(
-    config: &config::Vm,
-    guest: &Guest,
-    machine: &Machine,
-    connection: &Connection,
-) -> Result<bool> {
-    let mut boot = Boot::read(&machine.dir).await?;
-    let system = guest.system.display().to_string();
-    let line = format!(
-        "{} {} {}",
-        ssh::quote(&format!("{system}/sw/bin/max-switch")),
-        ssh::quote(&system),
-        ssh::quote(&guest.registration.display().to_string()),
-    );
-    // Rooted before the guest runs it.
-    machine.keep_too(&config.guest).await;
-    ssh::ask(connection, &line).await?;
-    boot.guest.clone_from(&config.guest);
-    boot.write(&machine.dir).await?;
-    Ok(boot.reboots_for(guest))
-}
-
-/// Makes `root` a link to `image`, in place of what it was.
-async fn link(image: &Path, root: &Path) {
-    let _ = fs::remove_file(root).await;
-    if let Err(error) = fs::symlink(image, root).await {
-        warn!(root = %root.display(), %error, "couldn't root a VM's image");
-    }
-}
-
 /// Writes `bytes` to `path`, a file only max reads.
 async fn secret(path: &Path, bytes: &[u8]) -> Result<()> {
     let _ = fs::remove_file(path).await;
@@ -590,39 +499,10 @@ mod tests {
     fn a_boot_is_read_as_it_was_written() {
         let boot = Boot {
             slot: 3,
-            contract: 1,
             guest: "/nix/store/x-max-guest.json".into(),
             units: true,
-            kernel: "/nix/store/k-linux/vmlinux".into(),
-            initrd: "/nix/store/i-initrd/initrd".into(),
         };
         let written = serde_json::to_string(&boot).unwrap();
         assert_eq!(serde_json::from_str::<Boot>(&written).unwrap(), boot);
-    }
-
-    /// A switch gives a running guest the new system, not the kernel or
-    /// the initrd.
-    #[test]
-    fn a_vm_boots_again_only_for_a_kernel_or_an_initrd() {
-        let boot = Boot {
-            slot: 0,
-            contract: 1,
-            guest: "/nix/store/a-max-guest.json".into(),
-            units: true,
-            kernel: "/nix/store/k-linux/vmlinux".into(),
-            initrd: "/nix/store/i-initrd/initrd".into(),
-        };
-        let guest = |kernel: &str, initrd: &str| Guest {
-            kernel: kernel.into(),
-            initrd: initrd.into(),
-            cmdline: String::new(),
-            contract: 1,
-            system: "/nix/store/s-nixos-system".into(),
-            registration: "/nix/store/r-closure-info/registration".into(),
-        };
-        let (kernel, initrd) = ("/nix/store/k-linux/vmlinux", "/nix/store/i-initrd/initrd");
-        assert!(!boot.reboots_for(&guest(kernel, initrd)));
-        assert!(boot.reboots_for(&guest("/nix/store/n-linux/vmlinux", initrd)));
-        assert!(boot.reboots_for(&guest(kernel, "/nix/store/n-initrd/initrd")));
     }
 }

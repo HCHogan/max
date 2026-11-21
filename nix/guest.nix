@@ -1,6 +1,6 @@
 # A group's VM: a NixOS guest that cloud-hypervisor boots straight into its
-# kernel. max starts it as its own child, with a command line of its own
-# making (see docs/rust-rewrite.md, "VM processes"); this module only builds the
+# kernel. max has systemd start it, with a command line of its own making
+# (see "Starting a VM" in docs/design/vm.md); this module only builds the
 # system, and the flake hands max its kernel, initrd and command line.
 #
 # Commands run as root; the VM boundary is the isolation, so the guest has a
@@ -38,37 +38,8 @@ let
   flags = "/work/.max/chromium-flags";
   # Chromium's own, without "HeadlessChrome" in it.
   userAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${lib.versions.major pkgs.chromium.version}.0.0.0 Safari/537.36";
-  # Moves the running guest to another image's system: its paths into the
-  # Nix database, as register-nix-paths does at boot, and then NixOS's own
-  # switch, in a unit of its own so that it outlives whoever asked. max
-  # runs the new image's copy, by its path, so a guest older than this
-  # command can be switched too. See "VM processes" in
-  # docs/rust-rewrite.md.
-  switch = pkgs.writeShellApplication {
-    name = "max-switch";
-    runtimeInputs = [
-      pkgs.coreutils
-      config.nix.package.out
-      config.systemd.package
-    ];
-    text = ''
-      system=$1
-      registration=$2
-      stamp=/nix/var/nix/max-registered
-      if [ "$(cat "$stamp" 2> /dev/null)" != "$registration" ]; then
-        nix-store --load-db < "$registration"
-        echo "$registration" > "$stamp"
-      fi
-      exec systemd-run --quiet --collect --wait --unit="max-switch-$(date +%s)" \
-        "$system/bin/switch-to-configuration" test
-    '';
-  };
 in
 {
-  # What the flake puts in the guest's JSON, for max to switch a running
-  # guest to this system.
-  system.build.registration = registration;
-
   # Max's calls and background commands, as units.
   imports = [ ./jobs.nix ];
 
@@ -167,7 +138,6 @@ in
     ];
     after = [ "local-fs.target" ];
     conflicts = [ "shutdown.target" ];
-    restartIfChanged = false;
     serviceConfig = {
       Type = "oneshot";
       RemainAfterExit = true;
@@ -206,8 +176,6 @@ in
   networking.resolvconf.enable = false;
   environment.etc."resolv.conf".source = "/run/max/resolv.conf";
   systemd.services.max-guest = {
-    # What the VM booted with doesn't change with the image.
-    restartIfChanged = false;
     wantedBy = [ "sysinit.target" ];
     before = [
       "sysinit.target"
@@ -254,31 +222,11 @@ in
       if [ -n "''${domain:-}" ]; then
         printf 'Host * !*.*\n  HostName %%h.%s\nHost *\n  User max\n  BatchMode yes\n  ConnectTimeout 15\n  StrictHostKeyChecking accept-new\n' "$domain" > /run/max/ssh_config
       fi
+      # run_code's runner, where max runs it, and Max's tools for a
+      # program of its own in JS, where one requires them (tools.js).
+      ln -sfn ${maxx}/lib/max-runner/runner.js /run/max/runner.js
+      ln -sfn ${maxx}/lib/max-runner/tools.js /run/max/tools.js
     '';
-  };
-
-  # run_code's runner, where max runs it, and Max's tools for a program of
-  # its own in JS, where one requires them (tools.js). A unit of its own:
-  # a switch to a new image runs it again, and the next program has the
-  # new runner.
-  systemd.services.max-runner = {
-    wantedBy = [ "sysinit.target" ];
-    # Before max can log in and run one.
-    before = [
-      "sysinit.target"
-      "sshd-vsock.socket"
-    ];
-    after = [ "max-guest.service" ];
-    requires = [ "max-guest.service" ];
-    unitConfig.DefaultDependencies = false;
-    serviceConfig = {
-      Type = "oneshot";
-      RemainAfterExit = true;
-      ExecStart = [
-        "${pkgs.coreutils}/bin/ln -sfn ${maxx}/lib/max-runner/runner.js /run/max/runner.js"
-        "${pkgs.coreutils}/bin/ln -sfn ${maxx}/lib/max-runner/tools.js /run/max/tools.js"
-      ];
-    };
   };
 
   # Everything in the guest reaches the host at 127.0.0.1:7777: max's
@@ -295,8 +243,6 @@ in
   # at the socket (module.nix). A connection nothing takes at the host's
   # end only closes, and its caller can't reach max.
   systemd.services."max-host@" = {
-    # A switch to a new image leaves the calls in flight.
-    restartIfChanged = false;
     unitConfig.DefaultDependencies = false;
     serviceConfig = {
       ExecStart = "${pkgs.socat}/bin/socat STDIO VSOCK-CONNECT:2:7777";
@@ -312,9 +258,6 @@ in
   # own in ${flags}, such as --load-extension: Chromium, not Google
   # Chrome, still takes that one.
   systemd.services.max-browser = {
-    # A switch to a new image leaves the browser and its tabs: the next
-    # start, in the next boot, has the new one.
-    restartIfChanged = false;
     unitConfig.RequiresMountsFor = "/work";
     environment.TZ = "Asia/Shanghai";
     serviceConfig = {
@@ -505,9 +448,6 @@ in
     # models max serves the VM (pi.nix). maxx, Max's tools from shell
     # commands and programs in any language, is with the jobs (jobs.nix).
     (import ./pi.nix { inherit pkgs pi; })
-    # Moves the guest to a new image where it runs; max runs the new
-    # image's.
-    switch
     # tools.video's copies for the model, and programs' own.
     ffmpeg-headless
     poppler-utils

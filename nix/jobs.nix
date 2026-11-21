@@ -16,8 +16,7 @@ let
   };
 in
 {
-  # On the PATH: a unit's hook runs the system's, whichever image started
-  # the unit.
+  # On the PATH, where max, Max and a unit's hook find it.
   environment.systemPackages = [ maxx ];
 
   # Calls and background commands, background agents among them. No
@@ -61,8 +60,6 @@ in
   # lists what Max hasn't heard yet.
   systemd.services."max-notify@" = {
     description = "Tell Max that %i ended";
-    # A switch to a new image leaves the ones that wait.
-    restartIfChanged = false;
     unitConfig.StartLimitIntervalSec = 0;
     serviceConfig = {
       Type = "oneshot";

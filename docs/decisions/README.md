@@ -33,6 +33,7 @@ Why Max is built the way it is: one file for each decision that was a real trade
 - [max's socket is systemd's](max-socket-is-systemds.md)
 - [A guest's calls come straight to max](guests-reach-max-directly.md)
 - [A guest reset ends its VM](a-guest-reset-ends-its-vm.md)
+- [A new image restarts its VMs](a-new-image-restarts-its-vms.md)
 - [A forwarder keeps no count](forwarder-keeps-no-count.md)
 - [Idle guests drop their caches; the VMs' sizes stay](idle-guests-drop-caches.md)
 - [The derived-data workers share conventions, not a framework](no-worker-framework.md)

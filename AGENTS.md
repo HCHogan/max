@@ -42,24 +42,23 @@ with no VM inside it. What the host makes of a call's line is in
 nested test, `.#nestedChecks.x86_64-linux.vm`, which needs nested KVM
 and runs on tank.
 
-## The contract with a guest
+## A guest and its image
 
-A VM outlives max, so a new max meets guests an older one booted. Raise
-the number in `nix/contract.nix` with any change to what the two say to
-each other: the arguments of what max runs with `maxx`, or the line a
-call prints, the layout of `/run/max/jobs`, the runner's input, the
-routes a guest calls. A VM
-whose guest keeps another number is restarted when max attaches to it;
-one with the same number runs on. A change an older guest goes on
-working with, such as a field more in what a route answers, needs no new
-number.
+A VM outlives max, and max attaches only to a VM that booted the image
+max boots itself: a deploy that changes the guest's image stops the VMs
+that run, with the background commands and agents in them, and each boots
+the new image when it is next needed (see "A VM outlives max" in
+docs/design/vm.md). So both ends of what a guest and max say to each
+other change together: the arguments of what max runs with `maxx`, the
+line a call prints, the runner's input, the routes a guest calls. Any
+change to a guest file is such a deploy, a comment's too.
 
-What a guest asks comes to max at one socket, which each VM's port for
-the host is a link to (see "A guest's calls reach max" in
-docs/design/vm.md). The link is made when a VM boots, so raise the number
-too with a change to where it leads or how max tells whose VM a call is
-from. The tests of that are in `crates/max/src/service/http.rs` and the
-nested test.
+What the host gives a VM at its boot isn't the image's: the link its
+calls come by (see "A guest's calls reach max" in docs/design/vm.md), the
+unit's launcher in `nix/module.nix`, the command line. A change to those
+reaches a VM at its next boot; when it can't wait, the deploy stops the
+VMs, `systemctl stop 'maxx-vm@*'`. The tests of how max tells whose VM a
+call is from are in `crates/max/src/service/http.rs` and the nested test.
 
 ## Queries
 

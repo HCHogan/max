@@ -42,8 +42,8 @@ Only declarative configuration applied at boot needs root, all in NixOS:
   `<vm.dir>/<conversation id>/`, and writes three files:
   `boot.env`, which the unit reads (the tap,
   the sizes, the kernel, the initrd and the command line); `boot.json`,
-  which the next max reads (the slot, the guest's contract, the image,
-  whether with Max's units); and `ssh.key`, the key made for this boot. Then
+  which the next max reads (the slot, the image, whether with Max's
+  units); and `ssh.key`, the key made for this boot. Then
   it has systemd start the unit, whose launcher starts two virtiofsd (a
   read-only one for the store, a read-write one for `/work`) and
   cloud-hypervisor, its main process. max tries SSH every 100 ms; the VM is
@@ -89,38 +89,32 @@ is in [decisions/lifetimes-to-systemd.md](../decisions/lifetimes-to-systemd.md).
   attaches to each (`Service::attach`): it reads `boot.json`, takes the
   VM's slot and logs in with the saved key within 10 seconds (`ATTACH`). Its idle time counts from then. A VM max can't use is stopped,
   and boots again when next needed (at once, if kept on): one without a
-  record, one whose slot isn't free for it, one whose guest keeps another
-  contract.
-- **The contract** is a number (`nix/contract.nix`) for what max says to a
-  guest it didn't boot and what the guest keeps between images; the guest's
-  JSON carries it. When to raise it is in AGENTS.md.
-- **Switching a running guest**: a VM booted from an image a deploy has
-  replaced, with the same contract, runs on, and its guest is switched to
-  the new system where it runs. The guest's store is the host's, so the new
-  system is already there: max runs that image's `max-switch` in the guest
-  (`machine::switch`), which loads the system's paths into the guest's Nix
-  database, as `register-nix-paths` does at boot, and then runs NixOS's
-  `switch-to-configuration test` in a unit of its own. Commands, agents and
-  resident programs run through it: Max's own units and the transient ones
-  aren't in `/etc/systemd/system`, which is all a switch looks at, and what
-  mustn't restart under running work is marked `restartIfChanged = false`
-  (`max-guest`, `max-host@`, `max-notify@`, `max-browser`); the runner's link
-  has a unit of its own, `max-runner`, which a switch runs again.
-- **Stale VMs**: one that boots another kernel or initrd than the image's,
-  or whose switch failed, is stopped once nothing of Max's runs in it and
-  nobody has used it for 10 minutes (`QUIET`), to boot the new image whole;
-  a kept one boots again in the same sweep.
-- If max's connection to a VM drops while its unit runs (a switch
-  restarting sshd, say), max attaches again (`Service::reattach`) before
+  record, one whose slot isn't free for it, one that booted another image
+  than max boots.
+- **A new image restarts its VMs.** A guest is the image it booted until
+  it stops, and what it and max say to each other (what max runs with
+  `maxx`, the line a call prints, the runner's input, the routes a guest
+  calls) is only kept in step within one image. So max attaches to a VM
+  only if `boot.json` names the image max boots itself, by its path: a
+  deploy that brings another stops every VM that runs, with the background
+  commands and agents in it, as max starts, and each boots the new image
+  when it is next needed. A deploy of max alone, as most are, leaves the
+  VMs as they run. Why a guest isn't switched where it runs is in
+  [decisions/a-new-image-restarts-its-vms.md](../decisions/a-new-image-restarts-its-vms.md).
+- **What the host gave a VM at its boot stays as it was**: the link its
+  calls come by, the unit's launcher, the command line. A change to those
+  reaches a VM at its next boot; a deploy that can't wait for that stops
+  the VMs, `systemctl stop 'maxx-vm@*'`.
+- If max's connection to a VM drops while its unit runs (its sshd
+  restarting, say), max attaches again (`Service::reattach`) before
   giving the VM up. If the unit no longer runs, the VM ended by itself:
   `machine::attach` asks systemd before trying the socket, the end counts as
   a failure, and the call that found it has the VM boot again.
-- **GC roots**: max links what each VM booted (whose kernel modules it goes
-  on loading) and each image it was switched to (whose processes may run
-  on), as `7` and `7.<image>`, under `/nix/var/nix/gcroots/per-user/maxx/`,
-  since the host's weekly collection would otherwise take a replaced image
-  from under a running guest. The links go when max stops the VM, and those
-  of VMs that ended without max (a host restart) when max next starts.
+- **GC roots**: max links the image each VM booted, as `7`, under
+  `/nix/var/nix/gcroots/per-user/maxx/`, since the host's weekly collection
+  would otherwise take an image from under a guest that still runs it. The
+  link goes when max stops the VM, and those of VMs that ended without max
+  (a host restart) when max next starts.
 - **While max restarts**, what a guest asks of it waits. The socket the
   guests reach max at is systemd's (`maxx.socket`), which listens
   whether max runs or not: a request made meanwhile waits there, and the max
@@ -141,8 +135,8 @@ is in [decisions/lifetimes-to-systemd.md](../decisions/lifetimes-to-systemd.md).
   connection only closes, and its client reports a failed call,
   `unreachable`. With max's unit alone stopped the socket still listens,
   and the next thing a guest asks starts max again.
-- **Stopping**: only max asking systemd stops a VM (idle, evicted, dead, on
-  an older image and quiet, unusable at attach), or `systemctl stop
+- **Stopping**: only max asking systemd stops a VM (idle, evicted, dead,
+  unusable at attach, as on another image), or `systemctl stop
   maxx.target`, or vm-check, which stops its own (`Vms::shut`). A stop is
   `systemctl stop --no-block`, and booting the same VM waits until systemd
   has that request (`Service::stopping`), so a start can't reach systemd
@@ -376,7 +370,8 @@ with no process between them. Why is in
   it, which needs nested KVM: CI's runners can't give it, so it isn't in
   `checks` and is run on tank. It also covers a guest's calls across a
   restart and a stop of max, a model's answer streamed through max, a
-  switch to a second image, `maxx-ssh` and the machined registration,
+  deploy that brings a second image and restarts the VM on it, `maxx-ssh`
+  and the machined registration,
   and the operations network against a fake tailnet (a veth in
   `maxx-ops` to 100.64.0.2 in another namespace: the operations VM
   reaches it and the machine's own tailnet address, an ordinary VM
