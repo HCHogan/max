@@ -21,10 +21,10 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
     # pi, the background agents, in the guest. nix/pi.sh relies on this
-    # one's (pi 1.5.0's) models.json, settings and sessions: moving the
+    # one's (pi 1.6.0's) models.json, settings and sessions: moving the
     # pin means running scripts/check-pi (see "Background agents" in
     # docs/design/jobs.md).
-    llm-agents.url = "github:numtide/llm-agents.nix/2add2fd83bf01a23357d401ba24155e35d9d93d2";
+    llm-agents.url = "github:numtide/llm-agents.nix/a59764a6424689d67c1bd9070fd48afa44a47ee0";
   };
 
   outputs =

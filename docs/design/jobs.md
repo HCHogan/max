@@ -27,7 +27,8 @@ pi; it has no tool of its own, and max keeps nothing of it. Why is in
   failed) and the output's file. The title is the command's first line, so
   the notice says which directory and session it was, and a turn that
   didn't start the agent can go on with it. At its limit or when stopped
-  (`systemctl stop`, `/kill`), pi exits at once with nothing printed: the
+  (`systemctl stop`, `/kill`), pi exits at once with no report, and at most
+  `Request aborted` for the model call it was in: the
   notice at the limit says it is out of time, and a stop tells nobody.
 - **Going on**: the same `--session-id` in the same directory goes on with
   the agent's whole conversation, all it read and did, and then the new
@@ -122,13 +123,15 @@ without a key:
 
 ### What the guest's pi relies on in pi
 
-Checked with pi 1.5.0:
+Checked with pi 1.6.0:
 
 - Print mode writes the last text to stdout and exits 0; when the last
   model call fails it writes the error to stderr and exits 1. The session
   is kept either way. A background command's unit writes both to its
   output file.
-- pi exits at once on SIGTERM, with status 143 and nothing written.
+- pi exits at once on SIGTERM, with status 143 and nothing on stdout; a
+  model call under way leaves `Request aborted` on stderr, which the unit
+  writes to the output file with the rest.
 - Standard input that isn't a terminal goes before the first prompt, so a
   heredoc is the task; as an argument, a leading `@` would be read as a
   file.
