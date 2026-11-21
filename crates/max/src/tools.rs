@@ -380,12 +380,17 @@ pub fn guest_dir(dir: Option<&str>) -> String {
     }
 }
 
+/// How much of a command's first line its title keeps: enough to tell
+/// runs of one program apart by their arguments, in a notice and in
+/// `maxx units list`.
+const HEADLINE_CHARS: usize = 200;
+
 /// What a task or a command is, in a line: the first of it, cut short.
 #[must_use]
 pub fn headline(task: &str) -> String {
     let line = task.trim().lines().next().unwrap_or_default();
-    let mut title: String = line.chars().take(30).collect();
-    if line.chars().count() > 30 {
+    let mut title: String = line.chars().take(HEADLINE_CHARS).collect();
+    if line.chars().count() > HEADLINE_CHARS {
         title.push('…');
     }
     title

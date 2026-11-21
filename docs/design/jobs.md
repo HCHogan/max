@@ -260,9 +260,10 @@ woken when it ends.
   and where its output is written as it runs.
 - **When it ends**, the unit's `ExecStopPost=` (`maxx units ended`) writes
   how, and starts `max-notify@<unit>.service`, a oneshot that calls `maxx
-  wake` with `[<unit> 完成] $ make`, the exit status and run time, the end of
-  the output (a wake takes 4,000 characters) and the file's path; `到点了，下面是
-  做到一半的` at its limit. With `Restart=on-failure` systemd retries it until
+  wake` with `[<unit> 完成] $ make` (the command's first line, up to 200
+  characters, as `maxx units list` titles it), the exit status and run
+  time, the end of the output (a wake takes 4,000 characters) and the
+  file's path; `到点了，下面是做到一半的` at its limit. With `Restart=on-failure` systemd retries it until
   max takes it, so a notice isn't lost while max is away, and `systemctl
   list-units 'max-notify@*'` lists those that wait. Max sees it as
   `[max-wake] [max-job-… 完成] …`. A unit stopped on request (`systemctl stop`,
