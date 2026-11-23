@@ -2378,7 +2378,7 @@ checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
 [[package]]
 name = "qqbot"
 version = "0.1.0"
-source = "git+https://github.com/HCHogan/qqbot?rev=fae878a9b77bdda6b33bed44a5a6c83e9ee42893#fae878a9b77bdda6b33bed44a5a6c83e9ee42893"
+source = "git+https://github.com/HCHogan/qqbot?rev=21bcc2249346b6fe8432be69c6fd161ed7bae45d#21bcc2249346b6fe8432be69c6fd161ed7bae45d"
 dependencies = [
  "base64 0.23.1",
  "futures-util",

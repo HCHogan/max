@@ -38,7 +38,6 @@ mod chunk;
 mod parse;
 
 use std::collections::BTreeSet;
-use std::ops::Range;
 
 use crate::ids::PrincipalId;
 use crate::message::Draft;
@@ -114,33 +113,6 @@ pub fn speaks(text: &str, known: &BTreeSet<PrincipalId>) -> bool {
     chunks
         .iter()
         .any(|chunk| parse::parse(chunk, known).is_some())
-}
-
-/// Where a message's text is code, found as the segmenter finds it: fenced
-/// blocks, fences included, and inline code spans, backticks included. A
-/// sender that rewrites Markdown for its platform leaves these as written.
-#[must_use]
-pub fn code(text: &str) -> Vec<Range<usize>> {
-    let mut code = Vec::new();
-    let mut in_fence = false;
-    let mut start = 0;
-    for line in text.split_inclusive('\n') {
-        let end = start + line.len();
-        if chunk::is_fence(line.as_bytes()) {
-            in_fence = !in_fence;
-            code.push(start..end);
-        } else if in_fence {
-            code.push(start..end);
-        } else {
-            code.extend(
-                chunk::code_spans(line.as_bytes())
-                    .into_iter()
-                    .map(|(from, to)| start + from..start + to),
-            );
-        }
-        start = end;
-    }
-    code
 }
 
 /// Cuts streamed text into chunks: `chunk::Chunker`, over `str`.

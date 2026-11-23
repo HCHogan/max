@@ -11,7 +11,6 @@
 //! as.
 
 use std::collections::{HashMap, VecDeque};
-use std::fmt::Write;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -22,11 +21,11 @@ use max_core::ids::{EndpointId, MessageId};
 use max_core::message::{
     Content, MediaKind, MediaRef, MentionTarget, Message as Row, Node, Platform, Sha256,
 };
-use max_core::segment;
 use max_db::ledger::{self, Sent as Delivered};
 use max_db::platform::{self, ConversationKind};
 use max_db::{PgConnection, PgPool};
-use qqbot::api::{Media, Uploaded};
+use qqbot::api::{Media, Refusal, Uploaded};
+use qqbot::markdown::Markdown;
 use qqbot::message::{Body, Outgoing as Message, Sent};
 use qqbot::{Chat, api};
 use tokio::sync::mpsc::{self, UnboundedReceiver};
@@ -421,12 +420,10 @@ impl Unsent {
     /// come back whole.
     fn from(error: &api::Error) -> Self {
         let text = error.to_string();
-        match error {
-            api::Error::Http(error) if !error.is_connect() && !error.is_builder() => {
-                Self::Unknown(text)
-            }
-            api::Error::Decode { .. } => Self::Unknown(text),
-            _ => Self::Refused(text),
+        if error.may_have_arrived() {
+            Self::Unknown(text)
+        } else {
+            Self::Refused(text)
         }
     }
 
@@ -450,16 +447,20 @@ impl Unsent {
 
 /// Why QQ didn't recall a message, for whoever asked.
 fn refusal(error: &api::Error) -> String {
-    match error {
-        api::Error::Api { code: 40062003, .. } => {
+    match (error.refusal(), error) {
+        (Some(Refusal::NoPermission), _) => {
             "QQ says there is no permission (40062003): someone else's message can be recalled only by a bot that is the group's admin, and the owner's and the admins' not at all"
                 .to_owned()
         }
-        api::Error::Api { code: 40064004, .. } => {
+        (Some(Refusal::TooLateToRecall), _) => {
             "it was sent over 2 minutes ago, and QQ no longer lets it be recalled (40064004)".to_owned()
         }
-        api::Error::Api { code, message, .. } => format!("QQ didn't recall it: {code} {message}"),
-        error => format!("QQ never answered, so it isn't known whether it was recalled: {error}"),
+        (None, api::Error::Api { code, message, .. }) => {
+            format!("QQ didn't recall it: {code} {message}")
+        }
+        (None, error) => {
+            format!("QQ never answered, so it isn't known whether it was recalled: {error}")
+        }
     }
 }
 
@@ -501,24 +502,26 @@ async fn lower(
         Some(target) => ledger::quote_id(conn, *target).await?,
         None => None,
     };
-    let mut text = String::new();
+    let mut text = Markdown::new();
     let mut attached = None;
     for node in nodes {
         match node {
-            Node::Text { text: piece } => push_markdown(&mut text, piece),
+            Node::Text { text: piece } => {
+                text.text(piece);
+            }
             Node::Mention {
                 target: MentionTarget::Identity(identity),
                 display,
             } => match platform::native_user_id(conn, *identity).await? {
                 Some(openid) if kind == ConversationKind::Group => {
-                    let _ = write!(text, "<qqbot-at-user id=\"{openid}\" />");
+                    text.at(&openid);
                 }
                 _ => {
-                    let _ = write!(text, "@{display}");
+                    text.text(&format!("@{display}"));
                 }
             },
             Node::Mention { display, .. } => {
-                let _ = write!(text, "@{display}");
+                text.text(&format!("@{display}"));
             }
             Node::Media {
                 media: Some(MediaRef::Blob(sha256)),
@@ -544,26 +547,10 @@ async fn lower(
         }
     }
     Ok(Lowered {
-        text,
+        text: text.finish(),
         quote,
         attached,
     })
-}
-
-/// QQ renders `$$…$$` but not `\[…\]`. In code, `\[` is as written.
-fn push_markdown(out: &mut String, text: &str) {
-    let code = segment::code(text);
-    let mut from = 0;
-    for (at, _) in text.match_indices('\\') {
-        if matches!(text.as_bytes().get(at + 1), Some(b'[' | b']'))
-            && !code.iter().any(|span| span.contains(&at))
-        {
-            out.push_str(&text[from..at]);
-            out.push_str("$$");
-            from = at + 2;
-        }
-    }
-    out.push_str(&text[from..]);
 }
 
 #[cfg(test)]

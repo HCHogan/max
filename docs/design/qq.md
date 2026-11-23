@@ -2,8 +2,10 @@
 
 Max is on QQ through Tencent's official bot API (the QQ Open Platform,
 individually verified; the bot is named maxx), with the protocol in
-[qqbot](https://github.com/HCHogan/qqbot) and the mapping to Max's types in
-`crates/max/src/qq`. Why not NapCat and OneBot, and how sending settled on
+[qqbot](https://github.com/HCHogan/qqbot), which also reads and writes
+QQ's markup (mentions, faces, the transcripts below, Markdown as QQ
+renders it) and says what QQ's errors mean, and the mapping to Max's types
+in `crates/max/src/qq`. Why not NapCat and OneBot, and how sending settled on
 what it is, is in
 [decisions/official-qq-bot.md](../decisions/official-qq-bot.md).
 "Tested" below means tried in the test group; the rest is from QQ's

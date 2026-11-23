@@ -1,15 +1,15 @@
-//! QQ's messages as `Inbound`: see "Inbound" under "The official QQ bot" in
-//! docs/rust-rewrite.md. Text with `<@openid>` mentions and
-//! `<faceType=…>` faces becomes nodes; attachments become media, with
-//! where to download them; the
-//! quoted message is found by its `msg_idx`, or by what QQ shows of it.
+//! QQ's messages as `Inbound`: see "Inbound" in docs/design/qq.md. qqbot
+//! reads QQ's markup; here its mentions, faces and attachments become
+//! nodes, with where to download each attachment, and the quoted message
+//! is found by its `msg_idx`, or by what QQ shows of it.
 
 use chrono::{DateTime, Utc};
 use max_core::message::{
     Emote, MediaKind, MediaMeta, MediaRef, MentionTarget, Node, Platform, Role,
 };
 use max_db::platform::ConversationKind;
-use qqbot::event::{Attachment, Element, User};
+use qqbot::content::{self, Segment};
+use qqbot::event::{self, Attachment, AttachmentKind, Element, Message};
 use qqbot::{Dispatch, Event};
 
 use super::native_id;
@@ -40,14 +40,14 @@ pub fn inbound(dispatch: &mut Dispatch, now: DateTime<Utc>) -> Option<Inbound> {
         .clone()
         .or_else(|| author.user_openid.clone())
         .or_else(|| author.id.clone())?;
-    let role = match author.member_role.as_deref() {
-        Some("owner") => Some(Role::Owner),
-        Some("admin") => Some(Role::Admin),
-        Some(_) => Some(Role::Member),
+    let role = match author.role() {
+        Some(event::Role::Owner) => Some(Role::Owner),
+        Some(event::Role::Admin) => Some(Role::Admin),
+        Some(event::Role::Member) => Some(Role::Member),
         None if chat.kind == ConversationKind::Group => Some(Role::Member),
         None => None,
     };
-    let mut nodes = content_nodes(&message.content, &message.mentions);
+    let mut nodes = content_nodes(&message.content, Some(message));
     nodes.extend(message.attachments.iter().map(attachment));
     let quote = message.quotes().map(|quote_id| Quote {
         quote_id: Some(quote_id.to_owned()),
@@ -82,53 +82,24 @@ pub fn inbound(dispatch: &mut Dispatch, now: DateTime<Utc>) -> Option<Inbound> {
     })
 }
 
-/// How a quoted message that quotes another, or holds a forward, comes:
-/// as a dump, not as its text.
-///
-/// ```text
-/// === 消息 1 ===
-/// [消息内容]   its text
-/// [消息类型] 引用消息
-/// [附件1] 类型:图片 文件名:0FD9….jpg 尺寸:3072x4096 大小:8.2MB URL:…
-/// [关联消息]
-/// --- 第1条 ---
-///     [消息内容] what it quotes, indented
-/// ```
-const DUMP: &str = "=== 消息 1 ===";
-
 /// What QQ shows of a quoted message: its text, without mentions or
-/// faces, and its files' names. Of a dump, the quoted message's own: not
-/// what it quotes in turn.
+/// faces, and its files' names. A quoted message that quotes another or
+/// holds a forward comes as a dump, of which only its own count, not what
+/// it quotes in turn.
 fn shown(quoted: &Element) -> Quote {
-    let content = quoted.content.as_deref().unwrap_or_default();
     let mut files: Vec<String> = quoted
         .attachments
         .iter()
         .filter_map(|attachment| attachment.filename.clone())
         .collect();
-    let text = match content.strip_prefix(DUMP) {
+    let text = match quoted.dump() {
         Some(dump) => {
-            let own = dump.split("\n[关联消息]").next().unwrap_or_default();
-            files.extend(
-                own.lines()
-                    .filter(|line| line.starts_with("[附件"))
-                    .filter_map(|line| line.split_once("文件名:"))
-                    .filter_map(|(_, rest)| rest.split_whitespace().next())
-                    .map(str::to_owned),
-            );
-            own.split_once("[消息内容]")
-                .and_then(|(_, rest)| rest.split("\n[消息类型]").next())
-                .unwrap_or_default()
+            let own = dump.messages.into_iter().next().unwrap_or_default();
+            files.extend(own.files.into_iter().filter_map(|file| file.name));
+            plain(own.text.as_deref().unwrap_or_default())
         }
-        None => content,
+        None => plain(quoted.content.as_deref().unwrap_or_default()),
     };
-    let text: String = content_nodes(text, &[])
-        .into_iter()
-        .filter_map(|node| match node {
-            InNode::Node(Node::Text { text }) => Some(text),
-            _ => None,
-        })
-        .collect();
     Quote {
         quote_id: None,
         text: Some(text).filter(|text| !text.trim().is_empty()),
@@ -136,150 +107,70 @@ fn shown(quoted: &Element) -> Quote {
     }
 }
 
-/// Text, `<@openid>` and `<@all>` mentions, and `<faceType=…>` faces.
-fn content_nodes(content: &str, mentions: &[User]) -> Vec<InNode> {
-    let mut nodes = Vec::new();
-    let mut text = String::new();
-    let mut rest = content;
-    while let Some(start) = rest.find('<') {
-        let Some(len) = rest[start..].find('>') else {
-            break;
-        };
-        let tag = &rest[start + 1..start + len];
-        let node = if let Some(openid) = tag.strip_prefix('@') {
-            Some(mention(openid, mentions))
-        } else if tag.starts_with("faceType=") {
-            Some(InNode::Node(Node::Emote(face(tag))))
-        } else {
-            None
-        };
-        let Some(node) = node else {
-            // A < that starts no tag, such as in "a<b".
-            text.push_str(&rest[..=start]);
-            rest = &rest[start + 1..];
-            continue;
-        };
-        text.push_str(&rest[..start]);
-        if !text.is_empty() {
-            nodes.push(InNode::Node(Node::Text {
-                text: std::mem::take(&mut text),
-            }));
-        }
-        nodes.push(node);
-        rest = &rest[start + len + 1..];
-    }
-    text.push_str(rest);
-    if !text.is_empty() {
-        nodes.push(InNode::Node(Node::Text { text }));
-    }
-    nodes
+/// Content's text alone, without mentions or faces.
+fn plain(content: &str) -> String {
+    content::parse(content)
+        .into_iter()
+        .filter_map(|segment| match segment {
+            Segment::Text(text) => Some(text),
+            _ => None,
+        })
+        .collect()
 }
 
-fn mention(openid: &str, mentions: &[User]) -> InNode {
-    if openid == "all" || openid == "everyone" {
-        return InNode::Node(Node::Mention {
-            target: MentionTarget::All,
-            display: "全体成员".into(),
-        });
-    }
-    let user = mentions.iter().find(|user| {
-        [&user.member_openid, &user.id, &user.user_openid]
-            .into_iter()
-            .any(|id| id.as_deref() == Some(openid))
-    });
-    let display = user
-        .and_then(|user| user.username.clone())
-        .unwrap_or_else(|| "某人".into());
-    match user {
-        Some(user) if user.is_you => InNode::MentionMe { display },
-        _ => InNode::Mention {
-            user: openid.to_owned(),
-            display,
-        },
-    }
-}
-
-/// `faceType=1,faceId="306",ext="<base64 of {"text":"牛气冲天"}>"`.
-fn face(tag: &str) -> Emote {
-    let field = |name: &str| {
-        let start = tag.find(&format!("{name}=\""))? + name.len() + 2;
-        let end = tag[start..].find('"')? + start;
-        Some(&tag[start..end])
-    };
-    let name = field("ext")
-        .and_then(base64)
-        .and_then(|json| serde_json::from_slice::<serde_json::Value>(&json).ok())
-        .and_then(|ext| ext["text"].as_str().map(str::to_owned))
-        .filter(|name| !name.is_empty());
-    Emote {
-        platform: Platform::Qq,
-        id: field("faceId").unwrap_or_default().to_owned(),
-        name,
-    }
+/// Content as nodes. A mention's name comes from `message`'s `mentions`;
+/// without one, as in a forward, it is 某人.
+fn content_nodes(content: &str, message: Option<&Message>) -> Vec<InNode> {
+    content::parse(content)
+        .into_iter()
+        .map(|segment| match segment {
+            Segment::Text(text) => InNode::Node(Node::Text { text }),
+            Segment::AtAll => InNode::Node(Node::Mention {
+                target: MentionTarget::All,
+                display: "全体成员".into(),
+            }),
+            Segment::At(openid) => {
+                let user = message.and_then(|message| message.mentioned(&openid));
+                let display = user
+                    .and_then(|user| user.username.clone())
+                    .unwrap_or_else(|| "某人".into());
+                match user {
+                    Some(user) if user.is_you => InNode::MentionMe { display },
+                    _ => InNode::Mention {
+                        user: openid,
+                        display,
+                    },
+                }
+            }
+            Segment::Face(face) => InNode::Node(Node::Emote(Emote {
+                platform: Platform::Qq,
+                id: face.id,
+                name: face.name,
+            })),
+        })
+        .collect()
 }
 
 fn attachment(attachment: &Attachment) -> InNode {
-    let mime = attachment.content_type.clone();
-    let kind = match mime.as_deref().unwrap_or_default() {
-        mime if mime.starts_with("image/") => MediaKind::Image,
-        mime if mime.starts_with("video/") => MediaKind::Video,
-        mime if mime == "voice" || mime.starts_with("audio/") => MediaKind::Audio,
-        _ => MediaKind::File,
-    };
-    let description = attachment
-        .asr_refer_text
-        .clone()
-        .filter(|text| !text.trim().is_empty());
-    // A voice message is SILK or AMR; QQ's WAV of it is what can be played.
-    let url = match kind {
-        MediaKind::Audio => attachment
-            .voice_wav_url
-            .as_ref()
-            .or(attachment.url.as_ref()),
-        _ => attachment.url.as_ref(),
+    let kind = match attachment.kind() {
+        AttachmentKind::Picture => MediaKind::Image,
+        AttachmentKind::Video => MediaKind::Video,
+        AttachmentKind::Voice => MediaKind::Audio,
+        AttachmentKind::File => MediaKind::File,
     };
     InNode::Node(Node::Media {
-        media: url.map(|url| MediaRef::Remote(https(url))),
+        media: attachment.download_url().map(MediaRef::Remote),
         meta: MediaMeta {
             kind,
-            mime,
+            mime: attachment.content_type.clone(),
             size: attachment.size,
             name: attachment.filename.clone(),
-            description,
+            description: attachment
+                .asr_refer_text
+                .clone()
+                .filter(|text| !text.trim().is_empty()),
         },
     })
-}
-
-/// QQ sometimes leaves the scheme off an attachment's address.
-fn https(url: &str) -> String {
-    if url.contains("://") {
-        url.to_owned()
-    } else {
-        format!("https://{}", url.trim_start_matches('/'))
-    }
-}
-
-/// Standard base64, padded or not; None if it isn't.
-fn base64(text: &str) -> Option<Vec<u8>> {
-    let mut out = Vec::with_capacity(text.len() * 3 / 4);
-    let (mut buffer, mut bits) = (0u32, 0);
-    for byte in text.bytes().filter(|byte| *byte != b'=') {
-        let value = match byte {
-            b'A'..=b'Z' => byte - b'A',
-            b'a'..=b'z' => byte - b'a' + 26,
-            b'0'..=b'9' => byte - b'0' + 52,
-            b'+' => 62,
-            b'/' => 63,
-            _ => return None,
-        };
-        buffer = (buffer << 6) | u32::from(value);
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            out.push((buffer >> bits).to_le_bytes()[0]);
-        }
-    }
-    Some(out)
 }
 
 #[cfg(test)]

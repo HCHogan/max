@@ -250,7 +250,7 @@ and a web of dependencies while blocking nothing.
 
 | Crate | Contents | Why it is separate |
 | --- | --- | --- |
-| [`qqbot`](https://github.com/HCHogan/qqbot) | The official QQ bot API: tokens, the gateway (heartbeat, Resume, reconnection), event and REST types, sending, retracting and uploads. It knows nothing of Max. | Dependency direction: the protocol layer mustn't grow into Max's shape. It is also the one part worth reusing. |
+| [`qqbot`](https://github.com/HCHogan/qqbot) | The official QQ bot API: tokens, the gateway (heartbeat, Resume, reconnection), event and REST types, sending, retracting and uploads, and QQ's markup, read and written: mentions, faces, the transcripts of forwards and Markdown as QQ renders it. It knows nothing of Max. | Dependency direction: the protocol layer mustn't grow into Max's shape. It is also the one part worth reusing. |
 | `max-core` | All pure logic: the Node, Message, Draft and Item types, the two state machines (the core and intent), request construction, the segmenter, rendering for the model, the prompt and `limits`. Depends only on serde, serde_json, thiserror and chrono without its `clock` feature. | Dependency direction: sans-I/O is the compiler's to guarantee. |
 | `max-db` | The schema, migrations, all sqlx queries and row types. | Compile time; the `.sqlx` metadata in one place. |
 | `max-llm` | The Responses and Chat adapters, stream parsing, reasoning pass-through, multimodal downgrading. | Protocol details in one place, tested alone against recorded responses. |
