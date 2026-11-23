@@ -197,7 +197,7 @@ async fn markdown_with_a_mention_and_a_quote(pool: PgPool) {
                 principal: xiaoming,
             },
             DraftNode::Text {
-                text: " 在，\\[x^2\\]".into(),
+                text: " 在，\\[x^2\\]，`grep '\\['`\n```\n\\[\n```".into(),
             },
         ],
     };
@@ -210,7 +210,9 @@ async fn markdown_with_a_mention_and_a_quote(pool: PgPool) {
     assert_eq!(
         sent[0].1,
         Message {
-            body: Body::Markdown("<qqbot-at-user id=\"XIAOMING\" /> 在，$$x^2$$".into()),
+            body: Body::Markdown(
+                "<qqbot-at-user id=\"XIAOMING\" /> 在，$$x^2$$，`grep '\\['`\n```\n\\[\n```".into()
+            ),
             quote: Some("IDX0".into()),
         }
     );

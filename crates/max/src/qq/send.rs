@@ -22,6 +22,7 @@ use max_core::ids::{EndpointId, MessageId};
 use max_core::message::{
     Content, MediaKind, MediaRef, MentionTarget, Message as Row, Node, Platform, Sha256,
 };
+use max_core::segment;
 use max_db::ledger::{self, Sent as Delivered};
 use max_db::platform::{self, ConversationKind};
 use max_db::{PgConnection, PgPool};
@@ -549,11 +550,14 @@ async fn lower(
     })
 }
 
-/// QQ renders `$$…$$` but not `\[…\]`.
+/// QQ renders `$$…$$` but not `\[…\]`. In code, `\[` is as written.
 fn push_markdown(out: &mut String, text: &str) {
+    let code = segment::code(text);
     let mut from = 0;
     for (at, _) in text.match_indices('\\') {
-        if matches!(text.as_bytes().get(at + 1), Some(b'[' | b']')) {
+        if matches!(text.as_bytes().get(at + 1), Some(b'[' | b']'))
+            && !code.iter().any(|span| span.contains(&at))
+        {
             out.push_str(&text[from..at]);
             out.push_str("$$");
             from = at + 2;

@@ -171,9 +171,10 @@ like group ids it stays out of the repository.
   and tables render, and `<` and `&` need no escaping. A single newline
   breaks the line; two trailing spaces add a blank line; a space after bold
   is swallowed. LaTeX `$…$`, `\(…\)`, `$$…$$` and `math` code blocks render;
-  `\[…\]` doesn't, so it is turned into `$$…$$`. Markdown links, bare links
-  and URLs in plain text are all clickable. Pictures in Markdown show only
-  from QQ's own domains. The length limit hasn't been tested.
+  `\[…\]` doesn't, so outside code it is turned into `$$…$$`. Markdown
+  links, bare links and URLs in plain text are all clickable. Pictures in
+  Markdown show only from QQ's own domains. The length limit hasn't been
+  tested.
 - **Rejected or unknown**: a message counts as rejected, and is sent again
   as plain text, only when QQ answers with an error or no connection was
   made. If the request went out and then timed out, or the answer can't be
