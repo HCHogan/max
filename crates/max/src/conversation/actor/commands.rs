@@ -228,13 +228,13 @@ impl Conversation {
     }
 
     /// A card like the Haskell version's `!version`, in English: maxx and
-    /// its commit, then a key and its value a line, a line under a key's
+    /// its version, then a key and its value a line, a line under a key's
     /// first one going without the key. `/model` and `/persona` show
     /// those.
     async fn status(&self) -> Result<String> {
         let [may_ask, asked_by] = self.linked().await?;
         let settings = &self.settings;
-        let mut lines = vec![format!("maxx {}", crate::COMMIT)];
+        let mut lines = vec![format!("maxx {}", crate::VERSION)];
         let mut line = |key: &str, value: String| lines.push(format!("{key:<10}{value}"));
         for (key, value) in self.machine().await {
             line(key, value);

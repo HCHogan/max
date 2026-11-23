@@ -58,7 +58,7 @@ const DRAIN: Duration = Duration::from_secs(15);
 const SHUTDOWN: Duration = Duration::from_secs(10);
 
 #[derive(Parser)]
-#[command(version, about)]
+#[command(name = "max", version = max::VERSION, about)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -170,7 +170,7 @@ fn logging(level: config::Level) {
 
 async fn serve(config: Config, platforms: Platforms) -> Result<()> {
     let running = start(config, platforms).await?;
-    info!(commit = max::COMMIT, "serving");
+    info!(version = max::VERSION, "serving");
     let mut terminate = signal(SignalKind::terminate())?;
     tokio::select! {
         _ = terminate.recv() => {}

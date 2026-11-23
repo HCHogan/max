@@ -89,15 +89,26 @@
           # Dependencies build once and are cached apart from our code.
           cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 
+          # The day (UTC) and the commit of the source built, as NixOS ends
+          # its own versions, so every build is told apart without a tag:
+          # 20261123.4999d8f. A dirty tree's commit ends in -dirty.
+          version =
+            let
+              day = builtins.substring 0 8 (self.lastModifiedDate or "19700101");
+              commit = self.shortRev or self.dirtyShortRev or "dev";
+            in
+            "${day}.${commit}";
+
           max = craneLib.buildPackage (
             commonArgs
             // {
-              inherit cargoArtifacts;
+              inherit cargoArtifacts version;
               cargoExtraArgs = "--package max-cli";
               doCheck = false; # the nextest check runs the tests
-              # /status shows it. Only this package: the dependencies and
-              # the checks don't rebuild for a new commit.
-              MAX_COMMIT = self.shortRev or self.dirtyShortRev or "dev";
+              # /status, the log and --version show it. Only this package:
+              # the dependencies and the checks don't rebuild for a new
+              # commit.
+              MAX_VERSION = version;
             }
           );
 

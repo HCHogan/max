@@ -66,8 +66,10 @@ only`. The ranks themselves are in [Permissions](identity.md#permissions).
 
 ## The commands
 
-- **`/status`**: a small card. The first line is maxx and the commit it was
-  built from (the flake sets `MAX_COMMIT`; a cargo build says dev). Then
+- **`/status`**: a small card. The first line is maxx and its version:
+  the day (UTC) and the commit of the source built, as NixOS ends its own,
+  `maxx 20261123.4999d8f`. The flake sets it as `MAX_VERSION`; a cargo
+  build outside it says dev. Then
   aligned key-value lines: the VM (below); the model and effort for the
   next reply; proactive replies; `state stopped` after `/stop`; the
   settings the conversation has set, if any

@@ -3,10 +3,11 @@
 //! implements (`adapter`). The binary, max-cli, is a thin command line
 //! over this.
 
-/// The commit max was built from: the flake sets `MAX_COMMIT`, and a
-/// cargo build outside it says dev.
-pub const COMMIT: &str = match option_env!("MAX_COMMIT") {
-    Some(commit) => commit,
+/// The version max was built as: the day (UTC) and the commit of the
+/// source, `20261123.4999d8f`, which the flake sets as `MAX_VERSION`. A
+/// cargo build outside it is dev.
+pub const VERSION: &str = match option_env!("MAX_VERSION") {
+    Some(version) => version,
     None => "dev",
 };
 
