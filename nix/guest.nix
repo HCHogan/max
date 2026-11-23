@@ -9,8 +9,7 @@
 #
 # What differs between groups' VMs comes on the kernel command line, which
 # max appends to: the address (max.ip, max.gateway), the resolvers
-# (max.dns), the key max logs in with (max.key) and who commits are by
-# (max.git).
+# (max.dns) and who commits are by (max.git).
 {
   config,
   lib,
@@ -162,8 +161,8 @@ in
     script = "${pkgs.e2fsprogs}/bin/resize2fs /dev/disk/by-label/max-nix";
   };
 
-  # The address, resolvers and max's key, from the command line, before
-  # anything uses them. The initrd loads the NIC, so this needn't wait for
+  # The address and resolvers, from the command line, before anything
+  # uses them. The initrd loads the NIC, so this needn't wait for
   # udev or networkd.
   boot.initrd.kernelModules = [ "virtio_net" ];
   networking.usePredictableInterfaceNames = false;
@@ -195,7 +194,6 @@ in
           max.ip=*) address=''${word#max.ip=} ;;
           max.gateway=*) gateway=''${word#max.gateway=} ;;
           max.dns=*) dns=''${word#max.dns=} ;;
-          max.key=*) key=''${word#max.key=} ;;
           max.git=*) git=''${word#max.git=} ;;
         esac
       done
@@ -206,8 +204,6 @@ in
       for server in ''${dns//,/ }; do
         echo "nameserver $server" >> /run/max/resolv.conf
       done
-      install -m 0600 /dev/null /run/max/authorized_keys
-      echo "ssh-ed25519 $key max" > /run/max/authorized_keys
       # Commits are by Max's GitHub account, when max has one: name,email.
       if [ -n "''${git:-}" ]; then
         printf '[user]\n\tname = %s\n\temail = %s\n' "''${git%%,*}" "''${git#*,}" > /etc/gitconfig
@@ -374,7 +370,6 @@ in
       # home from systemd, not from here.
       SetEnv = "HOME=/var/empty";
     };
-    authorizedKeysFiles = [ "/run/max/authorized_keys" ];
     # / is a tmpfs, so host keys are generated every boot; RSA takes seconds.
     hostKeys = [
       {

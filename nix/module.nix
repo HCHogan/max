@@ -222,8 +222,8 @@ let
 
   # A shell in a conversation's VM, or a command there, as root in the
   # guest: for debugging, by whoever reads max's files on the host, which
-  # is root. It goes in as max does, with the key max made for the boot,
-  # to the guest's sshd on the VM's vsock socket.
+  # is root. It goes in as max does, to the guest's sshd on the VM's vsock
+  # socket, which asks for nothing.
   vmSsh = pkgs.writeShellApplication {
     name = "${name}-ssh";
     runtimeInputs = [ pkgs.openssh ];
@@ -238,7 +238,7 @@ let
         echo "${name}-ssh: no VM's socket at $dir/notify.vsock: it isn't running, or this isn't root" >&2
         exit 1
       fi
-      exec ssh -i "$dir/ssh.key" -o IdentitiesOnly=yes -o User=root \
+      exec ssh -o User=root \
         -o ProxyCommand="${config.systemd.package}/lib/systemd/systemd-ssh-proxy vsock-mux$dir/notify.vsock %p" \
         -o ProxyUseFdpass=yes -o CheckHostIP=no -o StrictHostKeyChecking=no \
         -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \

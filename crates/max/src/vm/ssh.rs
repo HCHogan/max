@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use color_eyre::eyre::{Result, bail, ensure};
 use russh::client::{self, Handle, Msg};
-use russh::keys::{PrivateKey, PrivateKeyWithHashAlg, PublicKeyOrCertificate};
+use russh::keys::PublicKeyOrCertificate;
 use russh::{Channel, ChannelMsg};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
@@ -42,19 +42,19 @@ impl client::Handler for Client {
 /// An SSH connection to a guest.
 pub type Connection = Handle<Client>;
 
-/// Logs in as root with `key`. Fails while the guest is still booting.
+/// Logs in as root, with nothing: the guest's sshd asks for nothing, since
+/// only the host reaches it (see "Entering another conversation's VM" in
+/// docs/design/vm.md). Fails while the guest is still booting.
 ///
 /// # Errors
 ///
-/// If the socket can't be reached, or the guest doesn't take the key.
-pub async fn connect(socket: &Path, key: Arc<PrivateKey>) -> Result<Connection> {
+/// If the socket can't be reached, or the guest doesn't let max in.
+pub async fn connect(socket: &Path) -> Result<Connection> {
     let stream = sshd(socket).await?;
     let config = Arc::new(client::Config::default());
     let mut connection = client::connect_stream(config, stream, Client).await?;
-    let auth = connection
-        .authenticate_publickey("root", PrivateKeyWithHashAlg::new(key, None))
-        .await?;
-    ensure!(auth.success(), "the guest refused max's key");
+    let auth = connection.authenticate_none("root").await?;
+    ensure!(auth.success(), "the guest didn't let max in");
     Ok(connection)
 }
 

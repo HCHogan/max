@@ -21,9 +21,9 @@ Only declarative configuration applied at boot needs root, all in NixOS:
   restarting it doesn't cut running VMs off.
 - Each tap is its own /30 (out of `10.235.0.0/24` by default): the host is
   `.1`, the guest `.2`, every VM the same MAC. No DHCP: when max starts a
-  VM it puts `max.ip`, `max.gateway`, `max.dns` and the boot's SSH public
-  key `max.key` on the guest's kernel command line, and a oneshot in the
-  guest applies them before the network comes up.
+  VM it puts `max.ip`, `max.gateway` and `max.dns` on the guest's kernel
+  command line, and a oneshot in the guest applies them before the network
+  comes up.
 - The taps aren't bridged; routing and nft keep VMs apart. A VM may use
   only its own tap's `.2` as source and reach only public addresses, with
   no IPv6; connections from a VM to the host are always refused, the host
@@ -38,11 +38,11 @@ Only declarative configuration applied at boot needs root, all in NixOS:
   that is neither in use, busy nor kept on), prepares `work`, `nix.img`
   and the link the guest's calls come by
   (see [A guest's calls reach max](#a-guests-calls-reach-max)) under
-  `<vm.dir>/<conversation id>/`, and writes three files:
+  `<vm.dir>/<conversation id>/`, and writes two files:
   `boot.env`, which the unit reads (the tap,
-  the sizes, the kernel, the initrd and the command line); `boot.json`,
+  the sizes, the kernel, the initrd and the command line), and `boot.json`,
   which the next max reads (the slot, the image, whether with Max's
-  units); and `ssh.key`, the key made for this boot. Then
+  units). Then
   it has systemd start the unit, whose launcher starts two virtiofsd (a
   read-only one for the store, a read-write one for `/work`) and
   cloud-hypervisor, its main process. max tries SSH every 100 ms; the VM is
@@ -86,7 +86,7 @@ is in [decisions/lifetimes-to-systemd.md](../decisions/lifetimes-to-systemd.md).
 
 - **Attaching**: when max starts, it lists the active `maxx-vm@` units and
   attaches to each (`Service::attach`): it reads `boot.json`, takes the
-  VM's slot and logs in with the saved key within 10 seconds (`ATTACH`). Its idle time counts from then. A VM max can't use is stopped,
+  VM's slot and logs in within 10 seconds (`ATTACH`). Its idle time counts from then. A VM max can't use is stopped,
   and boots again when next needed (at once, if kept on): one without a
   record, one whose slot isn't free for it, one that booted another image
   than max boots.
@@ -145,13 +145,13 @@ is in [decisions/lifetimes-to-systemd.md](../decisions/lifetimes-to-systemd.md).
 
 - **`maxx-ssh 7`** on the host is a root shell in conversation 7's VM, and
   `maxx-ssh 7 systemctl status` runs a command there. It goes in as max
-  does, with the boot's `ssh.key` to the guest's sshd on the vsock socket,
-  through `systemd-ssh-proxy vsock-mux/…`; it is for root, who can read
-  max's files. The session starts in `/work`, and its `HOME` is
-  `/var/empty`, as for max's own commands, so nothing in the group's home
-  runs in it (see [Units follow /work](jobs.md#units-follow-work)). max
-  doesn't know of the session: a VM not kept on is still
-  stopped after its idle time.
+  does: to the guest's sshd on the vsock socket, through
+  `systemd-ssh-proxy vsock-mux/…`, offering nothing. It is for root, who
+  can open the socket. The session starts in `/work`, and
+  its `HOME` is `/var/empty`, as for max's own commands, so nothing in the
+  group's home runs in it (see [Units follow /work](jobs.md#units-follow-work)).
+  max doesn't know of the session: a VM not kept on is still stopped
+  after its idle time.
 - **A running VM is a machine of the host's**: the unit's `ExecStartPost`,
   as root, registers it with systemd-machined (`RegisterMachine` on the bus) as
   `maxx-7`, class `vm`, service `maxx`, leader cloud-hypervisor (dropping a stale registration of
@@ -191,10 +191,10 @@ B's: `maxx say` there says in B's chat. Why it is ssh, through max, is in
   socket. So root's password is empty and sshd takes it, as OpenSSH's
   "none" authentication (`PermitRootLogin`, `PasswordAuthentication`,
   `PermitEmptyPasswords`, and PAM's `nullok` for sshd alone, so a console
-  login and `su` still refuse it). A's ssh offers nothing and checks no
-  host key, since each VM's is made at its boot. This holds only while
-  vsock is the one way to a guest's sshd: its TCP listener doesn't start,
-  and taps don't reach each other.
+  login and `su` still refuse it). max logs in so, as `maxx-ssh` does;
+  A's ssh offers nothing and checks no host key, since each VM's is made
+  at its boot. This holds only while vsock is the one way to a guest's
+  sshd: its TCP listener doesn't start, and taps don't reach each other.
 - **One way only.** A→B lets A into B; B gets into A only by a link B→A.
 - **A connection holds B's VM**, as a call does: B isn't stopped as idle
   while one is open. It ends when either end closes, or as max stops,
@@ -261,8 +261,7 @@ nested test would show if it changed.
 virtiofsd, as an ordinary user, enters new user, mount, pid and net
 namespaces, changes its root to the share and holds no capabilities. The
 guest's root is mapped to `maxx` and every other uid squashed to it, so
-`chown` succeeds without effect and `mknod` fails; the `/work` mapping is
-also what lets the guest's sshd accept `authorized_keys`.
+`chown` succeeds without effect and `mknod` fails.
 
 `maxx.service`'s hardening is relaxed in four places for this, and nothing
 else:

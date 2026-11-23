@@ -49,10 +49,10 @@ through a socket in the VM's directory.
   nft changes; and max knows whose VM asks as it does for every call, by
   the process that made the connection, so no VM speaks for another.
 - **Nothing asked**, because only max and what max lets through reach a
-  guest's sshd, and on the host whoever can open a VM's vsock socket can
-  read max's key beside it. A check of keys per link would keep no one
-  out, and its keys would have to be handed round and kept in step with
-  the links.
+  guest's sshd, and on the host only root and max's user can open a VM's
+  vsock socket. A check of keys per link would keep no one out, and its
+  keys would have to be handed round and kept in step with the links. Nor
+  does max keep a key the guest is told of: it logs in as A's ssh does.
 - **An upgrade on max's socket**, not a socket of its own: it has how a
   caller is known, and systemd holding connections while max restarts, and
   a refusal can say why.

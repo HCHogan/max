@@ -1,23 +1,19 @@
 //! A VM as a unit of the host's systemd, which max starts and stops but
 //! doesn't own: the VM outlives max, and the max that comes after attaches
 //! to it. max makes the VM's directory and disk, writes what the unit and
-//! its own successor need (`boot.env`, `boot.json`, `ssh.key`), and has
+//! its own successor need (`boot.env`, `boot.json`), and has
 //! systemd start the unit; then SSH once the guest answers. The unit's
 //! processes are the NixOS module's to run (nix/module.nix). See "Starting
 //! a VM" and "A VM outlives max" in docs/design/vm.md.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::Arc;
 use std::time::Duration;
 
 use color_eyre::eyre::{Result, WrapErr, bail, eyre};
 use max_core::ids::ConversationId;
-use russh::keys::ssh_key::LineEnding;
-use russh::keys::{Algorithm, PrivateKey};
 use serde::{Deserialize, Serialize};
 use tokio::fs;
-use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tokio::time::{Instant, sleep, timeout_at};
 use tracing::warn;
@@ -36,8 +32,6 @@ const RETRY: Duration = Duration::from_millis(100);
 const ENV: &str = "boot.env";
 /// What the next max reads of it.
 const RECORD: &str = "boot.json";
-/// The key max logs in with, made for the boot.
-const KEY: &str = "ssh.key";
 /// Where the guest's calls arrive: the hybrid vsock's port 7777, as
 /// cloud-hypervisor names the socket it connects to when the guest
 /// connects to the host's port. A link to max's own socket ([`calls`]).
@@ -308,17 +302,9 @@ pub(super) async fn boot(
         .await
         .wrap_err("linking the guest's port to max's socket")?;
 
-    let key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519)?;
-    let public = key.public_key().to_openssh()?;
-    let blob = public
-        .split(' ')
-        .nth(1)
-        .ok_or_else(|| eyre!("an OpenSSH public key without its blob"))?;
-    // For the max that attaches to the VM: it runs on after this one.
-    secret(&dir.join(KEY), key.to_openssh(LineEnding::LF)?.as_bytes()).await?;
     let dns: Vec<String> = config.dns.iter().map(ToString::to_string).collect();
     let mut cmdline = format!(
-        "{} max.ip={} max.gateway={} max.dns={} max.key={blob}",
+        "{} max.ip={} max.gateway={} max.dns={}",
         guest.cmdline,
         slot.address,
         slot.gateway,
@@ -349,11 +335,10 @@ pub(super) async fn boot(
     machine.keep(&config.guest).await;
     machine.run(&["start"]).await?;
 
-    let key = Arc::new(key);
     let socket = dir.join(VSOCK);
     let deadline = Instant::now() + BOOT;
     loop {
-        let error = match ssh::connect(&socket, Arc::clone(&key)).await {
+        let error = match ssh::connect(&socket).await {
             Ok(connection) => {
                 return Ok(Booted {
                     machine,
@@ -375,8 +360,8 @@ pub(super) async fn boot(
     }
 }
 
-/// Attaches to `conversation`'s VM, which runs: logs in with the key its
-/// boot left. None if its unit has ended: there is nothing to attach to,
+/// Attaches to `conversation`'s VM, which runs, and logs in. None if its
+/// unit has ended: there is nothing to attach to,
 /// and its socket, which stays, would only be waited on.
 pub(super) async fn attach(
     config: &config::Vm,
@@ -387,9 +372,7 @@ pub(super) async fn attach(
         return Ok(None);
     }
     let dir = &machine.dir;
-    let key = fs::read(dir.join(KEY)).await.wrap_err("reading its key")?;
-    let key = Arc::new(PrivateKey::from_openssh(key)?);
-    let connection = match let_in(&dir.join(VSOCK), &key, ATTACH).await {
+    let connection = match let_in(&dir.join(VSOCK), ATTACH).await {
         Ok(connection) => connection,
         // It ended while max tried.
         Err(_) if !machine.active().await => return Ok(None),
@@ -405,11 +388,11 @@ pub(super) async fn attach(
 /// `within`. One that takes the connection and then says nothing has no
 /// longer: such a VM outlives max, and would keep the next one waiting
 /// as well.
-async fn let_in(socket: &Path, key: &Arc<PrivateKey>, within: Duration) -> Result<Connection> {
+async fn let_in(socket: &Path, within: Duration) -> Result<Connection> {
     let deadline = Instant::now() + within;
     let mut refused = None;
     while Instant::now() < deadline {
-        match timeout_at(deadline, ssh::connect(socket, Arc::clone(key))).await {
+        match timeout_at(deadline, ssh::connect(socket)).await {
             Ok(Ok(connection)) => return Ok(connection),
             Ok(Err(error)) => refused = Some(error),
             Err(_) => break,
@@ -419,20 +402,6 @@ async fn let_in(socket: &Path, key: &Arc<PrivateKey>, within: Duration) -> Resul
     Err(refused
         .unwrap_or_else(|| eyre!("it took the connection and said nothing"))
         .wrap_err(format!("the guest didn't let max in within {within:?}")))
-}
-
-/// Writes `bytes` to `path`, a file only max reads.
-async fn secret(path: &Path, bytes: &[u8]) -> Result<()> {
-    let _ = fs::remove_file(path).await;
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(path)
-        .await?;
-    file.write_all(bytes).await?;
-    file.flush().await?;
-    Ok(())
 }
 
 /// `variables` as systemd reads an `EnvironmentFile`: a line each, the
