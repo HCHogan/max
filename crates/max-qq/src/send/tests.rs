@@ -1,11 +1,64 @@
 use std::sync::Arc;
 
-use max_core::message::{Draft, DraftNode, Message as Row};
+use chrono::{FixedOffset, TimeZone};
+use max::conversation::{Place, ingest};
+use max::inbound::{Chat as InChat, InNode, Inbound, Person};
+use max_core::message::{Draft, DraftNode, Message as Row, Platform, Role};
 use max_db::ledger::Delivery;
+use serde_json::json;
 
 use super::*;
-use crate::conversation::testing::{from_xiaoming, group, offset, text};
-use crate::conversation::{Place, ingest};
+
+fn offset() -> FixedOffset {
+    FixedOffset::east_opt(8 * 3600).unwrap()
+}
+
+/// A QQ group with Max in it.
+async fn group(conn: &mut PgConnection) -> Place {
+    let me = platform::account(conn, Platform::Qq, "BOT", "maxx")
+        .await
+        .unwrap();
+    let kind = ConversationKind::Group;
+    let native_id = "group:GROUP1";
+    let endpoint = platform::endpoint(conn, Platform::Qq, native_id, me.identity, kind, None)
+        .await
+        .unwrap();
+    Place {
+        conversation: endpoint.conversation,
+        kind,
+        endpoint: endpoint.id,
+        platform: Platform::Qq,
+        native_id: native_id.into(),
+        me,
+        my_name: "maxx".into(),
+    }
+}
+
+/// 小明 says something in the group.
+fn from_xiaoming(n: u32, nodes: Vec<InNode>) -> Inbound {
+    Inbound {
+        platform: Platform::Qq,
+        chat: InChat {
+            native_id: "group:GROUP1".into(),
+            kind: ConversationKind::Group,
+        },
+        native_id: format!("MSG{n}"),
+        quote_id: Some(format!("IDX{n}")),
+        sender: Person {
+            native_user_id: "XIAOMING".into(),
+            name: "小明".into(),
+            role: Some(Role::Member),
+        },
+        at: Utc.with_ymd_and_hms(2026, 10, 29, 4, n, 0).unwrap(),
+        quote: None,
+        nodes,
+        raw: json!({ "id": format!("MSG{n}") }),
+    }
+}
+
+fn text(text: &str) -> InNode {
+    InNode::Node(Node::Text { text: text.into() })
+}
 
 /// Records what it is asked to send or recall, and answers both from one
 /// script: Ok gives a message an id and a ref_idx, `Err(LOST)` an answer

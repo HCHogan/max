@@ -52,8 +52,8 @@ have meant edits all over `max` again.
   `max` for what it maps to (`Inbound`, `Outgoing`, `Place`, the ledger's
   writes), so `max` can't depend on it.
 - The trait is shaped by one platform; the next may bend it.
-- `max` exposes its test helpers behind a `testing` feature, for the
-  adapters' tests.
+- An adapter's tests make their own chats and people, as max's do, and
+  run the adapter's sender against max's ledger.
 
 ## Alternatives
 

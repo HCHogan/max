@@ -31,7 +31,6 @@ use max::media::fetch;
 use max::media::pictures::Pictures;
 use max::media::stickers::Stickers;
 use max::media::store::Store;
-use max::qq::Qq;
 use max::recall::Vectors;
 use max::scope::Scope;
 use max::search::{self, Search};
@@ -39,6 +38,8 @@ use max::service;
 use max::table::{self, Me, Table};
 use max::vm::Vms;
 use max::worker::Rows;
+use max_core::message::Platform;
+use max_qq::Qq;
 
 mod vm_check;
 
@@ -101,7 +102,7 @@ fn main() -> Result<()> {
     };
     HookBuilder::new().theme(theme).install()?;
     match Cli::parse().command {
-        Command::CheckConfig(args) => Config::load(&args.config).map(drop),
+        Command::CheckConfig(args) => load(&args.config).map(drop),
         Command::Run(args) => run(&args.config),
         Command::VmCheck {
             args,
@@ -112,16 +113,46 @@ fn main() -> Result<()> {
 }
 
 fn run(path: &Path) -> Result<()> {
-    let config = Config::load(path)?;
+    let (config, platforms) = load(path)?;
     logging(config.log.level);
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
-    let served = runtime.block_on(serve(config));
+    let served = runtime.block_on(serve(config, platforms));
     // Dropping the runtime would wait on blocking tasks for as long as
     // they take.
     runtime.shutdown_timeout(SHUTDOWN);
     served
+}
+
+/// The platforms' sections of the configuration, as their adapters read
+/// them.
+#[derive(Debug, Default)]
+struct Platforms {
+    qq: Option<max_qq::Config>,
+}
+
+impl Platforms {
+    /// The platforms configured.
+    fn platforms(&self) -> Vec<Platform> {
+        self.qq.iter().map(|_| Platform::Qq).collect()
+    }
+}
+
+/// The configuration file, read and checked, with each platform's section
+/// read by its adapter; without reading the secrets it names.
+fn load(path: &Path) -> Result<(Config, Platforms)> {
+    let config = Config::load(path)?;
+    let mut platforms = Platforms::default();
+    for (name, section) in &config.platforms {
+        let within = || format!("in platforms.{name} of {}", path.display());
+        let section = toml::Value::Table(section.clone());
+        match name.as_str() {
+            "qq" => platforms.qq = Some(section.try_into().wrap_err_with(within)?),
+            _ => bail!("{}: Max can't be on platforms.{name}", path.display()),
+        }
+    }
+    Ok((config, platforms))
 }
 
 fn logging(level: config::Level) {
@@ -137,8 +168,8 @@ fn logging(level: config::Level) {
     }
 }
 
-async fn serve(config: Config) -> Result<()> {
-    let running = start(config).await?;
+async fn serve(config: Config, platforms: Platforms) -> Result<()> {
+    let running = start(config, platforms).await?;
     info!(commit = max::COMMIT, "serving");
     let mut terminate = signal(SignalKind::terminate())?;
     tokio::select! {
@@ -281,16 +312,10 @@ async fn derived(
 }
 
 /// Starts everything, in the order each needs the one before.
-async fn start(config: Config) -> Result<Running> {
-    let qq = config
-        .platforms
-        .qq
-        .as_ref()
-        .map(config::Qq::credentials)
-        .transpose()?;
+async fn start(config: Config, on: Platforms) -> Result<Running> {
     let models = Arc::new(Models::new(&config.llm)?);
     let pool = database(&config.database.url).await?;
-    let owners = owners(&pool, &config).await?;
+    let owners = owners(&pool, &config, &on.platforms()).await?;
 
     let mut workers = Scope::new();
     let Derived {
@@ -331,8 +356,8 @@ async fn start(config: Config) -> Result<Running> {
         .as_ref()
         .map(|pictures| Arc::clone(&pictures.store));
     let mut platforms = Adapters::new();
-    if let Some(credentials) = qq {
-        let qq = Qq::connect(credentials, pool.clone(), store.clone());
+    if let Some(qq) = &on.qq {
+        let qq = Qq::connect(qq, pool.clone(), store.clone());
         let qq = qq.await.wrap_err("checking the QQ credentials")?;
         platforms.insert(qq.platform(), Arc::new(qq));
     }
@@ -442,13 +467,13 @@ impl Running {
 
 /// The people behind the owners file's accounts, who may run every
 /// command.
-async fn owners(pool: &PgPool, config: &Config) -> Result<BTreeSet<PrincipalId>> {
+async fn owners(pool: &PgPool, config: &Config, on: &[Platform]) -> Result<BTreeSet<PrincipalId>> {
     let mut conn = pool.acquire().await?;
     let mut owners = BTreeSet::new();
     for config::Owner {
         platform,
         native_id,
-    } in config.owners()?
+    } in config.owners(on)?
     {
         // A name until they first write.
         let account = platform::account(&mut conn, platform, &native_id, "主人").await?;

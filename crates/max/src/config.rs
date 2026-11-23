@@ -36,13 +36,14 @@ pub struct Config {
     pub database: Database,
     /// The models, and who uses which.
     pub llm: Llm,
-    /// The chat platforms Max is on.
+    /// The chat platforms Max is on, by name: each section is its
+    /// adapter's to read, which max-cli hands it.
     #[serde(default)]
-    pub platforms: Platforms,
+    pub platforms: BTreeMap<String, toml::Table>,
     /// Without it, the tools tell the model there is no VM.
     pub vm: Option<Vm>,
     /// Without it, media aren't downloaded and the model sees only what
-    /// QQ said about them.
+    /// the platform said about them.
     pub media: Option<Media>,
     /// Without it, `web_search` tells the program there is none.
     pub search: Option<Search>,
@@ -638,24 +639,6 @@ pub struct Price {
     pub output: f64,
 }
 
-/// `[platforms]`.
-#[derive(Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Platforms {
-    /// QQ, through the official bot API.
-    pub qq: Option<Qq>,
-}
-
-/// Tencent's official bot API.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Qq {
-    /// The file the bot's AppID is in.
-    pub app_id_file: PathBuf,
-    /// The file the bot's secret is in.
-    pub app_secret_file: PathBuf,
-}
-
 /// The groups' VMs; see "VM processes". The NixOS module fills this in: the
 /// unit it made for a VM, the programs max runs itself, and the taps.
 #[derive(Debug, Deserialize)]
@@ -846,13 +829,14 @@ impl Config {
         Ok(config)
     }
 
-    /// The owners' accounts, as the owners file lists them.
+    /// The owners' accounts, as the owners file lists them. `on` are the
+    /// platforms Max is on.
     ///
     /// # Errors
     ///
     /// If the owners file can't be read, or a line of it isn't `platform:id`
     /// on a platform Max is on.
-    pub fn owners(&self) -> Result<Vec<Owner>> {
+    pub fn owners(&self, on: &[Platform]) -> Result<Vec<Owner>> {
         let Some(path) = &self.owners_file else {
             return Ok(Vec::new());
         };
@@ -862,8 +846,8 @@ impl Config {
                 let (platform, id) = line
                     .split_once(':')
                     .ok_or_else(|| eyre!("{}: {line:?} isn't platform:id", path.display()))?;
-                // The QQ of before is a platform too, which nobody is on.
-                let Ok(platform @ Platform::Qq) = platform.trim().parse() else {
+                let parsed = platform.trim().parse().ok();
+                let Some(platform) = parsed.filter(|platform| on.contains(platform)) else {
                     bail!(
                         "{}: an owner on a platform Max isn't on: {platform:?}",
                         path.display()
@@ -992,22 +976,12 @@ impl Provider {
     }
 }
 
-impl Qq {
-    /// The bot's AppID and secret, read from their files.
-    ///
-    /// # Errors
-    ///
-    /// If either file can't be read.
-    pub fn credentials(&self) -> Result<qqbot::Credentials> {
-        Ok(qqbot::Credentials {
-            app_id: secret(&self.app_id_file)?,
-            secret: secret(&self.app_secret_file)?,
-        })
-    }
-}
-
 /// A secret's file, which holds the value and maybe a final newline.
-fn secret(path: &Path) -> Result<String> {
+///
+/// # Errors
+///
+/// If the file can't be read, or is empty.
+pub fn secret(path: &Path) -> Result<String> {
     let text = fs::read_to_string(path)
         .wrap_err_with(|| format!("reading the secret {}", path.display()))?;
     let value = text.trim_end_matches(['\r', '\n']);

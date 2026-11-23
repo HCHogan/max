@@ -11,8 +11,8 @@ use max_db::platform::Speaker;
 use qqbot::api::{self, Mute, MuteOp};
 
 use super::group;
-use crate::conversation::Place;
-use crate::service::Failure;
+use max::conversation::Place;
+use max::service::Failure;
 
 /// QQ's longest mute.
 pub(super) const LONGEST: TimeDelta = TimeDelta::days(30);

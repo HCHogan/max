@@ -21,7 +21,6 @@ pub mod embedding;
 pub mod inbound;
 pub mod llm;
 pub mod media;
-pub mod qq;
 pub mod recall;
 pub mod scope;
 pub mod search;

@@ -14,7 +14,7 @@ use qqbot::event::{self, Attachment, AttachmentKind, Element, Message};
 use qqbot::{Dispatch, Event};
 
 use super::native_id;
-use crate::inbound::{Chat, InNode, Inbound, Person, Quote};
+use max::inbound::{Chat, InNode, Inbound, Person, Quote};
 
 /// A message someone sent Max, or None for every other event.
 pub fn inbound(dispatch: &mut Dispatch, now: DateTime<Utc>) -> Option<Inbound> {

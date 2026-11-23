@@ -43,7 +43,7 @@ impl Tool for SendVoice {
     fn guide() -> String {
         format!(
             "Sends an audio file under /work to this chat as a voice message, which shows as a bar people tap to hear. MP3, WAV or Ogg; ffmpeg converts anything else. At most {} MiB, and not empty; no symlink on the path.\n  \
-            It returns once the audio is stored and queued, and handle is its handle; the upload goes on after that. The records keep the audio, as [audio#…], and nothing of what it says. If it doesn't go out, as when QQ can't make the audio out, its row in the records is marked （没发出去）.",
+            It returns once the audio is stored and queued, and handle is its handle; the upload goes on after that. The records keep the audio, as [audio#…], and nothing of what it says. If it doesn't go out, as when the platform can't make the audio out, its row in the records is marked （没发出去）.",
             SENT_VOICE_BYTES >> 20
         )
     }

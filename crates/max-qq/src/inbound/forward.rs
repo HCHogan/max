@@ -19,7 +19,7 @@ use max_core::message::{MediaKind, MediaMeta, MediaRef, Node};
 use qqbot::transcript::{Entry, FileKind, Kind, Transcript};
 
 use super::{content_nodes, plain};
-use crate::inbound::InNode;
+use max::inbound::InNode;
 
 /// How much of a quoted message's text its `[reply: …]` shows.
 const QUOTE_CHARS: usize = 40;

@@ -28,7 +28,7 @@ send_image(args: { path: string; caption?: string }): Promise<{ handle: string }
 send_file(args: { path: string; name?: string }): Promise<{ handle: string }>;
 
 /** Sends an audio file under /work to this chat as a voice message, which shows as a bar people tap to hear. MP3, WAV or Ogg; ffmpeg converts anything else. At most 16 MiB, and not empty; no symlink on the path.
-  It returns once the audio is stored and queued, and handle is its handle; the upload goes on after that. The records keep the audio, as [audio#…], and nothing of what it says. If it doesn't go out, as when QQ can't make the audio out, its row in the records is marked （没发出去）. */
+  It returns once the audio is stored and queued, and handle is its handle; the upload goes on after that. The records keep the audio, as [audio#…], and nothing of what it says. If it doesn't go out, as when the platform can't make the audio out, its row in the records is marked （没发出去）. */
 send_voice(args: { path: string }): Promise<{ handle: string }>;
 
 /** Recalls a message of this chat; id is the number in the #number at the start of its line. Whether to is yours to judge: for flooding, ads or what breaks the rules, or when someone asks and the reason is sound; say so briefly afterwards.

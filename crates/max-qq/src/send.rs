@@ -1,6 +1,6 @@
 //! QQ's sender: the only writer of `deliveries` for QQ. What a
 //! conversation says goes out in the order it was committed, one chat at a
-//! time and chats side by side; see "Outbound" under "The official QQ bot".
+//! time and chats side by side; see "Outbound" in docs/design/qq.md.
 //!
 //! Every message goes out proactively, never as a passive reply: a group
 //! Max is in allows that (机器人主动发言). It keeps within QQ's rates: it
@@ -33,9 +33,9 @@ use tokio::time::{Instant, sleep_until};
 use tracing::{info, warn};
 
 use super::chat;
-use crate::conversation::{Outgoing, Place, Refused};
-use crate::media::store::Store;
-use crate::scope::Scope;
+use max::conversation::{Outgoing, Place, Refused};
+use max::media::store::Store;
+use max::scope::Scope;
 
 /// QQ's answer, some time later.
 pub type Answer<'a, T> = Pin<Box<dyn Future<Output = Result<T, api::Error>> + Send + 'a>>;

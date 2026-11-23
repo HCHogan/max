@@ -254,13 +254,15 @@ and a web of dependencies while blocking nothing.
 | `max-core` | All pure logic: the Node, Message, Draft and Item types, the two state machines (the core and intent), request construction, the segmenter, rendering for the model, the prompt and `limits`. Depends only on serde, serde_json, thiserror and chrono without its `clock` feature. | Dependency direction: sans-I/O is the compiler's to guarantee. |
 | `max-db` | The schema, migrations, all sqlx queries and row types. | Compile time; the `.sqlx` metadata in one place. |
 | `max-llm` | The Responses and Chat adapters, stream parsing, reasoning pass-through, multimodal downgrading. | Protocol details in one place, tested alone against recorded responses. |
-| `max` | Configuration, services, the conversation actor and its tasks, the sender, the QQ adapter, projection, the workers, the VMs, max's service to them, the tools, commands. | Everything else is business logic and belongs together. |
-| `max-cli` | The `max` binary: the command line, starting and stopping the rest, and `max vm-check`. | Kept apart from `max` for the platforms' crates, which depend on `max` and are started here. |
+| `max` | Configuration, services, the conversation actor and its tasks, what a platform's adapter implements, projection, the workers, the VMs, max's service to them, the tools, commands. It names no platform. | Everything else is business logic and belongs together. |
+| `max-qq` | QQ's adapter: QQ's events as `Inbound`s, the sender with QQ's rates and uploads, the gateway's session across restarts, QQ's rules for recalling and muting, `[platforms.qq]`. | Dependency direction: platform code can't reach into `max`; see [Platforms](design/platforms.md). |
+| `max-cli` | The `max` binary: the command line, reading the platforms' sections, starting and stopping the rest, and `max vm-check`. | `max-qq` depends on `max`, so what starts both can't be in `max`. |
 
 - Dependencies point only downwards: `qqbot` and `max-core` are at the
   bottom and don't depend on each other; `max-db` and `max-llm` depend on
-  `max-core`; `max` depends on all of them, and `max-cli` on `max`. Mapping QQ events to `Node`s
-  is `max`'s, not `qqbot`'s.
+  `max-core`; `max` depends on those three; `max-qq` on `max` and
+  `qqbot`; and `max-cli` on `max` and `max-qq`. QQ's markup is `qqbot`'s
+  to read and write, and mapping it to Max's types is `max-qq`'s.
 - `max-core`'s dependency allowlist is a CI check: only those four
   libraries may appear in `cargo tree -p max-core -e normal`. CI also
   builds `max-core` alone, so chrono's features aren't merged with those
@@ -271,10 +273,12 @@ and a web of dependencies while blocking nothing.
   is a module of `max` (`max/src/recall.rs`, say), with its pure logic in
   `max-core`, testable without a database.
 - `qqbot` lives in its own public, MIT-licensed repository with its own
-  toolchain, lints and CI. `max` depends on it by commit (`git` plus `rev`
-  in `Cargo.toml`); cargo-deny's `allow-git` lists only that repository,
+  toolchain, lints and CI. `max-qq` depends on it by commit (`git` plus
+  `rev` in `Cargo.toml`); cargo-deny's `allow-git` lists only that repository,
   and crane fetches it by `Cargo.lock`. No submodules.
-- Platform adapters stay in `max` until it grows uncomfortably large.
+- Each platform's adapter is a crate of its own, which implements
+  `max::adapter::Adapter`; see
+  [decisions/platform-adapters.md](decisions/platform-adapters.md).
 - Lints are in `[workspace.lints]`, and bare `tokio::spawn` is blocked in
   `clippy.toml`. Beyond the defaults: `as` casts that may truncate, change
   sign or overflow (use `try_from`, or `#[expect]` with a reason where

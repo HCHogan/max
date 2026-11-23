@@ -1,10 +1,10 @@
 # Platforms
 
-Max is on chat platforms through adapters: QQ's is the only one, in
-`crates/max/src/qq` (see [The official QQ bot](qq.md)). An adapter
-implements `max::adapter::Adapter`, and the rest of max uses a platform only
-through it; a row records its platform (`max_core::message::Platform`) and
-nothing more of it. Why the line is drawn here is in
+Max is on chat platforms through adapters, a crate each: QQ's is the only
+one, `max-qq` (see [The official QQ bot](qq.md)). An adapter implements
+`max::adapter::Adapter`, and max uses a platform only through it; a row
+records its platform (`max_core::message::Platform`) and nothing more of
+it. Why the line is drawn here is in
 [decisions/platform-adapters.md](../decisions/platform-adapters.md).
 
 What a platform writes and expects (its markup, its errors' meanings) is its
@@ -33,8 +33,11 @@ types.
   tools, in each conversation on the platform. It tells the platform's
   rules for the tools, which the tools' descriptions leave to it.
 
-`max-cli` starts an adapter for each `[platforms.*]` section of the
-configuration and hands them to max.
+`max-cli` hands each `[platforms.<name>]` section of the configuration to
+its adapter's crate to read, which `max check-config` does too, starts the
+adapters, and hands them to max: a section for a platform there is no
+adapter for is an error. An owner is `platform:id` on a platform
+configured.
 
 ## Group management
 

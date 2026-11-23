@@ -1870,7 +1870,6 @@ dependencies = [
  "max-core",
  "max-db",
  "max-llm",
- "qqbot",
  "rand",
  "reqwest",
  "russh",
@@ -1898,7 +1897,7 @@ dependencies = [
  "max",
  "max-core",
  "max-db",
- "qqbot",
+ "max-qq",
  "serde_json",
  "tokio",
  "tokio-util",
@@ -1942,6 +1941,25 @@ dependencies = [
  "sse-stream",
  "thiserror",
  "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "max-qq"
+version = "1.0.0"
+dependencies = [
+ "chrono",
+ "color-eyre",
+ "max",
+ "max-core",
+ "max-db",
+ "qqbot",
+ "rand",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "tokio-util",
  "tracing",
 ]
 

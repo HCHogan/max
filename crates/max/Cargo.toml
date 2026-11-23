@@ -17,7 +17,6 @@ futures-util.workspace = true
 max-core.workspace = true
 max-db.workspace = true
 max-llm.workspace = true
-qqbot.workspace = true
 rustix.workspace = true
 rand.workspace = true
 reqwest.workspace = true

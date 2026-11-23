@@ -1,11 +1,12 @@
-//! QQ, through the official bot: its gateway in, its REST API out. See
-//! "The official QQ bot" in docs/design/qq.md.
+//! QQ's adapter, through the official bot: its gateway in, its REST API
+//! out. See docs/design/qq.md.
 
 pub mod groups;
 pub mod inbound;
 pub mod listen;
 pub mod send;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -15,20 +16,31 @@ use max_core::message::{Message, Platform, Role};
 use max_db::PgPool;
 use max_db::platform::Speaker;
 use qqbot::Chat;
+use serde::Deserialize;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio_util::sync::CancellationToken;
 
-use crate::adapter::{Adapter, Answer, Bot};
-use crate::conversation::{Outgoing, Place};
-use crate::inbound::Inbound;
-use crate::media::store::Store;
-use crate::service::Failure;
+use max::adapter::{Adapter, Answer, Bot};
+use max::conversation::{Outgoing, Place};
+use max::inbound::Inbound;
+use max::media::store::Store;
+use max::service::Failure;
 
 const GROUP: &str = "group:";
 const C2C: &str = "c2c:";
 
 /// How long QQ lets any message be recalled.
 const RECALL: TimeDelta = TimeDelta::minutes(2);
+
+/// `[platforms.qq]`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Config {
+    /// The file the bot's AppID is in.
+    pub app_id_file: PathBuf,
+    /// The file the bot's secret is in.
+    pub app_secret_file: PathBuf,
+}
 
 /// QQ's adapter.
 pub struct Qq {
@@ -50,16 +62,17 @@ impl std::fmt::Debug for Qq {
 }
 
 impl Qq {
-    /// The bot with `credentials`, which QQ is asked who it is.
+    /// The bot `config` names, which QQ is asked who it is.
     ///
     /// # Errors
     ///
-    /// If QQ doesn't take the credentials, or can't be reached.
-    pub async fn connect(
-        credentials: qqbot::Credentials,
-        pool: PgPool,
-        store: Option<Arc<Store>>,
-    ) -> Result<Self> {
+    /// If the secrets can't be read, QQ doesn't take them, or QQ can't be
+    /// reached.
+    pub async fn connect(config: &Config, pool: PgPool, store: Option<Arc<Store>>) -> Result<Self> {
+        let credentials = qqbot::Credentials {
+            app_id: max::config::secret(&config.app_id_file)?,
+            secret: max::config::secret(&config.app_secret_file)?,
+        };
         let client = Arc::new(qqbot::Client::new(credentials)?);
         let bot = client.me().await?;
         let notes = format!(

@@ -1,7 +1,7 @@
 //! QQ's gateway as Max's intake. Messages go to the conversation table;
 //! when Max stops, the session is saved to resume after the restart, so
-//! QQ replays what was said in between. See "Resume across restarts" under
-//! "The official QQ bot" in docs/rust-rewrite.md.
+//! QQ replays what was said in between. See "Connection" in
+//! docs/design/qq.md.
 
 use chrono::Utc;
 use color_eyre::eyre::Result;
@@ -15,7 +15,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use super::inbound::inbound;
-use crate::inbound::Inbound;
+use max::inbound::Inbound;
 
 /// Until `stop`, or until QQ closes the gateway for good.
 ///

@@ -23,6 +23,7 @@ max = { path = "crates/max" }
 max-core = { path = "crates/max-core" }
 max-db = { path = "crates/max-db" }
 max-llm = { path = "crates/max-llm" }
+max-qq = { path = "crates/max-qq" }
 # QQ's official bot API, in a repository of its own since 2026-11-03;
 # a new commit there is taken by changing rev here.
 qqbot = { git = "https://github.com/HCHogan/qqbot", rev = "21bcc2249346b6fe8432be69c6fd161ed7bae45d" }

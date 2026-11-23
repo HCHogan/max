@@ -5,14 +5,14 @@ individually verified; the bot is named maxx), with the protocol in
 [qqbot](https://github.com/HCHogan/qqbot), which also reads and writes
 QQ's markup (mentions, faces, the transcripts below, Markdown as QQ
 renders it) and says what QQ's errors mean, and QQ's adapter (see
-[Platforms](platforms.md)) in `crates/max/src/qq`. Why not NapCat and OneBot, and how sending settled on
+[Platforms](platforms.md)) in `crates/max-qq`. Why not NapCat and OneBot, and how sending settled on
 what it is, is in
 [decisions/official-qq-bot.md](../decisions/official-qq-bot.md).
 "Tested" below means tried in the test group; the rest is from QQ's
 documentation.
 
-The configuration is `[platforms.qq]`: `app_id_file` and
-`app_secret_file`. The AppID isn't a secret, but it identifies the bot, so
+The configuration is `[platforms.qq]`, which `max-qq` reads:
+`app_id_file` and `app_secret_file`. The AppID isn't a secret, but it identifies the bot, so
 like group ids it stays out of the repository.
 
 ## Connection
