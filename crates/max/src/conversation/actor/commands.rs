@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use chrono::{TimeDelta, Utc};
 use color_eyre::eyre::Result;
-use max_core::message::{Draft, DraftNode, Platform, Role};
+use max_core::message::{Draft, DraftNode, Role};
 use max_db::platform::{self, ConversationKind};
 use max_db::usage;
 use tokio::time::{Instant, timeout};
@@ -22,7 +22,7 @@ use crate::command::{self, Choice, Command, Config, Persona};
 use crate::conversation::Unanswered;
 use crate::conversation::ingest::{By, Committed};
 use crate::llm::Chosen;
-use crate::{qq, vm};
+use crate::vm;
 
 mod spent;
 
@@ -502,8 +502,10 @@ impl Conversation {
         self.answer(text).await
     }
 
-    /// In a private chat, a code to bind a QQ group with; in a group, the
-    /// group is bound already, or it wouldn't have an actor.
+    /// In a private chat, a code to bind a group with; in a group, the
+    /// group is bound already, or it wouldn't have an actor. With an
+    /// argument, the code goes on with an old group's history, which the
+    /// platform's adapter names.
     async fn bind(&mut self, committed: &Committed, argument: Option<&str>) -> Result<String> {
         if self.place.kind != ConversationKind::Direct {
             return Ok("error: this group is bound already, and can't be bound again".to_owned());
@@ -511,14 +513,18 @@ impl Conversation {
         let conversation = match argument {
             None => None,
             Some(group) => {
-                let native_id = qq::native_id(qqbot::Chat::Group(group));
+                let platforms = &self.shared.services.platforms;
+                let old = platforms.get(&self.place.platform);
+                let Some((was, native_id)) = old.and_then(|adapter| adapter.old_chat(group)) else {
+                    return Ok("error: there are no old groups here".to_owned());
+                };
                 let mut conn = self.shared.services.pool.acquire().await?;
-                let found =
-                    platform::conversation_of(&mut conn, Platform::QqLegacy, &native_id).await?;
+                let found = platform::conversation_of(&mut conn, was, &native_id).await?;
                 let Some(conversation) = found else {
                     return Ok(format!("error: no history of old group {group}"));
                 };
-                let bound = platform::endpoint_on(&mut conn, conversation, Platform::Qq).await?;
+                let bound =
+                    platform::endpoint_on(&mut conn, conversation, self.place.platform).await?;
                 if bound.is_some() {
                     return Ok(format!(
                         "error: old group {group}'s history goes on in another group already"

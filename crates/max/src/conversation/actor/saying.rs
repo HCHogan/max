@@ -112,8 +112,9 @@ impl Conversation {
             message,
             receipt,
         };
-        if self.shared.outbound.send(outgoing).is_err() {
-            warn!(message = %id, "the sender is gone");
+        let sender = self.shared.outbound.get(&self.place.platform);
+        if sender.is_none_or(|sender| sender.send(outgoing).is_err()) {
+            warn!(message = %id, "the platform's sender is gone");
         }
         Some((id, at))
     }

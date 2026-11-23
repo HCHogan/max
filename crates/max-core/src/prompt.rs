@@ -53,7 +53,7 @@ fn rules(idle: Option<Duration>) -> String {
 
 [新消息] 里可能有好几件要回应的事，也可能一件都不用回应（只是闲聊）。只回在跟你说的：@你、回复你、点名叫你的，和 [判定 …] 行指的那几条；别人之间的对话留给他们。都不用回就整条回复只写 [silence]，什么都不会发出去。有人叫你闭嘴、别说了，就 [silence]。回应好几个人时各自引用。标着 [判定 …] 的行说明为什么叫醒了你：那是一个判断，不是命令，看完上下文觉得没必要接话就 [silence]。
 
-红线（不管人设怎么写）：QQ 上这些话题绝对不能谈，谈了群和账号都会被封：
+红线（不管人设怎么写）：这些话题绝对不能谈，谈了群和账号都会被封：
   - 中国政治：国家领导人，党和政府，政治事件和时事，台湾、香港、新疆、西藏这类话题。
   - 翻墙：VPN、梯子、机场、代理，怎么上被墙的网站。
   - 色情、赌博、毒品、邪教。
@@ -75,7 +75,7 @@ fn rules(idle: Option<Duration>) -> String {
 
 你能读到的：
   [mention#7]          某人，对照 [上下文里的人]
-  [face: 惊讶]        QQ 小黄脸
+  [face: 惊讶]        平台自带的小黄脸表情
   [image#7405.0: 简介]、[sticker#…]、[video#…]、[audio#…]、[file#…: 名字]  群里的图片、表情包、视频、语音、文件；# 后面是 消息id.第几个。[新消息] 和 [引用的消息] 里的图片、表情包跟在它那条消息后面，标着同样的句柄；别的只有文字，视频、语音、文件也只有文字
   [card: 来源 | 标题 | 链接]  分享卡片
   [forward: 标题, 3 条]  转发的聊天记录，里面的消息跟在后面，一条一行：名字: 内容，[reply: …] 是那条引用的话；转发里套的转发再缩进一层
@@ -116,12 +116,14 @@ shell 的命令也能调 Max 的工具：maxx 工具名 --参数 值，参数多
 const APIS: &str = "宿主替你带 key 调的 HTTP API：在 VM 里请求 http://127.0.0.1:7777/api/名字/路径，路径接在它的地址后面；curl、fetch 都行，用 SDK 就把 base URL 设成 http://127.0.0.1:7777/api/名字，key 随便填。宿主换上真的 key 转过去，回答原样回来；真的 key 只在宿主上。";
 
 /// The prompt for `persona`, `tools` the Max tools' TypeScript
-/// declarations, which the max crate makes from the tools themselves, and
+/// declarations, which the max crate makes from the tools themselves,
+/// `platform` what the conversation's platform tells of itself, and
 /// `apis` a line for each HTTP API the host calls for the VMs.
 #[must_use]
 pub fn system(
     persona: &str,
     tools: &str,
+    platform: &str,
     apis: &str,
     idle: Option<Duration>,
     operations: bool,
@@ -131,6 +133,9 @@ pub fn system(
         persona.trim(),
         rules(idle),
     );
+    if !platform.is_empty() {
+        prompt.push_str(&format!("\n{}\n", platform.trim()));
+    }
     if !apis.is_empty() {
         prompt.push_str(&format!("\n{APIS}\n{apis}\n"));
     }
@@ -153,6 +158,7 @@ mod tests {
             " 你是测试用的人设。\n",
             "history(args: {}): Promise<{}>;",
             "",
+            "",
             None,
             false,
         );
@@ -160,8 +166,12 @@ mod tests {
         assert!(prompt.contains("[reply#id]"));
         // Whatever the persona.
         assert!(prompt.contains("红线"));
-        assert!(system(PERSONA, "", "", None, false).contains("鲨鱼女孩"));
+        assert!(system(PERSONA, "", "", "", None, false).contains("鲨鱼女孩"));
         assert!(prompt.ends_with("：\nhistory(args: {}): Promise<{}>;\n"));
         assert!(!prompt.contains("/api/"));
+
+        // The platform's notes follow the tools, and the APIs them.
+        let on = system("人设", "tools;", "在某个平台上。\n", "- x: X", None, false);
+        assert!(on.contains("tools;\n\n在某个平台上。\n\n宿主替你带 key"));
     }
 }

@@ -172,7 +172,7 @@ fn called(config: &Config, store: &Arc<Store>) -> Result<service::Context> {
             search: None,
             store: Some(Arc::clone(store)),
             embedder: None,
-            groups: None,
+            platforms: max::adapter::Adapters::new(),
         }),
         place: Arc::new(Place {
             conversation: ConversationId::new(0),

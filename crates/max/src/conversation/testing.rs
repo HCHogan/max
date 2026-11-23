@@ -48,7 +48,7 @@ pub(crate) fn shared(
     let shared = Shared {
         services: Arc::new(Services::bare(pool.clone())),
         models: Arc::new(models),
-        outbound,
+        outbound: [(Platform::Qq, outbound)].into(),
         stop_grace: Duration::from_millis(200),
         owners,
         binds: Arc::default(),

@@ -1,6 +1,6 @@
 //! `/bind` codes. An owner asks for one in a private chat, for an old
-//! conversation or a new one, and says it in a QQ group to bind the group
-//! to it.
+//! conversation or a new one, and says it in a group of the same platform
+//! to bind the group to it.
 
 use max_core::ids::{ConversationId, PrincipalId};
 

@@ -75,11 +75,14 @@ impl Conversation {
         let persona = settings.persona.as_deref().unwrap_or(prompt::PERSONA);
         let vms = self.shared.vms.as_ref();
         let apis = vms.map_or("", |vms| vms.apis());
+        let platforms = &self.shared.services.platforms;
+        let platform = platforms.get(&self.place.platform);
         let projection = Projection {
             place: &self.place,
             system: prompt::system(
                 persona,
                 &service::tool::DECLARATIONS,
+                platform.map_or("", |adapter| adapter.notes()),
                 apis,
                 vms.map(Vms::idle),
                 vms.is_some_and(|vms| vms.operates(self.place.conversation)),

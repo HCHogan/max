@@ -1,14 +1,14 @@
-//! `recall_message`: takes back a message of the group, through the actor
-//! and QQ's sender. See "Outbound" under "The official QQ bot".
+//! `recall_message`: takes back a message of the chat, through the actor
+//! and the platform's sender. See "Group management" in
+//! docs/design/platforms.md.
 //!
-//! What QQ would refuse anyway is refused here, with the reason, and
-//! leaves no row: anything past QQ's two minutes, and the owner's and
-//! admins' messages. Whether Max is an admin isn't asked: QQ's refusal
-//! comes back in words.
+//! What would be refused anyway is refused here, with the reason, and
+//! leaves no row: by Max's rules, and by the platform's, which its adapter
+//! checks (`Adapter::recallable`).
 
-use chrono::{TimeDelta, Utc};
+use chrono::Utc;
 use max_core::ids::MessageId;
-use max_core::message::{Content, Platform, Role};
+use max_core::message::Content;
 use max_db::ledger::{self, Delivery};
 use max_db::platform::ConversationKind;
 use schemars::JsonSchema;
@@ -16,9 +16,6 @@ use serde::{Deserialize, Serialize};
 
 use super::tool::Tool;
 use super::{Context, Failure};
-
-/// How long QQ lets any message be recalled.
-const WINDOW: TimeDelta = TimeDelta::minutes(2);
 
 pub(super) struct RecallMessage;
 
@@ -36,18 +33,16 @@ pub(super) struct Recalled {
 
 impl Tool for RecallMessage {
     const NAME: &'static str = "recall_message";
-    const DESCRIPTION: &'static str = "Recalls a message sent in this chat within the last 2 minutes: your own, or an ordinary member's when you are an admin of the group.";
+    const DESCRIPTION: &'static str = "Recalls a message of this chat while the platform still lets it: your own, or someone else's when you are an admin of the group.";
 
     type Args = Args;
     type Output = Recalled;
 
     fn guide() -> String {
-        format!(
-            "Recalls a message of this chat; id is the number in the #number at the start of its line. Whether to is yours to judge: for flooding, ads or what breaks the rules, or when someone asks and the reason is sound; say so briefly afterwards.\n  \
-            QQ lets only messages sent within {} minutes be recalled: what you said yourself (a segment is a message, so a reply sent in several is recalled one at a time), and, when you are an admin of the group, an ordinary member's; the owner's and the admins' can't be. In a private chat only your own.\n  \
-            It returns once QQ has recalled it; if QQ doesn't, the call fails and says why. The records gain a row of yours, [unsend#id], marked （没发出去） if QQ didn't recall it.",
-            WINDOW.num_minutes()
-        )
+        "Recalls a message of this chat; id is the number in the #number at the start of its line. Whether to is yours to judge: for flooding, ads or what breaks the rules, or when someone asks and the reason is sound; say so briefly afterwards.\n  \
+        What you said yourself can be recalled (a segment is a message, so a reply sent in several is recalled one at a time), and in a group, when you are its admin, others' too; in a private chat only your own. For how long, and whose, is the platform's to say: the system prompt has its rules.\n  \
+        It returns once the platform has recalled it; if it doesn't, the call fails and says why. The records gain a row of yours, [unsend#id], marked （没发出去） if it wasn't recalled."
+            .to_owned()
     }
 
     async fn run(context: &Context, Args { id }: Args) -> Result<Recalled, Failure> {
@@ -58,7 +53,8 @@ impl Tool for RecallMessage {
 
 async fn recall(context: &Context, id: i64) -> Result<(), Failure> {
     let place = &context.place;
-    let (Some(poster), Platform::Qq) = (context.poster.as_ref(), place.platform) else {
+    let adapter = context.services.platforms.get(&place.platform);
+    let (Some(poster), Some(adapter)) = (context.poster.as_ref(), adapter) else {
         return Err(Failure::new(
             "unavailable",
             "messages can't be recalled from here",
@@ -87,16 +83,17 @@ async fn recall(context: &Context, id: i64) -> Result<(), Failure> {
         }
     } else if place.kind == ConversationKind::Direct {
         return refused("in a private chat only your own messages can be recalled");
-    } else if matches!(row.message.sender.role, Some(Role::Owner | Role::Admin)) {
-        return refused("QQ doesn't let a bot recall the owner's or an admin's message");
+    }
+    if row.endpoint != place.endpoint {
+        return refused("it was said in the chat this one goes on from, and can't be recalled");
     }
     // Max's, still on its way out, counts from now.
     let native = ledger::native(&mut conn, target, row.endpoint).await?;
     drop(conn);
-    let since = native.map_or_else(Utc::now, |(_, at)| at);
-    if row.endpoint != place.endpoint || Utc::now() - since > WINDOW {
-        return refused("it was sent over 2 minutes ago, and QQ no longer lets it be recalled");
-    }
+    let sent = native.map_or_else(Utc::now, |(_, at)| at);
+    adapter
+        .recallable(place, &row.message, sent)
+        .map_err(|why| Failure::new("refused", why))?;
     poster
         .unsend(target)
         .await

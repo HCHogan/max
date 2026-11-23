@@ -19,7 +19,7 @@ use std::time::Duration;
 use chrono::Utc;
 use max_core::ids::{EndpointId, MessageId};
 use max_core::message::{
-    Content, MediaKind, MediaRef, MentionTarget, Message as Row, Node, Platform, Sha256,
+    Content, MediaKind, MediaRef, MentionTarget, Message as Row, Node, Sha256,
 };
 use max_db::ledger::{self, Sent as Delivered};
 use max_db::platform::{self, ConversationKind};
@@ -109,17 +109,6 @@ struct Kept {
     file_info: String,
     /// Until when it is used, if not for good.
     until: Option<Instant>,
-}
-
-/// Before anything is said: what the last process committed and never
-/// heard back about may or may not have gone out. It isn't sent again.
-///
-/// # Errors
-///
-/// If the query fails.
-pub async fn recover(pool: &PgPool) -> sqlx::Result<u64> {
-    let mut conn = pool.acquire().await?;
-    ledger::mark_unknown(&mut conn, Platform::Qq, Utc::now()).await
 }
 
 /// Until every conversation's sender handle is gone, then until what was

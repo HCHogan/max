@@ -13,7 +13,6 @@ use clap::{Parser, Subcommand};
 use color_eyre::config::{HookBuilder, Theme};
 use color_eyre::eyre::{Result, WrapErr, bail};
 use max_core::ids::PrincipalId;
-use max_core::message::Platform;
 use max_db::PgPool;
 use max_db::platform;
 use tokio::signal::unix::{SignalKind, signal};
@@ -21,6 +20,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
+use max::adapter::{self, Adapter, Adapters};
 use max::config::{self, Config};
 use max::conversation::Shared;
 use max::embedding::Embedder;
@@ -31,8 +31,7 @@ use max::media::fetch;
 use max::media::pictures::Pictures;
 use max::media::stickers::Stickers;
 use max::media::store::Store;
-use max::qq::groups::Groups;
-use max::qq::{listen, send};
+use max::qq::Qq;
 use max::recall::Vectors;
 use max::scope::Scope;
 use max::search::{self, Search};
@@ -46,13 +45,13 @@ mod vm_check;
 use self::vm_check::vm_check;
 
 // Stopping, in order, within systemd's TimeoutStopSec of 60 seconds.
-/// The QQ gateway saves its session.
+/// The platforms stop listening, as QQ's gateway saves its session.
 const INTAKE_GRACE: Duration = Duration::from_secs(5);
 /// A conversation's core may go on this long, then is interrupted;
 const STOP_GRACE: Duration = Duration::from_secs(20);
 /// the table waits a little longer for every conversation.
 const CONVERSATIONS_GRACE: Duration = Duration::from_secs(25);
-/// The sender sends and records what conversations said.
+/// The platforms' senders send and record what conversations said.
 const DRAIN: Duration = Duration::from_secs(15);
 /// Tasks still running when the runtime shuts down.
 const SHUTDOWN: Duration = Duration::from_secs(10);
@@ -306,14 +305,6 @@ async fn start(config: Config) -> Result<Running> {
             None
         }
     };
-    let client = match qq {
-        Some(credentials) => Some(Arc::new(qqbot::Client::new(credentials)?)),
-        None => None,
-    };
-    // A tool mutes through QQ's client directly; see qq::groups.
-    let groups = client
-        .as_ref()
-        .map(|client| Arc::clone(client) as Arc<dyn Groups>);
     let mut services = Scope::new();
     let vm_dir = config.vm.as_ref().map(|vm| vm.dir.clone());
     // What the VMs have for the conversations, such as a wake, and what
@@ -339,15 +330,27 @@ async fn start(config: Config) -> Result<Running> {
     let store = pictures
         .as_ref()
         .map(|pictures| Arc::clone(&pictures.store));
+    let mut platforms = Adapters::new();
+    if let Some(credentials) = qq {
+        let qq = Qq::connect(credentials, pool.clone(), store.clone());
+        let qq = qq.await.wrap_err("checking the QQ credentials")?;
+        platforms.insert(qq.platform(), Arc::new(qq));
+    }
     let tools = Arc::new(service::Services {
         pool: pool.clone(),
         offset: config.utc_offset,
         search,
-        store: store.clone(),
+        store,
         embedder,
-        groups,
+        platforms: platforms.clone(),
     });
-    let (outbound, outbound_rx) = mpsc::unbounded_channel();
+    let mut outbound = HashMap::new();
+    let mut outbound_rx = HashMap::new();
+    for &platform in platforms.keys() {
+        let (tx, rx) = mpsc::unbounded_channel();
+        outbound.insert(platform, tx);
+        outbound_rx.insert(platform, rx);
+    }
     let shared = Arc::new(Shared {
         services: tools,
         models,
@@ -369,31 +372,25 @@ async fn start(config: Config) -> Result<Running> {
     let mut intake = Scope::new();
     let mut senders = Scope::new();
     let failed = CancellationToken::new();
-    if let Some(client) = client {
-        let bot = client.me().await.wrap_err("checking the QQ credentials")?;
+    for (platform, adapter) in platforms {
+        let bot = adapter.me();
         let mut conn = pool.acquire().await?;
-        let account = platform::account(&mut conn, Platform::Qq, &bot.id, &bot.username).await?;
+        let account = platform::account(&mut conn, platform, &bot.id, &bot.name).await?;
         drop(conn);
-        info!(bot = %bot.username, "QQ credentials work");
-        me.insert(
-            Platform::Qq,
-            Me {
-                account,
-                name: bot.username,
-            },
-        );
-        let unconfirmed = send::recover(&pool).await?;
+        info!(%platform, bot = %bot.name, "on a platform");
+        let name = bot.name.clone();
+        me.insert(platform, Me { account, name });
+        let unconfirmed = adapter::recover(&pool, platform).await?;
         if unconfirmed > 0 {
-            info!(unconfirmed, "messages the last run never heard back about");
+            info!(%platform, unconfirmed, "messages the last run never heard back about");
         }
-        // The only sender, while QQ is the only platform.
-        let api = Arc::clone(&client) as Arc<dyn send::Api>;
-        let sending = pool.clone();
-        senders.spawn(move |_| send::run(api, sending, store, outbound_rx, DRAIN));
-        let (pool, intake_tx, failed) = (pool.clone(), intake_tx.clone(), failed.clone());
+        if let Some(outbound_rx) = outbound_rx.remove(&platform) {
+            senders.spawn(|_| adapter.send(outbound_rx, DRAIN));
+        }
+        let (intake_tx, failed) = (intake_tx.clone(), failed.clone());
         intake.spawn(move |stop| async move {
-            if let Err(error) = listen::listen(&client, &pool, &intake_tx, stop).await {
-                error!(%error, "QQ's gateway stopped");
+            if let Err(error) = adapter.listen(intake_tx, stop).await {
+                error!(%platform, %error, "stopped listening to a platform");
                 failed.cancel();
             }
         });

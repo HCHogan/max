@@ -37,10 +37,10 @@ use serde_json::Value;
 use sqlx::PgPool;
 use tracing::warn;
 
+use crate::adapter::Adapters;
 use crate::conversation::{Place, Poster};
 use crate::embedding::Embedder;
 use crate::media::store::Store;
-use crate::qq::groups::Groups;
 use crate::search::Search;
 
 /// What the tools reach, the same for every call, built once in main; an
@@ -57,11 +57,11 @@ pub struct Services {
     pub store: Option<Arc<Store>>,
     /// For `find_stickers`, and `history` by meaning.
     pub embedder: Option<Arc<Embedder>>,
-    /// For `mute_member` and a group's name; None without QQ.
-    pub groups: Option<Arc<dyn Groups>>,
+    /// The platforms Max is on, for what a tool asks of one.
+    pub platforms: Adapters,
 }
 
-/// By what there is of each: QQ's client says nothing of itself.
+/// By what there is of each: a platform's adapter says nothing of itself.
 impl fmt::Debug for Services {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Services")
@@ -69,7 +69,7 @@ impl fmt::Debug for Services {
             .field("search", &self.search)
             .field("store", &self.store)
             .field("embedder", &self.embedder)
-            .field("groups", &self.groups.is_some())
+            .field("platforms", &self.platforms.keys().collect::<Vec<_>>())
             .finish_non_exhaustive()
     }
 }
@@ -107,7 +107,7 @@ impl Services {
             search: None,
             store: None,
             embedder: None,
-            groups: None,
+            platforms: Adapters::new(),
         }
     }
 }

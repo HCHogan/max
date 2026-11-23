@@ -40,6 +40,7 @@ Why Max is built the way it is: one file for each decision that was a real trade
 
 ## Platforms and people
 
+- [A platform is an adapter crate behind max's trait](platform-adapters.md)
 - [QQ through the official bot API](official-qq-bot.md)
 - [No matching people by avatar](no-avatar-matching.md)
 - [Matrix is deferred](matrix-deferred.md)

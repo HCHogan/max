@@ -32,13 +32,13 @@ send_file(args: { path: string; name?: string }): Promise<{ handle: string }>;
 send_voice(args: { path: string }): Promise<{ handle: string }>;
 
 /** Recalls a message of this chat; id is the number in the #number at the start of its line. Whether to is yours to judge: for flooding, ads or what breaks the rules, or when someone asks and the reason is sound; say so briefly afterwards.
-  QQ lets only messages sent within 2 minutes be recalled: what you said yourself (a segment is a message, so a reply sent in several is recalled one at a time), and, when you are an admin of the group, an ordinary member's; the owner's and the admins' can't be. In a private chat only your own.
-  It returns once QQ has recalled it; if QQ doesn't, the call fails and says why. The records gain a row of yours, [unsend#id], marked （没发出去） if QQ didn't recall it. */
+  What you said yourself can be recalled (a segment is a message, so a reply sent in several is recalled one at a time), and in a group, when you are its admin, others' too; in a private chat only your own. For how long, and whose, is the platform's to say: the system prompt has its rules.
+  It returns once the platform has recalled it; if it doesn't, the call fails and says why. The records gain a row of yours, [unsend#id], marked （没发出去） if it wasn't recalled. */
 recall_message(args: { id: number }): Promise<{ recalled: number }>;
 
-/** Mutes someone in this group, or lifts a mute. member is the number in [mention#number]; seconds is how long from now, 0 lifts it, at most 2592000 (30 days). Whether to mute, and for how long, is yours to judge: for flooding, ads or abuse, or when someone asks and the reason is sound; say so briefly in the chat afterwards.
-  QQ lets only a group's admins mute, and only ordinary members: the owner, the admins and yourself can't be muted, there is no muting in a private chat, and nobody who hasn't spoken in this group can be muted. Muting someone already muted moves the end to seconds from now.
-  It returns once QQ has done it: until is when the mute ends, null when lifted; if QQ doesn't, the call fails and says why. No row is added to the records. */
+/** Mutes someone in this group, or lifts a mute. member is the number in [mention#number]; seconds is how long from now, 0 lifts it. Whether to mute, and for how long, is yours to judge: for flooding, ads or abuse, or when someone asks and the reason is sound; say so briefly in the chat afterwards.
+  Whom you can mute, and for how long at most, is the platform's to say: the system prompt has its rules. There is no muting in a private chat, nor of yourself, nor of anybody who hasn't spoken in this group. Muting someone already muted moves the end to seconds from now.
+  It returns once the platform has done it: until is when the mute ends, null when lifted; if it doesn't, the call fails and says why. No row is added to the records. */
 mute_member(args: { member: number; seconds: number }): Promise<{ member: number; until: string | null }>;
 
 /** Finds stickers in the library by meaning: the library holds the stickers seen in every chat, ranked by how near each description is to what query means, nearest first.

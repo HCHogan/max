@@ -4,8 +4,8 @@ Max is on QQ through Tencent's official bot API (the QQ Open Platform,
 individually verified; the bot is named maxx), with the protocol in
 [qqbot](https://github.com/HCHogan/qqbot), which also reads and writes
 QQ's markup (mentions, faces, the transcripts below, Markdown as QQ
-renders it) and says what QQ's errors mean, and the mapping to Max's types
-in `crates/max/src/qq`. Why not NapCat and OneBot, and how sending settled on
+renders it) and says what QQ's errors mean, and QQ's adapter (see
+[Platforms](platforms.md)) in `crates/max/src/qq`. Why not NapCat and OneBot, and how sending settled on
 what it is, is in
 [decisions/official-qq-bot.md](../decisions/official-qq-bot.md).
 "Tested" below means tried in the test group; the rest is from QQ's
@@ -285,31 +285,18 @@ All paths under `/v2/groups/{group_openid}/`.
 
 ## Max's tools for the group
 
-- **`recall_message({ id })`** retracts one message of this group by `#id`,
-  at Max's judgement. Each segment of a reply is its own QQ message with its
-  own `#id`, so a whole reply is retracted segment by segment. What QQ would
-  surely refuse is refused on the host first, with the reason, and leaves
-  no row: anything older than 2 minutes (Max's counted from its delivery
-  receipt, others' from their time), the group owner's and administrators'
-  messages (by the role their message carries), others' messages in a
-  private chat, Max's messages that weren't sent or may not have been, and
-  messages already retracted. Whether Max is an administrator isn't asked:
-  others' messages are tried, and QQ's refusal comes back in words. A
-  retraction is a `Post`, entered as one of Max's unsend rows and retracted
-  by the sender in ledger order, so retracting what Max just said waits
-  behind its sending. Success records sent, refusal failed, which projects
-  as `[unsend#id]（没发出去）`.
-- **`mute_member({ member, seconds })`** mutes or unmutes someone in this
-  group, at Max's judgement, and Max says so briefly in the group after.
-  `member` is the N of `[mention#N]`; the `member_openid` is the account the
-  person last spoke with here, so someone who hasn't spoken here can't be
-  muted. `seconds` 0 unmutes (del), at most 2,592,000 (30 days); otherwise
-  a `GET` first tells whether to update or add, with the expiry in `+08:00`.
-  What QQ would surely refuse is refused first: private chats, Max itself,
-  the group owner and administrators (by their latest message's role).
-  Whether Max is an administrator isn't asked; QQ's refusal (40011030) is
-  passed back. The actor is asked whether a mute may go ahead (it refuses
-  while the conversation is stopped), but a mute is no message and isn't
-  entered: it leaves a log line, and the next core learns of it only from
-  what Max said. Muting twice does no harm, so a mute that may have failed
-  is simply done again.
+What `recall_message` and `mute_member` check of their own, and how they
+reach the adapter, is in [Group management](platforms.md#group-management).
+QQ's adapter adds QQ's rules, which its notes tell the model:
+
+- **Recalling**: only within 2 minutes of a message's time, and not the
+  group owner's or administrators' messages (by the role their message
+  carries). Whether Max is an administrator isn't asked: others' messages
+  are tried, and QQ's refusal comes back in words. Success records sent,
+  refusal failed, which projects as `[unsend#id]（没发出去）`.
+- **Muting**: not the group owner or administrators (by their latest
+  message's role), and at most 30 days ahead. Lifting is a del; otherwise
+  a `GET` first tells whether to update or add, with the expiry in
+  `+08:00`. Whether Max is an administrator isn't asked; QQ's refusal
+  (40011030) is passed back. Muting twice does no harm, so a mute that may
+  have failed is simply done again.

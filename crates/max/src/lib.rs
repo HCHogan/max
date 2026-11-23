@@ -1,6 +1,7 @@
-//! Max, a group chat agent: the services, the conversation actors and the
-//! platform adapters around max-core's state machines. The binary in
-//! main.rs is a thin command line over this.
+//! Max, a group chat agent: the services and the conversation actors
+//! around max-core's state machines, and what a platform's adapter
+//! implements (`adapter`). The binary, max-cli, is a thin command line
+//! over this.
 
 /// The commit max was built from: the flake sets `MAX_COMMIT`, and a
 /// cargo build outside it says dev.
@@ -9,6 +10,7 @@ pub const COMMIT: &str = match option_env!("MAX_COMMIT") {
     None => "dev",
 };
 
+pub mod adapter;
 pub mod bind;
 pub mod causes;
 pub mod code;

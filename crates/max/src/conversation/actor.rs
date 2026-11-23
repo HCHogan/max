@@ -36,7 +36,6 @@ use crate::config::Limits;
 use crate::inbound::Inbound;
 use crate::llm::{Chosen, Models};
 use crate::media::pictures::Pictures;
-use crate::qq;
 use crate::scope::Scope;
 use crate::service;
 use crate::vm::Vms;
@@ -81,8 +80,8 @@ pub struct Shared {
     pub services: Arc<service::Services>,
     /// The configured models.
     pub models: Arc<Models>,
-    /// To the platform's sender: what the conversations say.
-    pub outbound: UnboundedSender<Outgoing>,
+    /// To each platform's sender: what the conversations say.
+    pub outbound: HashMap<Platform, UnboundedSender<Outgoing>>,
     /// How long a core may go on when Max stops, before it is interrupted.
     pub stop_grace: Duration,
     /// Max's owners, who may run every command.
@@ -244,30 +243,29 @@ impl Conversation {
         served
     }
 
-    /// Asks QQ what this group is called, and keeps the answer as the
-    /// conversation's title, by which other conversations name this one.
-    /// Once as the actor starts, so a group renamed is known by its new
-    /// name after Max restarts. In a task of its own: the actor waits only
-    /// on the database. Without an answer the title stays as it was.
+    /// Asks the platform what this chat is called, and keeps the answer
+    /// as the conversation's title, by which other conversations name this
+    /// one. Once as the actor starts, so a group renamed is known by its
+    /// new name after Max restarts. In a task of its own: the actor waits
+    /// only on the database. Without an answer the title stays as it was.
     fn learn_title(&mut self) {
-        let (Some(qq), Platform::Qq) = (&self.shared.services.groups, self.place.platform) else {
+        let Some(adapter) = self.shared.services.platforms.get(&self.place.platform) else {
             return;
         };
-        let Some(group) = qq::group(&self.place.native_id) else {
-            return;
-        };
-        let (qq, group) = (Arc::clone(qq), group.to_owned());
+        let (adapter, place) = (Arc::clone(adapter), Arc::clone(&self.place));
         let pool = self.shared.services.pool.clone();
         let conversation = self.place.conversation;
         self.side.spawn(move |_| async move {
             let learned = async {
-                let info = qq.info(&group).await?;
+                let Some(title) = adapter.title(&place).await? else {
+                    return Ok(());
+                };
                 let mut conn = pool.acquire().await?;
-                platform::set_title(&mut conn, conversation, &info.group_name).await?;
+                platform::set_title(&mut conn, conversation, &title).await?;
                 Ok::<_, Report>(())
             };
             if let Err(error) = learned.await {
-                warn!(%conversation, %error, "couldn't learn what the group is called");
+                warn!(%conversation, %error, "couldn't learn what the chat is called");
             }
         });
     }
