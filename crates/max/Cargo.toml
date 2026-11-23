@@ -1,6 +1,6 @@
 [package]
 name = "max"
-description = "The Max group chat agent"
+description = "The Max group chat agent: everything but the binary and the platforms"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -12,7 +12,6 @@ workspace = true
 [dependencies]
 axum.workspace = true
 chrono = { workspace = true, features = ["clock"] }
-clap.workspace = true
 color-eyre.workspace = true
 futures-util.workspace = true
 max-core.workspace = true
@@ -35,7 +34,6 @@ tokio = { workspace = true, features = ["rt-multi-thread", "signal", "macros", "
 tokio-util.workspace = true
 toml.workspace = true
 tracing.workspace = true
-tracing-subscriber.workspace = true
 
 [dev-dependencies]
 insta.workspace = true

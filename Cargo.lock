@@ -1863,7 +1863,6 @@ version = "1.0.0"
 dependencies = [
  "axum",
  "chrono",
- "clap",
  "color-eyre",
  "futures-util",
  "image",
@@ -1883,6 +1882,24 @@ dependencies = [
  "sqlx",
  "thiserror",
  "tiktoken-rs",
+ "tokio",
+ "tokio-util",
+ "toml",
+ "tracing",
+]
+
+[[package]]
+name = "max-cli"
+version = "1.0.0"
+dependencies = [
+ "axum",
+ "clap",
+ "color-eyre",
+ "max",
+ "max-core",
+ "max-db",
+ "qqbot",
+ "serde_json",
  "tokio",
  "tokio-util",
  "toml",

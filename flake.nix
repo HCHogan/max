@@ -93,7 +93,7 @@
             commonArgs
             // {
               inherit cargoArtifacts;
-              cargoExtraArgs = "--package max";
+              cargoExtraArgs = "--package max-cli";
               doCheck = false; # the nextest check runs the tests
               # /status shows it. Only this package: the dependencies and
               # the checks don't rebuild for a new commit.

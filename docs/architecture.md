@@ -117,7 +117,7 @@ Rules:
    the resident service that holds its connection. See
    [How resources end](design/lifetimes.md#how-resources-end).
 
-Shutdown order (`main.rs`):
+Shutdown order (`max-cli`'s `main.rs`):
 
 0. Take no more from the VMs: what they ask from here on waits at max's
    socket, which systemd holds, for the next max. What was taken goes on
@@ -254,11 +254,12 @@ and a web of dependencies while blocking nothing.
 | `max-core` | All pure logic: the Node, Message, Draft and Item types, the two state machines (the core and intent), request construction, the segmenter, rendering for the model, the prompt and `limits`. Depends only on serde, serde_json, thiserror and chrono without its `clock` feature. | Dependency direction: sans-I/O is the compiler's to guarantee. |
 | `max-db` | The schema, migrations, all sqlx queries and row types. | Compile time; the `.sqlx` metadata in one place. |
 | `max-llm` | The Responses and Chat adapters, stream parsing, reasoning pass-through, multimodal downgrading. | Protocol details in one place, tested alone against recorded responses. |
-| `max` | The binary: configuration, CLI, services, the conversation actor and its tasks, the sender, the QQ adapter, projection, the workers, the VMs, max's service to them, the tools, commands. | Everything else is business logic and belongs together. |
+| `max` | Configuration, services, the conversation actor and its tasks, the sender, the QQ adapter, projection, the workers, the VMs, max's service to them, the tools, commands. | Everything else is business logic and belongs together. |
+| `max-cli` | The `max` binary: the command line, starting and stopping the rest, and `max vm-check`. | Kept apart from `max` for the platforms' crates, which depend on `max` and are started here. |
 
 - Dependencies point only downwards: `qqbot` and `max-core` are at the
   bottom and don't depend on each other; `max-db` and `max-llm` depend on
-  `max-core`; `max` depends on all of them. Mapping QQ events to `Node`s
+  `max-core`; `max` depends on all of them, and `max-cli` on `max`. Mapping QQ events to `Node`s
   is `max`'s, not `qqbot`'s.
 - `max-core`'s dependency allowlist is a CI check: only those four
   libraries may appear in `cargo tree -p max-core -e normal`. CI also
