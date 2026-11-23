@@ -41,6 +41,7 @@ Why Max is built the way it is: one file for each decision that was a real trade
 
 ## Platforms and people
 
+- [The conversation is the finest grain of permission](permission-by-conversation.md)
 - [A platform is an adapter crate behind max's trait](platform-adapters.md)
 - [QQ through the official bot API](official-qq-bot.md)
 - [No matching people by avatar](no-avatar-matching.md)

@@ -517,7 +517,8 @@ edges and their direction is in
 
 - **Permission is an edge between conversations**, not a person's: below a
   conversation nothing could be enforced, since its members share one VM as
-  root and one context. A person's own permission is their private chat's.
+  root and one context. A person's own permission is their private chat's;
+  see [decisions/permission-by-conversation.md](../decisions/permission-by-conversation.md).
 - **An edge has a direction.** A→B lets Max in A ask Max in B, not the other
   way, and what it exposes is B: anyone in A can have A's Max ask, so the edge
   lets A's members try to talk B's Max into whatever B's Max can do, the

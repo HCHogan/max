@@ -8,7 +8,8 @@ made with `/link` by the people the two conversations belong to. The design is i
 
 - **Permission is an edge between conversations, not a person's.** Below a
   conversation nothing can be enforced: its members share one VM as root and
-  one context.
+  one context (see
+  [The conversation is the finest grain of permission](permission-by-conversation.md)).
 - **The edge has a direction, and the asked side redeems the code.** What an
   edge exposes is the asked conversation: the answering core is the one that
   serves its own chat, with all its tools, and the host can't give it fewer.

@@ -90,6 +90,11 @@ write them too. The rules:
 
 ## Permissions
 
+- **The conversation is the finest grain**: what Max can do in a
+  conversation, anyone in it can have Max do, and no tool checks who
+  started a turn. Ranks are for commands, and a person's own permission is
+  their private chat's. Why is in
+  [decisions/permission-by-conversation.md](../decisions/permission-by-conversation.md).
 - **Owners** are listed in the owners file (from sops), one
   `platform:native_id` a line, resolved to identities at startup (created if
   unseen). Permissions go by principal, so every account merged into an

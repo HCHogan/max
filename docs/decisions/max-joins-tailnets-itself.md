@@ -65,9 +65,9 @@ host's configuration.
 - **The node's key is in the VM.** The operations network kept it on the
   host, out of the guest's reach. Now anyone in the conversation can have
   Max read the node's state and use it from elsewhere, until the tailnet
-  removes it. The conversation is the unit of permission (see
-  [Asking another conversation](../design/jobs.md#asking-another-conversation)),
-  and they could already have had Max give them their own way in to those
+  removes it. The conversation is the finest grain of permission (see
+  [permission-by-conversation.md](permission-by-conversation.md)), and
+  they could already have had Max give them their own way in to those
   machines; a tailnet that minds can expire the node's key.
 - **A VM on several tailnets joins them**: anyone in the conversation can
   have Max carry things from one to another. The conversation's permission
