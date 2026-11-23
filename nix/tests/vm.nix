@@ -204,7 +204,7 @@ pkgs.testers.runNixOSTest {
     assert machine.succeed("machinectl list --no-legend").split()[:3] == ["maxx-7", "vm", "maxx"]
     machined = machine.succeed("machinectl show maxx-7 -p Unit -p Leader").split()
     assert sorted(machined) == [f"Leader={pid}", "Unit=maxx-vm@7.service"], machined
-    assert machine.succeed("maxx-ssh 7 'hostname; id -un; pwd' < /dev/null").split() == ["max", "root", "/work"]
+    assert machine.succeed("maxx-ssh 7 'hostname; id -un; pwd' < /dev/null").split() == ["maxvm7", "root", "/work"]
     # Along a link from 7 to 8, 7's ssh is root in 8's VM, which max
     # boots for it; and 8's isn't let into 7's.
     machine.succeed(

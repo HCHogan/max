@@ -42,7 +42,9 @@ in
   imports = [ ./jobs.nix ];
 
   system.stateVersion = "26.05";
-  networking.hostName = "max";
+  # None of the image's: max names each VM on its command line,
+  # systemd.hostname=maxvm9 for conversation 9's.
+  networking.hostName = "";
 
   microvm = {
     hypervisor = "cloud-hypervisor";

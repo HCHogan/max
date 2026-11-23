@@ -23,7 +23,8 @@ Only declarative configuration applied at boot needs root, all in NixOS:
   `.1`, the guest `.2`, every VM the same MAC. No DHCP: when max starts a
   VM it puts `max.ip`, `max.gateway` and `max.dns` on the guest's kernel
   command line, and a oneshot in the guest applies them before the network
-  comes up.
+  comes up. The same command line names the VM, `systemd.hostname=maxvm9`
+  for conversation 9's: the image has no hostname of its own.
 - The taps aren't bridged; routing and nft keep VMs apart. A VM may use
   only its own tap's `.2` as source and reach only public addresses, with
   no IPv6; connections from a VM to the host are always refused, the host

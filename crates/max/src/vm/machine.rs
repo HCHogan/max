@@ -304,7 +304,7 @@ pub(super) async fn boot(
 
     let dns: Vec<String> = config.dns.iter().map(ToString::to_string).collect();
     let mut cmdline = format!(
-        "{} max.ip={} max.gateway={} max.dns={}",
+        "{} systemd.hostname=maxvm{conversation} max.ip={} max.gateway={} max.dns={}",
         guest.cmdline,
         slot.address,
         slot.gateway,
