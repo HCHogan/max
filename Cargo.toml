@@ -82,6 +82,12 @@ rand = { version = "0.10", default-features = false, features = ["thread_rng"] }
 # JSON-RPC posted over HTTP on a unix socket per VM, stateless, JSON
 # replies; the protocol is ours, a page of it. Also the VM's other routes.
 axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio"] }
+# A guest's ssh to another conversation's VM is an HTTP upgrade on max's
+# socket, which max then joins to that VM's sshd: hyper's upgrade, and
+# hyper-util's adapter of it to tokio's IO. Both are in the tree already,
+# through axum.
+hyper = { version = "1.12", default-features = false, features = ["http1"] }
+hyper-util = { version = "0.1.21", default-features = false, features = ["tokio"] }
 # The JSON Schemas of Max's tools, from their argument and result types,
 # so that a tool's contract is written once; serde_json keeps the fields
 # in the order they are declared, for the schemas and the TypeScript made
