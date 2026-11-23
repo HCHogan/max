@@ -1,7 +1,8 @@
 //! QQ's messages as `Inbound`: see "Inbound" in docs/design/qq.md. qqbot
 //! reads QQ's markup; here its mentions, faces and attachments become
-//! nodes, with where to download each attachment, and the quoted message
-//! is found by its `msg_idx`, or by what QQ shows of it.
+//! nodes, with where to download each attachment, a merged forward
+//! becomes Max's form of it (`forward`), and the quoted message is found
+//! by its `msg_idx`, or by what QQ shows of it.
 
 use chrono::{DateTime, Utc};
 use max_core::message::{
@@ -47,7 +48,10 @@ pub fn inbound(dispatch: &mut Dispatch, now: DateTime<Utc>) -> Option<Inbound> {
         None if chat.kind == ConversationKind::Group => Some(Role::Member),
         None => None,
     };
-    let mut nodes = content_nodes(&message.content, Some(message));
+    let mut nodes = match message.forward() {
+        Some(forward) => forward::nodes(&forward),
+        None => content_nodes(&message.content, Some(message)),
+    };
     nodes.extend(message.attachments.iter().map(attachment));
     let quote = message.quotes().map(|quote_id| Quote {
         quote_id: Some(quote_id.to_owned()),
@@ -173,5 +177,6 @@ fn attachment(attachment: &Attachment) -> InNode {
     })
 }
 
+mod forward;
 #[cfg(test)]
 mod tests;

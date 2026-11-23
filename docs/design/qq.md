@@ -152,8 +152,24 @@ like group ids it stays out of the repository.
   name and its picture in `attachments`. The model sees `[face: name]`.
 - **Merged forwards** (tested): `message_type = 102`; the body is a text
   transcript QQ assembles, each entry with its content and sender's
-  nickname, and no structured sub-messages. Pictures in it are written into
-  the text with file name, dimensions, size and URL.
+  nickname, and no structured sub-messages. Pictures, videos and files in
+  it are written into the text with file name, dimensions, size and URL,
+  and some files with no URL. A quote is the quoted text under
+  `[关联消息]`; a forward inside it says `[消息类型] 合并转发消息`, with its
+  messages under `[关联消息]` one level deeper, or with none at all (two
+  of the six seen). Max's form of it is a line for the forward and one for
+  each message, `名字: 内容`, a message's later lines and a nested
+  forward's messages indented two spaces, a quote as `[reply: …]` before
+  the text, and each picture, video and file a media node with QQ's URL,
+  downloaded at once like any attachment, since QQ's URLs expire:
+
+  ```text
+  [forward: 群聊的聊天记录, 3 条]
+  小明: 看这个 [image#9.0]
+  小红: [reply: 看这个] 好家伙
+  小明: [forward: 群聊的聊天记录, 1 条]
+    小刚: 早
+  ```
 - **Cards** (tested): `message_type = 3`; `ark_data` holds the title, source
   and preview picture, and the body a text summary. Mini-program cards
   (Bilibili, Zhihu) don't carry the original link, so Max sees the title.

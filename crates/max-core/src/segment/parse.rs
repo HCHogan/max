@@ -4,7 +4,8 @@
 //! rest is consumed so that an echoed display form acts instead of leaking.
 //! Max writes quotes, mentions and pictures (`[sticker#7405.0]`, a chunk
 //! of its own); forms that are only for reading (`[face: 吃瓜]`,
-//! `[unsend#7405]`, `[video#7405.0]`) are dropped when echoed, and so is
+//! `[unsend#7405]`, `[video#7405.0]`, a forward's `[reply: 早]`) are
+//! dropped when echoed, and so is
 //! a copied row header. Anything else that doesn't parse stays text, and a
 //! marker among it whose id isn't one, `[reply#${id}]`, is noted, for a
 //! program whose variable wasn't filled in. Code fences and inline code
@@ -254,6 +255,7 @@ fn display(s: &str) -> Option<usize> {
     const EVENTS: &[&str] = &["edit", "unsend", "react", "unreact", "poke"];
     const BARE: &[&str] = &[
         "image", "sticker", "video", "audio", "file", "forward", "card", "face", "emote", "poke",
+        "reply",
     ];
     let bytes = s.as_bytes();
     let body = s.strip_prefix('[')?;

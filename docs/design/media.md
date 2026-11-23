@@ -7,7 +7,9 @@ version's lessons are noted with the commits that taught them.
 ## Storing
 
 - **Nodes and handles**: inbound, a QQ attachment's download URL is written
-  into its node, `Media { media: Some(Remote(url)) }`. The ledger is
+  into its node, `Media { media: Some(Remote(url)) }`, and so is that of a
+  picture, video or file in a merged forward's transcript (see
+  [Inbound](qq.md#inbound)). The ledger is
   append-only, so a download's result is recorded in `message_media`
   (message, index, sha256). The index is the item's position in the
   message, from 0, and the model's handle is `image#<message id>.<index>`,
