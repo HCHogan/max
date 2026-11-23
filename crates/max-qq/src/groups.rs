@@ -8,7 +8,7 @@
 use chrono::{DateTime, FixedOffset, SecondsFormat, TimeDelta, Utc};
 use max_core::message::Role;
 use max_db::platform::Speaker;
-use qqbot::api::{self, Mute, MuteOp};
+use qqbot::api::{self, Mute, MuteOp, Refusal};
 
 use super::group;
 use max::conversation::Place;
@@ -63,12 +63,14 @@ fn qq_time() -> FixedOffset {
 
 /// What QQ's refusal, or its silence, tells Max.
 fn not_muted(error: &api::Error) -> Failure {
-    let why = match error {
-        api::Error::Api { code: 40011030, .. } => {
+    let why = match (error.refusal(), error) {
+        (Some(Refusal::NotAnAdmin), _) => {
             "QQ says the bot isn't an admin of the group (40011030), so it can't mute".to_owned()
         }
-        api::Error::Api { code, message, .. } => format!("QQ refused: {code} {message}"),
-        error => format!("it isn't known whether QQ did it; doing it again does no harm: {error}"),
+        (_, api::Error::Api { code, message, .. }) => format!("QQ refused: {code} {message}"),
+        (_, error) => {
+            format!("it isn't known whether QQ did it; doing it again does no harm: {error}")
+        }
     };
     Failure::new("not_muted", why)
 }

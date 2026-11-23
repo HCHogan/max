@@ -454,6 +454,9 @@ fn refusal(error: &api::Error) -> String {
         (Some(Refusal::TooLateToRecall), _) => {
             "it was sent over 2 minutes ago, and QQ no longer lets it be recalled (40064004)".to_owned()
         }
+        (Some(Refusal::NotAnAdmin), _) => {
+            "QQ says the bot isn't an admin of the group (40011030), so it can't recall someone else's message".to_owned()
+        }
         (None, api::Error::Api { code, message, .. }) => {
             format!("QQ didn't recall it: {code} {message}")
         }
