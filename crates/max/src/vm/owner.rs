@@ -105,7 +105,8 @@ struct Service {
     signals: UnboundedSender<Signal>,
     idle: Duration,
     vms: HashMap<ConversationId, State>,
-    free: Free,
+    /// The slots no VM has, the next to take last.
+    free: Vec<usize>,
     boots: Scope,
     booted: UnboundedSender<(ConversationId, Result<Booted, Unusable>)>,
     /// The VMs max had systemd stop a moment ago, each done once systemd
@@ -130,7 +131,7 @@ pub(super) async fn run(
     let dir = config.dir.clone();
     let mut service = Service {
         idle: idle(&config),
-        free: Free::new(&config),
+        free: (0..config.slots.len()).rev().collect(),
         config,
         guest: Arc::new(guest),
         signals,
@@ -233,13 +234,11 @@ impl Service {
     /// Boots the conversation's VM for `waiting`: without Max's units if
     /// it has been failing.
     fn start(&mut self, conversation: ConversationId, waiting: Waiting) {
-        let operates = self.config.operates(conversation);
-        let pool = self.config.operations_slots();
-        let Some(slot) = self.free.take(operates).or_else(|| {
-            evict(&mut self.vms, &self.kept, &mut self.stopping, |slot| {
-                pool.contains(&slot) == operates
-            })
-        }) else {
+        let Some(slot) = self
+            .free
+            .pop()
+            .or_else(|| evict(&mut self.vms, &self.kept, &mut self.stopping))
+        else {
             for reply in waiting {
                 let _ = reply.send(Err(NoVm::Full));
             }
@@ -272,13 +271,8 @@ impl Service {
                 stopping.await;
             }
             let started = Instant::now();
-            let operations = if operates {
-                config.operations.as_ref()
-            } else {
-                None
-            };
-            let slot = (slot, config.slot(slot));
-            let booting = machine::boot(&config, &guest, conversation, slot, operations, units);
+            let slot = (slot, &config.slots[slot]);
+            let booting = machine::boot(&config, &guest, conversation, slot, units);
             let result = match timeout(BOOT + Duration::from_secs(10), booting).await {
                 Ok(result) => result.map_err(|error| format!("{error:#}")),
                 Err(_) => Err(format!("the VM didn't boot within {BOOT:?}")),
@@ -301,7 +295,6 @@ impl Service {
     /// between them.
     async fn attach(&mut self, conversation: ConversationId) {
         let machine = Machine::of(&self.config, conversation);
-        let operates = self.config.operates(conversation);
         let usable = match Boot::read(&machine.dir).await {
             Err(error) => Err(format!("{error:#}")),
             Ok(boot) if boot.guest != self.config.guest => Err(format!(
@@ -309,9 +302,12 @@ impl Service {
                 boot.guest.display(),
                 self.config.guest.display()
             )),
-            Ok(boot) => match self.free.take_slot(boot.slot, operates) {
-                true => Ok(boot),
-                false => Err(format!("its slot, {}, isn't free for it", boot.slot)),
+            Ok(boot) => match self.free.iter().position(|&free| free == boot.slot) {
+                Some(at) => {
+                    self.free.remove(at);
+                    Ok(boot)
+                }
+                None => Err(format!("its slot, {}, isn't free", boot.slot)),
             },
         };
         let boot = match usable {
@@ -392,7 +388,7 @@ impl Service {
                 State::Running(running) => running.slot,
             };
             Machine::of(&self.config, conversation).stopped().await;
-            self.free.release(slot);
+            self.free.push(slot);
         }
     }
 
@@ -413,7 +409,7 @@ impl Service {
             Ok(booted) => booted,
             Err(unusable) => {
                 let machine = Machine::of(&self.config, conversation);
-                self.free.release(slot);
+                self.free.push(slot);
                 self.fail(conversation);
                 if !units {
                     // Not the units, then: the VM waits for a tool to need
@@ -537,7 +533,7 @@ impl Service {
             if !keep {
                 self.stopping
                     .insert(*conversation, running.machine.stop().boxed());
-                self.free.release(running.slot);
+                self.free.push(running.slot);
             }
             keep
         });
@@ -592,72 +588,18 @@ fn keep(
     }
 }
 
-/// The slots no VM has: the ordinary ones and the operations network's
-/// apart, since a group's VM takes only its own kind.
-struct Free {
-    ordinary: Vec<usize>,
-    operations: Vec<usize>,
-    /// The first of the operations network's.
-    first: usize,
-}
-
-impl Free {
-    fn new(config: &config::Vm) -> Self {
-        let pool = config.operations_slots();
-        Self {
-            ordinary: (0..pool.start).rev().collect(),
-            first: pool.start,
-            operations: pool.rev().collect(),
-        }
-    }
-
-    fn take(&mut self, operations: bool) -> Option<usize> {
-        if operations {
-            self.operations.pop()
-        } else {
-            self.ordinary.pop()
-        }
-    }
-
-    /// Takes `slot` itself, for a VM that runs on it already: whether it
-    /// was free, and of the VM's kind.
-    fn take_slot(&mut self, slot: usize, operations: bool) -> bool {
-        let pool = if operations {
-            &mut self.operations
-        } else {
-            &mut self.ordinary
-        };
-        match pool.iter().position(|&free| free == slot) {
-            Some(at) => {
-                pool.remove(at);
-                true
-            }
-            None => false,
-        }
-    }
-
-    fn release(&mut self, slot: usize) {
-        if slot >= self.first {
-            self.operations.push(slot);
-        } else {
-            self.ordinary.push(slot);
-        }
-    }
-}
-
 /// Stops the VM that has gone unused longest, if one isn't lent, busy or
-/// kept and its slot is one `fits`, for that slot.
+/// kept, for its slot.
 fn evict(
     vms: &mut HashMap<ConversationId, State>,
     kept: &BTreeSet<ConversationId>,
     stopping: &mut HashMap<ConversationId, BoxFuture<'static, ()>>,
-    fits: impl Fn(usize) -> bool,
 ) -> Option<usize> {
     let (&conversation, _) = vms
         .iter()
         .filter(|(conversation, _)| !kept.contains(conversation))
         .filter_map(|(conversation, state)| match state {
-            State::Running(running) if !running.lent() && !running.busy() && fits(running.slot) => {
+            State::Running(running) if !running.lent() && !running.busy() => {
                 Some((conversation, running.idle_since))
             }
             _ => None,

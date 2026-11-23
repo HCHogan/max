@@ -36,6 +36,7 @@ Why Max is built the way it is: one file for each decision that was a real trade
 - [A new image restarts its VMs](a-new-image-restarts-its-vms.md)
 - [A forwarder keeps no count](forwarder-keeps-no-count.md)
 - [Idle guests drop their caches; the VMs' sizes stay](idle-guests-drop-caches.md)
+- [Max joins tailnets itself](max-joins-tailnets-itself.md)
 - [The derived-data workers share conventions, not a framework](no-worker-framework.md)
 
 ## Platforms and people

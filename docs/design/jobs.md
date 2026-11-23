@@ -521,7 +521,7 @@ edges and their direction is in
 - **An edge has a direction.** A→B lets Max in A ask Max in B, not the other
   way, and what it exposes is B: anyone in A can have A's Max ask, so the edge
   lets A's members try to talk B's Max into whatever B's Max can do, the
-  [operations network](vm.md#the-operations-network) included, and the
+  [tailnets](vm.md#tailnets) it is on included, and the
   answering core is the one serving B's own chat, with all its tools. An edge
   into B is a weaker membership of B, made only where that is acceptable.
 - **`/link` makes one**, with a code, as `/bind` does: `/link` in A answers

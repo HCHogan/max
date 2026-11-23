@@ -78,11 +78,6 @@ enum Command {
         args: Args,
         #[arg(long, default_value = "uname -a")]
         command: String,
-        /// On the operations network's last slot instead, as a group of
-        /// `vm.operations` would be: `--command "ssh <host> hostname"`
-        /// checks the way to the fleet.
-        #[arg(long)]
-        operations: bool,
     },
 }
 
@@ -104,11 +99,7 @@ fn main() -> Result<()> {
     match Cli::parse().command {
         Command::CheckConfig(args) => load(&args.config).map(drop),
         Command::Run(args) => run(&args.config),
-        Command::VmCheck {
-            args,
-            command,
-            operations,
-        } => vm_check(&args.config, command, operations),
+        Command::VmCheck { args, command } => vm_check(&args.config, command),
     }
 }
 

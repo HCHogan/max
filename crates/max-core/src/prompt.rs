@@ -126,7 +126,6 @@ pub fn system(
     platform: &str,
     apis: &str,
     idle: Option<Duration>,
-    operations: bool,
 ) -> String {
     let mut prompt = format!(
         "{}\n\n{}\n\nMax 的工具（只能在 run_code 的程序里调）：\n{tools}\n",
@@ -139,14 +138,8 @@ pub fn system(
     if !apis.is_empty() {
         prompt.push_str(&format!("\n{APIS}\n{apis}\n"));
     }
-    if operations {
-        prompt.push_str(&format!("\n{OPERATIONS}\n"));
-    }
     prompt
 }
-
-/// For a group whose VM is on the operations network.
-const OPERATIONS: &str = "运维网络：本群的 VM 接在群友们那些机器（fleet）的 tailnet 上。shell 里 ssh 主机名（比如 ssh h610 uptime）就以 max 登录那台机器，免密 sudo，不用密钥；短名字自动补上 tailnet 的域名，新机器的 host key 第一次连时自动记下。群里谁都能让你在这些机器上做事，你自己判断：改配置、重启服务、删东西之前先在群里说清楚要做什么，拿不准就先问。跑得久的放进远端的 systemd-run 或 tmux，别挂在 ssh 上。";
 
 #[cfg(test)]
 mod tests {
@@ -160,18 +153,17 @@ mod tests {
             "",
             "",
             None,
-            false,
         );
         assert!(prompt.starts_with("你是测试用的人设。\n\n对话场景："));
         assert!(prompt.contains("[reply#id]"));
         // Whatever the persona.
         assert!(prompt.contains("红线"));
-        assert!(system(PERSONA, "", "", "", None, false).contains("鲨鱼女孩"));
+        assert!(system(PERSONA, "", "", "", None).contains("鲨鱼女孩"));
         assert!(prompt.ends_with("：\nhistory(args: {}): Promise<{}>;\n"));
         assert!(!prompt.contains("/api/"));
 
         // The platform's notes follow the tools, and the APIs them.
-        let on = system("人设", "tools;", "在某个平台上。\n", "- x: X", None, false);
+        let on = system("人设", "tools;", "在某个平台上。\n", "- x: X", None);
         assert!(on.contains("tools;\n\n在某个平台上。\n\n宿主替你带 key"));
     }
 }

@@ -10,7 +10,6 @@ mod machine;
 mod owner;
 pub mod ssh;
 
-use std::collections::BTreeSet;
 use std::fmt;
 use std::os::fd::AsFd;
 use std::path::{Path, PathBuf};
@@ -107,8 +106,6 @@ pub struct Vms {
     requests: UnboundedSender<Request>,
     apis: Arc<Apis>,
     idle: Duration,
-    /// The groups on the operations network.
-    operating: Arc<BTreeSet<ConversationId>>,
     /// Ends max's service to the VMs.
     listening: CancellationToken,
 }
@@ -181,14 +178,6 @@ impl Vms {
         let guest = Guest::load(&config.guest)?;
         std::fs::create_dir_all(&config.dir)?;
         let idle = idle(&config);
-        let operating = Arc::new(
-            config
-                .operations
-                .iter()
-                .flat_map(|ops| &ops.conversations)
-                .copied()
-                .collect(),
-        );
         // Where every VM's guest reaches max: the tools, the timeline's
         // rows, the models and the keyed APIs. Whose
         // VM a connection is from is systemd's to say, by the process
@@ -227,7 +216,6 @@ impl Vms {
             requests,
             apis,
             idle,
-            operating,
             listening,
         })
     }
@@ -237,12 +225,6 @@ impl Vms {
     /// here on waits at the socket systemd holds, for the max that comes.
     pub fn stop_listening(&self) {
         self.listening.cancel();
-    }
-
-    /// Whether the conversation's VM is on the operations network.
-    #[must_use]
-    pub fn operates(&self, conversation: ConversationId) -> bool {
-        self.operating.contains(&conversation)
     }
 
     /// How long a VM may go without a command before it is stopped,

@@ -85,7 +85,6 @@ impl Conversation {
                 platform.map_or("", |adapter| adapter.notes()),
                 apis,
                 vms.map(Vms::idle),
-                vms.is_some_and(|vms| vms.operates(self.place.conversation)),
             ),
             window: chosen.window,
             cleared_upto: settings.cleared_upto,

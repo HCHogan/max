@@ -21,10 +21,9 @@ Only declarative configuration applied at boot needs root, all in NixOS:
   restarting it doesn't cut running VMs off.
 - Each tap is its own /30 (out of `10.235.0.0/24` by default): the host is
   `.1`, the guest `.2`, every VM the same MAC. No DHCP: when max starts a
-  VM it puts `max.ip`, `max.gateway`, `max.dns`, the boot's SSH public key
-  `max.key` (and `max.domain` on the operations network) on the guest's
-  kernel command line, and a oneshot in the guest applies them before the
-  network comes up.
+  VM it puts `max.ip`, `max.gateway`, `max.dns` and the boot's SSH public
+  key `max.key` on the guest's kernel command line, and a oneshot in the
+  guest applies them before the network comes up.
 - The taps aren't bridged; routing and nft keep VMs apart. A VM may use
   only its own tap's `.2` as source and reach only public addresses, with
   no IPv6; connections from a VM to the host are always refused, the host
@@ -239,84 +238,24 @@ else:
 `RestrictSUIDSGID` also keeps the guest from setting setuid bits in
 `/work`.
 
-## The operations network
+## Tailnets
 
-The VMs of groups listed in `vm.operations.conversations` (conversation
-ids, so no group numbers in the public repository) can reach the owner's
-fleet over the tailnet. Anyone in such a group can have Max act on the
-fleet, which amounts to root, so it is only for trusted groups. It copies
-the Haskell version's `nix/operations.nix`, on cloud-hypervisor taps.
+The host puts no VM on a tailnet. A guest reaches the internet, which is
+all Tailscale needs, so when someone wants Max on their machines, Max joins
+their tailnet itself: tailscaled as one of its own units (see
+[Resident programs](jobs.md#resident-programs)), its state under `/work`,
+the node let in by whoever runs that tailnet. A tailscaled is on one
+tailnet at a time; for several, Max runs one each in userspace networking,
+which keeps their routes and their `100.64.0.0/10` addresses apart, and
+reaches each by its own socket (`tailscale --socket=… nc`) or proxy.
+Nothing in the image or the prompt is for this.
 
-- **The network**: on the host, a network namespace `maxx-ops` runs its own
-  tailscaled, the tailnet node `maxops` (Headscale user `max@imdomestic.com`).
-  The operations VMs use taps of their own (`maxx-ops0…`, 10.236.0.0/24, 4
-  by default), and the host routes everything from them into the namespace
-  by source (`ip rule from 10.236.0.0/24 lookup 236`). Inside, traffic to
-  the tailnet and the subnets it advertises goes through `tailscale0`, the
-  rest back out through the uplink to the internet, both masqueraded as the
-  namespace's address.
-- **networkd must keep that rule**: when systemd-networkd configures an
-  interface it manages, it deletes any ip rule not in that interface's
-  `.network` file (`ManageForeignRoutingPolicyRules`, on by default, which
-  the owner keeps). Once, after a host restart, it deleted the rule five
-  seconds after `maxx-ops-network` added it, and the operations VMs' traffic
-  fell through to the main table and was refused, unnoticed for a day. So a
-  host using networkd must write the rule into a managed interface's
-  `.network` (on tank, nix-config's `hosts/tank/maxx.nix`, on `30-br-lan`),
-  or the module's assertion refuses to build; `maxx-ops-network` deletes
-  every identical rule and adds it back with `proto static`, the same rule
-  networkd adds, since networkd compares rules with their protocol.
-- **The namespace's resolvers**: its tailscaled can't reach the host's
-  resolver, so it is given `vm.dns` as its /etc/resolv.conf. systemd
-  binds a file at the end of /etc/resolv.conf's links, which on a host
-  with resolved is resolved's stub, and resolved renames a new stub over
-  the old one whenever the host's DNS changes; the mount goes with the old
-  file, and the client is left with the host's 127.0.0.53. It keeps the
-  connection to Headscale it has, and fails only when it must look the
-  server up again. So on such a host a directory with both of resolved's
-  files is bound over `/run/systemd/resolve`, which resolved keeps.
-- **Logging in without keys**: the fleet runs Tailscale SSH, and
-  Headscale's policy admits `group:imdomestic` (which includes `max@`) by
-  tailnet identity. Each machine has a `max` user with passwordless sudo
-  (nix-config's `system/modules/max-operator.nix`). The VM holds no key and
-  can't reach tailscaled's socket or state.
-- **The guest**: the command line adds `max.domain=<tailnet domain>`, and
-  `100.100.100.100` comes first among the resolvers (MagicDNS answers only
-  tailnet names and SERVFAILs the rest, so glibc asks the next).
-  `max-guest` writes `/run/max/ssh_config` from them: short names completed
-  with the domain, `User max`, `BatchMode`,
-  `StrictHostKeyChecking accept-new`, known_hosts in `/work/.ssh` (root's
-  home is `/work`). The guest's ssh_config always `Include`s it; other VMs
-  don't have the file, which ssh ignores. `programs.ssh.systemd-ssh-proxy`
-  is off in the guest: its Include is a store file, which on virtiofs isn't
-  owned by root, so ssh would reject its whole configuration.
-- **What the host enforces**: traffic from the operations taps can only
-  enter the namespace (anything with `oifname != maxx-uplink` is refused),
-  so with the namespace down it never falls through to the host's own
-  tailnet node; traffic leaving the namespace reaches only the internet,
-  not the LAN, other VMs, the host's tailnet or its services; the namespace
-  accepts no new connections from the VMs. An ordinary group mustn't get
-  root on the machine running max or on any VM.
-- **The host, as any other machine**: its own tailnet address is local, so
-  the host would take a VM's packets for it and refuse them at its input
-  chain. With `vm.operations.hostAddress` set, the host sends them to the
-  namespace's end of the uplink instead, which hands them on to that
-  address over the tailnet, and the host's Tailscale SSH lets them in as
-  max, as every other machine does. An operations group then has root on
-  the machine running max as well: its keys, its database, every group's
-  VM.
-- **Slots**: operations groups use only the operations taps, others only
-  the ordinary ones, each class evicting its own by idle time. A changed
-  list takes effect at a VM's next boot.
-- **The prompt** of these groups ends with an "operations network" section:
-  how to ssh, passwordless sudo, saying what it will change before changing
-  it, and long tasks in a remote `systemd-run` or tmux.
-- **State**: the node's state is in `/var/lib/maxx-ops-tailscale`, the
-  Haskell version's `maxops` identity carried over;
-  `vm.operations.authKeyFile` logs in from scratch.
-- Code: `config::Operations`, `Free` in `vm.rs`, the command line in
-  `vm/machine.rs`, `max-guest` in `nix/guest.nix`, `vm.operations` in
-  `nix/module.nix`.
+What Max joins is its conversation's, as everything in its VM is: anyone in
+the conversation can have Max use it, and the tailnet's own ACLs say what
+the node reaches. The host's tailnet is out of a guest's reach, as every
+private address is (see [The host](#the-host)). Why the host keeps no
+tailnet for the VMs is in
+[decisions/max-joins-tailnets-itself.md](../decisions/max-joins-tailnets-itself.md).
 
 ## A guest's calls reach max
 
@@ -366,21 +305,16 @@ with no process between them. Why is in
 
 - `max vm-check` starts a VM as max would and runs checks in it (a
   command, a program calling the tools, the browser, units, background
-  commands and agents); `--operations` uses the operations network's last
-  tap, `--command` runs a command of your own.
+  commands and agents); `--command` runs a command of your own.
 - The flake's `nestedChecks.<system>.vm` runs the module, the taps, nft and
   the hardened service in a NixOS test machine, and `maxx-vm-check` inside
   it, which needs nested KVM: CI's runners can't give it, so it isn't in
   `checks` and is run on tank. It also covers a guest's calls across a
   restart and a stop of max, a model's answer streamed through max, a
   deploy that brings a second image and restarts the VM on it, `maxx-ssh`
-  and the machined registration,
-  and the operations network against a fake tailnet (a veth in
-  `maxx-ops` to 100.64.0.2 in another namespace: the operations VM
-  reaches it and the machine's own tailnet address, an ordinary VM
-  can't and has no ssh_config), with networkd checked to keep the rule
-  and the namespace's client its resolvers when resolved rewrites its
-  stub. On a Mac it runs too slowly to pass; see
+  and the machined registration, and that a VM reaches neither a stand-in
+  for the machine's tailnet (100.64.0.2, in another namespace, which the
+  machine reaches) nor the machine's own address on it. On a Mac it runs too slowly to pass; see
   [research/nested-test-on-mac.md](../research/nested-test-on-mac.md).
 - The guest's jobs have a NixOS test of their own, `.#checks.<system>.jobs`;
   when to run which is in AGENTS.md.

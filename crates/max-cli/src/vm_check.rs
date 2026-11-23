@@ -51,10 +51,9 @@ fn with_provider(mut llm: config::Llm, base_url: &str) -> Result<Upstreams> {
     agents.ok_or_else(|| eyre!("no model for vm-check's agent"))
 }
 
-/// On the last slot, which a running service takes last; or the
-/// operations network's last.
-pub(crate) fn vm_check(path: &Path, command: String, operations: bool) -> Result<()> {
-    let (config, vm) = configured(path, operations)?;
+/// On the last slot, which a running service takes last.
+pub(crate) fn vm_check(path: &Path, command: String) -> Result<()> {
+    let (config, vm) = configured(path)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
@@ -79,23 +78,13 @@ pub(crate) fn vm_check(path: &Path, command: String, operations: bool) -> Result
 
 /// The configuration, and its VMs as vm-check has them: the last slot, and
 /// a directory and units of its own.
-fn configured(path: &Path, operations: bool) -> Result<(Config, config::Vm)> {
+fn configured(path: &Path) -> Result<(Config, config::Vm)> {
     let mut config = Config::load(path)?;
     logging(config.log.level);
     let Some(mut vm) = config.vm.take() else {
         bail!("the configuration has no [vm]");
     };
     vm.slots.drain(..vm.slots.len() - 1);
-    match vm.operations.as_mut() {
-        // vm-check's conversation, 0, is one of its groups.
-        Some(ops) if operations => {
-            ops.slots.drain(..ops.slots.len() - 1);
-            ops.conversations = vec![ConversationId::new(0)];
-        }
-        Some(ops) => ops.conversations.clear(),
-        None if operations => bail!("the configuration has no [vm.operations]"),
-        None => {}
-    }
     // A directory of its own. The VM service boots again the VMs it finds
     // there with units, and a second boot of a VM maxx runs would take
     // that VM's sockets from it (2026-11-03).

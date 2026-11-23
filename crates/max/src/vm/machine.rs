@@ -296,7 +296,6 @@ pub(super) async fn boot(
     guest: &Guest,
     conversation: ConversationId,
     (index, slot): (usize, &Slot),
-    operations: Option<&config::Operations>,
     units: bool,
 ) -> Result<Booted> {
     let machine = Machine::of(config, conversation);
@@ -315,14 +314,7 @@ pub(super) async fn boot(
         .ok_or_else(|| eyre!("an OpenSSH public key without its blob"))?;
     // For the max that attaches to the VM: it runs on after this one.
     secret(&dir.join(KEY), key.to_openssh(LineEnding::LF)?.as_bytes()).await?;
-    // On the operations network, the tailnet's resolvers come first, and
-    // the guest's ssh takes a short host name as one under its domain.
-    let dns: Vec<String> = operations
-        .into_iter()
-        .flat_map(|ops| &ops.dns)
-        .chain(&config.dns)
-        .map(ToString::to_string)
-        .collect();
+    let dns: Vec<String> = config.dns.iter().map(ToString::to_string).collect();
     let mut cmdline = format!(
         "{} max.ip={} max.gateway={} max.dns={} max.key={blob}",
         guest.cmdline,
@@ -330,9 +322,6 @@ pub(super) async fn boot(
         slot.gateway,
         dns.join(","),
     );
-    if let Some(ops) = operations {
-        cmdline.push_str(&format!(" max.domain={}", ops.domain));
-    }
     if let Some(author) = &config.author {
         cmdline.push_str(&format!(" max.git={},{}", author.name, author.email));
     }

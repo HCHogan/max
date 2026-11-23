@@ -11,12 +11,8 @@
 # socket, which is systemd's, so what the guest asks of max while max
 # restarts waits there, and max knows whose VM a call is from by the
 # process that made its connection. A model's answer streams to the guest
-# through max. Then a VM on the
-# operations network reaches a stand-in for the tailnet through its
-# namespace, where an ordinary VM can't, its ip rule having outlived
-# networkd; the machine itself by its tailnet address the same way; and
-# the namespace's client keeps its resolvers when resolved rewrites its
-# stub.
+# through max. Then a VM can't reach a stand-in for the machine's
+# tailnet, which the machine reaches, nor the machine's own address on it.
 {
   pkgs,
   module,
@@ -80,17 +76,6 @@ pkgs.testers.runNixOSTest {
       vm = {
         enable = true;
         slots = 2;
-        # No tailnet here: its client fails to log in, and the test puts a
-        # stand-in where the tailnet would be.
-        operations = {
-          enable = true;
-          slots = 1;
-          loginServer = "http://127.0.0.1:9";
-          domain = "tail.example";
-          # The machine's own tailnet address, as tank's is; the test puts
-          # it on the machine and on the tailnet's stand-in.
-          hostAddress = "100.64.0.9";
-        };
       };
       settings = {
         vm = {
@@ -125,18 +110,9 @@ pkgs.testers.runNixOSTest {
     # A deploy that brings a new image for the VMs.
     specialisation.newer.configuration.services.maxx.vm.guest = newer;
     boot.kernel.sysctl."net.ipv4.ip_forward" = 1;
-    # As on tank: networkd, which removes the ip rules its .network files
-    # don't name, and eth1's names the operations network's; and resolved,
-    # whose stub /etc/resolv.conf leads to.
+    # As on tank: networkd and resolved.
     networking.useNetworkd = true;
     services.resolved.enable = true;
-    systemd.network.networks."40-eth1".routingPolicyRules = [
-      {
-        From = "10.236.0.0/24";
-        Table = 236;
-        Priority = 236;
-      }
-    ];
   };
   testScript = ''
     machine.wait_for_unit("maxx.service")
@@ -342,69 +318,27 @@ pkgs.testers.runNixOSTest {
     machine.copy_from_vm("/var/lib/maxx/vm/check/0/work/.max/browser-check.png")
     print(shown)
 
-    # The operations network. The tailnet's stand-in: a namespace behind a
-    # veth from maxx-ops, where tailscale0 would be.
-    machine.wait_for_unit("maxx-ops-network.service")
-    # Its client keeps the resolvers it was given when resolved renames a
-    # new stub over the one /etc/resolv.conf leads to, as it does when
-    # the host's DNS changes; the host's 127.0.0.53 isn't in the namespace.
-    machine.succeed("test $(readlink -f /etc/resolv.conf) = /run/systemd/resolve/stub-resolv.conf")
-    machine.wait_until_succeeds(
-        "p=$(systemctl show -P MainPID maxx-ops-tailscaled.service) && test $p != 0"
-        + " && i=$(stat -c %i /run/systemd/resolve/stub-resolv.conf)"
-        + " && resolvectl domain eth1 renamed-$RANDOM.test && sleep 1"
-        + " && test $(stat -c %i /run/systemd/resolve/stub-resolv.conf) != $i"
-        + " && nsenter -t $p -m cat /etc/resolv.conf | grep -q '^nameserver 223.5.5.5'"
-        + " && test $(systemctl show -P MainPID maxx-ops-tailscaled.service) = $p",
-        timeout=120,
-    )
-    machine.succeed("systemctl stop maxx-ops-tailscaled.service")
-    # The rule that sends the VMs into the namespace outlives networkd
-    # configuring a link, when it removes rules no .network names (a
-    # stranger's goes), and the namespace's service adding it again.
-    rules = "ip rule | grep -c 'from 10.236.0.0/24 lookup 236 proto static'"
-    for again in ["", "systemctl restart maxx-ops-network.service"]:
-        if again:
-            machine.succeed(again)
-        machine.succeed("ip rule add from 192.0.2.0/24 lookup 237 priority 237")
-        machine.succeed("networkctl reconfigure eth1")
-        machine.wait_until_fails("ip rule | grep -q 'lookup 237'")
-        assert machine.succeed(rules) == "1\n", machine.succeed("ip rule")
+    # The machine's tailnet, as tank's: another machine on it, behind a
+    # veth, and the machine's own address, on a dummy.
     machine.succeed(
         "ip netns add fleet",
-        "ip -n maxx-ops link add fleet0 type veth peer name eth0 netns fleet",
-        "ip -n maxx-ops address add 100.64.0.1/24 dev fleet0",
-        "ip -n maxx-ops link set fleet0 up",
-        "ip -n maxx-ops route add 100.64.0.0/10 dev fleet0",
+        "ip link add fleet0 type veth peer name eth0 netns fleet",
+        "ip address add 100.64.0.1/24 dev fleet0",
+        "ip link set fleet0 up",
         "ip -n fleet address add 100.64.0.2/24 dev eth0",
-        # The machine's own tailnet address: on the machine, as it would be
-        # on its tailscale0, and on the tailnet, where its node answers.
+        "ip -n fleet link set eth0 up",
         "ip link add tailnet0 type dummy",
         "ip address add 100.64.0.9/32 dev tailnet0",
         "ip link set tailnet0 up",
-        "ip -n fleet address add 100.64.0.9/32 dev eth0",
-        "ip -n fleet link set eth0 up",
-        "ip -n fleet link set lo up",
+        "ping -c 1 -W 5 100.64.0.2",
     )
-    machine.succeed("ip rule | grep -q 'from 10.236.0.0/24 lookup 236'")
     check = (
         "systemd-run --wait --collect --pipe -p User=maxx -p Group=maxx -p SupplementaryGroups=kvm "
         + "$(systemctl show -P ExecStart maxx-vm-check.service | grep -o '/nix/store/[^ ;]*/bin/max vm-check --config [^ ;]*') "
     )
-    reached = machine.succeed(
-        check + "--operations --command 'cat /run/max/ssh_config; head -n 1 /etc/resolv.conf;"
-        + " ping -c 1 -W 5 100.64.0.2; ping -c 1 -W 5 100.64.0.9' 2>&1"
-    )
-    assert "HostName %h.tail.example" in reached and "User max" in reached, reached
-    assert "nameserver 100.100.100.100" in reached, reached
-    # Another machine, and this one by its tailnet address, through the
-    # namespace: the machine itself refuses them.
-    assert reached.count(" 1 received") == 2, reached
-    # An ordinary VM can't, nor has the ssh_config.
     refused = machine.succeed(
-        check + "--command 'ls /run/max/ssh_config; ping -c 1 -W 5 100.64.0.2' 2>&1"
+        check + "--command 'ping -c 1 -W 5 100.64.0.2; ping -c 1 -W 5 100.64.0.9' 2>&1"
     )
-    assert "No such file" in refused and "0 received" in refused, refused
-    print(reached)
+    assert refused.count(" 0 received") == 2, refused
   '';
 }

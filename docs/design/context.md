@@ -19,8 +19,8 @@ same line.
 Blocks are ordered by how often they change:
 
 1. **System**: the persona, the rules, the TypeScript declarations of
-   Max's tools, the keyed APIs and, for operations groups, the operations
-   network's section. The same for every turn of a conversation.
+   Max's tools and the keyed APIs. The same for every turn of a
+   conversation.
 2. **Tools**: `run_code` and `shell`, which never change.
 3. **Raw tail**: every message after the tail's mark up to the snapshot
    position `from`, except the first inputs, one per line as
