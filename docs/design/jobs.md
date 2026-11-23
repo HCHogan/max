@@ -508,10 +508,12 @@ marks, what stands in for a picture left out, the agent's own prompt, and what
 ## Asking another conversation
 
 Max in one conversation can ask Max in another, which answers by its own
-rules, with its own memory and people at hand. The asker gets the answer and
-nothing else, never the other conversation's context, memory or files.
-Conversations are otherwise isolated (`history`, the VM and `/work` are each
-one conversation's; only the sticker library is shared). The reasoning behind
+rules, with its own memory and people at hand, and can enter its VM (see
+[Entering another conversation's VM](vm.md#entering-another-conversations-vm)).
+A question gets the answer and nothing else, never the other conversation's
+context; its VM, with its `/work` and its memory file, is the asker's Max's
+as root. Without a link conversations are isolated (`history`, the VM and
+`/work` are each one conversation's; only the sticker library is shared). The reasoning behind
 edges and their direction is in
 [decisions/asking-another-conversation.md](../decisions/asking-another-conversation.md).
 
@@ -519,12 +521,13 @@ edges and their direction is in
   conversation nothing could be enforced, since its members share one VM as
   root and one context. A person's own permission is their private chat's;
   see [decisions/permission-by-conversation.md](../decisions/permission-by-conversation.md).
-- **An edge has a direction.** A→B lets Max in A ask Max in B, not the other
-  way, and what it exposes is B: anyone in A can have A's Max ask, so the edge
-  lets A's members try to talk B's Max into whatever B's Max can do, the
-  [tailnets](vm.md#tailnets) it is on included, and the
-  answering core is the one serving B's own chat, with all its tools. An edge
-  into B is a weaker membership of B, made only where that is acceptable.
+- **An edge has a direction.** A→B lets Max in A ask Max in B and enter B's
+  VM, not the other way, and what it exposes is B: anyone in A can have A's
+  Max do in B's VM what B's Max can, the [tailnets](vm.md#tailnets) it is on
+  and the logins in its browser included, or ask B's Max, whose answering
+  core is the one serving B's own chat, with all its tools. An edge into B is
+  a membership of B's VM, if not of its chat, made only where that is
+  acceptable.
 - **`/link` makes one**, with a code, as `/bind` does: `/link` in A answers
   with a six-digit code, valid 10 minutes and held in memory; `/link <code>`
   in B makes A→B. The side to be asked redeems the code, since it is the one
@@ -537,11 +540,11 @@ edges and their direction is in
 
   | Command | Answer |
   | --- | --- |
-  | `/link` in A | `code issued: 123456 lets Max here ask Max in another conversation, and not the other way`, then `send /link 123456 there (in a group: @maxx /link 123456)` and `valid for 10 minutes, once` |
-  | `/link 123456` in B | `linked: Max in c#7 <title> may ask Max here now, and not the other way`, then `@maxx /unlink c#7 removes it`; or `skipped: Max in c#7 <title> may ask Max here already` |
+  | `/link` in A | `code issued: 123456 lets Max here ask Max in another conversation and enter its VM, and not the other way`, then `send /link 123456 there (in a group: @maxx /link 123456)` and `valid for 10 minutes, once` |
+  | `/link 123456` in B | `linked: Max in c#7 <title> may ask Max here and enter this VM now, and not the other way`, then `@maxx /unlink c#7 removes it`; or `skipped: Max in c#7 <title> may ask Max here already` |
   | `/link 123456` in A itself | `error: that code was issued here; send it in the conversation Max here is to ask` (the code is looked at before it is used, `Codes::peek`, so the slip doesn't use it up) |
   | a wrong, used or expired code | `error: no such code, or it has run out` |
-  | `/unlink c#7` | `unlinked: Max here and Max in c#7 <title> can't ask each other any more`, or `skipped: no link with c#7` |
+  | `/unlink c#7` | `unlinked: Max here and Max in c#7 <title> can't ask each other or enter each other's VM any more`, or `skipped: no link with c#7` |
   | `/status` | `may ask   c#9 · c#12` and `asked by  c#7`, each only when there is someone |
 
   `/link` codes are kept apart from `/bind`'s (`code::Codes`). A isn't told
@@ -583,8 +586,9 @@ edges and their direction is in
   that asked may be gone. The chats' people see nothing unless Max says so.
   What was asked and answered is in the turns' records (`turns.trigger`,
   `turn_outcomes.run`), not where `history` and `maxx events` look.
-- **What Max is told**: the conversations it may ask are listed in the volatile
-  block after the people, under `[能问的会话]`, a line each, read from `links`
+- **What Max is told**: the conversations it may ask and enter are listed in
+  the volatile block after the people, under `[能问的会话]`, a line each, and
+  those that may ask and enter it under `[能进来的会话]`, read from `links`
   when a core starts (none, no block), so the system prompt stays the same for
   every conversation, and an edge made during a core shows from the next
   (`ask` checks the edge when called). The tools' guides say the rest; when to

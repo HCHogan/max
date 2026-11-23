@@ -160,10 +160,12 @@ impl Projection<'_> {
         let mut roster: BTreeSet<PrincipalId> = people.values().copied().collect();
         roster.insert(self.place.me.principal);
         let askable = links::asked(conn, conversation).await?;
+        let askers = links::askers(conn, conversation).await?;
         let volatile = Volatile {
             now: self.now,
             roster: roster_lines(conn, self.place, &roster, project::roster_line).await?,
             askable: askable.iter().map(Peer::to_string).collect(),
+            askers: askers.iter().map(Peer::to_string).collect(),
             memory: self.memory,
             quoted: quoted_text,
             first: first_text,

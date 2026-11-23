@@ -336,7 +336,14 @@ async fn start(config: Config, on: Platforms) -> Result<Running> {
         info!("no model for background agents: pi in a VM has none of max's");
     }
     let vms = match config.vm {
-        Some(vm) => Some(Vms::start(vm, &mut services, signals, agents, apis)?),
+        Some(vm) => Some(Vms::start(
+            vm,
+            &mut services,
+            signals,
+            pool.clone(),
+            agents,
+            apis,
+        )?),
         None => {
             info!("no VMs: the tools can't run");
             None

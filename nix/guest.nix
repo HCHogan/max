@@ -337,11 +337,34 @@ in
   # nothing. Nothing here connects to a vsock or a socket by ssh.
   programs.ssh.systemd-ssh-proxy.enable = false;
 
+  # Another conversation's VM, along a link: ssh c9.max is root in c#9's
+  # VM, in its /work. maxx connect asks max for the way (connect.js), and
+  # carries ssh's bytes along it. That VM's sshd asks for no password or
+  # key, and its host key is made at its boot: what is trusted is the
+  # way, which is max's.
+  programs.ssh.extraConfig = ''
+    Host *.max
+      ProxyCommand ${maxx}/bin/maxx connect %h
+      User root
+      BatchMode yes
+      StrictHostKeyChecking no
+      UserKnownHostsFile /dev/null
+      LogLevel ERROR
+  '';
+
   services.openssh = {
     enable = true;
     openFirewall = false;
     settings = {
-      PermitRootLogin = "prohibit-password";
+      # Root has no password, and sshd takes the empty one ("none"
+      # authentication): what reaches sshd at all is only what reaches
+      # the VM's vsock port 22, which is max, and another VM's ssh that
+      # max lets through along a link (see "Entering another
+      # conversation's VM" in docs/design/vm.md). On the host, only root
+      # and max's user can open the VM's socket.
+      PermitRootLogin = "yes";
+      PasswordAuthentication = true;
+      PermitEmptyPasswords = true;
       # max runs concurrent commands over one connection.
       MaxSessions = 100;
       # sshd runs a command in root's shell, and bash reads ~/.bashrc
@@ -361,8 +384,13 @@ in
     ];
   };
   systemd.services.sshd.wantedBy = lib.mkForce [ ];
-  # Commands run in transient units, not login sessions.
-  security.pam.services.sshd.startSession = lib.mkForce false;
+  security.pam.services.sshd = {
+    # Commands run in transient units, not login sessions.
+    startSession = lib.mkForce false;
+    # Root's empty password, for sshd alone (services.openssh above): a
+    # console login and su still refuse it.
+    allowNullPassword = true;
+  };
 
   nix.settings = {
     experimental-features = [
@@ -392,7 +420,8 @@ in
   users.manageLingering = false;
   users.mutableUsers = false;
   users.allowNoPasswordLogin = true;
-  users.users.root.hashedPassword = "!";
+  # None: sshd takes the empty one (services.openssh), nothing else does.
+  users.users.root.hashedPassword = "";
   # Chinese, for the browser's pages and whatever else draws text.
   fonts.packages = [ pkgs.noto-fonts-cjk-sans ];
   environment.systemPackages = with pkgs; [

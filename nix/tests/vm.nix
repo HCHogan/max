@@ -11,8 +11,9 @@
 # socket, which is systemd's, so what the guest asks of max while max
 # restarts waits there, and max knows whose VM a call is from by the
 # process that made its connection. A model's answer streams to the guest
-# through max. Then a VM can't reach a stand-in for the machine's
-# tailnet, which the machine reaches, nor the machine's own address on it.
+# through max. Along a link, one VM's ssh enters another's. Then a VM
+# can't reach a stand-in for the machine's tailnet, which the machine
+# reaches, nor the machine's own address on it.
 {
   pkgs,
   module,
@@ -204,6 +205,15 @@ pkgs.testers.runNixOSTest {
     machined = machine.succeed("machinectl show maxx-7 -p Unit -p Leader").split()
     assert sorted(machined) == [f"Leader={pid}", "Unit=maxx-vm@7.service"], machined
     assert machine.succeed("maxx-ssh 7 'hostname; id -un; pwd' < /dev/null").split() == ["max", "root", "/work"]
+    # Along a link from 7 to 8, 7's ssh is root in 8's VM, which max
+    # boots for it; and 8's isn't let into 7's.
+    machine.succeed(
+        "runuser -u maxx -- psql -d maxx -v ON_ERROR_STOP=1 -c \"insert into conversations (id, kind) values (7, 'group'), (8, 'group') on conflict do nothing; insert into links (asker_id, asked_id, made_at) values (7, 8, now())\""
+    )
+    machine.succeed("maxx-ssh 7 'echo from 7 | ssh c8.max \"cat > /work/entered\"' < /dev/null")
+    assert machine.succeed("cat /var/lib/maxx/vm/8/work/entered").strip() == "from 7"
+    refused = machine.fail("maxx-ssh 8 'ssh c7.max true' < /dev/null 2>&1")
+    assert "no link from c#8 to c#7" in refused, refused
     # What the VM booted is rooted for as long as it runs.
     machine.succeed("readlink /nix/var/nix/gcroots/per-user/maxx/7 | grep -q max-guest.json")
     # Where the guest reaches the host is a link to max's socket, and max

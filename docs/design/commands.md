@@ -141,5 +141,5 @@ only`. The ranks themselves are in [Permissions](identity.md#permissions).
 - **`/bind`** joins a group to a conversation, new or one of the old
   platform's that the adapter names; on QQ, see
   [The official QQ bot](qq.md#groups-and-private-chats).
-- **`/link`** and **`/unlink`** let one conversation's Max ask another's;
-  see [Asking another conversation](jobs.md#asking-another-conversation).
+- **`/link`** and **`/unlink`** let one conversation's Max ask another's
+  and enter its VM; see [Asking another conversation](jobs.md#asking-another-conversation).

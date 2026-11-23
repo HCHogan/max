@@ -4,8 +4,10 @@
 # host's service (client.js); the guest's own are in local.json: what
 # Node does itself (shown.js, video.js), and `units apply`, which the
 # guest's systemd does, a script here (max-units.sh). Beside the tools,
-# and no tool itself, is `maxx jobs` (max-jobs.sh): what max runs for a
-# call and for a background command, and the hooks of their units.
+# and no tools themselves, are `maxx jobs` (max-jobs.sh): what max runs
+# for a call and for a background command, and the hooks of their units;
+# and `maxx connect` (connect.js), ssh's way into another conversation's
+# VM.
 # bin/maxx runs the scripts itself, and anything else goes to Node, which
 # reads the options.
 #
@@ -65,6 +67,7 @@ pkgs.runCommand "maxx" { meta.mainProgram = "maxx"; } ''
   cp ${./shown.js} $out/lib/max-runner/shown.js
   cp ${./video.js} $out/lib/max-runner/video.js
   cp ${./maxx.js} $out/lib/max-runner/maxx.js
+  cp ${./connect.js} $out/lib/max-runner/connect.js
   mkdir -p $out/bin
   cat > $out/bin/maxx <<EOF
   #!${pkgs.runtimeShell}
@@ -75,6 +78,10 @@ pkgs.runCommand "maxx" { meta.mainProgram = "maxx"; } ''
     "jobs "*)
       shift
       exec ${lib.getExe scripts.jobs} "\$@"
+      ;;
+    "connect "*)
+      shift
+      exec ${pkgs.nodejs}/bin/node $out/lib/max-runner/connect.js "\$@"
       ;;
     # Its words alone, or with a JSON object as a program writes one:
     # there are no options for Node to read.

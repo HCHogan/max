@@ -42,6 +42,8 @@ const KEY: &str = "ssh.key";
 /// cloud-hypervisor names the socket it connects to when the guest
 /// connects to the host's port. A link to max's own socket ([`calls`]).
 const CALLS: &str = "notify.vsock_7777";
+/// The VM's hybrid vsock socket, where max reaches the guest's ports.
+pub(super) const VSOCK: &str = "notify.vsock";
 
 /// What the flake's `guest` package says to boot.
 #[derive(Debug, Deserialize)]
@@ -348,7 +350,7 @@ pub(super) async fn boot(
     machine.run(&["start"]).await?;
 
     let key = Arc::new(key);
-    let socket = dir.join("notify.vsock");
+    let socket = dir.join(VSOCK);
     let deadline = Instant::now() + BOOT;
     loop {
         let error = match ssh::connect(&socket, Arc::clone(&key)).await {
@@ -387,7 +389,7 @@ pub(super) async fn attach(
     let dir = &machine.dir;
     let key = fs::read(dir.join(KEY)).await.wrap_err("reading its key")?;
     let key = Arc::new(PrivateKey::from_openssh(key)?);
-    let connection = match let_in(&dir.join("notify.vsock"), &key, ATTACH).await {
+    let connection = match let_in(&dir.join(VSOCK), &key, ATTACH).await {
         Ok(connection) => connection,
         // It ended while max tried.
         Err(_) if !machine.active().await => return Ok(None),

@@ -53,6 +53,8 @@ struct Running {
     /// of the VM.
     _tasks: Scope,
     work: Arc<Path>,
+    /// Where max reaches the guest's ports.
+    vsock: Arc<Path>,
     lent: Arc<()>,
     idle_since: Instant,
     /// When the guest last said something of Max's runs in it.
@@ -68,6 +70,7 @@ impl Running {
             connection: Arc::clone(&self.connection),
             closes: self.closes.clone(),
             work: Arc::clone(&self.work),
+            vsock: Arc::clone(&self.vsock),
             _lent: Arc::clone(&self.lent),
         }
     }
@@ -460,6 +463,7 @@ impl Service {
                 }
             }
         });
+        let vsock = machine.dir.join(machine::VSOCK).into();
         let mut running = Running {
             slot,
             machine,
@@ -467,6 +471,7 @@ impl Service {
             closes,
             _tasks: tasks,
             work: work(&self.config.dir, conversation).into(),
+            vsock,
             lent: Arc::new(()),
             idle_since: Instant::now(),
             busy: None,

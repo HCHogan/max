@@ -164,6 +164,47 @@ is in [decisions/lifetimes-to-systemd.md](../decisions/lifetimes-to-systemd.md).
   reaches, where cloud-hypervisor's vsock is a multiplexer on a UNIX socket.
   So the way in is `maxx-ssh`.
 
+## Entering another conversation's VM
+
+Along a link from A to B (see
+[Asking another conversation](jobs.md#asking-another-conversation)), Max
+in A may enter B's VM: `ssh c9.max` in A's VM is root in conversation 9's,
+in its `/work`, and `scp` and `sftp` go the same way. What runs there is
+B's: `maxx say` there says in B's chat. Why it is ssh, through max, is in
+[decisions/ssh-along-a-link.md](../decisions/ssh-along-a-link.md).
+
+- **The way is max's.** The guest's ssh_config sends `Host *.max` through
+  `maxx connect %h` (`nix/connect.js`), which asks max at
+  `127.0.0.1:7777` for `/connect/9` as an HTTP upgrade (`Connection:
+  upgrade`, `Upgrade: ssh`). max knows whose VM asks as for every call
+  (see [A guest's calls reach max](#a-guests-calls-reach-max)), reads
+  whether there is a link from it to B (`links::linked`), takes B's VM as
+  a call does, booting it
+  if it isn't running, and opens B's sshd at the VM's vsock port 22 as it
+  does for its own login (`ssh::sshd`). Then it answers 101 and copies the
+  bytes both ways (`vm/enter.rs`). A refusal is plain text, which `maxx
+  connect` prints: 403 `no link from c#7 to c#9`, 503 for a VM that
+  doesn't start.
+- **The guest's sshd asks for nothing.** What reaches it at all is what
+  reaches the VM's vsock port 22: max, and a connection max let through
+  along a link; on the host, only root and max's user can open the vsock
+  socket. So root's password is empty and sshd takes it, as OpenSSH's
+  "none" authentication (`PermitRootLogin`, `PasswordAuthentication`,
+  `PermitEmptyPasswords`, and PAM's `nullok` for sshd alone, so a console
+  login and `su` still refuse it). A's ssh offers nothing and checks no
+  host key, since each VM's is made at its boot. This holds only while
+  vsock is the one way to a guest's sshd: its TCP listener doesn't start,
+  and taps don't reach each other.
+- **One way only.** A→B lets A into B; B gets into A only by a link B→A.
+- **A connection holds B's VM**, as a call does: B isn't stopped as idle
+  while one is open. It ends when either end closes, or as max stops,
+  which ends every one. `/unlink` refuses the next; one that is open runs
+  on until it ends.
+- **What Max is told**: the volatile block's `[能问的会话]` lists the
+  conversations Max may enter as well as ask, and the system prompt's
+  legend says how; `[能进来的会话]` lists those that may ask and enter
+  Max's own.
+
 ## Resources
 
 - **Volumes** are owned by `maxx` and removed only on explicit deletion.
@@ -312,7 +353,8 @@ with no process between them. Why is in
   `checks` and is run on tank. It also covers a guest's calls across a
   restart and a stop of max, a model's answer streamed through max, a
   deploy that brings a second image and restarts the VM on it, `maxx-ssh`
-  and the machined registration, and that a VM reaches neither a stand-in
+  and the machined registration, a VM's ssh into another's along a link and
+  its refusal the other way, and that a VM reaches neither a stand-in
   for the machine's tailnet (100.64.0.2, in another namespace, which the
   machine reaches) nor the machine's own address on it. On a Mac it runs too slowly to pass; see
   [research/nested-test-on-mac.md](../research/nested-test-on-mac.md).

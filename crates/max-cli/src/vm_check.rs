@@ -102,7 +102,15 @@ async fn checked(config: Config, vm: config::Vm, command: String) -> Result<Vec<
     let (signals, heard) = mpsc::unbounded_channel();
     let (base_url, asked) = provider(&mut services).await?;
     let agents = Arc::new(with_provider(config.llm.clone(), &base_url)?);
-    let vms = Vms::start(vm, &mut services, signals, Some(agents), Arc::default())?;
+    let pool = PgPool::connect_lazy(&config.database.url)?;
+    let vms = Vms::start(
+        vm,
+        &mut services,
+        signals,
+        pool,
+        Some(agents),
+        Arc::default(),
+    )?;
     // A store of vm-check's own, for what calls show the model.
     let stored = std::env::temp_dir().join(format!("maxx-vm-check-{}", std::process::id()));
     let store = Arc::new(Store::open(&stored).await?);

@@ -48,6 +48,23 @@ pub type Connection = Handle<Client>;
 ///
 /// If the socket can't be reached, or the guest doesn't take the key.
 pub async fn connect(socket: &Path, key: Arc<PrivateKey>) -> Result<Connection> {
+    let stream = sshd(socket).await?;
+    let config = Arc::new(client::Config::default());
+    let mut connection = client::connect_stream(config, stream, Client).await?;
+    let auth = connection
+        .authenticate_publickey("root", PrivateKeyWithHashAlg::new(key, None))
+        .await?;
+    ensure!(auth.success(), "the guest refused max's key");
+    Ok(connection)
+}
+
+/// The guest's sshd, through the VM's socket: what follows is the
+/// greeting, and what logs in is whoever has this stream.
+///
+/// # Errors
+///
+/// If the socket can't be reached, or the guest's port 22 isn't there.
+pub async fn sshd(socket: &Path) -> Result<UnixStream> {
     let mut stream = UnixStream::connect(socket).await?;
     stream.write_all(b"CONNECT 22\n").await?;
     // A byte at a time: sshd's greeting follows the line.
@@ -65,13 +82,7 @@ pub async fn connect(socket: &Path, key: Arc<PrivateKey>) -> Result<Connection> 
         "the VM's socket answered {:?}",
         String::from_utf8_lossy(&line)
     );
-    let config = Arc::new(client::Config::default());
-    let mut connection = client::connect_stream(config, stream, Client).await?;
-    let auth = connection
-        .authenticate_publickey("root", PrivateKeyWithHashAlg::new(key, None))
-        .await?;
-    ensure!(auth.success(), "the guest refused max's key");
-    Ok(connection)
+    Ok(stream)
 }
 
 /// The channels of calls max let go of before they ended, for the VM's

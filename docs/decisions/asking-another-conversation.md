@@ -56,5 +56,7 @@ say it won't answer, the asked Max answers that. This was step 5 of
 
 ## Cost
 
-An edge into a conversation is a weaker membership of it. A question asked
+An edge into a conversation is a weaker membership of it: of its VM, as
+root, since [Max enters a linked conversation's VM](ssh-along-a-link.md),
+if not of its chat. A question asked
 just before max restarts is forgotten, and the asker isn't told.

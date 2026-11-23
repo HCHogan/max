@@ -1,7 +1,7 @@
 //! `/link` and `/unlink`: the edges along which Max in one conversation
-//! asks Max in another, made by the people the two belong to: a group's
-//! owner, the other person in a private chat, and Max's owners. See
-//! "Asking another conversation" in docs/design/jobs.md.
+//! asks Max in another and enters its VM, made by the people the two
+//! belong to: a group's owner, the other person in a private chat, and
+//! Max's owners. See "Asking another conversation" in docs/design/jobs.md.
 
 use chrono::Utc;
 use color_eyre::eyre::Result;
@@ -23,7 +23,7 @@ impl Conversation {
             let code = codes.issue(here, now);
             let how = command::how(ConversationKind::Group, &self.place.my_name, "/link");
             return Ok(format!(
-                "code issued: {code} lets Max here ask Max in another conversation, and not the other way\n\
+                "code issued: {code} lets Max here ask Max in another conversation and enter its VM, and not the other way\n\
                  send /link {code} there (in a group: {how} {code})\n\
                  valid for 10 minutes, once"
             ));
@@ -48,7 +48,7 @@ impl Conversation {
         let unlink = format!("/unlink c#{}", asker.conversation);
         let how = command::how(self.place.kind, &self.place.my_name, &unlink);
         Ok(format!(
-            "linked: Max in {asker} may ask Max here now, and not the other way\n{how} removes it"
+            "linked: Max in {asker} may ask Max here and enter this VM now, and not the other way\n{how} removes it"
         ))
     }
 
@@ -68,7 +68,7 @@ impl Conversation {
         }
         let other = peer(&mut conn, other).await?;
         Ok(format!(
-            "unlinked: Max here and Max in {other} can't ask each other any more"
+            "unlinked: Max here and Max in {other} can't ask each other or enter each other's VM any more"
         ))
     }
 

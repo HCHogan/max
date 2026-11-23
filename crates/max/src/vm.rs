@@ -5,6 +5,7 @@
 //! programs" in docs/design/jobs.md.
 
 mod about;
+mod enter;
 mod events;
 mod machine;
 mod owner;
@@ -34,6 +35,7 @@ use crate::llm::Upstreams;
 use crate::scope::Scope;
 use crate::service;
 use crate::service::api::Apis;
+use max_db::PgPool;
 
 /// The files `maxx units apply` installs.
 const UNIT_KINDS: [&str; 5] = ["service", "socket", "timer", "path", "target"];
@@ -146,6 +148,8 @@ pub struct Vm {
     connection: Arc<Connection>,
     closes: Closes,
     work: Arc<Path>,
+    /// Where max reaches the guest's ports.
+    vsock: Arc<Path>,
     _lent: Arc<()>,
 }
 
@@ -160,7 +164,8 @@ impl fmt::Debug for Vm {
 
 impl Vms {
     /// Starts the service in `scope`; what programs in the VMs say to Max
-    /// goes to `signals`. What they call besides Max's tools is carried
+    /// goes to `signals`, and which VM may enter which is read from the
+    /// links in `pool`. What they call besides Max's tools is carried
     /// here too: the models, `agents`, if the background agents have one,
     /// and the `apis` the host keeps the keys of.
     ///
@@ -172,6 +177,7 @@ impl Vms {
         config: config::Vm,
         scope: &mut Scope,
         signals: UnboundedSender<Signal>,
+        pool: PgPool,
         agents: Option<Arc<Upstreams>>,
         apis: Arc<Apis>,
     ) -> Result<Self> {
@@ -179,7 +185,8 @@ impl Vms {
         std::fs::create_dir_all(&config.dir)?;
         let idle = idle(&config);
         // Where every VM's guest reaches max: the tools, the timeline's
-        // rows, the models and the keyed APIs. Whose
+        // rows, the models, the keyed APIs and the way into another
+        // conversation's VM. Whose
         // VM a connection is from is systemd's to say, by the process
         // that made it.
         let listener = listen(&config.dir)?;
@@ -196,7 +203,21 @@ impl Vms {
         // end, while the calls it has go on.
         let listening = CancellationToken::new();
         let ends = listening.clone();
-        let carried = service::agents(agents).merge(service::api::router(Arc::clone(&apis)));
+        let (requests, rx) = mpsc::unbounded_channel();
+        let vms = Self {
+            requests,
+            apis,
+            idle,
+            listening,
+        };
+        // A VM's ssh into another's: the connections, joined until they
+        // end, and the route that makes them.
+        let (joins, joining) = mpsc::unbounded_channel();
+        scope.spawn(move |stop| enter::join(joining, stop));
+        let entering = enter::router(pool, vms.clone(), joins);
+        let carried = service::agents(agents)
+            .merge(service::api::router(Arc::clone(&vms.apis)))
+            .merge(entering);
         scope.spawn(move |stop| async move {
             let host = events::router(calls.clone(), ends.clone());
             let app = service::router(calls, host).merge(carried);
@@ -210,14 +231,8 @@ impl Vms {
                 }
             }
         });
-        let (requests, rx) = mpsc::unbounded_channel();
         scope.spawn(move |_| owner::run(config, guest, signals, rx));
-        Ok(Self {
-            requests,
-            apis,
-            idle,
-            listening,
-        })
+        Ok(vms)
     }
 
     /// Takes no more of what the VMs ask, as max begins to stop. What it
@@ -327,6 +342,17 @@ impl Vm {
     #[must_use]
     pub fn connection(&self) -> &Connection {
         &self.connection
+    }
+
+    /// A connection of its own to the guest's sshd, not logged in: for
+    /// another conversation's VM to enter this one.
+    ///
+    /// # Errors
+    ///
+    /// If the VM's socket can't be reached, or the guest's port 22 isn't
+    /// there.
+    pub async fn sshd(&self) -> Result<tokio::net::UnixStream> {
+        ssh::sshd(&self.vsock).await
     }
 
     /// The host's side of the guest's /work.

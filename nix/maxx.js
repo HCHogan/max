@@ -20,8 +20,8 @@
 // status 1. A wrong command line exits with 2. One of the guest's own
 // that a script does, given its words alone or with a JSON object, never
 // comes here: bin/maxx runs the script itself (maxx.nix), which is how
-// this does once it has read the options. Nor does `maxx jobs`, which is
-// max's own and no tool.
+// this does once it has read the options. Nor do `maxx jobs` and `maxx
+// connect`, which are max's own and no tools.
 "use strict";
 
 const { once } = require("node:events");

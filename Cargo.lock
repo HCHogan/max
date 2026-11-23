@@ -1865,6 +1865,8 @@ dependencies = [
  "chrono",
  "color-eyre",
  "futures-util",
+ "hyper",
+ "hyper-util",
  "image",
  "insta",
  "max-core",

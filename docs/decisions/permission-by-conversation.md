@@ -75,7 +75,8 @@ acting on someone's machines) looks as if it wants a check of who asked.
 ## Built on it
 
 - [One conversation's Max can ask another's](asking-another-conversation.md):
-  `/link` and the edges between conversations.
+  `/link` and the edges between conversations, along which
+  [Max enters another conversation's VM](ssh-along-a-link.md).
 - [Max joins tailnets itself](max-joins-tailnets-itself.md): a tailnet Max
   joins is its conversation's.
 - The group management tools, gated by Max's rules and judgement only.
