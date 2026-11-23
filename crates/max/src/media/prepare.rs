@@ -84,7 +84,8 @@ pub fn prepare(bytes: &[u8]) -> ImageResult<Option<Prepared>> {
     }))
 }
 
-/// A picture as PNG, which QQ takes where it doesn't take WebP. Blocking.
+/// A picture as PNG, for a platform that doesn't take its format.
+/// Blocking.
 ///
 /// # Errors
 ///

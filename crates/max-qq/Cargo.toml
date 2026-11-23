@@ -18,7 +18,7 @@ max-db.workspace = true
 qqbot.workspace = true
 serde.workspace = true
 sqlx.workspace = true
-tokio = { workspace = true, features = ["sync", "time"] }
+tokio = { workspace = true, features = ["fs", "rt", "sync", "time"] }
 tokio-util.workspace = true
 tracing.workspace = true
 

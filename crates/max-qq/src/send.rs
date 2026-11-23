@@ -6,12 +6,13 @@
 //! Max is in allows that (机器人主动发言). It keeps within QQ's rates: it
 //! waits, it isn't dropped. It goes as Markdown, and once more as plain
 //! text if that fails. A picture or file is uploaded to the chat first,
-//! unless it was lately; a picture goes with plain text under it, if any,
+//! unless it was lately, a WebP picture as PNG, which QQ takes instead; a picture goes with plain text under it, if any,
 //! and a file alone. An unsend recalls what its row went out or came in
 //! as.
 
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
+use std::path::Path;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -29,11 +30,13 @@ use qqbot::markdown::Markdown;
 use qqbot::message::{Body, Outgoing as Message, Sent};
 use qqbot::{Chat, api};
 use tokio::sync::mpsc::{self, UnboundedReceiver};
+use tokio::task::spawn_blocking;
 use tokio::time::{Instant, sleep_until};
 use tracing::{info, warn};
 
 use super::chat;
 use max::conversation::{Outgoing, Place, Refused};
+use max::media::prepare;
 use max::media::store::Store;
 use max::scope::Scope;
 
@@ -213,7 +216,7 @@ impl Shared {
                 // Under a picture alone: a voice message and a file have
                 // no text.
                 let caption = Some(text.trim().to_owned())
-                    .filter(|text| !text.is_empty() && attached.kind == Kind::Picture);
+                    .filter(|text| !text.is_empty() && attached.kind.is_picture());
                 self.attached(chat, &place.native_id, message.id, attached, caption, quote)
                     .await
             }
@@ -329,9 +332,16 @@ impl Shared {
         let Attached { sha256, kind } = &key.attached;
         // Read as it is uploaded: a file can be hundreds of MiB.
         let path = store.path(sha256);
-        let content = api::Content::Path(&path);
+        let png;
+        let content = match kind {
+            Kind::WebP => {
+                png = as_png(&path).await?;
+                api::Content::Bytes(&png)
+            }
+            _ => api::Content::Path(&path),
+        };
         let media = match kind {
-            Kind::Picture => Media::Picture(content),
+            Kind::Picture | Kind::WebP => Media::Picture(content),
             Kind::Voice => Media::Voice(content),
             Kind::File(name) => Media::File { name, content },
         };
@@ -474,9 +484,25 @@ struct Attached {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum Kind {
     Picture,
+    /// A picture QQ doesn't take as it is.
+    WebP,
     Voice,
     /// Under this name.
     File(String),
+}
+
+impl Kind {
+    fn is_picture(&self) -> bool {
+        matches!(self, Self::Picture | Self::WebP)
+    }
+}
+
+/// A WebP picture in the store, as PNG.
+async fn as_png(path: &Path) -> Result<Vec<u8>, String> {
+    let webp = tokio::fs::read(path).await.map_err(|e| e.to_string())?;
+    let png = spawn_blocking(move || prepare::png(&webp)).await;
+    png.map_err(|e| e.to_string())?
+        .map_err(|e| format!("a WebP picture that doesn't decode: {e}"))
 }
 
 async fn lower(
@@ -521,6 +547,7 @@ async fn lower(
                         Kind::File(meta.name.clone().unwrap_or_else(|| "file".to_owned()))
                     }
                     MediaKind::Audio => Kind::Voice,
+                    _ if meta.mime.as_deref() == Some("image/webp") => Kind::WebP,
                     _ => Kind::Picture,
                 };
                 attached = Some(Attached {

@@ -13,7 +13,7 @@ use tracing::warn;
 use super::tool::Tool;
 use super::work::{beneath_work, read};
 use super::{Context, Failure, internal};
-use crate::media::prepare::{png, prepare};
+use crate::media::prepare::prepare;
 use max_core::limits::PICTURE_BYTES;
 
 pub(super) struct SendImage;
@@ -71,7 +71,7 @@ async fn send(context: &Context, Args { path, caption }: Args) -> Result<Sent, F
     let work = work.clone();
     let read = spawn_blocking(move || read(&work, &relative, PICTURE_BYTES));
     let bytes = read.await.map_err(|_| internal())??;
-    let (bytes, mime) = picture(bytes).await?;
+    let mime = picture(&bytes)?;
     let (prepared, bytes) = spawn_blocking(move || (prepare(&bytes), bytes))
         .await
         .map_err(|_| internal())?;
@@ -128,22 +128,15 @@ async fn send(context: &Context, Args { path, caption }: Args) -> Result<Sent, F
     })
 }
 
-/// The picture as QQ takes it, and its type: PNG, JPEG and GIF as they
-/// are, WebP as PNG.
-async fn picture(bytes: Vec<u8>) -> Result<(Vec<u8>, &'static str), Failure> {
+/// The picture's type: PNG, JPEG, GIF or WebP, kept as they are. A
+/// platform that doesn't take one converts it as it sends it.
+fn picture(bytes: &[u8]) -> Result<&'static str, Failure> {
     let not_one = || Failure::new("not_a_picture", "only PNG, JPEG, GIF and WebP can be sent");
-    match image::guess_format(&bytes).map_err(|_| not_one())? {
-        ImageFormat::Png => Ok((bytes, "image/png")),
-        ImageFormat::Jpeg => Ok((bytes, "image/jpeg")),
-        ImageFormat::Gif => Ok((bytes, "image/gif")),
-        ImageFormat::WebP => {
-            let converted = spawn_blocking(move || png(&bytes))
-                .await
-                .map_err(|_| internal())?;
-            let png =
-                converted.map_err(|_| Failure::new("not_a_picture", "this WebP doesn't decode"))?;
-            Ok((png, "image/png"))
-        }
+    match image::guess_format(bytes).map_err(|_| not_one())? {
+        ImageFormat::Png => Ok("image/png"),
+        ImageFormat::Jpeg => Ok("image/jpeg"),
+        ImageFormat::Gif => Ok("image/gif"),
+        ImageFormat::WebP => Ok("image/webp"),
         _ => Err(not_one()),
     }
 }

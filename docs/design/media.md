@@ -124,8 +124,9 @@ them is in [The official QQ bot](qq.md#outbound).
 - **`send_image({ path, caption? })`** sends a picture made or fetched in
   the VM: a chart, a screenshot, a download. It is read on the host from
   the group's `/work` without following symlinks (see
-  [Reading files](#reading-files)), PNG, JPEG or GIF by their header, WebP
-  turned into PNG, at most 10 MiB (`PICTURE_BYTES`). It is stored, written
+  [Reading files](#reading-files)), PNG, JPEG, GIF or WebP by their header,
+  kept as it is (a platform that doesn't take one converts it as it sends
+  it), at most 10 MiB (`PICTURE_BYTES`). It is stored, written
   to `media`, entered with a `Post`, and once the sender reports back, its
   handle is returned. `caption` is text under the picture, in the same
   message.

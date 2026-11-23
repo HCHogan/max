@@ -218,7 +218,8 @@ like group ids it stays out of the repository.
   `msg_type = 7`. Base64 can be uploaded directly, and a `file_info` lasts a
   day; `content` is a caption under the picture, in the same message, and
   may be left out, so the group sees only the picture, as with a member's
-  sticker. GIFs are sent animated (134 frames and 1.9 MB tested). The
+  sticker. GIFs are sent animated (134 frames and 1.9 MB tested). QQ
+  doesn't take WebP, so the sender uploads a WebP picture as PNG. The
   upload's `raw_url` is empty, so a picture can't be put in Markdown. See
   [Sending images](media.md#sending-images),
   [Sending files](media.md#sending-files) and
