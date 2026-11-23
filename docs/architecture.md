@@ -70,7 +70,7 @@ Tasks are related in only two ways: parent and child (who owns a task and
 shuts it down), and mailboxes (who sends what to whom).
 
 - The root has these scopes, closed in this order at shutdown:
-  - **intake**: the chat's connection (QQ's gateway).
+  - **intake**: each platform's connection, such as QQ's gateway.
   - **conversations**: the conversation table and one actor per
     conversation. The table finds a conversation's actor by its chat, and
     creates the conversation and starts the actor if there is none; groups
@@ -78,7 +78,7 @@ shuts it down), and mailboxes (who sends what to whom).
     [Processing flow](design/actor.md#processing-flow)). An actor stays up
     once started; if it exits on an error, the next message starts it
     again (see [Restarts](design/actor.md#restarts)).
-  - **senders**: the platform sender.
+  - **senders**: each platform's sender.
   - **workers**: the derived-data workers; see
     [The three roles](#the-three-roles).
   - **services**: the VM service and max's service to the VMs.
@@ -112,7 +112,7 @@ Rules:
 1. Bare `tokio::spawn` is forbidden, by clippy's `disallowed-methods`.
    Tasks are created only through a `Scope`.
 2. Side effects are handed to a longer-lived owner. A message is handed to
-   the platform sender after the actor has entered it in the ledger. An
+   its platform's sender after the actor has entered it in the ledger. An
    external resource that can be stopped only through an API is stopped by
    the resident service that holds its connection. See
    [How resources end](design/lifetimes.md#how-resources-end).
@@ -130,8 +130,8 @@ Shutdown order (`max-cli`'s `main.rs`):
    interrupted when it runs out (see [Restarts](design/actor.md#restarts)).
    Then `side` is closed and the actor exits. Inner graces are shorter than
    outer ones.
-3. Drain: the sender finishes sending what was entered in the ledger and
-   records the receipts (15 seconds).
+3. Drain: each platform's sender finishes sending what was entered in the
+   ledger and records the receipts (15 seconds).
 4. The workers and services are closed without waiting: a worker's units
    are redone by the next start's scan, and the VMs, units of their own,
    stay with what runs in them for the next max to attach to.
@@ -301,7 +301,8 @@ and a web of dependencies while blocking nothing.
   model reads. How long a VM may idle comes from `vm.idle_minutes` and reaches
   `prompt::system` through `Vms::idle`. `webread`'s default length is
   written in Python, and a test checks it against the constant. Not there:
-  the ranges of tool arguments (they follow their own schemas), QQ's own
-  limits (two minutes to retract, 30 days of muting), algorithm tuning
+  the ranges of tool arguments (they follow their own schemas), a
+  platform's own limits (QQ's two minutes to retract and 30 days of
+  muting, which its adapter keeps and tells the model), algorithm tuning
   (intent's batch size and waits), and timeouts and retries that only keep
   pipelines from hanging.

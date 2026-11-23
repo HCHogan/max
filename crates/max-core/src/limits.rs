@@ -4,8 +4,9 @@
 //! changes what the model reads too.
 //!
 //! What stays with its own code: a tool's argument ranges (with its
-//! schema), QQ's own limits, the tuning of an algorithm, and timeouts,
-//! retries and grace periods that only keep the plumbing honest.
+//! schema), a platform's own limits (its adapter's), the tuning of an
+//! algorithm, and timeouts, retries and grace periods that only keep the
+//! plumbing honest.
 //!
 //! Some a conversation may set for itself: see [`Setting`].
 

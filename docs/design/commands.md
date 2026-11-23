@@ -136,7 +136,8 @@ only`. The ranks themselves are in [Permissions](identity.md#permissions).
   and remove the context's watermark; **`/config`** shows and sets the
   conversation's limits. See [Commands](context.md#commands) and
   [Settings a conversation sets](config.md#settings-a-conversation-sets).
-- **`/bind`** joins a QQ group to a conversation; see
+- **`/bind`** joins a group to a conversation, new or one of the old
+  platform's that the adapter names; on QQ, see
   [The official QQ bot](qq.md#groups-and-private-chats).
 - **`/link`** and **`/unlink`** let one conversation's Max ask another's;
   see [Asking another conversation](jobs.md#asking-another-conversation).
