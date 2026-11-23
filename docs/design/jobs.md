@@ -294,8 +294,8 @@ tool.
   anywhere). It answers with each unit's state, the last 10 log lines of any
   that failed, the files skipped and why, and what it removed, as one JSON
   object. It takes a lock, so the run at boot and Max's can't collide.
-- At boot `max-units.service` runs it once, after `/work`, the network and
-  nix-daemon are up; when Max changes the directory, it runs `maxx units
+- At boot `max-units.service` runs it once, after `/work`, `/tmp`, the
+  network and nix-daemon are up; when Max changes the directory, it runs `maxx units
   apply` itself. Starting never blocks
   (`--no-block`); it waits at most 5 seconds before reporting.
 - **`max-units.slice`**: `CPUWeight=20` and `IOWeight=20`, yielding to

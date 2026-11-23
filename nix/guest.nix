@@ -305,13 +305,16 @@ in
   # `maxx units apply` when Max changes them. They run in max-units.slice, which
   # yields to commands and can't take all the memory. max.units=off on the
   # command line leaves them out, for a VM they keep from coming up. See
-  # "Resident programs" in docs/design/jobs.md.
+  # "Resident programs" in docs/design/jobs.md. It needs /tmp, which
+  # systemd-tmpfiles-setup makes again in the real root: sysinit.target,
+  # reached in the initrd already, doesn't wait for that.
   systemd.services.max-units = {
     wantedBy = [ "multi-user.target" ];
     after = [
       "max-guest.service"
       "network.target"
       "nix-daemon.socket"
+      "systemd-tmpfiles-setup.service"
     ];
     unitConfig = {
       RequiresMountsFor = "/work";
