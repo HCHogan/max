@@ -45,6 +45,7 @@ Why Max is built the way it is: one file for each decision that was a real trade
 - [The conversation is the finest grain of permission](permission-by-conversation.md)
 - [A platform is an adapter crate behind max's trait](platform-adapters.md)
 - [QQ through the official bot API](official-qq-bot.md)
+- [WeChat through the desktop client](wechat-through-the-desktop-client.md)
 - [No matching people by avatar](no-avatar-matching.md)
 - [Matrix is deferred](matrix-deferred.md)
 - [Features deliberately removed](features-removed.md)

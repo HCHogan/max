@@ -10,9 +10,16 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-chrono.workspace = true
+base64.workspace = true
+chrono = { workspace = true, features = ["clock"] }
+color-eyre.workspace = true
 max.workspace = true
 max-core.workspace = true
 max-db.workspace = true
+serde.workspace = true
 serde_json.workspace = true
+sqlx.workspace = true
+tokio = { workspace = true, features = ["fs", "rt", "sync", "time"] }
+tokio-util.workspace = true
+tracing.workspace = true
 wxdesk-proto.workspace = true

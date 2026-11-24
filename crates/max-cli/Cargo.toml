@@ -21,6 +21,7 @@ max.workspace = true
 max-core.workspace = true
 max-db.workspace = true
 max-qq.workspace = true
+max-wechat.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "signal", "macros", "time", "sync"] }
 tokio-util.workspace = true
