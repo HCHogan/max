@@ -24,13 +24,9 @@ max-core = { path = "crates/max-core" }
 max-db = { path = "crates/max-db" }
 max-llm = { path = "crates/max-llm" }
 max-qq = { path = "crates/max-qq" }
-max-wechat = { path = "crates/max-wechat" }
 # QQ's official bot API, in a repository of its own since 2026-11-03;
 # a new commit there is taken by changing rev here.
 qqbot = { git = "https://github.com/HCHogan/qqbot", rev = "443b3f40a211aa7bab0fbe04195ff9d91135069c" }
-# What WeChat's driver, wxdesk, says over its TCP stream: it drives WeChat
-# for Linux in a VM. A new commit there is taken by changing rev here.
-wxdesk-proto = { git = "https://github.com/HCHogan/wxdesk", rev = "328c0ca79adfdabd502dde3b005ab15031b13077" }
 
 # Postgres for max-db: compile-time checked queries, migrations and
 # #[sqlx::test]. Only the features we use; no TLS, the database is local.

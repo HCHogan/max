@@ -32,9 +32,8 @@ three places. None of that is kept.
 - **No hot reload**: a change means a restart.
 
 The top-level sections: `utc_offset`, `owners_file`, `log`, `database`,
-`llm`, `platforms.qq` and `platforms.wechat` (see [Platforms](platforms.md)),
-`limits`, and the optional `vm`, `media`, `search`, `github` and `api`,
-each described with its feature.
+`llm`, `platforms.qq`, `limits`, and the optional `vm`, `media`, `search`,
+`github` and `api`, each described with its feature.
 
 ## NixOS
 

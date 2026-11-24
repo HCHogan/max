@@ -25,8 +25,9 @@ pub enum Platform {
     /// QQ as the Haskell version saw it through NapCat, by QQ and group
     /// numbers. Only imported history has it; nothing sends there.
     QqLegacy,
-    /// WeChat through its desktop client: groups by name, people by the
-    /// name the client shows them by.
+    /// WeChat through its desktop client, which Max was on for a while:
+    /// groups by name, people by the name the client showed them by. Only
+    /// the rows from then have it; nothing sends there.
     Wechat,
 }
 

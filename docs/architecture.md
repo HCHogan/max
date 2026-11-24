@@ -47,7 +47,6 @@ Non-goals:
 | LLM | in-house, on reqwest and sse-stream | 0.13 / 0.2.6 | Only in `max-llm`. Small structs for the dozen or so fields that are read; everything else stays raw JSON and is passed through. sse-stream only splits the byte stream into events. Why not a client library: [decisions/own-llm-client.md](decisions/own-llm-client.md). |
 | HTTP server | axum | 0.8.9 | max's service to the VMs; see [The guest's calls](design/tools.md#the-guests-calls). |
 | The official QQ bot | [qqbot](https://github.com/HCHogan/qqbot), in-house: tokio-tungstenite (rustls) for the gateway, reqwest for REST | by commit | Official SDKs exist only for Go, Python and Node; see [The official QQ bot](design/qq.md). |
-| WeChat | [wxdesk](https://github.com/HCHogan/wxdesk)'s protocol crate, `wxdesk-proto`, in-house: JSON lines over TCP | by commit | wxdesk drives the desktop client in a VM; see [WeChat through the desktop client](design/wechat.md). |
 | Agent loop | in-house, sans-I/O | — | See [The core](design/core.md). |
 | Tool parameter schemas | schemars | 1.2 | Each tool's JSON Schema is generated from the types of its parameters and result. |
 | codemode runtime | Node | from the pinned nixpkgs | In the group VMs' guest image; the runner and the SDK are in-house. |
@@ -251,14 +250,12 @@ and a web of dependencies while blocking nothing.
 | `max-llm` | The Responses and Chat adapters, stream parsing, reasoning pass-through, multimodal downgrading. | Protocol details in one place, tested alone against recorded responses. |
 | `max` | Configuration, services, the conversation actor and its tasks, what a platform's adapter implements, projection, the workers, the VMs, max's service to them, the tools, commands. It names no platform. | Everything else is business logic and belongs together. |
 | `max-qq` | QQ's adapter: QQ's events as `Inbound`s, the sender with QQ's rates and uploads, the gateway's session across restarts, QQ's rules for recalling and muting, `[platforms.qq]`. | Dependency direction: platform code can't reach into `max`; see [Platforms](design/platforms.md). |
-| `max-wechat` | WeChat's adapter: wxdesk's messages as `Inbound`s, its connection, the sender, `[platforms.wechat]`. | As `max-qq`. |
 | `max-cli` | The `max` binary: the command line, reading the platforms' sections, starting and stopping the rest, and `max vm-check`. | `max-qq` depends on `max`, so what starts both can't be in `max`. |
 
-- Dependencies point only downwards: `qqbot`, `wxdesk-proto` and
-  `max-core` are at the bottom and don't depend on each other; `max-db`
-  and `max-llm` depend on `max-core`; `max` depends on those three;
-  `max-qq` on `max` and `qqbot`, `max-wechat` on `max` and
-  `wxdesk-proto`; and `max-cli` on `max` and the adapters. QQ's markup is `qqbot`'s
+- Dependencies point only downwards: `qqbot` and `max-core` are at the
+  bottom and don't depend on each other; `max-db` and `max-llm` depend on
+  `max-core`; `max` depends on those three; `max-qq` on `max` and
+  `qqbot`; and `max-cli` on `max` and `max-qq`. QQ's markup is `qqbot`'s
   to read and write, and mapping it to Max's types is `max-qq`'s.
 - `max-core`'s dependency allowlist is a CI check: only those four
   libraries may appear in `cargo tree -p max-core -e normal`. CI also

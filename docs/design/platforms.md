@@ -1,8 +1,7 @@
 # Platforms
 
-Max is on chat platforms through adapters, a crate each: QQ's is
-`max-qq` (see [The official QQ bot](qq.md)), and WeChat's `max-wechat`
-(see [WeChat through the desktop client](wechat.md)). An adapter implements
+Max is on chat platforms through adapters, a crate each: QQ's is the only
+one, `max-qq` (see [The official QQ bot](qq.md)). An adapter implements
 `max::adapter::Adapter`, and max uses a platform only through it; a row
 records its platform (`max_core::message::Platform`) and nothing more of
 it. Why the line is drawn here is in

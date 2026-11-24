@@ -2,8 +2,12 @@
 
 Max is on WeChat through the official desktop client for Linux in a VM,
 read through the accessibility bus and driven with synthetic input, by
-wxdesk. The design is in
-[WeChat through the desktop client](../design/wechat.md).
+wxdesk.
+
+Max isn't on WeChat for now: `max-wechat` and its design were removed,
+and the rows from then keep their platform. The design is in the history,
+`git show 8b33f38d:docs/design/wechat.md`, and the adapter in
+`crates/max-wechat` at the same commit.
 
 ## Context
 

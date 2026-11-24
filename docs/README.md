@@ -23,6 +23,6 @@ The design, in reading order:
 8. [vm.md](design/vm.md): the group VMs and how their guests reach max
 9. [jobs.md](design/jobs.md): agents, background commands, resident programs, questions
 10. [commands.md](design/commands.md), [identity.md](design/identity.md), [config.md](design/config.md)
-11. [platforms.md](design/platforms.md), [qq.md](design/qq.md), [wechat.md](design/wechat.md), [media.md](design/media.md)
+11. [platforms.md](design/platforms.md), [qq.md](design/qq.md), [media.md](design/media.md)
 
 How to keep these files is in [AGENTS.md](../AGENTS.md#documentation).

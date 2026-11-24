@@ -37,7 +37,6 @@ use max::vm::Vms;
 use max::worker::Rows;
 use max_core::message::Platform;
 use max_qq::Qq;
-use max_wechat::Wechat;
 
 mod vm_check;
 
@@ -119,15 +118,12 @@ fn run(path: &Path) -> Result<()> {
 #[derive(Debug, Default)]
 struct Platforms {
     qq: Option<max_qq::Config>,
-    wechat: Option<max_wechat::Config>,
 }
 
 impl Platforms {
     /// The platforms configured.
     fn platforms(&self) -> Vec<Platform> {
-        let qq = self.qq.iter().map(|_| Platform::Qq);
-        let wechat = self.wechat.iter().map(|_| Platform::Wechat);
-        qq.chain(wechat).collect()
+        self.qq.iter().map(|_| Platform::Qq).collect()
     }
 }
 
@@ -141,7 +137,6 @@ fn load(path: &Path) -> Result<(Config, Platforms)> {
         let section = toml::Value::Table(section.clone());
         match name.as_str() {
             "qq" => platforms.qq = Some(section.try_into().wrap_err_with(within)?),
-            "wechat" => platforms.wechat = Some(section.try_into().wrap_err_with(within)?),
             _ => bail!("{}: Max can't be on platforms.{name}", path.display()),
         }
     }
@@ -316,11 +311,6 @@ async fn start(config: Config, on: Platforms) -> Result<Running> {
         let qq = Qq::connect(qq, pool.clone(), store.clone());
         let qq = qq.await.wrap_err("checking the QQ credentials")?;
         platforms.insert(qq.platform(), Arc::new(qq));
-    }
-    if let Some(wechat) = &on.wechat {
-        let wechat =
-            Wechat::new(wechat, pool.clone(), store.clone()).wrap_err("reading wxdesk's token")?;
-        platforms.insert(wechat.platform(), Arc::new(wechat));
     }
     let tools = Arc::new(service::Services {
         pool: pool.clone(),
