@@ -22,7 +22,10 @@ first; and `name`, what Max is called on WeChat, as the client shows it.
 
 - WeChat runs as the user `wx` in an Xvnc display of its own, with the
   accessibility bus on (`QT_ACCESSIBILITY=1`). It is logged in once, by
-  scanning a QR code through VNC, and the login lasts in the VM's disk.
+  scanning a QR code through VNC; the login lasts in the VM's disk, but
+  when the client starts again the phone has to confirm it. So a deploy
+  doesn't restart the VM: a new image boots when its service is next
+  started.
   wxdesk's NixOS module runs both; the group's name is in the VM's
   `/var/lib/wxdesk/env`, out of the store and the repository.
 - **Reading**: the open chat's messages are a list whose items are named by
@@ -90,7 +93,5 @@ first; and `name`, what Max is called on WeChat, as the client shows it.
 
 ## Open
 
-- Whether the login survives the VM's reboot without the phone confirming
-  again is untried.
 - A chat that gets more messages between two looks than the window shows
   loses the ones in between.
