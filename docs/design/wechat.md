@@ -61,6 +61,11 @@ first; and `name`, what Max is called on WeChat, as the client shows it.
 - **Chats** are `group:<the group's name>` and `user:<the friend's
   name>`, as the session list shows them: renaming a group makes another
   chat.
+- **A group** is Max's once bound, as any group is: an owner gets a
+  code with `/bind` in a private chat where Max knows them as an owner,
+  such as QQ's, and sends `@maxx /bind <code>` in the group, with an @
+  picked from the client's list. Until then the group's messages are
+  dropped. The sender's name in the group becomes the owner's there.
 - **People** are known by their names, as the client shows them: the
   window shows no other id. A friend's name is the remark the owner gives
   them. Someone who changes their name is someone else to Max. A member
