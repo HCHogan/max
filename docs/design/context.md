@@ -299,24 +299,17 @@ choices are in
     `plan_cache_mode = force_custom_plan`, since after a few executions a
     prepared statement's generic plan can't see a term's length and would
     read the whole index for a two-character term.
-  - **Meaning**: the whole query becomes one vector with the model the
-    sticker library uses (bge-m3, 1024 dimensions; see
-    [Sending images](media.md#sending-images)), waiting at most 5 seconds;
-    without a model, or on error or timeout, the search is literal only,
-    with no error. `max_db::recall` takes the nearest messages by cosine
-    distance, with the same filters, comparing one model's vectors only,
-    as many rows as literal search fetches (3 × limit), and a similarity of
-    at least 0.5 (a guess, still to be tuned) makes a candidate.
-  - **Ranking**, 0 to 1: the literal score is the share of terms matched,
-    the meaning score the cosine similarity, and a row found both ways
-    takes the higher; ties go newest first. Messages are deduplicated by
-    body, keeping the latest. `limit` is 10 by default, at most 30; no
-    paging.
+  - **No search by meaning**: a word written another way (自由～的～光
+    for 自由的光) is found by searching again with shorter or other
+    keywords; see
+    [decisions/keywords-not-vectors.md](../decisions/keywords-not-vectors.md).
+  - **Ranking**: the share of the terms matched, ties newest first; 3 ×
+    limit candidates are fetched. Messages are deduplicated by body,
+    keeping the latest. `limit` is 10 by default, at most 30; no paging.
   - **Results**: `{ results: [{ ref, time, text, read }] }`: `ref` is
     `#id`, `time` like `2026-10-03 周六 14:02`, `text` "name: body" as in
     the tail, pictures with their captions, cut past 160 characters to a
-    span starting 40 before the match (from the start for a row found by
-    meaning alone), with `…` where text was cut. `read` is `{ around: id }`,
+    span starting 40 before the match, with `…` where text was cut. `read` is `{ around: id }`,
     which passed back reads 10 rows on each side.
   - At most 4 searches run at once across all groups, since short terms
     are compared against every row of a conversation; reads don't count.
@@ -333,32 +326,6 @@ choices are in
     forward from the row after the last for a read from `from`, backward
     from the first for a read of the latest. `who` and `limit` carry over.
     An empty range gives one line, `（没有这样的消息）`.
-- **Vectors**: one per chat message, in `message_embeddings`, per row
-  rather than per window: a result is one row anyway and `around` gives
-  its surroundings; the ledger is append-only, so a row's vector never goes
-  stale, where a window's would; and the old database's vectors were per
-  row, imported by id. A message's text for embedding is its `text` without
-  textless handles (`[mention#3]`, `[reply#12]`, `[image]`; the SQL
-  function `recall_text`), skipped if under 4 characters (`在吗`, `好的`:
-  meaning search gets nothing from them, and literal search still finds
-  them), and cut to 2,000 characters. Captions don't get vectors of their
-  own; literal search covers them.
-  - `halfvec(1024)`, not `vector`: about 1.2 GB for 225,000 rows with the
-    HNSW index, against 3 GB, with the same nearest neighbours. Besides
-    HNSW (`halfvec_cosine_ops`) there is a btree on `conversation_id`.
-    Queries set `hnsw.iterative_scan = relaxed_order`, so that when the
-    first rows HNSW fetches are filtered out by conversation or time it
-    looks further; small conversations are fetched by the btree and sorted
-    exactly, which is again why plans are custom.
-- **The recall vector worker** (`max::recall`) gets every row entered and
-  computes those without a vector from the current model, 2 requests at a
-  time, retrying after 10 and then 60 seconds, then giving up. At startup
-  and hourly it sweeps the table, newest first, 16 rows a request, with no
-  retries: the next sweep is the retry. A page that fails is retried row by
-  row once, so one text the service rejects doesn't block everything older;
-  if none succeeds, the service is down, and the worker waits for the next
-  sweep. A change of model recomputes everything. Its usage isn't
-  recorded. With no embedding model there is no worker.
 - The system prompt's line on records says older material isn't in the
   context, and that `history` finds the past by content, or reads it by
   person and time.

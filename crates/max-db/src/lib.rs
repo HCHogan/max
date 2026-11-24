@@ -15,15 +15,14 @@
 )]
 
 pub mod captions;
-pub mod embeddings;
 pub mod ledger;
 pub mod links;
 pub mod media;
 pub mod platform;
 pub mod recall;
+pub mod stickers;
 pub mod turns;
 pub mod usage;
-pub mod vectors;
 
 #[cfg(test)]
 mod testing;
@@ -67,7 +66,6 @@ mod tests {
             tables,
             [
                 "_sqlx_migrations",
-                "caption_embeddings",
                 "conversation_settings",
                 "conversations",
                 "deliveries",
@@ -78,12 +76,10 @@ mod tests {
                 "llm_usage",
                 "media",
                 "media_captions",
-                "message_embeddings",
                 "message_media",
                 "messages",
                 "principals",
                 "summaries",
-                "summary_embeddings",
                 "summary_runs",
                 "turn_outcomes",
                 "turns",

@@ -46,9 +46,6 @@ pub struct Config {
     pub media: Option<Media>,
     /// Without it, `web_search` tells the program there is none.
     pub search: Option<Search>,
-    /// Without it, stickers aren't embedded, and `find_stickers` tells the
-    /// program there is no library.
-    pub embedding: Option<Embedding>,
     /// Max's GitHub account, which the guests' commits are by. Without
     /// it, they have no author set.
     pub github: Option<GitHub>,
@@ -103,31 +100,6 @@ impl Limits {
             );
         }
         Ok(())
-    }
-}
-
-/// The model that turns text into vectors for search by meaning; see
-/// "Sending images". Its vectors must be 1024 long, as the schema's are:
-/// bge-m3's.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Embedding {
-    /// An OpenAI-compatible API's, ending in `/v1`.
-    pub base_url: BaseUrl,
-    /// The model's name, sent with each request and kept with each vector.
-    pub model: String,
-    /// The file its API key is in, if it takes one.
-    pub api_key_file: Option<PathBuf>,
-}
-
-impl Embedding {
-    /// The key, read from its file.
-    ///
-    /// # Errors
-    ///
-    /// If the key's file can't be read.
-    pub fn api_key(&self) -> Result<Option<String>> {
-        self.api_key_file.as_deref().map(secret).transpose()
     }
 }
 

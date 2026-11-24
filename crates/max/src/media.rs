@@ -6,5 +6,4 @@ pub mod fetch;
 pub mod mp4;
 pub mod pictures;
 pub mod prepare;
-pub mod stickers;
 pub mod store;

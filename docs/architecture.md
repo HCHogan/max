@@ -42,7 +42,7 @@ Non-goals:
 | Error handling | color-eyre; thiserror for errors callers match on | 0.6.5 / 2 | Colour is off when output goes to journald. An error says what happened and keeps what that came of as its source; `causes::chain` puts the two together where an error becomes text. |
 | Logging | tracing, tracing-subscriber | 0.1 / 0.3 | To stdout, collected by journald. |
 | Command line, configuration | clap (derive), toml | 4.6 / 1.1 | One source: the TOML file; see [Configuration](design/config.md). |
-| Database | sqlx (postgres, runtime-tokio, macros, migrate, chrono, json), Postgres with the pgvector extension | 0.9.0 | SQL is checked at compile time; the `.sqlx` offline metadata is committed; migrations use sqlx's own mechanism. No TLS: the database is local. Vectors go in as `float4[]` cast to `vector`, so there is no pgvector crate. |
+| Database | sqlx (postgres, runtime-tokio, macros, migrate, chrono, json), Postgres with pg_trgm | 0.9.0 | SQL is checked at compile time; the `.sqlx` offline metadata is committed; migrations use sqlx's own mechanism. No TLS: the database is local. Vectors go in as `float4[]` cast to `vector`, so there is no pgvector crate. |
 | Time | chrono | 0.4 | sqlx 0.9 doesn't support jiff. |
 | LLM | in-house, on reqwest and sse-stream | 0.13 / 0.2.6 | Only in `max-llm`. Small structs for the dozen or so fields that are read; everything else stays raw JSON and is passed through. sse-stream only splits the byte stream into events. Why not a client library: [decisions/own-llm-client.md](decisions/own-llm-client.md). |
 | HTTP server | axum | 0.8.9 | max's service to the VMs; see [The guest's calls](design/tools.md#the-guests-calls). |
@@ -151,8 +151,7 @@ The tasks fall into three kinds, by what they produce:
 
 1. **The main body**: the conversation actor and the I/O tasks it spawns.
    They consume requests and produce replies.
-2. **Derived-data workers**: media download, caption, sticker embedding
-   and recall vectors. Each reads the ledger or another derived table and
+2. **Derived-data workers**: media download and caption. Each reads the ledger or another derived table and
    writes a table of its own, of which it is the only writer. It never
    touches the ledger or the turn records, and its results are read only
    during projection. They share conventions, not a framework (why:
@@ -162,15 +161,13 @@ The tasks fall into three kinds, by what they produce:
      what is done. Whether a unit is done is known only from the
      database; no completion state is kept in memory.
    - **Input.** A ledger-entry notification, or keys an upstream worker
-     hands over (caption gets the images download stored; sticker
-     embedding gets what caption wrote). Anything missed is found by a scan
-     for gaps in the output table at startup, and hourly for download,
-     embedding and recall vectors.
+     hands over (caption gets the images download stored). Anything missed
+     is found by a scan for gaps in the output table at startup.
    - **Each worker's own loop.** Concurrency, retries, timeouts and when
      to run are its constants: one `Scope` for the resident task, one task
      per unit, a `Semaphore` for concurrency, retries as `sleep` within
      the unit's task, and a log line once retries are exhausted. Caption
-     and embedding keep a set of sha256 hashes in progress, so a file
+     keeps a set of sha256 hashes in progress, so a file
      arriving again doesn't start a second model call; losing the set
      costs only doing the work once more.
    - **Shutdown.** Units in progress are dropped, their transactions roll
@@ -183,10 +180,7 @@ The tasks fall into three kinds, by what they produce:
    Each worker's policy: download runs 4 at a time and retries after 1 and
    then 4 seconds (see [Media](design/media.md)); caption runs 2 at a time,
    allows 2 minutes a call, retries once a minute later and then writes an
-   empty caption; sticker embedding and recall vectors run 2 at a time and
-   retry after 10 and then 60 seconds (see
-   [Sending images](design/media.md#sending-images) and
-   [Recall](design/context.md#recall)). Not wanted: persistent queues,
+   empty caption. Not wanted: persistent queues,
    failure tables, retry-count columns, leases, `LISTEN/NOTIFY` and policy
    knobs in the configuration.
 3. **Trigger sources**: what they produce isn't a table but input, all of

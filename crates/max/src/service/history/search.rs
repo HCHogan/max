@@ -1,43 +1,31 @@
 //! `history` with a query: where in this conversation's history its terms
-//! are, among its rows (with their pictures' and stickers' captions), and
-//! what there is near it by meaning, under the read's filters; each result
-//! says how `history` reads it in context. A term is found as written,
-//! ignoring case. See "Recall".
+//! are, among its rows (with their pictures' and stickers' captions), under
+//! the read's filters; each result says how `history` reads it in context.
+//! See "Recall".
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
-use std::hash::Hash;
-use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use max_core::ids::MessageId;
 use max_core::render::{Render, moment};
-use max_db::recall::{self, Near, Query};
+use max_db::recall::{self, Query};
 use max_db::{PgConnection, ledger};
 use schemars::JsonSchema;
 use serde::Serialize;
 use tokio::sync::Semaphore;
-use tokio::time::timeout;
-use tracing::debug;
 
 use super::Filters;
 use crate::conversation::project::people;
+use crate::service::keywords::{self, TERM_CHARS, fold, pattern};
 use crate::service::{Context, Failure};
 
 pub(super) const DEFAULT: usize = 10;
 pub(super) const MOST: usize = 30;
-pub(super) const MOST_TERMS: usize = 8;
-const TERM_CHARS: usize = 50;
 /// Characters of a result's text, around its first hit when longer.
 const SNIPPET: usize = 160;
 /// Of those, how many come before the hit.
 const LEAD: usize = 40;
-/// How long the query's vector is waited for; without it, the search goes
-/// by the words alone.
-const MEANING_WAIT: Duration = Duration::from_secs(5);
-/// The least cosine similarity of what is found by meaning alone: a
-/// guess, still to be tuned on real searches.
-const NEAR: f32 = 0.5;
 
 /// Searches at once, from every conversation: one with a short term reads
 /// the whole conversation.
@@ -51,8 +39,7 @@ pub(crate) struct Hit {
     time: String,
     text: String,
     read: Around,
-    /// From 0 to 1: the share of the terms it has, or how near it is by
-    /// meaning, whichever is higher.
+    /// From 0 to 1: the share of the terms it has.
     #[serde(skip)]
     score: f32,
     #[serde(skip)]
@@ -69,20 +56,6 @@ pub(super) struct Around {
     around: i64,
 }
 
-/// The query's vector, and the model whose vectors it is compared with.
-struct Meaning<'a> {
-    model: &'a str,
-    vector: Vec<f32>,
-}
-
-/// A candidate by the words, by meaning, or both: the terms it has, and
-/// the higher of its two scores.
-#[derive(Default)]
-struct Candidate {
-    has: Vec<usize>,
-    score: f32,
-}
-
 /// The best `limit` results for `query`, ten by default.
 pub(super) async fn found(
     context: &Context,
@@ -90,10 +63,9 @@ pub(super) async fn found(
     filters: &Filters,
     limit: Option<usize>,
 ) -> Result<Vec<Hit>, Failure> {
-    let terms = terms(query)?;
+    let terms = keywords::terms("history", query)?;
     let limit = limit.unwrap_or(DEFAULT).min(MOST);
     let patterns: Vec<String> = terms.iter().map(|term| pattern(term)).collect();
-    let meaning = meaning(context, query).await;
 
     let _slot = SLOTS.acquire().await;
     let mut conn = context.services.pool.acquire().await?;
@@ -108,68 +80,20 @@ pub(super) async fn found(
         // Room for the copies of one message that count as one.
         limit: i64::try_from(limit * 3).unwrap_or(i64::MAX),
     };
-    let meaning = meaning.as_ref();
-    let hits = row_hits(&mut conn, context, &query, &terms, meaning).await?;
+    let hits = row_hits(&mut conn, context, &query, &terms).await?;
     Ok(choose(hits, limit))
 }
 
-/// The query's vector, when there is an embedding model and it answers in
-/// time.
-async fn meaning<'a>(context: &'a Context, query: &str) -> Option<Meaning<'a>> {
-    let embedder = context.services.embedder.as_ref()?;
-    match timeout(MEANING_WAIT, embedder.one(query)).await {
-        Ok(Ok(vector)) => Some(Meaning {
-            model: &embedder.model,
-            vector,
-        }),
-        Ok(Err(error)) => {
-            debug!("history searches by the words alone: {error}");
-            None
-        }
-        Err(_) => {
-            debug!("history searches by the words alone: no vector in time");
-            None
-        }
-    }
-}
-
-/// The candidates by the words and by meaning as one. By the words, a
-/// candidate scores the share of the terms it has; by meaning, its
-/// similarity, if it is near enough.
-fn merged<T: Eq + Hash>(
-    words: Vec<(T, Vec<usize>)>,
-    near: Vec<Near<T>>,
-    terms: &[String],
-) -> HashMap<T, Candidate> {
-    let mut candidates = HashMap::new();
-    for (id, has) in words {
-        let score = has.len() as f32 / terms.len().max(1) as f32;
-        candidates.insert(id, Candidate { has, score });
-    }
-    for (id, similarity) in near {
-        if similarity >= NEAR {
-            let candidate = candidates.entry(id).or_insert_with(Candidate::default);
-            candidate.score = candidate.score.max(similarity);
-        }
-    }
-    candidates
-}
-
-/// The rows the terms are in, or near the query by meaning, as their lines
-/// show them, captions and all.
+/// The rows the terms are in, as their lines show them, captions and
+/// all.
 async fn row_hits(
     conn: &mut PgConnection,
     context: &Context,
     query: &Query<'_>,
     terms: &[String],
-    meaning: Option<&Meaning<'_>>,
 ) -> Result<Vec<Hit>, Failure> {
-    let words = recall::messages(conn, query).await?;
-    let near = match meaning {
-        Some(meaning) => recall::near_messages(conn, query, meaning.model, &meaning.vector).await?,
-        None => Vec::new(),
-    };
-    let found = merged(words, near, terms);
+    let found: HashMap<MessageId, Vec<usize>> =
+        recall::messages(conn, query).await?.into_iter().collect();
     let ids: Vec<MessageId> = found.keys().copied().collect();
     let rows = ledger::picked(conn, query.conversation, &ids).await?;
     let people = people(conn, rows.iter().map(|row| &row.message), &context.place).await?;
@@ -180,7 +104,7 @@ async fn row_hits(
     let mut hits = Vec::new();
     for row in &rows {
         let message = &row.message;
-        let Some(found) = found.get(&message.id) else {
+        let Some(has) = found.get(&message.id) else {
             continue;
         };
         let body = render.body(message);
@@ -188,44 +112,16 @@ async fn row_hits(
         hits.push(Hit {
             handle: format!("#{}", message.id),
             time: moment(message.at, context.services.offset),
-            text: format!("{name}：{}", snippet(&body, &chosen(terms, &found.has))),
+            text: format!("{name}：{}", snippet(&body, &chosen(terms, has))),
             read: Around {
                 around: message.id.get(),
             },
-            score: found.score,
+            score: has.len() as f32 / terms.len() as f32,
             at: message.at,
             key: body,
         });
     }
     Ok(hits)
-}
-
-/// The query's terms, lowercased as the database does: words between
-/// spaces, each once.
-fn terms(query: &str) -> Result<Vec<String>, Failure> {
-    let mut terms: Vec<String> = Vec::new();
-    for word in query.split_whitespace() {
-        let word: String = fold(word).into_iter().collect();
-        if word.chars().count() > TERM_CHARS {
-            return Err(Failure::new(
-                "bad_arguments",
-                format!("a keyword is at most {TERM_CHARS} characters"),
-            ));
-        }
-        if !terms.contains(&word) {
-            terms.push(word);
-        }
-    }
-    if terms.is_empty() {
-        return Err(Failure::new("bad_arguments", "history: query is empty"));
-    }
-    if terms.len() > MOST_TERMS {
-        return Err(Failure::new(
-            "bad_arguments",
-            format!("at most {MOST_TERMS} keywords"),
-        ));
-    }
-    Ok(terms)
 }
 
 /// The pattern for a sender's name that has `who` in it.
@@ -238,27 +134,6 @@ pub(super) fn sender(who: &str) -> Result<String, Failure> {
         ));
     }
     Ok(pattern(&who))
-}
-
-/// `text` lowercased a character at a time, as Postgres's `lower` does, so
-/// positions stay put.
-fn fold(text: &str) -> Vec<char> {
-    text.chars()
-        .map(|c| c.to_lowercase().next().unwrap_or(c))
-        .collect()
-}
-
-/// A LIKE pattern that finds `term` anywhere.
-fn pattern(term: &str) -> String {
-    let mut out = String::from("%");
-    for c in term.chars() {
-        if matches!(c, '%' | '_' | '\\') {
-            out.push('\\');
-        }
-        out.push(c);
-    }
-    out.push('%');
-    out
 }
 
 /// The terms at `indexes`.

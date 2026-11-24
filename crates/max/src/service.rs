@@ -8,6 +8,7 @@ mod find_stickers;
 mod forward;
 mod history;
 mod http;
+mod keywords;
 mod mute_member;
 mod program;
 mod recall_message;
@@ -39,7 +40,6 @@ use tracing::warn;
 
 use crate::adapter::Adapters;
 use crate::conversation::{Place, Poster};
-use crate::embedding::Embedder;
 use crate::media::store::Store;
 use crate::search::Search;
 
@@ -55,8 +55,6 @@ pub struct Services {
     pub search: Option<Arc<Search>>,
     /// The content store, for pictures and files sent.
     pub store: Option<Arc<Store>>,
-    /// For `find_stickers`, and `history` by meaning.
-    pub embedder: Option<Arc<Embedder>>,
     /// The platforms Max is on, for what a tool asks of one.
     pub platforms: Adapters,
 }
@@ -68,7 +66,6 @@ impl fmt::Debug for Services {
             .field("offset", &self.offset)
             .field("search", &self.search)
             .field("store", &self.store)
-            .field("embedder", &self.embedder)
             .field("platforms", &self.platforms.keys().collect::<Vec<_>>())
             .finish_non_exhaustive()
     }
@@ -106,7 +103,6 @@ impl Services {
             offset: crate::conversation::testing::offset(),
             search: None,
             store: None,
-            embedder: None,
             platforms: Adapters::new(),
         }
     }

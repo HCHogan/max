@@ -33,8 +33,8 @@ three places. None of that is kept.
 
 The top-level sections: `utc_offset`, `owners_file`, `log`, `database`,
 `llm`, `platforms.qq` and `platforms.wechat` (see [Platforms](platforms.md)),
-`limits`, and the optional `vm`, `media`, `search`,
-`embedding`, `github` and `api`, each described with its feature.
+`limits`, and the optional `vm`, `media`, `search`, `github` and `api`,
+each described with its feature.
 
 ## NixOS
 

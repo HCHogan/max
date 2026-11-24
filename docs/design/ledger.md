@@ -389,11 +389,8 @@ read and migrations undoing one another.
   build sets `SQLX_OFFLINE=true`. After changing a migration or a query,
   run `scripts/prepare-queries`, which rebuilds the development database
   and regenerates it.
-- Vectors use pgvector, which isn't a trusted extension, and `maxx` isn't a
-  superuser: the NixOS module creates it as postgres in
-  `postgresql-setup`, and the migration's `create extension if not exists
-  vector` does nothing. A database dropped and recreated needs it again;
-  restarting `postgresql-setup` is enough.
+- `maxx` isn't a superuser, and the migrations need none: the extensions
+  they create, pg_trgm and btree_gist, are trusted ones.
 
 ### Tables
 
@@ -409,13 +406,11 @@ read and migrations undoing one another.
 | Media | `media` | By sha256: MIME type, size, width and height, when first seen, and the sha256 of the version for the model. The kind is in the message's node, since the same bytes may be a picture in one message and a sticker in another. See [Media](media.md) |
 |  | `message_media` | Message, ordinal, sha256. An inbound node holds a download URL, and the file is recorded here once downloaded; a picture a program handed over (`tools.show()`) has its sha256 in the node |
 |  | `media_captions` | One row per sha256, written once: the prompt used (image or sticker), the text (empty if the model gave up), `skip` (pictures that don't look like stickers, kept out of the sticker library) and the model (empty for imported captions). Only the caption worker writes it. Queries that read rows fill captions into media nodes without a description. See [Media](media.md) |
-|  | `caption_embeddings` | One row per sha256: a sticker caption's `vector(1024)`, its model, time. Only the embedding worker writes it; after a change of model it recomputes them all, and search compares one model's vectors only. See [Sending images](media.md#sending-images) |
-|  | `message_embeddings` | One row per message: conversation, a `halfvec(1024)`, its model, time. Only the recall vector worker writes it, recomputing all after a change of model. See [Recall](context.md#recall) |
 | Turn | `turns`, `turn_outcomes` | See [Turn records](#turn-records). `t#N` is `turns.ordinal`, counted from 1 in each conversation |
 |  | `llm_usage` | Turn (nullable), purpose (turn, intent, caption), provider, model, effort, tokens (bigint, with cache hits and reasoning tokens), `cost_micros` (millionths of a US dollar, null while the price is unknown, as it so far always is: `/status` works the cost out from the tokens and the configured `price`), and three timings: `first_ms` to the first output of any kind, `took_ms` to the end, and `quiet_ms`, the longest stretch with nothing arriving, which is what `stream_idle_timeout_secs` cuts off; check it before lowering that timeout. Turns and `complete`'s calls (intent, caption) are recorded; a background agent's calls aren't (see [Background agents](jobs.md#background-agents)) |
 
 Tables kept with their rows but no longer read or written:
-`summaries`, `summary_runs` and `summary_embeddings`, from the historian
+`summaries` and `summary_runs`, from the historian
 ([decisions/no-summaries.md](../decisions/no-summaries.md)),
 and `llm_usage` rows of purpose `historian`. `llm_usage` rows of purpose
 `job`, a background agent's calls, are no longer written

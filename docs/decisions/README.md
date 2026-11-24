@@ -10,7 +10,8 @@ Why Max is built the way it is: one file for each decision that was a real trade
 - [Memory is a file Max writes itself](memory-is-a-file.md)
 - [Max tidies its own memory](max-tidies-its-own-memory.md)
 - [No historian, no summaries](no-summaries.md)
-- [One tool for recall, on trigrams and half-precision vectors](history-tool.md)
+- [One tool for recall, on trigrams and half-precision vectors](history-tool.md) (its vectors removed by the one below)
+- [Search goes by keywords, without vectors](keywords-not-vectors.md)
 - [Rare cases fail plainly](rare-cases-fail-plainly.md)
 
 ## Tools and programs

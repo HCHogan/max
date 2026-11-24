@@ -1,9 +1,7 @@
 //! Recall: where in a conversation the terms of a `history` search are. A
 //! term is found as a substring of lowercased text: a row's rendered text
-//! or the captions of its pictures and stickers. The rows' vectors find
-//! more, near the query's by meaning. These find the candidates; ranking
-//! them is the caller's.
-//! See "Recall".
+//! or the captions of its pictures and stickers. This finds the
+//! candidates; ranking them is the caller's. See "Recall".
 
 use max_core::ids::{ConversationId, MessageId};
 use sqlx::{Connection, PgConnection};
@@ -102,59 +100,6 @@ pub async fn messages(
     Ok(rows
         .into_iter()
         .map(|row| (MessageId::new(row.id), indexes(&row.terms)))
-        .collect())
-}
-
-/// A candidate by meaning, with the cosine similarity of its vector to the
-/// query's: 1 the same, 0 nothing in common.
-pub type Near<T> = (T, f32);
-
-/// The chat rows whose vectors by `model` are nearest `vector`, under the
-/// filters of [`messages`] but the patterns: up to `query.limit`, about
-/// the nearest first. The HNSW index alone would stop at 40 candidates,
-/// before the filters; it is told to go on until there are enough. In a
-/// small conversation the planner goes through its rows instead, so the
-/// plan is made with the conversation in hand.
-pub async fn near_messages(
-    conn: &mut PgConnection,
-    query: &Query<'_>,
-    model: &str,
-    vector: &[f32],
-) -> sqlx::Result<Vec<Near<MessageId>>> {
-    let mut tx = conn.begin().await?;
-    sqlx::query!("set local plan_cache_mode = force_custom_plan")
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query!("set local hnsw.iterative_scan = relaxed_order")
-        .execute(&mut *tx)
-        .await?;
-    let rows = sqlx::query!(
-        r#"
-        select e.message_id as "id!",
-               (1 - (e.embedding <=> $3::float4[]::halfvec))::float4 as "similarity!"
-        from message_embeddings e join messages m on m.id = e.message_id
-        where e.conversation_id = $1 and e.model = $2 and m.kind = 'chat'
-          and ($4::bigint is null or m.id >= $4)
-          and ($5::bigint is null or m.id < $5)
-          and ($7::text is null or lower(m.sender_name) like $7)
-          and not exists (select from messages u where u.target_id = m.id and u.event = 'unsend')
-        order by e.embedding <=> $3::float4[]::halfvec
-        limit $6
-        "#,
-        query.conversation.get(),
-        model,
-        vector as &[f32],
-        query.from.map(MessageId::get),
-        query.until.map(MessageId::get),
-        query.limit,
-        query.sender
-    )
-    .fetch_all(&mut *tx)
-    .await?;
-    tx.commit().await?;
-    Ok(rows
-        .into_iter()
-        .map(|row| (MessageId::new(row.id), row.similarity))
         .collect())
 }
 

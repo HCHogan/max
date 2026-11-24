@@ -199,7 +199,7 @@
                 # reqwest loads the system's CA certificates when a client
                 # is built, even one that only talks to a local server.
                 nativeBuildInputs = [
-                  (pkgs.postgresql_17.withPackages (p: [ p.pgvector ]))
+                  pkgs.postgresql_17
                   pkgs.cacert
                   # Run the guest's runner and webread.
                   pkgs.nodejs

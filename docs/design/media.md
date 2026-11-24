@@ -131,31 +131,19 @@ them is in [The official QQ bot](qq.md#outbound).
   handle is returned. `caption` is text under the picture, in the same
   message.
 - **`find_stickers({ query, limit? })`** searches the sticker library by
-  meaning and sends nothing: `{ stickers: { handle, description }[] }`,
+  keywords and sends nothing: `{ stickers: { handle, description }[] }`,
   `limit` 1 to 10, 5 by default; the model picks one and writes its handle.
   The library is every sticker seen in any conversation (node kind sticker),
   by sha256, its handle the latest message where it appeared as a sticker.
   Stickers captioned SKIP or empty are left out, as are those captioned with
   the picture prompt (first seen as a picture).
-  - The embedding model is bge-m3 (1024 dimensions), served by Ollama on
-    h610. `[embedding]` has `base_url` (OpenAI-compatible, ending in
-    `/v1`), `model` and an optional `api_key_file`; without it there is no
-    embedding worker and `find_stickers` answers `unavailable`. The
-    dimension is the table's, not an option: a vector of another length is
-    an error.
-  - The vectors are in `caption_embeddings`, one per file with its model,
-    and searches compare the current model's only.
-  - **The embedding worker** (`media/stickers.rs`) gets each sticker
-    caption the caption worker writes (not SKIP, not empty), and at startup
-    and hourly sweeps for captions without a vector from the current model,
-    so a change of model recomputes everything. A file is a unit, 2 at a
-    time, 30 seconds a request, retried after 10 and 60 seconds, then left
-    for the next sweep. Its usage isn't recorded.
-  - A query becomes a vector and the nearest stickers by cosine distance
-    come back; a failure answers `unavailable`, without retry. There is no
-    distance threshold: relevant and irrelevant results overlap (relevant
-    ones mostly at 0.31 to 0.45, while the nearest for "今天天气怎么样" was at
-    0.44), so the model chooses by reading the descriptions.
+  - `query` is keywords as `history` takes them (see
+    [Recall](context.md#recall)): at most 8, each a substring of the
+    lowercased caption. The guide asks for a few short ones that say the
+    same thing in different words (`无语 无奈 翻白眼`), since a caption
+    names the feeling, what is in the picture and the words on it.
+  - Stickers with more of the keywords come first, then those seen last.
+    The captions' trigram index serves it, as it does `history`.
 - **The sender** uploads for a `file_info` (base64 up to 5 MiB, in parts
   past it) and sends `msg_type = 7`; only `send_image` carries `content`.
   `file_info` is cached in memory by (endpoint, sha256, file name) until an

@@ -7,7 +7,7 @@
 [![CI](https://github.com/HCHogan/max/actions/workflows/ci.yml/badge.svg)](https://github.com/HCHogan/max/actions/workflows/ci.yml)
 [![Rust](https://img.shields.io/badge/body-Rust%202024-000000.svg?logo=rust)](rust-toolchain.toml)
 [![NixOS](https://img.shields.io/badge/VMs-NixOS%20on%20cloud--hypervisor-5277C3.svg?logo=nixos&logoColor=white)](nix/guest.nix)
-[![Postgres](https://img.shields.io/badge/ledger-Postgres%20%2B%20pgvector-4169E1.svg?logo=postgresql&logoColor=white)](crates/max-db)
+[![Postgres](https://img.shields.io/badge/ledger-Postgres-4169E1.svg?logo=postgresql&logoColor=white)](crates/max-db)
 [![License](https://img.shields.io/badge/license-MIT-000000.svg)](LICENSE)
 
 </div>
@@ -28,7 +28,7 @@ wrote this one myself.
 QQ official bot gateway
   │  every message, sticker, picture and recall lands in one ledger
   ▼
-PostgreSQL + pgvector (the ledger)
+PostgreSQL (the ledger)
   ├──▶ intent       an @ or a reply wakes me; a small model reads the rest
   │                 of the chatter in batches and decides whether to
   ├──▶ projection   the chat, laid out so the prompt's prefix stays
@@ -104,7 +104,7 @@ what says the same thing and drop what has expired.
 | Path | What's inside |
 |---|---|
 | `crates/max-core` | The state machines for turns and intent, the projection, the reply parser (`[reply#id]`, `[sticker#id]`, …), and the prompt. |
-| `crates/max-db` | The schema, migrations and compile-time checked `sqlx` queries over Postgres and `pgvector`. |
+| `crates/max-db` | The schema, migrations and compile-time checked `sqlx` queries over Postgres. |
 | `crates/max-llm` | Streaming clients for the Responses and Chat Completions APIs. |
 | `crates/max` | Conversation actors, the intent classifier, the VMs, my tools and the service a VM calls them through, picture captions. |
 | `nix/guest.nix` | The NixOS guest I live in (`runner.js`, the `maxx` CLI, `webread`, Chromium). |
@@ -119,7 +119,7 @@ You need Nix with flakes enabled. Everything else is pinned.
 
 ```sh
 direnv allow                         # or: nix develop --impure
-PC_TUI_ENABLED=0 devenv up           # Postgres + pgvector on 127.0.0.1:5434; leave it running
+PC_TUI_ENABLED=0 devenv up           # Postgres on 127.0.0.1:5434; leave it running
 cargo nextest run
 ```
 

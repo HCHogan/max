@@ -131,7 +131,7 @@ whatever is stuck inside it.
 | A question to another conversation | none: it lasts as long as the core that read it, whose idle window is its only clock (see [Asking another conversation](jobs.md#asking-another-conversation)) | Policy. |
 | Wait, then escalate | as needed | Policy: a `close` that gives a command time to exit by itself first, say. |
 | Waiting tables in resident services | once per table | No leak: the sender's table of messages awaiting receipts, say. Nothing outside a resident service cancels it. |
-| Derived-data workers | in each worker, as its constants: download relies on the HTTP client's 10-second connect and 60-second overall timeouts; caption allows 2 minutes a call; embedding 30 seconds a request | No hang; retries and rescans are policy. |
+| Derived-data workers | in each worker, as its constants: download relies on the HTTP client's 10-second connect and 60-second overall timeouts; caption allows 2 minutes a call | No hang; retries and rescans are policy. |
 | Model calls outside a turn | once, in `Chosen::complete`: classification and caption call through it; it fetches the whole text and records usage (a failure to record is only logged, as it is for turns). The caller gives the limit (60 seconds for classification, 2 minutes for caption), and there are no retries | No hang. |
 | Retry backoff for a turn's model call | once, in the model call's task: 1, 2, 4 and 8 seconds, only while nothing has been said, as many times as the provider's `retries` | Policy. |
 | The sender waiting for quota | once, in the QQ sender: past the per-minute quota of proactive messages, it waits until the earliest of them is a minute old | Policy: wait rather than drop. |

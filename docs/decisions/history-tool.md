@@ -2,6 +2,8 @@
 
 Max recalls with one tool, `history`, which searches when given a query and
 reads without one. The design is in [Recall](../design/context.md#recall).
+Its search by meaning, and the vectors below, were later removed: see
+[Search goes by keywords, without vectors](keywords-not-vectors.md).
 
 ## Context
 

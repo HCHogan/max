@@ -168,7 +168,6 @@ fn called(config: &Config, store: &Arc<Store>) -> Result<service::Context> {
             offset: config.utc_offset,
             search: None,
             store: Some(Arc::clone(store)),
-            embedder: None,
             platforms: max::adapter::Adapters::new(),
         }),
         place: Arc::new(Place {

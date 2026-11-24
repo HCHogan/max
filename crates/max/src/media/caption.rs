@@ -15,7 +15,7 @@ use max_core::run::Request;
 use max_db::captions::{self, Caption, Kind};
 use max_db::{PgPool, usage};
 use tokio::sync::Semaphore;
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
@@ -57,9 +57,6 @@ pub struct Captioner {
     pub chosen: Chosen,
     /// Where it reads a picture for the model.
     pub pictures: Arc<Pictures>,
-    /// The embedding worker, which is handed the files of the sticker
-    /// captions written; None when there is none.
-    pub stickers: Option<UnboundedSender<Sha256>>,
 }
 
 /// A file to caption, and a row's medium that has it: what the model is
@@ -183,15 +180,7 @@ impl Captioner {
             at: Utc::now(),
         };
         let mut conn = self.pool.acquire().await?;
-        let written = captions::write(&mut conn, &caption).await?;
-        if let Some(stickers) = &self.stickers
-            && written
-            && kind == Kind::Sticker
-            && !skip
-            && !text.is_empty()
-        {
-            let _ = stickers.send(picture.sha256.clone());
-        }
+        captions::write(&mut conn, &caption).await?;
         Ok(())
     }
 

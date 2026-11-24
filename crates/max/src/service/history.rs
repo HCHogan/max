@@ -15,10 +15,11 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
+use super::keywords::MOST_TERMS;
 use super::tool::Tool;
 use super::{Context, Failure};
 use read::{AROUND, MOST_AROUND, Next, Page};
-use search::{Hit, MOST_TERMS};
+use search::Hit;
 
 pub(super) struct History;
 
@@ -100,7 +101,7 @@ impl Tool for History {
         format!(
             "Looks through this conversation's chat records, with the descriptions of pictures and stickers. For things from before the context, who said what, or what was talked about on a day, look before answering. The filters go together:\n  \
             who is a few characters of the speaker's name (the group card at the time); from and to are YYYY-MM-DD (a whole day, the day itself included both ways), YYYY-MM-DD HH:MM, or #number (from includes that message, to doesn't).\n  \
-            With query it searches, and returns results: query is keywords separated by spaces, at most {MOST_TERMS}, each looked for as written, whatever its case; keep a Chinese keyword short, two or three characters. The whole query is also matched by meaning. Messages with more of the keywords, and nearer in meaning, come first, and of equals the newer; limit is {} by default and at most {}. text is a passage around the match; read, passed back as it is, reads that message with {AROUND} on each side. Recalled messages aren't searched.\n  \
+            With query it searches, and returns results: query is keywords separated by spaces, at most {MOST_TERMS}, each looked for as written, whatever its case; keep a Chinese keyword short, two or three characters. Messages with more of the keywords come first, and of equals the newer; limit is {} by default and at most {}. text is a passage around the match; read, passed back as it is, reads that message with {AROUND} on each side. Recalled messages aren't searched.\n  \
             Without query it reads the messages themselves, a line each in order of time, as in the context, the long ones only their beginning: with from, forward from there; without, the newest (up to to); limit is {} by default and at most {}. When there is more, next holds the arguments to go on with, passed back as they are: forward from a read with from, backward from a read of the newest. Give at least one of who, from and to.\n  \
             around reads that message with before and after messages on each side ({AROUND} by default, at most {MOST_AROUND}), and goes with no other filter; with before and after both 0 it reads that one message alone, whole however long.\n  \
             A read comes in pages, none longer than one message may be in the context: pages is how many there are, and page picks one. What /clear --all cleared is only out of the context, and is found all the same.",

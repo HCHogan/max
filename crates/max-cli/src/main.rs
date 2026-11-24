@@ -23,15 +23,12 @@ use tracing::{error, info};
 use max::adapter::{self, Adapter, Adapters};
 use max::config::{self, Config};
 use max::conversation::Shared;
-use max::embedding::Embedder;
 use max::llm::Models;
 use max::media::caption::Captioner;
 use max::media::download::Download;
 use max::media::fetch;
 use max::media::pictures::Pictures;
-use max::media::stickers::Stickers;
 use max::media::store::Store;
-use max::recall::Vectors;
 use max::scope::Scope;
 use max::search::{self, Search};
 use max::service;
@@ -207,15 +204,13 @@ async fn database(url: &str) -> Result<PgPool> {
 
 /// What the derived-data workers leave for the rest to use.
 struct Derived {
-    embedder: Option<Arc<Embedder>>,
     /// Where each committed row goes, for the workers that take rows.
     rows: Rows,
     pictures: Option<Arc<Pictures>>,
 }
 
 /// Starts the derived-data workers the configuration has the means for:
-/// the recall vectors and the stickers' with an embedding model, and with
-/// a media directory the downloads and, with a model for them, the
+/// with a media directory the downloads and, with a model for them, the
 /// captions.
 async fn derived(
     config: &Config,
@@ -223,40 +218,7 @@ async fn derived(
     models: &Models,
     workers: &mut Scope,
 ) -> Result<Derived> {
-    let embedder = match &config.embedding {
-        Some(embedding) => {
-            let key = embedding.api_key()?;
-            let model = embedding.model.clone();
-            Some(Arc::new(Embedder::new(
-                embedding.base_url.as_str(),
-                model,
-                key,
-            )?))
-        }
-        None => {
-            info!("no embedding model: find_stickers says so, and history matches words only");
-            None
-        }
-    };
-    // Each committed row comes to the recall vector worker.
     let mut rows = Rows::default();
-    if let Some(embedder) = &embedder {
-        let worker = Vectors {
-            pool: pool.clone(),
-            embedder: Arc::clone(embedder),
-        };
-        let rx = rows.subscribe();
-        workers.spawn(move |stop| worker.run(rx, stop));
-    }
-    let stickers = embedder.as_ref().map(|embedder| {
-        let worker = Stickers {
-            pool: pool.clone(),
-            embedder: Arc::clone(embedder),
-        };
-        let (tx, rx) = mpsc::unbounded_channel();
-        workers.spawn(move |stop| worker.run(rx, stop));
-        tx
-    });
     let pictures = match &config.media {
         Some(media) => {
             let store = Arc::new(
@@ -274,7 +236,6 @@ async fn derived(
                         pool: pool.clone(),
                         chosen,
                         pictures: Arc::clone(&pictures),
-                        stickers,
                     };
                     let (tx, rx) = mpsc::unbounded_channel();
                     workers.spawn(move |stop| captioner.run(rx, stop));
@@ -300,11 +261,7 @@ async fn derived(
             None
         }
     };
-    Ok(Derived {
-        embedder,
-        rows,
-        pictures,
-    })
+    Ok(Derived { rows, pictures })
 }
 
 /// Starts everything, in the order each needs the one before.
@@ -314,11 +271,7 @@ async fn start(config: Config, on: Platforms) -> Result<Running> {
     let owners = owners(&pool, &config, &on.platforms()).await?;
 
     let mut workers = Scope::new();
-    let Derived {
-        embedder,
-        rows,
-        pictures,
-    } = derived(&config, &pool, &models, &mut workers).await?;
+    let Derived { rows, pictures } = derived(&config, &pool, &models, &mut workers).await?;
     let search = match &config.search {
         Some(search) => Some(Arc::new(Search::new(search::EXA, search.api_key()?)?)),
         None => {
@@ -374,7 +327,6 @@ async fn start(config: Config, on: Platforms) -> Result<Running> {
         offset: config.utc_offset,
         search,
         store,
-        embedder,
         platforms: platforms.clone(),
     });
     let mut outbound = HashMap::new();
