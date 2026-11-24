@@ -163,6 +163,13 @@ in
     script = "${pkgs.e2fsprogs}/bin/resize2fs /dev/disk/by-label/max-nix";
   };
 
+  # /dev/net/tun, as any Linux machine has it, for tailscaled, wireguard-go
+  # and the like. Elsewhere its node is made before tun is loaded, from
+  # the modules' device names, and opening it loads tun; here that list is
+  # made in the initrd, from the initrd's modules only, so tun is loaded
+  # at boot instead.
+  boot.kernelModules = [ "tun" ];
+
   # The address and resolvers, from the command line, before anything
   # uses them. The initrd loads the NIC, so this needn't wait for
   # udev or networkd.
