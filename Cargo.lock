@@ -1966,6 +1966,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "max-wechat"
+version = "1.0.0"
+dependencies = [
+ "chrono",
+ "max",
+ "max-core",
+ "max-db",
+ "serde_json",
+ "wxdesk-proto",
+]
+
+[[package]]
 name = "md-5"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4353,6 +4365,16 @@ name = "writeable"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
+
+[[package]]
+name = "wxdesk-proto"
+version = "0.1.0"
+source = "git+https://github.com/HCHogan/wxdesk?rev=328c0ca79adfdabd502dde3b005ab15031b13077#328c0ca79adfdabd502dde3b005ab15031b13077"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tokio",
+]
 
 [[package]]
 name = "yoke"
