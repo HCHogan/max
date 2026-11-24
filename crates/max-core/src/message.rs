@@ -25,11 +25,15 @@ pub enum Platform {
     /// QQ as the Haskell version saw it through NapCat, by QQ and group
     /// numbers. Only imported history has it; nothing sends there.
     QqLegacy,
+    /// WeChat through its desktop client: groups by name, people by the
+    /// name the client shows them by.
+    Wechat,
 }
 
 crate::names!(Platform, "platform", {
     Qq => "qq",
     QqLegacy => "qq_legacy",
+    Wechat => "wechat",
 });
 
 /// One row of a conversation's timeline.
