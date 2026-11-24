@@ -1,6 +1,0 @@
-# GitHub's language statistics count Rust, Lean and Nix only: the guest's
-# scripts, the migrations and the rest are there to serve them.
-* linguist-detectable=false
-*.rs linguist-detectable
-*.lean linguist-detectable
-*.nix linguist-detectable
