@@ -163,17 +163,21 @@ in
     script = "${pkgs.e2fsprogs}/bin/resize2fs /dev/disk/by-label/max-nix";
   };
 
-  # /dev/net/tun, as any Linux machine has it, for tailscaled, wireguard-go
-  # and the like. Elsewhere its node is made before tun is loaded, from
-  # the modules' device names, and opening it loads tun; here that list is
-  # made in the initrd, from the initrd's modules only, so tun is loaded
-  # at boot instead.
-  boot.kernelModules = [ "tun" ];
-
   # The address and resolvers, from the command line, before anything
   # uses them. The initrd loads the NIC, so this needn't wait for
   # udev or networkd.
-  boot.initrd.kernelModules = [ "virtio_net" ];
+  #
+  # And /dev/net/tun, as any Linux machine has it, for tailscaled,
+  # wireguard-go and the like. Elsewhere its node is made before tun is
+  # loaded, and opening it loads tun. Here systemd-modules-load and
+  # kmod-static-nodes run in the initrd only, from its modules, and aren't
+  # run again after the switch to the real root, so boot.kernelModules
+  # would load nothing: tun is loaded in the initrd, and its node comes
+  # with it.
+  boot.initrd.kernelModules = [
+    "virtio_net"
+    "tun"
+  ];
   networking.usePredictableInterfaceNames = false;
   networking.useNetworkd = false;
   networking.useDHCP = false;

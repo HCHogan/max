@@ -290,9 +290,9 @@ tailnet at a time; for several, Max runs one each in userspace networking,
 which keeps their routes and their `100.64.0.0/10` addresses apart, and
 reaches each by its own socket (`tailscale --socket=… nc`) or proxy.
 Nothing in the image or the prompt is for this. The image has
-`/dev/net/tun`, as any Linux machine does: it loads `tun` at boot, since
-the device nodes made ahead of their modules come from the initrd's
-modules only.
+`/dev/net/tun`, as any Linux machine does: its initrd loads `tun`, since
+the guest loads modules and makes the device nodes ahead of them only in
+the initrd, from the initrd's modules.
 
 What Max joins is its conversation's, as everything in its VM is: anyone in
 the conversation can have Max use it, and the tailnet's own ACLs say what
