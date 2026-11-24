@@ -4,6 +4,9 @@
   inputs = {
     # The nixpkgs revision nix-config deploys with.
     nixpkgs.url = "github:NixOS/nixpkgs/cd4ea8d57de16f4810bc5f14207bac45fbf19f67";
+    # Postgres 19, which the nixpkgs above, a 26.05, hasn't: the dev
+    # shell's and CI's. It goes once nixpkgs is a release with 19.
+    nixpkgs-postgres.url = "github:NixOS/nixpkgs/619c39f6eac5d1ed6b8f073a9414baf7034b2356";
     crane.url = "github:ipetkov/crane";
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
@@ -52,6 +55,9 @@
           # rust-toolchain.toml is the only place the compiler version lives.
           toolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
           craneLib = (crane.mkLib pkgs).overrideToolchain (_: toolchain);
+          # max's database wherever it runs, made by initdb with these.
+          postgresql = inputs.nixpkgs-postgres.legacyPackages.${system}.postgresql_19;
+          initdbArgs = import ./nix/initdb.nix;
 
           # Cargo's sources plus what the build reads besides: insta's
           # snapshots, max-db's migrations and its offline query data,
@@ -174,7 +180,7 @@
           inherit pkgs toolchain;
 
           packages = {
-            inherit max;
+            inherit max postgresql;
             default = max;
           }
           // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux { inherit guest; };
@@ -199,7 +205,7 @@
                 # reqwest loads the system's CA certificates when a client
                 # is built, even one that only talks to a local server.
                 nativeBuildInputs = [
-                  pkgs.postgresql_17
+                  postgresql
                   pkgs.cacert
                   # Run the guest's runner and webread.
                   pkgs.nodejs
@@ -212,7 +218,7 @@
                 # long on macOS.
                 preCheck = ''
                   export PGDATA="$TMPDIR/postgres"
-                  initdb --username=max --auth=trust --locale=C --encoding=UTF8 >/dev/null
+                  initdb --username=max --auth=trust ${pkgs.lib.escapeShellArgs initdbArgs} >/dev/null
                   pg_ctl start --wait --silent --log="$TMPDIR/postgres.log" \
                     --options "-c listen_addresses=127.0.0.1 -c port=54329 -c unix_socket_directories="
                   export DATABASE_URL=postgresql://max@127.0.0.1:54329/postgres
@@ -279,7 +285,16 @@
             inherit inputs pkgs;
             modules = [
               ./devenv.nix
-              { packages = [ toolchain ]; }
+              {
+                packages = [
+                  toolchain
+                  postgresql
+                ];
+                services.postgres = {
+                  package = postgresql;
+                  initdbArgs = initdbArgs;
+                };
+              }
             ];
           };
         };

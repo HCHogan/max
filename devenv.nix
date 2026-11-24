@@ -6,7 +6,6 @@
     cargo-machete
     cargo-nextest
     sqlx-cli
-    postgresql_17
     # max's tests run the guest's runner and webread.
     nodejs
     (python3.withPackages (p: [ p.trafilatura ]))
@@ -15,10 +14,10 @@
   ];
 
   # `devenv up` starts it. The Haskell checkout's shell uses 5433, so the two
-  # can run side by side.
+  # can run side by side. Its package and initdb's arguments are set in
+  # flake.nix, as CI's are.
   services.postgres = {
     enable = true;
-    package = pkgs.postgresql_17;
     listen_addresses = "127.0.0.1";
     port = 5434;
     initialDatabases = [ { name = "max"; } ];

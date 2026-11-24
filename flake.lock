@@ -372,6 +372,22 @@
         "type": "github"
       }
     },
+    "nixpkgs-postgres": {
+      "locked": {
+        "lastModified": 1795371335,
+        "narHash": "sha256-oa2P5WZer1A4wuhatl92JyHHEjrrOdIyuvTuI5LUi9Q=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "619c39f6eac5d1ed6b8f073a9414baf7034b2356",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "619c39f6eac5d1ed6b8f073a9414baf7034b2356",
+        "type": "github"
+      }
+    },
     "nixpkgs-src": {
       "flake": false,
       "locked": {
@@ -429,6 +445,7 @@
         "llm-agents": "llm-agents",
         "microvm": "microvm",
         "nixpkgs": "nixpkgs_3",
+        "nixpkgs-postgres": "nixpkgs-postgres",
         "rust-overlay": "rust-overlay_2",
         "systems": "systems_2"
       }
