@@ -429,7 +429,7 @@ impl From<Level> for LevelFilter {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Database {
-    /// For example `postgresql:///max?host=/run/postgresql&user=max`, over
+    /// For example `postgresql:///max?host=/run/max-postgres&user=max`, over
     /// the socket. `postgresql://max@/max` isn't a URL: a user needs a host.
     pub url: String,
 }

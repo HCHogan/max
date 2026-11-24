@@ -42,7 +42,7 @@ Non-goals:
 | Error handling | color-eyre; thiserror for errors callers match on | 0.6.5 / 2 | Colour is off when output goes to journald. An error says what happened and keeps what that came of as its source; `causes::chain` puts the two together where an error becomes text. |
 | Logging | tracing, tracing-subscriber | 0.1 / 0.3 | To stdout, collected by journald. |
 | Command line, configuration | clap (derive), toml | 4.6 / 1.1 | One source: the TOML file; see [Configuration](design/config.md). |
-| Database | sqlx (postgres, runtime-tokio, macros, migrate, chrono, json), Postgres with pg_trgm | 0.9.0 | SQL is checked at compile time; the `.sqlx` offline metadata is committed; migrations use sqlx's own mechanism. No TLS: the database is local. Vectors go in as `float4[]` cast to `vector`, so there is no pgvector crate. |
+| Database | sqlx (postgres, runtime-tokio, macros, migrate, chrono, json), Postgres 19 with pg_trgm and btree_gist | 0.9.0 | SQL is checked at compile time; the `.sqlx` offline metadata is committed; migrations use sqlx's own mechanism. No TLS: the database is max's own cluster, on a socket of the same host; see [NixOS](design/config.md#nixos). |
 | Time | chrono | 0.4 | sqlx 0.9 doesn't support jiff. |
 | LLM | in-house, on reqwest and sse-stream | 0.13 / 0.2.6 | Only in `max-llm`. Small structs for the dozen or so fields that are read; everything else stays raw JSON and is passed through. sse-stream only splits the byte stream into events. Why not a client library: [decisions/own-llm-client.md](decisions/own-llm-client.md). |
 | HTTP server | axum | 0.8.9 | max's service to the VMs; see [The guest's calls](design/tools.md#the-guests-calls). |

@@ -15,7 +15,7 @@
 
   # `devenv up` starts it. The Haskell checkout's shell uses 5433, so the two
   # can run side by side. Its package and initdb's arguments are set in
-  # flake.nix, as CI's are.
+  # flake.nix, as max's own cluster's are.
   services.postgres = {
     enable = true;
     listen_addresses = "127.0.0.1";

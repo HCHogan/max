@@ -41,6 +41,25 @@ The top-level sections: `utc_offset`, `owners_file`, `log`, `database`,
   the store with `pkgs.formats.toml`. Paths the module manages (the
   database socket, the media directory) are set in `settings` with
   `mkDefault`; no environment variables, no `environmentFile`.
+- **Its database is in a Postgres cluster of its own**,
+  `<name>-postgres.service`, which nothing else on the host shares. It is
+  the flake's `postgresql`, 19, the dev shell's and CI's too, made by
+  initdb with the arguments in `nix/initdb.nix` (the builtin provider's
+  C.UTF-8). Its data is in `/var/lib/<name>-postgres`, and it listens on
+  its socket in `/run/<name>-postgres` alone, no TCP, with peer
+  authentication: max connects as the role of its name, which owns the
+  database and isn't a superuser; the cluster's own user,
+  `<name>-postgres`, is its superuser, and `<name>-psql` opens psql as it,
+  for root. `postgresql.settings` goes into its `postgresql.conf`. Why:
+  [Max has a Postgres cluster of its own](../decisions/own-postgres.md).
+- **A new major version is moved to by hand.** The data directory's name
+  has no version in it and Postgres doesn't start on another major
+  version's data, so a new one stops there rather than start an empty
+  cluster. With max stopped: dump the database with the new version's
+  `pg_dump`, move the data directory aside, start the cluster, which
+  makes a new one, restore into it, and start max.
+- **Backups are the host's**: `pg_dump` as the cluster's user, on its
+  socket.
 - At build time `max check-config` validates the structure without reading
   the secret files, so a mistake fails `nixos-rebuild build`.
 - A changed configuration has a new store path, and systemd restarts the
@@ -113,7 +132,7 @@ As in Codex, pi and Hermes, three layers:
 
 ```toml
 [database]
-url = "postgresql:///max?host=/run/postgresql&user=max"
+url = "postgresql:///max?host=/run/max-postgres&user=max"
 
 [platforms.qq]
 app_id_file = "/run/secrets/max/qq-app-id"

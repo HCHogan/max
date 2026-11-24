@@ -1,8 +1,9 @@
 # The NixOS module, as a function of the service's name. Everything it
 # makes is named after it: the options under services.<name>, the user,
-# the database and its role, the directories, the slice, the target and
-# the service. So the Rust version runs on tank as "maxx" beside the
-# Haskell "max", and takes its place later by changing the one name.
+# the Postgres cluster with its database and role, the directories, the
+# slice, the target and the service. So the Rust version runs on tank as
+# "maxx" beside the Haskell "max", and takes its place later by changing
+# the one name.
 { name, packages }:
 {
   config,
@@ -15,6 +16,59 @@ let
   vm = cfg.vm.enable;
   toml = pkgs.formats.toml { };
   max = lib.getExe' cfg.package "max";
+
+  # max's own Postgres: a cluster for its database alone, reached on its
+  # socket only. See "Its database" in docs/design/config.md.
+  pg = cfg.postgresql.package;
+  dbUser = "${name}-postgres";
+  dbDir = "/var/lib/${name}-postgres";
+  dbSocket = "/run/${name}-postgres";
+  pgValue =
+    value:
+    if lib.isBool value then
+      lib.boolToString value
+    else if lib.isString value then
+      "'${lib.replaceStrings [ "'" ] [ "''" ] value}'"
+    else
+      toString value;
+  pgConf = pkgs.writeText "${name}-postgresql.conf" (
+    lib.concatStrings (
+      lib.mapAttrsToList (key: value: "${key} = ${pgValue value}\n") cfg.postgresql.settings
+    )
+  );
+  # A local user connects as the role of its own name: max as max, which
+  # owns its database, and the cluster's user as the superuser.
+  pgHba = pkgs.writeText "${name}-pg_hba.conf" ''
+    local all all peer
+  '';
+  # A cluster where there is none. There is no version in the directory's
+  # name, and Postgres refuses another major version's data: a new major
+  # version stops here, and never starts an empty cluster beside the old.
+  pgInit = pkgs.writeShellScript "${name}-postgres-init" ''
+    if ! [ -e ${dbDir}/PG_VERSION ]; then
+      ${pg}/bin/initdb --pgdata=${dbDir} --username=${dbUser} \
+        --auth-local=peer --auth-host=reject \
+        ${lib.escapeShellArgs (import ./initdb.nix)}
+    fi
+  '';
+  # max's role and database, made when they aren't there.
+  pgSetup = pkgs.writeShellScript "${name}-postgres-setup" ''
+    ${pg}/bin/psql --host=${dbSocket} --dbname=postgres --no-psqlrc --quiet \
+      --set=ON_ERROR_STOP=1 --set=name=${name} <<'EOF'
+    select format('create role %I login', :'name')
+    where not exists (select from pg_roles where rolname = :'name') \gexec
+    select format('create database %I owner %I', :'name', :'name')
+    where not exists (select from pg_database where datname = :'name') \gexec
+    EOF
+  '';
+  # psql in max's database as the cluster's superuser, for root.
+  dbPsql = pkgs.writeShellApplication {
+    name = "${name}-psql";
+    runtimeInputs = [ pkgs.util-linux ];
+    text = ''
+      exec runuser -u ${dbUser} -- ${pg}/bin/psql --host=${dbSocket} --dbname=${name} "$@"
+    '';
+  };
 
   # One tap per VM that can run at a time, each its own /30 cut from the
   # /24: the host's end is .1, the guest's .2. See "VM processes".
@@ -279,6 +333,36 @@ in
       '';
     };
 
+    postgresql = {
+      package = lib.mkOption {
+        type = lib.types.package;
+        default = packages.${pkgs.stdenv.hostPlatform.system}.postgresql;
+        defaultText = lib.literalMD "this flake's `postgresql`";
+        description = ''
+          The Postgres of max's own cluster. Another major version doesn't
+          start on this one's data, which is moved by hand: see "Its
+          database" in docs/design/config.md.'';
+      };
+
+      settings = lib.mkOption {
+        type =
+          with lib.types;
+          attrsOf (oneOf [
+            bool
+            int
+            float
+            str
+          ]);
+        default = { };
+        example = {
+          shared_buffers = "1GB";
+        };
+        description = ''
+          postgresql.conf. The module sets the socket, the authentication
+          and no TCP.'';
+      };
+    };
+
     vm = {
       enable = lib.mkEnableOption ''
         the groups' VMs, where the tools run. The module makes the taps and
@@ -316,30 +400,31 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    services.${name}.settings = {
-      database.url = lib.mkDefault "postgresql:///${name}?host=/run/postgresql&user=${name}";
-      media.dir = lib.mkDefault "/var/lib/${name}/media";
-      vm = lib.mkIf vm {
-        guest = "${cfg.vm.guest}";
-        mkfs = "${lib.getBin pkgs.e2fsprogs}/bin/mkfs.ext4";
-        dir = vmDir;
-        systemctl = "${config.systemd.package}/bin/systemctl";
-        unit = vmUnit;
-        inherit roots;
-        inherit (cfg.vm) dns;
-        inherit slots;
+    services.${name} = {
+      settings = {
+        database.url = lib.mkDefault "postgresql:///${name}?host=${dbSocket}&user=${name}";
+        media.dir = lib.mkDefault "/var/lib/${name}/media";
+        vm = lib.mkIf vm {
+          guest = "${cfg.vm.guest}";
+          mkfs = "${lib.getBin pkgs.e2fsprogs}/bin/mkfs.ext4";
+          dir = vmDir;
+          systemctl = "${config.systemd.package}/bin/systemctl";
+          unit = vmUnit;
+          inherit roots;
+          inherit (cfg.vm) dns;
+          inherit slots;
+        };
       };
-    };
 
-    services.postgresql = {
-      enable = true;
-      ensureDatabases = [ name ];
-      ensureUsers = [
-        {
-          inherit name;
-          ensureDBOwnership = true;
-        }
-      ];
+      postgresql.settings = {
+        listen_addresses = "";
+        unix_socket_directories = dbSocket;
+        hba_file = "${pgHba}";
+        # journald stamps the time.
+        log_line_prefix = lib.mkDefault "[%p] ";
+        # Its unit denies memory that is written and run.
+        jit = false;
+      };
     };
 
     users.users.${name} = {
@@ -348,6 +433,12 @@ in
       extraGroups = lib.optional vm "kvm";
     };
     users.groups.${name} = { };
+
+    users.users.${dbUser} = {
+      isSystemUser = true;
+      group = dbUser;
+    };
+    users.groups.${dbUser} = { };
 
     # Every process Max runs, the VMs included once there are any, so its
     # resources are counted apart from everything else on the host.
@@ -362,15 +453,15 @@ in
       description = "Max, the group chat agent (${name})";
       wantedBy = [ "${name}.target" ];
       partOf = [ "${name}.target" ];
-      # The target runs postgresql-setup, which makes the role and database.
       after = [
         "network-online.target"
-        "postgresql.target"
+        "${name}-postgres.service"
       ]
       ++ lib.optional vm "${name}-taps.service"
       ++ lib.optional vm "${name}.socket";
       wants = [ "network-online.target" ] ++ lib.optional vm "${name}-taps.service";
-      requires = [ "postgresql.target" ] ++ lib.optional vm "${name}.socket";
+      # A restart of the cluster restarts max.
+      requires = [ "${name}-postgres.service" ] ++ lib.optional vm "${name}.socket";
       # A deploy restarts max in one step, with its socket, below, left
       # as it is. Stopped first and started after, as a changed unit is
       # otherwise, a unit that has a socket has the socket stopped with
@@ -396,6 +487,65 @@ in
           StandardOutput = "journal";
           StandardError = "journal";
         };
+    };
+
+    # max's own Postgres, which nothing else on the host shares.
+    systemd.services."${name}-postgres" = {
+      description = "max's Postgres (${name})";
+      wantedBy = [ "${name}.target" ];
+      partOf = [ "${name}.target" ];
+      serviceConfig = {
+        Type = "notify";
+        User = dbUser;
+        Group = dbUser;
+        Slice = "${name}.slice";
+        StateDirectory = "${name}-postgres";
+        StateDirectoryMode = "0700";
+        # The socket's, which max, another user, connects to.
+        RuntimeDirectory = "${name}-postgres";
+        RuntimeDirectoryMode = "0755";
+        ExecStartPre = pgInit;
+        ExecStart = "${pg}/bin/postgres -D ${dbDir} -c config_file=${pgConf}";
+        ExecStartPost = pgSetup;
+        ExecReload = "${pkgs.coreutils}/bin/kill -HUP $MAINPID";
+        # A fast shutdown: open transactions roll back.
+        KillSignal = "SIGINT";
+        KillMode = "mixed";
+        TimeoutSec = 120;
+        Restart = "on-failure";
+        RestartSec = 5;
+        # A socket in the file system works across network namespaces.
+        PrivateNetwork = true;
+        RestrictAddressFamilies = [ "AF_UNIX" ];
+        NoNewPrivileges = true;
+        CapabilityBoundingSet = [ "" ];
+        ProtectSystem = "strict";
+        ProtectHome = true;
+        PrivateTmp = true;
+        PrivateDevices = true;
+        DevicePolicy = "closed";
+        PrivateMounts = true;
+        ProtectProc = "invisible";
+        ProcSubset = "pid";
+        ProtectClock = true;
+        ProtectHostname = true;
+        ProtectKernelTunables = true;
+        ProtectKernelLogs = true;
+        ProtectKernelModules = true;
+        ProtectControlGroups = true;
+        RestrictNamespaces = true;
+        RestrictRealtime = true;
+        RestrictSUIDSGID = true;
+        LockPersonality = true;
+        MemoryDenyWriteExecute = true;
+        RemoveIPC = true;
+        SystemCallArchitectures = "native";
+        SystemCallFilter = [
+          "@system-service"
+          "~@privileged @resources"
+        ];
+        UMask = "0077";
+      };
     };
 
     # Where the VMs' guests reach max, each VM's port for the host being a
@@ -440,7 +590,7 @@ in
         TimeoutStopSec = 10;
       };
     };
-    environment.systemPackages = lib.mkIf vm [ vmSsh ];
+    environment.systemPackages = [ dbPsql ] ++ lib.optional vm vmSsh;
 
     # max's user starts and stops the VMs' units, and no other.
     security.polkit.enable = lib.mkIf vm true;

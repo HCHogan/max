@@ -4,8 +4,9 @@
   inputs = {
     # The nixpkgs revision nix-config deploys with.
     nixpkgs.url = "github:NixOS/nixpkgs/cd4ea8d57de16f4810bc5f14207bac45fbf19f67";
-    # Postgres 19, which the nixpkgs above, a 26.05, hasn't: the dev
-    # shell's and CI's. It goes once nixpkgs is a release with 19.
+    # Postgres 19, which the nixpkgs above, a 26.05, hasn't: max's own
+    # cluster runs it, and the dev shell's and CI's. It goes once nixpkgs
+    # is a release with 19.
     nixpkgs-postgres.url = "github:NixOS/nixpkgs/619c39f6eac5d1ed6b8f073a9414baf7034b2356";
     crane.url = "github:ipetkov/crane";
     rust-overlay = {

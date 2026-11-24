@@ -103,7 +103,6 @@ pkgs.testers.runNixOSTest {
         };
       };
     };
-    services.postgresql.package = pkgs.postgresql_16;
     systemd.services.slow-model = {
       wantedBy = [ "multi-user.target" ];
       serviceConfig.ExecStart = "${pkgs.python3}/bin/python3 ${slow}";
@@ -208,7 +207,7 @@ pkgs.testers.runNixOSTest {
     # Along a link from 7 to 8, 7's ssh is root in 8's VM, which max
     # boots for it; and 8's isn't let into 7's.
     machine.succeed(
-        "runuser -u maxx -- psql -d maxx -v ON_ERROR_STOP=1 -c \"insert into conversations (id, kind) values (7, 'group'), (8, 'group') on conflict do nothing; insert into links (asker_id, asked_id, made_at) values (7, 8, now())\""
+        "maxx-psql -v ON_ERROR_STOP=1 -c \"insert into conversations (id, kind) values (7, 'group'), (8, 'group') on conflict do nothing; insert into links (asker_id, asked_id, made_at) values (7, 8, now())\""
     )
     machine.succeed("maxx-ssh 7 'echo from 7 | ssh c8.max \"cat > /work/entered\"' < /dev/null")
     assert machine.succeed("cat /var/lib/maxx/vm/8/work/entered").strip() == "from 7"

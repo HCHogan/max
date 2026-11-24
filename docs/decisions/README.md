@@ -41,6 +41,7 @@ Why Max is built the way it is: one file for each decision that was a real trade
 - [Idle guests drop their caches; the VMs' sizes stay](idle-guests-drop-caches.md)
 - [Max joins tailnets itself](max-joins-tailnets-itself.md)
 - [The derived-data workers share conventions, not a framework](no-worker-framework.md)
+- [Max has a Postgres cluster of its own](own-postgres.md)
 
 ## Platforms and people
 

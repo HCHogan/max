@@ -1,5 +1,5 @@
-# initdb's arguments for every cluster max's data lives in: the dev
-# shell's and CI's (flake.nix). The builtin
+# initdb's arguments for every cluster max's data lives in: max's own on a
+# host (nix/module.nix), the dev shell's and CI's (flake.nix). The builtin
 # provider's C.UTF-8 is Postgres's own, the same on Linux and macOS and
 # with any glibc: lower() maps letters by Unicode, as keywords::fold
 # expects, pg_trgm counts Chinese characters as a word's, and text sorts
