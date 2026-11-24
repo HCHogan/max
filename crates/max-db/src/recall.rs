@@ -104,7 +104,7 @@ pub async fn messages(
 }
 
 /// SQL's ordinals, from 1, as indexes.
-fn indexes(ordinals: &[i32]) -> Vec<usize> {
+pub(crate) fn indexes(ordinals: &[i32]) -> Vec<usize> {
     ordinals
         .iter()
         .filter_map(|&n| usize::try_from(n - 1).ok())

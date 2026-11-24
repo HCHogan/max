@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "with outcome as (\n             insert into turn_outcomes (turn_id, outcome, failure, error, run, finished_at)\n             values ($1, $2, $3, $4, $5, $6)\n             returning turn_id, run\n         )\n         insert into tool_calls (turn_id, n, name, arguments, output)\n         select o.turn_id, c.n, c.name, c.arguments, c.output\n         from outcome o, tool_calls_of(o.run) c\n         where o.run is not null",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text",
+        "Text",
+        "Jsonb",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8cccc2c9cbef067564be330f4caabd2f458b79fe904f208dc063a2545c93909f"
+}

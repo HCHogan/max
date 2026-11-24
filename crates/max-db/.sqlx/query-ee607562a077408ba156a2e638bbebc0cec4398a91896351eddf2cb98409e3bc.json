@@ -1,0 +1,66 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select c.name, c.arguments, c.output, t.started_at\n         from tool_calls c join turns t on t.id = c.turn_id\n         where t.conversation_id = $1 and t.ordinal = $2 and c.n = $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "tool_calls",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "arguments",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "tool_calls",
+            "name": "arguments"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "output",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "tool_calls",
+            "name": "output"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "started_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "turns",
+            "name": "started_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "ee607562a077408ba156a2e638bbebc0cec4398a91896351eddf2cb98409e3bc"
+}

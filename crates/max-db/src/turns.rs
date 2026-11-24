@@ -46,7 +46,8 @@ pub async fn start(
     })
 }
 
-/// A turn ends: its outcome, and its run.
+/// A turn ends: its outcome, and its run, whose tool calls go into
+/// `tool_calls` as text in the same statement (see [`crate::tool_calls`]).
 pub async fn finish(
     conn: &mut PgConnection,
     turn: TurnId,
@@ -86,8 +87,15 @@ async fn insert(
         Outcome::Lost => ("lost", None, None),
     };
     sqlx::query!(
-        "insert into turn_outcomes (turn_id, outcome, failure, error, run, finished_at)
-         values ($1, $2, $3, $4, $5, $6)",
+        "with outcome as (
+             insert into turn_outcomes (turn_id, outcome, failure, error, run, finished_at)
+             values ($1, $2, $3, $4, $5, $6)
+             returning turn_id, run
+         )
+         insert into tool_calls (turn_id, n, name, arguments, output)
+         select o.turn_id, c.n, c.name, c.arguments, c.output
+         from outcome o, tool_calls_of(o.run) c
+         where o.run is not null",
         turn.get(),
         outcome,
         failure,

@@ -12,6 +12,7 @@ Why Max is built the way it is: one file for each decision that was a real trade
 - [No historian, no summaries](no-summaries.md)
 - [One tool for recall, on trigrams and half-precision vectors](history-tool.md) (its vectors removed by the one below)
 - [Search goes by keywords, without vectors](keywords-not-vectors.md)
+- [`history` searches tool calls when asked](history-searches-tool-calls.md)
 - [Rare cases fail plainly](rare-cases-fail-plainly.md)
 
 ## Tools and programs

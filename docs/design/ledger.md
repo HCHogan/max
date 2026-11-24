@@ -291,7 +291,7 @@ enum Outcome { Answered, Silent, Interrupted, Failed { reason: FailReason }, Los
 | When | What is written |
 | --- | --- |
 | A trigger starts a core | `TurnStarted` (`turns`) |
-| The turn ends, an interruption at a restart included | `TurnFinished` with its run (`turn_outcomes`) |
+| The turn ends, an interruption at a restart included | `TurnFinished` with its run (`turn_outcomes`), and in the same statement the run's tool calls as text (`tool_calls`) |
 | A crash | nothing; a `Lost` outcome is added at startup |
 
 - **The trigger is in `TurnStarted`**: a direct trigger could be derived
@@ -407,6 +407,7 @@ read and migrations undoing one another.
 |  | `message_media` | Message, ordinal, sha256. An inbound node holds a download URL, and the file is recorded here once downloaded; a picture a program handed over (`tools.show()`) has its sha256 in the node |
 |  | `media_captions` | One row per sha256, written once: the prompt used (image or sticker), the text (empty if the model gave up), `skip` (pictures that don't look like stickers, kept out of the sticker library) and the model (empty for imported captions). Only the caption worker writes it. Queries that read rows fill captions into media nodes without a description. See [Media](media.md) |
 | Turn | `turns`, `turn_outcomes` | See [Turn records](#turn-records). `t#N` is `turns.ordinal`, counted from 1 in each conversation |
+|  | `tool_calls` | One row per tool call of a turn's run: turn, its place `n` (`t#N.n`), the tool, the arguments as `key: value` lines and the text of the result. The outcome's insert writes them, by the SQL function `tool_calls_of` from the run; the migration that made the table filled it from the runs before. A trigram index on the arguments and result together. What `history` searches with `tools: true`; see [Recall](context.md#recall) |
 |  | `llm_usage` | Turn (nullable), purpose (turn, intent, caption), provider, model, effort, tokens (bigint, with cache hits and reasoning tokens), `cost_micros` (millionths of a US dollar, null while the price is unknown, as it so far always is: `/status` works the cost out from the tokens and the configured `price`), and three timings: `first_ms` to the first output of any kind, `took_ms` to the end, and `quiet_ms`, the longest stretch with nothing arriving, which is what `stream_idle_timeout_secs` cuts off; check it before lowering that timeout. Turns and `complete`'s calls (intent, caption) are recorded; a background agent's calls aren't (see [Background agents](jobs.md#background-agents)) |
 
 Tables kept with their rows but no longer read or written:

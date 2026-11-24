@@ -6,8 +6,8 @@
 
 use max_core::ids::MessageId;
 use max_core::message::Message;
-use max_core::render::Render;
-use max_db::{PgConnection, ledger};
+use max_core::render::{Render, moment};
+use max_db::{PgConnection, ledger, tool_calls};
 use schemars::JsonSchema;
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -110,6 +110,30 @@ pub(super) fn paged(mut pages: Vec<String>, page: Option<usize>) -> Result<Page,
         pages: count,
         next: None,
     })
+}
+
+/// The `n`-th call of turn t#`turn` whole: its tool, when its turn
+/// started, what it was given and what it returned, cut evenly into pages.
+pub(super) async fn call(
+    context: &Context,
+    (turn, n): (i32, i32),
+    page: Option<usize>,
+) -> Result<Page, Failure> {
+    let mut conn = context.services.pool.acquire().await?;
+    let Some(call) = tool_calls::call(&mut conn, context.place.conversation, turn, n).await? else {
+        return Err(Failure::new(
+            "not_found",
+            format!("there is no call t#{turn}.{n} here"),
+        ));
+    };
+    let text = format!(
+        "t#{turn}.{n} {} {}\n{}\n→\n{}",
+        call.name,
+        moment(call.started, context.services.offset),
+        call.arguments,
+        call.output
+    );
+    paged(pages(&text, context.page_tokens), page)
 }
 
 fn not_found(id: i64) -> Failure {

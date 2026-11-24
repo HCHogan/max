@@ -21,6 +21,7 @@ pub mod media;
 pub mod platform;
 pub mod recall;
 pub mod stickers;
+pub mod tool_calls;
 pub mod turns;
 pub mod usage;
 
@@ -81,6 +82,7 @@ mod tests {
                 "principals",
                 "summaries",
                 "summary_runs",
+                "tool_calls",
                 "turn_outcomes",
                 "turns",
             ]

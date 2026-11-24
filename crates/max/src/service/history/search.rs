@@ -1,7 +1,7 @@
 //! `history` with a query: where in this conversation's history its terms
-//! are, among its rows (with their pictures' and stickers' captions), under
-//! the read's filters; each result says how `history` reads it in context.
-//! See "Recall".
+//! are, among its rows (with their pictures' and stickers' captions), or
+//! with `tools: true` among its turns' tool calls, under the read's
+//! filters; each result says how `history` reads it. See "Recall".
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -10,7 +10,7 @@ use chrono::{DateTime, Utc};
 use max_core::ids::MessageId;
 use max_core::render::{Render, moment};
 use max_db::recall::{self, Query};
-use max_db::{PgConnection, ledger};
+use max_db::{PgConnection, ledger, tool_calls};
 use schemars::JsonSchema;
 use serde::Serialize;
 use tokio::sync::Semaphore;
@@ -37,8 +37,11 @@ pub(crate) struct Hit {
     #[serde(rename = "ref")]
     handle: String,
     time: String,
+    /// A tool call's tool.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool: Option<String>,
     text: String,
-    read: Around,
+    read: Read,
     /// From 0 to 1: the share of the terms it has.
     #[serde(skip)]
     score: f32,
@@ -50,10 +53,13 @@ pub(crate) struct Hit {
     key: String,
 }
 
-/// `history`'s arguments that read a row in context.
+/// `history`'s arguments that read a result: a row in context, or a tool
+/// call whole.
 #[derive(Debug, Serialize, JsonSchema)]
-pub(super) struct Around {
-    around: i64,
+#[serde(untagged)]
+pub(super) enum Read {
+    Around { around: i64 },
+    Call { call: String },
 }
 
 /// The best `limit` results for `query`, ten by default.
@@ -81,6 +87,51 @@ pub(super) async fn found(
         limit: i64::try_from(limit * 3).unwrap_or(i64::MAX),
     };
     let hits = row_hits(&mut conn, context, &query, &terms).await?;
+    Ok(choose(hits, limit))
+}
+
+/// The best `limit` of the conversation's tool calls for `query`, ten by
+/// default.
+pub(super) async fn calls(
+    context: &Context,
+    query: &str,
+    filters: &Filters,
+    limit: Option<usize>,
+) -> Result<Vec<Hit>, Failure> {
+    let terms = keywords::terms("history", query)?;
+    let limit = limit.unwrap_or(DEFAULT).min(MOST);
+    let patterns: Vec<String> = terms.iter().map(|term| pattern(term)).collect();
+
+    let _slot = SLOTS.acquire().await;
+    let mut conn = context.services.pool.acquire().await?;
+    let query = Query {
+        conversation: context.place.conversation,
+        patterns: &patterns,
+        from: filters.from,
+        until: filters.until,
+        sender: None,
+        limit: i64::try_from(limit).unwrap_or(i64::MAX),
+    };
+    let found = tool_calls::matching(&mut conn, &query).await?;
+    let hits = found
+        .into_iter()
+        .map(|(call, has)| {
+            let handle = format!("t#{}.{}", call.turn, call.n);
+            let body = format!("{}\n→ {}", call.arguments, call.output);
+            Hit {
+                time: moment(call.started, context.services.offset),
+                tool: Some(call.name),
+                text: snippet(&body, &chosen(&terms, &has)),
+                read: Read::Call {
+                    call: handle.clone(),
+                },
+                score: has.len() as f32 / terms.len() as f32,
+                at: call.started,
+                key: handle.clone(),
+                handle,
+            }
+        })
+        .collect();
     Ok(choose(hits, limit))
 }
 
@@ -112,8 +163,9 @@ async fn row_hits(
         hits.push(Hit {
             handle: format!("#{}", message.id),
             time: moment(message.at, context.services.offset),
+            tool: None,
             text: format!("{name}：{}", snippet(&body, &chosen(terms, has))),
-            read: Around {
+            read: Read::Around {
                 around: message.id.get(),
             },
             score: has.len() as f32 / terms.len() as f32,

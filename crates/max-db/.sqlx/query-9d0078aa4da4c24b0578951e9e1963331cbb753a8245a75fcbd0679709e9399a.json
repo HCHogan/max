@@ -1,0 +1,99 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        with hits as materialized (\n            select c.turn_id, c.n, c.name, c.arguments, c.output, t.ordinal, t.started_at,\n                   lower(c.arguments || E'\\n' || c.output) as body\n            from tool_calls c join turns t on t.id = c.turn_id\n            where lower(c.arguments || E'\\n' || c.output) like any($2)\n              and t.conversation_id = $1\n              and ($3::bigint is null or t.from_id >= $3)\n              and ($4::bigint is null or t.from_id < $4)\n        ), found as materialized (\n            select *, array(\n                select x.n::int from unnest($2::text[]) with ordinality as x(pattern, n)\n                where body like x.pattern\n            ) as terms\n            from hits\n        )\n        select ordinal as \"turn!\", n as \"n!\", name as \"name!\", arguments as \"arguments!\",\n               output as \"output!\", started_at as \"started!\", terms as \"terms!\"\n        from found\n        order by cardinality(terms) desc, turn_id desc, n desc\n        limit $5\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "turn!",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "turns",
+            "name": "ordinal"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "n!",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "tool_calls",
+            "name": "n"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "name!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "tool_calls",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "arguments!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "tool_calls",
+            "name": "arguments"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "output!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "tool_calls",
+            "name": "output"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "started!",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "turns",
+            "name": "started_at"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "terms!",
+        "type_info": "Int4Array",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "TextArray",
+        "Int8",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "9d0078aa4da4c24b0578951e9e1963331cbb753a8245a75fcbd0679709e9399a"
+}
