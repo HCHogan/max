@@ -64,11 +64,13 @@ switch.
   reproducible as before, and the issue says which advisory: that is the
   news, and by hand is how a fix younger than seven days is taken.
 - **The guest's pins move too.** `microvm` and `llm-agents` change the
-  guest's image. Each has its checks: `pi` for what `nix/pi.sh` rests on,
-  `module` and `jobs` in CI, the nested test on tank. A deploy after one
-  stops the VMs that run, which boot the new image when next needed; with
-  the few conversations there are, that is a price worth not carrying
-  month-old pins.
+  guest's image. The gate has `pi` for what `nix/pi.sh` rests on, `jobs`
+  for what surrounds it, and `guest-evaluates`, which says only that the
+  image still evaluates. That it builds and boots is checked on tank, by
+  its system's build and the nested test, before `maxx` moves. A deploy
+  after one stops the VMs that run, which boot the new image when next
+  needed; with the few conversations there are, that is a price worth not
+  carrying month-old pins.
 - **On GitHub, and tank after it.** CI's checks already run on GitHub's
   runners, and the workflow's own token can push, so nothing is installed
   and no secret is kept. The nested test needs KVM inside a VM, which only
@@ -88,6 +90,10 @@ switch.
 - pi can move a minor version in a night. The `pi` check covers what the
   wrapper rests on, not everything an agent does with pi.
 - More deploys change the guest's image, and so restart the VMs.
+- A pin the guest's image no longer builds or boots with gets to max's
+  main: the gate doesn't build the image. tank's updater then leaves
+  `maxx` where it is and says so in nix-config's issue, and nothing of
+  max moves there until the pin is put back or the guest fixed.
 
 ## Alternatives
 

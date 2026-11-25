@@ -301,6 +301,13 @@
               inherit pkgs;
               inherit (inputs.llm-agents.packages.${system}) pi;
             };
+            # The guest's image evaluates, with the pins as they are. To
+            # build it is to fetch its whole closure, several GiB, and to
+            # boot it takes KVM in the test's machine: tank does both, in
+            # its system's build and in the nested test below.
+            guest-evaluates = pkgs.writeText "guest-evaluates" (
+              builtins.unsafeDiscardStringContext guest.drvPath
+            );
           };
 
           # These boot VMs inside the test machine, so they need KVM in it:
