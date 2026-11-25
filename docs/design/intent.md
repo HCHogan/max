@@ -83,9 +83,13 @@ options.
   its trigger, or is fed to the running one. A verdict shows as a line in
   `[新消息]`, such as `[判定：在追问你刚才的回答]`; a direct trigger adds no
   line, since its message is already marked `@你` or `回复你的 #123`.
-- **The cap**: at most 8 verdict wakes per conversation per hour
+- **The cap**: at most 20 verdict wakes per conversation per hour
   (`JUDGED_WAKES_PER_HOUR`), against a runaway small model; direct triggers
-  don't count. Verdicts past it are dropped. `/proactive` switches
+  don't count. Verdicts past it are dropped. It sits above what a lively
+  chat reaches by itself, about 15 an hour, two thirds of them while
+  Max's core is still up from its last answer: a cap of 8 is full on most
+  days in the busiest group, and then drops verdicts that are right, a
+  message that names Max without an @ among them. `/proactive` switches
   classification per conversation, and `/status` shows it.
 - **Output limit**: 1000 tokens (`MAX_OUTPUT` in `classify.rs`): a model
   that reasons first (`deepseek-v4.1-flash` at low effort thinks for about

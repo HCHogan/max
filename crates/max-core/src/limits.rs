@@ -88,8 +88,10 @@ pub const EVENTS_CAUGHT_UP: i64 = 1000;
 pub const WEBREAD_CHARS: usize = 12_000;
 
 /// The most times an hour the classifier may wake Max; it is a guard
-/// against the small model going wrong. Direct triggers don't count.
-pub const JUDGED_WAKES_PER_HOUR: usize = 8;
+/// against the small model going wrong, set above what a lively chat
+/// reaches: about 15 an hour, most of them while Max is already talking.
+/// Direct triggers don't count.
+pub const JUDGED_WAKES_PER_HOUR: usize = 20;
 
 /// A limit a conversation may set for itself, with `/config` or Max's
 /// `config` tool, by the name the configuration file, the command and the

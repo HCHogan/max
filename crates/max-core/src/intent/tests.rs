@@ -49,14 +49,16 @@ fn judged_wakes_are_capped() {
     let clock = Clock(Instant::now());
     let mut intent = Intent::new();
     let mut woken = 0;
-    for i in 0..10 {
-        let at = clock.at(i * 60);
-        intent.observe(&chat(i.try_into().unwrap()));
+    // Two more than the cap, a minute apart: all within the hour.
+    let tries = i64::try_from(JUDGED_WAKES_PER_HOUR).unwrap() + 2;
+    for i in 0..tries {
+        let at = clock.at(i.unsigned_abs() * 60);
+        intent.observe(&chat(i));
         woken += intent.verdict(verdict(true), at).len();
     }
     assert_eq!(woken, JUDGED_WAKES_PER_HOUR);
     // An hour after the first, there is room again.
-    intent.observe(&chat(20));
+    intent.observe(&chat(tries));
     assert_eq!(intent.verdict(verdict(true), clock.at(3600)).len(), 1);
 }
 
