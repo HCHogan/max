@@ -29,7 +29,6 @@ pub struct About {
 /// One of Max's units, as the guest's systemd has it.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Unit {
-    /// The unit's name.
     pub name: String,
     /// What systemd made of its file: loaded; not-found of a file
     /// `maxx units apply` hasn't installed; bad-setting or error of one it

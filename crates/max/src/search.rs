@@ -19,7 +19,6 @@ const AT_ONCE: usize = 4;
 const TITLE: usize = 200;
 const SNIPPET: usize = 800;
 
-/// A client for web search.
 pub struct Search {
     http: Client,
     url: String,

@@ -78,7 +78,6 @@ impl Does {
 pub struct Shared {
     /// The database, and what the tools reach.
     pub services: Arc<service::Services>,
-    /// The configured models.
     pub models: Arc<Models>,
     /// To each platform's sender: what the conversations say.
     pub outbound: HashMap<Platform, UnboundedSender<Outgoing>>,
@@ -116,7 +115,6 @@ pub struct Shared {
 pub struct Outgoing {
     /// Where it goes.
     pub place: Arc<Place>,
-    /// The row.
     pub message: Arc<Message>,
     /// Told once it is sent or failed, for a `Post` that waits.
     pub receipt: Option<Receipt>,
@@ -181,7 +179,6 @@ struct Active {
     started: Instant,
 }
 
-/// How a core ends.
 enum End {
     Kill(String),
     Failed(FailReason),

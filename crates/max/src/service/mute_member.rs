@@ -16,7 +16,6 @@ use tracing::info;
 use super::tool::Tool;
 use super::{Context, Failure};
 
-/// The `mute_member` tool.
 #[derive(Debug)]
 pub struct MuteMember;
 

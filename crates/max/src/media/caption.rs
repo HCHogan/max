@@ -51,7 +51,6 @@ const STICKER: &str = "你在给群聊里的表情包写简介，用来在表情
 /// The caption worker: what it needs.
 #[derive(Debug)]
 pub struct Captioner {
-    /// The database.
     pub pool: PgPool,
     /// The model that reads the pictures.
     pub chosen: Chosen,

@@ -75,7 +75,6 @@ impl People for BTreeMap<IdentityId, PrincipalId> {
 /// Something about a row the model should notice.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Mark {
-    /// Nothing.
     #[default]
     None,
     /// A trigger addressed to Max.

@@ -165,7 +165,6 @@ pub static DECLARATIONS: LazyLock<String> = LazyLock::new(|| {
     host.chain(guest).collect::<Vec<_>>().join("\n\n")
 });
 
-/// The tool of this name, if there is one.
 pub fn find(name: &str) -> Option<&'static Spec> {
     TOOLS.iter().find(|spec| spec.name == name)
 }

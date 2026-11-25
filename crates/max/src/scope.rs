@@ -23,7 +23,6 @@ pub struct Scope {
 }
 
 impl Scope {
-    /// A scope with no tasks.
     #[must_use]
     pub fn new() -> Self {
         Self::default()

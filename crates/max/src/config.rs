@@ -28,10 +28,8 @@ pub struct Config {
     pub utc_offset: FixedOffset,
     /// `platform:native id` per line, such as `qq:<user_openid>`.
     pub owners_file: Option<PathBuf>,
-    /// What is logged.
     #[serde(default)]
     pub log: Log,
-    /// The database.
     pub database: Database,
     /// The models, and who uses which.
     pub llm: Llm,
@@ -107,7 +105,6 @@ impl Limits {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Search {
-    /// The file its API key is in.
     pub api_key_file: PathBuf,
 }
 
@@ -127,7 +124,6 @@ impl Search {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GitHub {
-    /// The account's login.
     pub login: String,
     /// The account's number, for its commits' noreply address.
     pub user_id: u64,
@@ -165,7 +161,6 @@ impl GitHub {
 pub struct Api {
     /// What follows `/api/<name>` in a VM's call follows this.
     pub base_url: BaseUrl,
-    /// The file its secret is in.
     pub secret_file: PathBuf,
     /// Headers every call carries, `{secret}` in them standing for the
     /// secret, such as `Authorization = "Bearer {secret}"`.
@@ -305,9 +300,7 @@ impl std::fmt::Display for Rule {
 /// Who a guest's commits are by.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Author {
-    /// The name on a commit.
     pub name: String,
-    /// The address on a commit.
     pub email: String,
 }
 
@@ -371,7 +364,6 @@ impl fmt::Display for BaseUrl {
 /// One of Max's owners, by an account of theirs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Owner {
-    /// The platform their account is on.
     pub platform: Platform,
     /// The platform's id for the account.
     pub native_id: String,
@@ -400,16 +392,11 @@ pub struct Log {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Level {
-    /// Errors alone.
     Error,
-    /// Warnings and errors.
     Warn,
-    /// What Max does, too.
     #[default]
     Info,
-    /// And what it finds on the way.
     Debug,
-    /// Everything.
     Trace,
 }
 
@@ -459,7 +446,6 @@ pub struct Llm {
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Selection {
-    /// The model.
     pub model: ModelRef,
     /// The reasoning effort, as its provider spells it.
     pub effort: Option<String>,
@@ -515,7 +501,6 @@ impl fmt::Display for ModelRef {
 pub struct Provider {
     /// Its API, up to and including `/v1`.
     pub base_url: BaseUrl,
-    /// The protocol it speaks.
     pub protocol: ProtocolName,
     /// The file its API key is in, if it takes one.
     pub api_key_file: Option<PathBuf>,
@@ -601,7 +586,6 @@ pub struct Model {
 #[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Price {
-    /// Input.
     pub input: f64,
     /// Input read from the provider's cache; the input's price, unless
     /// said.
@@ -638,10 +622,8 @@ pub struct Vm {
     pub slots: Vec<Slot>,
     /// The resolvers a guest uses.
     pub dns: Vec<IpAddr>,
-    /// A VM's virtual CPUs.
     #[serde(default = "cpus")]
     pub cpus: u32,
-    /// A VM's memory, in MiB.
     #[serde(default = "memory")]
     pub memory_mib: u32,
     /// The disk that holds what the guest adds to the store.
@@ -689,7 +671,6 @@ fn kept() -> usize {
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Slot {
-    /// The tap's name.
     pub tap: String,
     /// The guest's.
     pub address: Cidr,
@@ -701,7 +682,6 @@ pub struct Slot {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(try_from = "String")]
 pub struct Cidr {
-    /// The address.
     pub address: IpAddr,
     /// How many of its bits are the network's.
     pub prefix: u8,

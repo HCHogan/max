@@ -57,7 +57,6 @@ const BURST: Duration = Duration::from_secs(5);
 /// A committed row, as intent sees it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Entry {
-    /// The row.
     pub id: MessageId,
     /// Whose account sent it.
     pub sender: IdentityId,
@@ -86,7 +85,6 @@ pub enum Decision {
     Wake {
         /// The rows it is about.
         ids: Vec<MessageId>,
-        /// Why.
         reason: Reason,
     },
     /// Run the classifier on these, newest last.

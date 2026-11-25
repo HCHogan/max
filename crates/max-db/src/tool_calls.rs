@@ -17,7 +17,6 @@ pub struct Call {
     pub turn: i32,
     /// Its place among the turn's calls, from 1.
     pub n: i32,
-    /// The tool.
     pub name: String,
     /// What it was given: a line `key: value` for each argument.
     pub arguments: String,

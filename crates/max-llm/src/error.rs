@@ -18,7 +18,6 @@ pub enum Error {
     /// The provider answered with an error's status.
     #[error("the provider answered {status}: {body}")]
     Status {
-        /// The HTTP status.
         status: u16,
         /// The start of what it said.
         body: String,
@@ -37,7 +36,6 @@ pub enum Error {
     Provider {
         /// Its code for the failure, or its type where it gives no code.
         code: String,
-        /// What it says of it.
         message: String,
     },
     /// The model stopped before finishing, such as at the output limit.

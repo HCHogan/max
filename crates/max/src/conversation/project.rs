@@ -26,9 +26,7 @@ use crate::tokens;
 /// What a projection reads besides the ledger.
 #[derive(Clone, Debug)]
 pub struct Projection<'a> {
-    /// The conversation's place.
     pub place: &'a Place,
-    /// The system prompt.
     pub system: String,
     /// The model's context window, in tokens.
     pub window: u32,
@@ -38,7 +36,6 @@ pub struct Projection<'a> {
     pub memory: String,
     /// The time, for the clock line.
     pub now: DateTime<Utc>,
-    /// Local time's offset.
     pub offset: FixedOffset,
 }
 

@@ -338,7 +338,6 @@ impl Vm {
         Ok(())
     }
 
-    /// The SSH connection to the guest.
     #[must_use]
     pub fn connection(&self) -> &Connection {
         &self.connection

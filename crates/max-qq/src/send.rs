@@ -46,11 +46,9 @@ pub type Answer<'a, T> = Pin<Box<dyn Future<Output = Result<T, api::Error>> + Se
 /// Sends messages, uploads pictures and files, and recalls messages. QQ's
 /// client in service; a recorder in tests.
 pub trait Api: Send + Sync + 'static {
-    /// Sends a message to a chat.
     fn send<'a>(&'a self, chat: Chat<'a>, message: &'a Message) -> Answer<'a, Sent>;
     /// Uploads a picture, a voice message or a file for a chat.
     fn upload<'a>(&'a self, chat: Chat<'a>, media: Media<'a>) -> Answer<'a, Uploaded>;
-    /// Recalls a message from a chat.
     fn recall<'a>(&'a self, chat: Chat<'a>, message_id: &'a str) -> Answer<'a, ()>;
 }
 

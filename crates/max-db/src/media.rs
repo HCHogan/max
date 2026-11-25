@@ -15,7 +15,6 @@ use crate::named;
 /// Downloaded bytes, as the content store holds them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Blob {
-    /// The file.
     pub sha256: Sha256,
     /// Its MIME type, where it is known.
     pub mime: Option<String>,
@@ -33,7 +32,6 @@ pub struct Blob {
 /// A message with media still to download.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Pending {
-    /// The message.
     pub message: MessageId,
     /// Those not downloaded yet.
     pub remote: Vec<Remote>,
@@ -127,7 +125,6 @@ pub struct Stored {
     pub kind: MediaKind,
     /// A file's, as the row's node has it.
     pub name: Option<String>,
-    /// The file.
     pub sha256: Sha256,
     /// Its MIME type, where it is known.
     pub mime: Option<String>,

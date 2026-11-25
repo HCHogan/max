@@ -87,11 +87,9 @@ pub async fn exists(conn: &mut PgConnection, sha256: &Sha256) -> sqlx::Result<bo
 /// A picture without a caption, and the first message it came in.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Uncaptioned {
-    /// The message.
     pub message: MessageId,
     /// Which of the message's media it is.
     pub ordinal: u16,
-    /// The file.
     pub sha256: Sha256,
     /// A picture or a sticker, as that message has it.
     pub kind: MediaKind,

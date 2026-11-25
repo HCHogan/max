@@ -32,10 +32,7 @@ pub enum Command {
     /// `/persona`, alone or with one.
     Persona(Persona),
     /// `/clear --all`; a bare `/clear` is answered with how.
-    Clear {
-        /// Whether `--all` was said.
-        all: bool,
-    },
+    Clear { all: bool },
     /// `/unclear`: takes `/clear --all` back.
     Unclear,
     /// The limits the conversation sets for itself.
@@ -103,12 +100,7 @@ pub enum Config {
     /// The one of this name.
     One(String),
     /// The limit of this name is set.
-    Set {
-        /// The limit's name.
-        name: String,
-        /// What it is set to.
-        value: Choice,
-    },
+    Set { name: String, value: Choice },
 }
 
 /// The command a message gives Max, if any: in a group, only one that

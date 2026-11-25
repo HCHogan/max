@@ -139,7 +139,6 @@ struct Function<'a> {
     parameters: &'static RawValue,
 }
 
-/// The request body.
 pub fn body<'a>(request: &'a Request, options: &'a Options, pictures: &'a Pictures) -> Body<'a> {
     let mut messages = Vec::new();
     let mut turn: Option<Assistant<'a>> = None;
@@ -457,7 +456,6 @@ struct Call {
 }
 
 impl Parser {
-    /// A parser for a response of `model`.
     #[must_use]
     pub fn new(model: ModelTag) -> Self {
         Self {

@@ -17,7 +17,6 @@ use crate::conversation::Place;
 pub struct Row {
     /// Where it was committed.
     pub place: Arc<Place>,
-    /// The row.
     pub message: Arc<Message>,
 }
 

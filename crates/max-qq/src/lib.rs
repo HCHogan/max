@@ -36,9 +36,7 @@ const RECALL: TimeDelta = TimeDelta::minutes(2);
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
-    /// The file the bot's AppID is in.
     pub app_id_file: PathBuf,
-    /// The file the bot's secret is in.
     pub app_secret_file: PathBuf,
 }
 

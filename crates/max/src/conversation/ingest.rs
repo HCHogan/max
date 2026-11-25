@@ -47,11 +47,9 @@ impl Direct {
 /// A row someone sent, as committed, with what the actor routes on.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Committed {
-    /// The row.
     pub message: Arc<Message>,
     /// Whose account sent it, and the person behind it.
     pub sender: Account,
-    /// The command it gives, if it gives one.
     pub command: Option<Command>,
     /// Why it is addressed to Max, if it is.
     pub direct: Option<Direct>,

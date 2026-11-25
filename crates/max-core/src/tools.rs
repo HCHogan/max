@@ -87,7 +87,6 @@ pub enum Tool {
     },
     /// A command for bash.
     Shell {
-        /// The command line.
         command: String,
         /// Where it runs, if not /work.
         workdir: Option<String>,

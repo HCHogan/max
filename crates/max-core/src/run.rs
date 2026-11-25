@@ -60,7 +60,6 @@ pub struct Context {
 pub enum Input {
     /// New rows on the timeline.
     Messages {
-        /// The rows.
         ids: Vec<MessageId>,
         /// The rows as the model is shown them.
         item: Item,
@@ -78,7 +77,6 @@ pub enum Input {
 pub struct Wake {
     /// The rows it is about.
     pub ids: Vec<MessageId>,
-    /// Why.
     pub reason: Reason,
     /// What the model is shown, such as `[判定：在追问]`. None for a
     /// direct trigger, whose rows are marked already.
@@ -110,10 +108,7 @@ pub enum Outcome {
     /// It was stopped: `/kill`, or Max shutting down.
     Interrupted,
     /// It gave up.
-    Failed {
-        /// Why.
-        reason: FailReason,
-    },
+    Failed { reason: FailReason },
     /// Running when the process crashed.
     Lost,
 }
@@ -133,13 +128,11 @@ pub enum Step {
 /// A model call, whole.
 #[derive(Debug)]
 pub struct Request {
-    /// The model to call.
     pub model: ModelTag,
     /// The base context and the transcript.
     pub items: Vec<Arc<Item>>,
     /// The tools it may call.
     pub tools: &'static [ToolSpec],
-    /// The model's output limit, if it has one.
     pub max_output: Option<u32>,
     /// For the segmenter in the model call.
     pub roster: BTreeSet<PrincipalId>,

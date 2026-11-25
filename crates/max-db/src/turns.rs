@@ -12,7 +12,6 @@ use crate::unknown;
 /// A turn as it starts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Started {
-    /// The turn.
     pub turn: TurnId,
     /// t#N, counted per conversation.
     pub ordinal: i32,

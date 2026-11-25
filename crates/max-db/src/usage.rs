@@ -31,9 +31,7 @@ pub struct Call<'a> {
     pub conversation: Option<ConversationId>,
     /// The turn it was part of, if of one.
     pub turn: Option<TurnId>,
-    /// What it was for.
     pub purpose: Purpose,
-    /// The provider called.
     pub provider: &'a str,
     /// The model, as the provider names it.
     pub model: &'a str,
@@ -49,7 +47,6 @@ pub struct Call<'a> {
     pub at: DateTime<Utc>,
 }
 
-/// Records a model call.
 pub async fn record(conn: &mut PgConnection, call: &Call<'_>) -> sqlx::Result<()> {
     let usage = call.usage;
     let timing = call.timing;
@@ -89,9 +86,7 @@ fn ms(duration: Duration) -> i32 {
 /// The tokens of a conversation's calls on one model, summed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Used {
-    /// The provider.
     pub provider: String,
-    /// The model.
     pub model: String,
     /// The input's tokens.
     pub input: i64,

@@ -13,7 +13,6 @@ use crate::{named, unknown};
 /// A row to commit.
 #[derive(Clone, Debug)]
 pub struct NewMessage<'a> {
-    /// The conversation it is a row of.
     pub conversation: ConversationId,
     /// The chat it came in at, or goes out to.
     pub endpoint: EndpointId,
@@ -44,11 +43,9 @@ pub struct NewMessage<'a> {
 /// A stored row, with what the reader needs besides the message.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Row {
-    /// The message.
     pub message: Message,
     /// The chat it came in at, or went out to.
     pub endpoint: EndpointId,
-    /// Whether it is a command.
     pub command: bool,
     /// For what Max sent to the row's endpoint: what became of it, once
     /// known.

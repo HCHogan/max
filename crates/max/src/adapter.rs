@@ -23,15 +23,12 @@ use crate::service::Failure;
 /// A platform's answer, some time later.
 pub type Answer<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
-/// The platforms Max is on.
 pub type Adapters = HashMap<Platform, Arc<dyn Adapter>>;
 
 /// Max's account on a platform, as the platform has it.
 #[derive(Clone, Debug)]
 pub struct Bot {
-    /// Its id there.
     pub id: String,
-    /// What it is called there.
     pub name: String,
 }
 

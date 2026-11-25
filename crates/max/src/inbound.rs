@@ -11,19 +11,15 @@ use max_db::platform::ConversationKind;
 /// A message someone sent, as its platform's adapter read it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Inbound {
-    /// The platform it came on.
     pub platform: Platform,
-    /// The chat it came in.
     pub chat: Chat,
     /// The platform's id for the message.
     pub native_id: String,
     /// The id it is quoted by, where that differs: QQ's msg_idx.
     pub quote_id: Option<String>,
-    /// Who sent it.
     pub sender: Person,
     /// When the platform says it was sent.
     pub at: DateTime<Utc>,
-    /// The message it quotes, if any.
     pub quote: Option<Quote>,
     /// What it says, in order.
     pub nodes: Vec<InNode>,
@@ -46,7 +42,6 @@ pub struct Chat {
 pub struct Person {
     /// The platform's id for their account.
     pub native_user_id: String,
-    /// What they are called there.
     pub name: String,
     /// None in private chats.
     pub role: Option<Role>,
@@ -105,7 +100,6 @@ impl Inbound {
         text
     }
 
-    /// Whether it @-mentions Max.
     #[must_use]
     pub fn mentions_me(&self) -> bool {
         self.nodes

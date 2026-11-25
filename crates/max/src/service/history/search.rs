@@ -188,7 +188,6 @@ pub(super) fn sender(who: &str) -> Result<String, Failure> {
     Ok(pattern(&who))
 }
 
-/// The terms at `indexes`.
 fn chosen<'t>(terms: &'t [String], indexes: &[usize]) -> Vec<&'t str> {
     indexes
         .iter()

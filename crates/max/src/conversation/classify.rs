@@ -40,9 +40,7 @@ pub const CONTEXT_LINES: i64 = 15;
 /// One classification: what its task needs.
 #[derive(Debug)]
 pub struct Job {
-    /// The database.
     pub pool: PgPool,
-    /// The conversation's place.
     pub place: Arc<Place>,
     /// The classifier's model.
     pub chosen: Chosen,

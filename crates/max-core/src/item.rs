@@ -13,7 +13,6 @@ use crate::message::{MediaKind, MediaRef};
 /// One thing the model is shown or says, with what it costs.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Item {
-    /// What it is.
     pub kind: ItemKind,
     /// For items the model produced: which protocol and model. An adapter
     /// drops `opaque` from another source.
@@ -26,15 +25,11 @@ pub struct Item {
     pub tokens: u32,
 }
 
-/// What an item is.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ItemKind {
     /// The system prompt.
-    System {
-        /// The prompt.
-        text: String,
-    },
+    System { text: String },
     /// What Max is shown: context blocks and new inputs, and the pictures
     /// among them, after the text.
     User {
@@ -127,7 +122,6 @@ pub struct ToolCall {
 pub struct ToolOutput {
     /// Its text, and the pictures and videos it shows.
     pub parts: Vec<Part>,
-    /// Whether the call failed.
     pub error: bool,
     /// Estimated by `max`.
     pub tokens: u32,
@@ -148,19 +142,14 @@ impl ToolOutput {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Part {
-    /// Text.
     Text {
         /// As the tool gave it.
         text: String,
     },
     /// A picture.
-    Media {
-        /// The file.
-        media: MediaRef,
-    },
+    Media { media: MediaRef },
     /// An MP4 the model watches, sound and all; `seconds` long.
     Video {
-        /// The file.
         media: MediaRef,
         /// How long it runs.
         seconds: u32,
@@ -191,7 +180,6 @@ pub enum Protocol {
 pub struct ModelOutput {
     /// What the model produced, in order.
     pub items: Vec<Item>,
-    /// What the call used.
     pub usage: Usage,
 }
 

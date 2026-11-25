@@ -67,7 +67,6 @@ pub struct Chosen {
     pub tag: ModelTag,
     /// Its context window, in tokens.
     pub window: u32,
-    /// Its output limit, if it has one.
     pub max_output: Option<u32>,
     /// Whether it watches videos.
     pub video: bool,
@@ -98,7 +97,6 @@ impl fmt::Debug for Chosen {
 pub struct Upstream {
     /// The provider's name in the configuration.
     pub provider: String,
-    /// The protocol it speaks.
     pub protocol: Protocol,
     /// Its API, up to and including `/v1`.
     pub base_url: String,
@@ -110,7 +108,6 @@ pub struct Upstream {
     pub model: String,
     /// Its context window, in tokens.
     pub window: u32,
-    /// Its output limit, if it has one.
     pub max_output: Option<u32>,
     /// How long the provider may keep quiet, before its answer or within it.
     pub idle: Duration,

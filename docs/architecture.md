@@ -279,15 +279,17 @@ and a web of dependencies while blocking nothing.
   truncation is meant); `_` arms that cover a single variant, so a new
   variant doesn't silently fall into one; `#[expect]` with a reason
   instead of `#[allow]`; redundant clones; large futures. What is public
-  is held to more: every public item has documentation, a function that
-  can fail or panic says when under `# Errors` or `# Panics` (max-db says
-  it once, for the crate), a public type has `Debug`, written by hand
-  where a derive would print a key, a function that only gives a value is
-  `#[must_use]`, and nothing is `pub` that can't be reached. No glob
-  imports outside a test's `use super::*`, and `unsafe` is forbidden, not
-  denied. Not `cast_precision_loss` (every conversion to f64 here is of
-  small numbers) nor `expect_used` (`unwrap_used` already forces an
-  `expect` with a reason).
+  is held to more: a function that can fail or panic says when under
+  `# Errors` or `# Panics` (max-db says it once, for the crate), a public
+  type has `Debug`, written by hand where a derive would print a key, a
+  function that only gives a value is `#[must_use]`, and nothing is `pub`
+  that can't be reached. No glob imports outside a test's `use super::*`,
+  and `unsafe` is forbidden, not denied. Not `cast_precision_loss` (every
+  conversion to f64 here is of small numbers), `expect_used` (`unwrap_used`
+  already forces an `expect` with a reason) nor `missing_docs`: a lint
+  can't tell a name that says it all from one that doesn't, and where it
+  asks for a line the line repeats the name. A doc comment says what the
+  name and the type don't: a unit, what `None` means, a why.
 - **Limits live in `max_core::limits`.** Every limit the model is told
   of, or that is used in more than one place, is defined there once; the
   system prompt's rules and the descriptions of `run_code` and `shell` are

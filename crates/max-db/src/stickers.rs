@@ -9,7 +9,6 @@ use sqlx::PgConnection;
 /// of the row's media it is, and its caption.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Sticker {
-    /// The row.
     pub message: MessageId,
     /// Which of the row's media it is.
     pub ordinal: u16,

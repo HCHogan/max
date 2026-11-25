@@ -24,7 +24,6 @@ use max::inbound::InNode;
 /// How much of a quoted message's text its `[reply: …]` shows.
 const QUOTE_CHARS: usize = 40;
 
-/// The forward's nodes.
 pub(super) fn nodes(forward: &Transcript) -> Vec<InNode> {
     let mut out = Out::default();
     out.text(&heading(forward));

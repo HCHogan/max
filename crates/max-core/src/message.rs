@@ -42,9 +42,7 @@ crate::names!(Platform, "platform", {
 pub struct Message {
     /// Its row in the ledger, and its place in the timeline.
     pub id: MessageId,
-    /// The conversation it is a row of.
     pub conversation: ConversationId,
-    /// Who sent it.
     pub sender: Sender,
     /// When it was sent.
     pub at: DateTime<Utc>,
@@ -118,14 +116,12 @@ pub enum Content {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Node {
-    /// Plain text.
     Text {
         /// As it was written.
         text: String,
     },
     /// An @ of someone, or of everyone.
     Mention {
-        /// Whom.
         target: MentionTarget,
         /// The name the @ showed, for where the account isn't known.
         display: String,
@@ -161,7 +157,6 @@ pub enum MentionTarget {
 /// platform it came from.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Emote {
-    /// The platform it is a face of.
     pub platform: Platform,
     /// The platform's id for it.
     pub id: String,
@@ -260,11 +255,9 @@ pub struct MediaMeta {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MediaKind {
-    /// A picture.
     Image,
     /// A picture sent as a sticker.
     Sticker,
-    /// A video.
     Video,
     /// A voice message or a recording.
     Audio,
@@ -286,7 +279,6 @@ crate::names!(MediaKind, "media kind", {
 pub struct Card {
     /// Where it's from, such as "哔哩哔哩".
     pub tag: Option<String>,
-    /// Its title.
     pub title: Option<String>,
     /// The line under its title.
     pub subtitle: Option<String>,
@@ -327,17 +319,13 @@ pub struct Draft {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DraftNode {
-    /// Plain text.
     Text {
         /// As it goes out.
         text: String,
     },
     /// Resolved to the person's account on the destination platform when
     /// sent; plain `@名字` where they have none.
-    Mention {
-        /// Whom.
-        principal: PrincipalId,
-    },
+    Mention { principal: PrincipalId },
     /// A row's picture or sticker sent again, by its handle
     /// (`[sticker#123.0]`). Whether Max may send it is checked when it is
     /// committed.
@@ -350,9 +338,7 @@ pub enum DraftNode {
     /// A picture a tool made, in the content store already. The model
     /// can't write it.
     Made {
-        /// The file.
         sha256: Sha256,
-        /// Its MIME type.
         mime: String,
         /// Its size in bytes.
         size: u64,
@@ -360,7 +346,6 @@ pub enum DraftNode {
     /// A file a tool sends, in the content store already, shown under
     /// `name`. The model can't write it.
     File {
-        /// The file.
         sha256: Sha256,
         /// The name it is shown under.
         name: String,
@@ -370,7 +355,6 @@ pub enum DraftNode {
     /// A voice message a tool sends, in the content store already. The
     /// model can't write it.
     Voice {
-        /// The file.
         sha256: Sha256,
         /// Its size in bytes.
         size: u64,

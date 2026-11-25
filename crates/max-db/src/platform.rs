@@ -120,7 +120,6 @@ pub async fn principals(
 /// What kind of chat a conversation is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConversationKind {
-    /// A group.
     Group,
     /// A private chat.
     Direct,
@@ -134,9 +133,7 @@ max_core::names!(ConversationKind, "conversation kind", {
 /// A chat a conversation is in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Endpoint {
-    /// The endpoint.
     pub id: EndpointId,
-    /// Its conversation.
     pub conversation: ConversationId,
 }
 
@@ -414,9 +411,7 @@ pub async fn speaker(
 /// message in the endpoint, or the name they were first seen with.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Known {
-    /// The person.
     pub principal: PrincipalId,
-    /// What they are called.
     pub name: String,
     /// Their role; None in a private chat, or for someone who hasn't spoken.
     pub role: Option<Role>,

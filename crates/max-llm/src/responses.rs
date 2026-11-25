@@ -124,7 +124,6 @@ struct Tool<'a> {
     strict: bool,
 }
 
-/// The request body.
 pub fn body<'a>(request: &'a Request, options: &'a Options, pictures: &'a Pictures) -> Body<'a> {
     let mut instructions = Vec::new();
     let mut input = Vec::new();
@@ -234,7 +233,6 @@ pub struct Parser {
 }
 
 impl Parser {
-    /// A parser for a response of `model`.
     #[must_use]
     pub fn new(model: ModelTag) -> Self {
         Self {

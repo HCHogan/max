@@ -121,7 +121,6 @@ struct Platforms {
 }
 
 impl Platforms {
-    /// The platforms configured.
     fn platforms(&self) -> Vec<Platform> {
         self.qq.iter().map(|_| Platform::Qq).collect()
     }

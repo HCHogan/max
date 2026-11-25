@@ -11,7 +11,6 @@ use sqlx::PgConnection;
 /// has one.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Peer {
-    /// The conversation.
     pub conversation: ConversationId,
     /// Its title, a group's name as its platform has it.
     pub title: Option<String>,

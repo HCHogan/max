@@ -221,9 +221,7 @@ pub enum Waited<T> {
 /// The command's stdout or stderr.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Stream {
-    /// Standard output.
     Out,
-    /// Standard error.
     Err,
 }
 

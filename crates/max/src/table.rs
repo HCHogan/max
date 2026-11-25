@@ -37,9 +37,7 @@ use crate::service;
 /// Max's account on a platform.
 #[derive(Clone, Debug)]
 pub struct Me {
-    /// The account.
     pub account: Account,
-    /// What it is called.
     pub name: String,
 }
 

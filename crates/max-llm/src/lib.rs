@@ -66,7 +66,6 @@ impl Pictures {
         self.files.insert(sha256, medium);
     }
 
-    /// Whether there is nothing to send.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.rows.is_empty() && self.files.is_empty()
@@ -77,9 +76,7 @@ impl Pictures {
 /// the body is written: no copy of it is made for the request.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Medium {
-    /// Its MIME type.
     pub mime: &'static str,
-    /// The file's bytes.
     pub bytes: Vec<u8>,
 }
 
