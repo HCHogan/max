@@ -15,6 +15,7 @@ Why Max is built the way it is: one file for each decision that was a real trade
 - [`history` searches tool calls when asked](history-searches-tool-calls.md)
 - [Rare cases fail plainly](rare-cases-fail-plainly.md)
 - [Direct triggers aren't held back](no-debounce.md)
+- [Max says little, and joins in seldom](max-says-little.md)
 
 ## Tools and programs
 

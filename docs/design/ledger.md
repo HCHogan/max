@@ -197,9 +197,23 @@ Placeholders:
 
 While the core is awake, every message in the group reaches it as
 `[新消息]`, so the prompt has it answer only what is addressed to it:
-messages that @ it, reply to it or name it, and those a `[判定 …]` line
-points to. It doesn't cut into other people's exchanges or answer
-questions put to others, and told to be quiet, it outputs `[silence]`.
+messages that @ it, reply to it or name it. A `[判定 …]` line is the
+classifier's guess, and the prompt has Max leave most of them unanswered:
+it speaks, one short message, when someone was calling it without an @,
+or asked the whole chat something nobody has answered and Max knows the
+answer. It doesn't cut into other people's exchanges or answer questions
+put to others. Told it talks too much, told to be quiet or sworn at, it
+outputs `[silence]` or a word, and goes on as before.
+
+How long a reply is, the prompt gives in the chat's own measure: a member's
+message is mostly a dozen characters and seldom over fifty, and so is
+Max's when it chats or joins in, one message of one sentence. An answer
+to a question starts with the answer and takes a message or two. It
+writes at length, and with headings, when someone asks for that or what
+is asked for is long by nature: code, steps, a comparison of what it
+found. Jokes and jabs are the seasoning of a reply in ten, and what Max
+isn't sure of or may be out of date it looks up first. Why is in
+[decisions/max-says-little.md](../decisions/max-says-little.md).
 
 ## Outbound
 
