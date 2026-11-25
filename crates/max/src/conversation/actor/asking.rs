@@ -6,7 +6,7 @@
 //! that core ends with the question unanswered, the asker hears so, as
 //! it does when Max is stopped there; whether to ask again is the
 //! asker's to judge. See "Asking another conversation" in
-//! docs/rust-rewrite.md.
+//! docs/design/jobs.md.
 
 use std::collections::BTreeMap;
 

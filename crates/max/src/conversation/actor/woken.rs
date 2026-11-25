@@ -1,7 +1,7 @@
 //! Wakes from outside the chat: `maxx wake` from something in the group's
 //! own VM, what the VM service says about the VM, and a question or an
 //! answer from another conversation (`asking`). See "Resident programs"
-//! in docs/rust-rewrite.md.
+//! in docs/design/jobs.md.
 
 use std::collections::VecDeque;
 

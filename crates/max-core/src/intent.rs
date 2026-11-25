@@ -46,9 +46,11 @@ pub enum Reason {
 
 /// The most messages one classification looks at.
 const BATCH: usize = 30;
-/// A held trigger wakes once its sender has been quiet this long...
+/// A held trigger wakes once its sender has been quiet this long, or at
+/// [`HOLD_AT_MOST`], whichever is first.
 const QUIET: Duration = Duration::from_secs(10);
-/// ...or this long after it came, whichever is first.
+/// The longest a trigger is held: it wakes this long after it came, if
+/// its sender hasn't gone quiet for [`QUIET`] before.
 const HOLD_AT_MOST: Duration = Duration::from_secs(20);
 /// Three messages from one sender this close together look like a
 /// sentence typed in pieces.

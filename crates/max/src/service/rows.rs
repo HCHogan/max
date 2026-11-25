@@ -7,7 +7,7 @@
 //! ledger knows of it besides, so that a program can make of the
 //! timeline what max's own projection makes of it. `maxx events --full`
 //! carries the same for the rows as they come (vm/events.rs). See "Rows
-//! as data" in docs/rust-rewrite.md.
+//! as data" in docs/design/jobs.md.
 
 use std::collections::BTreeMap;
 

@@ -52,10 +52,11 @@ pub struct Person {
 pub struct Quote {
     /// The id the quoted message is quoted by, where the platform gives it.
     pub quote_id: Option<String>,
-    /// What the platform showed of it, to find it by when the id is
-    /// unknown: its text, without mentions or faces...
+    /// Its text as the platform showed it, without mentions or faces, to
+    /// find it by when the id is unknown.
     pub text: Option<String>,
-    /// ...and the names of its pictures and files.
+    /// The names of its pictures and files as the platform showed them, to
+    /// find it by with `text`.
     pub files: Vec<String>,
 }
 

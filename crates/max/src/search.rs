@@ -1,5 +1,5 @@
 //! Web search, for the `web_search` tool: Exa's REST API, with the key on
-//! the host. See "Web search" in docs/rust-rewrite.md.
+//! the host. See "Web search" in docs/design/tools.md.
 
 use std::fmt;
 use std::time::Duration;

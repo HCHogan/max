@@ -1,6 +1,6 @@
 //! The derived-data workers' feed: every committed row, fanned out to
 //! each worker's mailbox. How a worker schedules its work is its own;
-//! see "Derived-data workers" under "The three roles" in docs/rust-rewrite.md.
+//! see "The three roles" in docs/architecture.md.
 
 use std::collections::HashSet;
 use std::fmt;

@@ -2,7 +2,7 @@
 //! prompt doesn't declare: `say`, which says something in the group as
 //! Max would, and `wake`, which wakes Max. A turn says things in its own
 //! output, and is awake; its programs may call these all the same. See
-//! "Resident programs" in docs/rust-rewrite.md.
+//! "Resident programs" in docs/design/jobs.md.
 
 use max_core::ids::PrincipalId;
 use max_core::project;

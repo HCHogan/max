@@ -1,6 +1,5 @@
 //! The download worker: each medium a message brings with an address, into
-//! the content store and `message_media`. See "Media" in
-//! docs/rust-rewrite.md.
+//! the content store and `message_media`. See docs/design/media.md.
 
 use std::fmt;
 use std::sync::Arc;

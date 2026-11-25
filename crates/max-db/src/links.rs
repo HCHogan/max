@@ -1,5 +1,5 @@
 //! Which conversation's Max may ask which other's: the edges `/link`
-//! makes. See "Asking another conversation" in docs/rust-rewrite.md.
+//! makes. See "Asking another conversation" in docs/design/jobs.md.
 
 use std::fmt::{self, Write};
 

@@ -187,9 +187,10 @@ struct Ended {
     /// systemd's result for the unit: `success`, `exit-code`, `timeout`,
     /// `signal`, `oom-kill`...
     result: String,
-    /// How its main process ended, `exited` or `killed`...
+    /// How its main process ended: `exited` or `killed`.
     code: String,
-    /// ...and with what: an exit status, or a signal's name.
+    /// What its main process ended with: an exit status, or a signal's
+    /// name.
     status: String,
     out: Option<Piece>,
     err: Option<Piece>,

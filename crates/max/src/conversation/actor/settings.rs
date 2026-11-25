@@ -1,7 +1,7 @@
 //! The limits a conversation sets for itself: with `/config`, or by Max
 //! with its `config` tool, the last to set one winning over the other and
 //! over the configuration file. See "Settings a conversation sets" in
-//! docs/rust-rewrite.md.
+//! docs/design/config.md.
 
 use std::fmt::Write;
 use std::time::Duration;

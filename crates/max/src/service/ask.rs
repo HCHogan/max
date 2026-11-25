@@ -1,7 +1,7 @@
 //! `ask` and `answer`: Max here asks Max in another conversation, and
 //! answers what one asked it. The conversation's actor sends each on its
 //! way; nothing waits for an answer. See "Asking another conversation" in
-//! docs/rust-rewrite.md.
+//! docs/design/jobs.md.
 
 use max_core::ids::ConversationId;
 use max_core::limits::ASK_CHARS;

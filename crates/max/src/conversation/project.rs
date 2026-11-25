@@ -332,7 +332,7 @@ fn counted_line<P: max_core::render::People>(
 /// much of a call for later calls, as whole messages; a tail that grows
 /// inside one message isn't reused once a few minutes have passed, and a
 /// new turn comes at least an idle window after the last call. See
-/// "Rules for a stable prefix" in docs/rust-rewrite.md.
+/// "Rules for a stable prefix" in docs/design/context.md.
 fn pieces<P: max_core::render::People>(
     render: &Render<'_, P>,
     lines: &[(&Message, String)],

@@ -1,5 +1,5 @@
 //! A conversation's actor: the one writer of its timeline and the driver
-//! of its core. See "The conversation actor" in docs/rust-rewrite.md.
+//! of its core. See docs/design/actor.md.
 
 mod actor;
 pub mod classify;
@@ -143,7 +143,7 @@ pub enum Heard {
     /// The VM service, about the group's VM.
     Vm(String),
     /// Max in another conversation asks Max here. See "Asking another
-    /// conversation" in docs/rust-rewrite.md.
+    /// conversation" in docs/design/jobs.md.
     Asked(Question),
     /// Max in another conversation answers what Max here asked it, or it
     /// can't be asked, and why.

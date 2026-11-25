@@ -1,6 +1,6 @@
 //! Calls from the group's VM: Max's tools, run beside the core. Every
 //! call comes this way, a turn's program's and a unit's of Max's own
-//! alike. See "The guest's calls" in docs/rust-rewrite.md.
+//! alike. See "The guest's calls" in docs/design/tools.md.
 
 use std::sync::Arc;
 

@@ -3,7 +3,7 @@
 //! used and how it runs. The JSON Schemas max's service lists, the
 //! checks on a call's arguments and the TypeScript the system prompt
 //! declares it with all come from there. See "Tool contract" in
-//! docs/rust-rewrite.md. The guest has tools of its own, which need no
+//! docs/design/tools.md. The guest has tools of its own, which need no
 //! host: those are declared once too, in nix/local.json ([`LOCAL`]).
 
 use std::future::Future;
@@ -43,7 +43,7 @@ pub trait Tool: 'static {
     /// `wake`, are for the programs Max keeps in the group's VM: a turn
     /// says things in its own output, and is awake. Anything in the VM
     /// may call either all the same. See "Resident programs" in
-    /// docs/rust-rewrite.md.
+    /// docs/design/jobs.md.
     const TURN: bool = true;
 
     /// Its arguments, whose schema is made of this type.

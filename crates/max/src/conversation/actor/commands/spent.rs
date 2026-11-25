@@ -14,9 +14,9 @@ pub(super) struct Spent {
     /// Of the input, how much hit the cache.
     cached: i64,
     output: i64,
-    /// US dollars, of the calls whose model has a price...
+    /// US dollars, of the calls whose model has a price.
     cost: f64,
-    /// ...which some had none.
+    /// Whether some calls' models had none, so `cost` leaves them out.
     unpriced: bool,
 }
 

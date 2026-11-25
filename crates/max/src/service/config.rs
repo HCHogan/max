@@ -1,6 +1,6 @@
 //! `config`: the limits Max sets for its conversation, as `/config` does
 //! for its people; the last to set one wins. The actor applies and saves
-//! them. See "Settings a conversation sets" in docs/rust-rewrite.md.
+//! them. See "Settings a conversation sets" in docs/design/config.md.
 
 use max_core::limits::Setting;
 use schemars::JsonSchema;
