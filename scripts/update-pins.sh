@@ -165,7 +165,10 @@ drop() {
   say "$1 doesn't pass, and stays"
   {
     printf '## %s\n\nIt stays as it is: `%s` fails with its newer one.\n\n```\n' "$1" "$gate"
-    tail -n 60 "$tmp/gate.log"
+    # What cargo-audit says of an advisory, which the tree of the crate's
+    # dependents under it pushes out of the log's last lines.
+    grep -E '> (Crate|Version|Title|ID|Solution): ' "$tmp/gate.log" | awk '!seen[$0]++' || true
+    tail -n 40 "$tmp/gate.log"
     printf '```\n\n'
   } >>"$tmp/report"
 }
