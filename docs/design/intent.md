@@ -2,10 +2,9 @@
 
 Intent decides when to wake the core. **Every inbound message goes
 through it**, @s and replies included, so it sees everything, and the
-rules, the debounce and the small model's classification are in one place.
-What is left is deliberately small: a debounce for messages that look
-unfinished, the small model, and an hourly cap; why the Haskell version's
-gates and signals went is in
+rules and the small model's classification are in one place. What is left
+is deliberately small: the rule for direct triggers, the small model, and
+an hourly cap; why the Haskell version's gates and signals went is in
 [decisions/rare-cases-fail-plainly.md](../decisions/rare-cases-fail-plainly.md).
 
 Like [the core](core.md), intent is a pure state machine in `max-core`
@@ -14,11 +13,9 @@ Like [the core](core.md), intent is a pure state machine in `max-core`
 ```rust
 // Synchronous, no I/O, no clock: the actor passes the time in
 impl Intent {
-    pub fn observe(&mut self, entry: &Entry, now: Instant) -> Vec<Decision>; // every row entered: others' messages, events and commands
+    pub fn observe(&mut self, entry: &Entry) -> Vec<Decision>; // every row entered: others' messages, events and commands
     pub fn verdict(&mut self, v: Option<Verdict>, now: Instant) -> Vec<Decision>; // the answer for the batch in flight; None on failure
-    pub fn tick(&mut self, now: Instant) -> Vec<Decision>;  // a debounce ran out
-    pub fn deadline(&self) -> Option<Instant>;              // part of the actor's deadline
-    pub fn forget(&mut self);                               // /stop: drop everything held
+    pub fn forget(&mut self);                               // /stop: drop what waits for the classifier
     pub fn set_proactive(&mut self, on: bool);              // /proactive
 }
 
@@ -35,35 +32,19 @@ pub struct Verdict { pub trigger: bool, pub reason: String }
 Its values are constants in `max-core`; there are no configuration
 options.
 
-## Direct triggers and the debounce
+## Direct triggers
 
 - **Direct triggers**: an @ of Max, a reply to Max, and any message in a
-  private chat. They don't call the small model, aren't capped, and wake at
-  once by default.
-- **The debounce**: a direct trigger that looks unfinished is held, and
-  wakes once its sender has been quiet for 10 seconds (`QUIET`), after at
-  most 20 (`HOLD_AT_MOST`). Their messages meanwhile, commands aside, join
-  the same `Wake` and reach the core together as its first inputs;
-  otherwise the trigger would be in the volatile block and the rest of the
-  sentence in the tail, in the wrong order. "Looks unfinished" is a pure
-  function, true when:
-  - nothing is left once the @ is removed;
-  - the message ends with punctuation such as `，、；：…`;
-  - it ends with a lead-in such as `但是、然后、我跟你讲、对了、就是、所以、而且、还有、那个、因为`;
-  - it is the same person's third message within 5 seconds (`BURST`).
-
-  The idea comes from [qq-bridge](../research/dsh-qq-bridge.md).
-- **A second half starts the model call over**: an @ that looks finished
-  wakes the core at once, and if its sender's next message arrives before
-  the call has said anything, the call is taken back and made again with
+  private chat. They don't call the small model, aren't capped, and wake
+  at once.
+- **Nothing is held back for a second half.** People do finish an @ in a
+  second message, and when its sender's next message arrives before the
+  model call has said anything, the call is taken back and made again with
   it; the conditions are in
-  [Starting a model call over](actor.md#starting-a-model-call-over). The
-  two work together: when nothing follows an @, typing a second half often
-  takes longer than the first output, so the debounce waits only when the
-  message looks unfinished. Of 554 direct turns in a week, 99 had another
-  message within a minute, 61 of them before Max's first sentence; the
-  second half came 3 to 38 seconds after the @, while a call's first output
-  takes 10 seconds at the median and 22 at p90.
+  [Starting a model call over](actor.md#starting-a-model-call-over). That
+  costs nothing when no second half comes, which a wait before the wake
+  would; why there is none is in
+  [decisions/no-debounce.md](../decisions/no-debounce.md).
 - **Commands** aren't triggers; the actor runs them.
 
 ## The small model
@@ -94,8 +75,8 @@ options.
   batch remembered, no task id is needed; a failed or panicked
   classification must still send `None`, or the conversation would never
   classify again. A positive verdict becomes `Wake { reason: Judged }` with
-  the batch's ids. Every `Wake`, a debounced direct trigger's too, follows
-  one rule: if every message it concerns is at or below `seen`, it is void,
+  the batch's ids. Every `Wake`, a direct trigger's too, follows one rule:
+  if every message it concerns is at or below `seen`, it is void,
   since those messages were already in a request and the model made its own
   choice about them (messages before a `/kill` are voided so too). A wake
   that isn't void becomes an `Input::Wake`: it starts a core, recorded as
@@ -119,7 +100,5 @@ options.
 
 ## State held only in memory
 
-Held triggers, collected chatter, the batch in flight and the hourly
-counts live in the actor's memory and are lost on restart; there is no
-table for them. A direct trigger still held at shutdown or a crash gets no
-answer, which is accepted.
+Collected chatter, the batch in flight and the hourly counts live in the
+actor's memory and are lost on restart; there is no table for them.

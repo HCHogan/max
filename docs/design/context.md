@@ -102,10 +102,9 @@ messages are split.
   in [decisions/tail-split-by-turn.md](../decisions/tail-split-by-turn.md).
   - A turn's tail is everything before its snapshot position except the
     rows that woke it. Someone speaking after the waking row (in the
-    seconds of debounce and classification) puts a piece on each side of
-    it, which the next turn can't match: that call misses, and the one
-    after lines up again. A truncation, or a caption changing a line,
-    misses once too.
+    seconds of classification) puts a piece on each side of it, which the
+    next turn can't match: that call misses, and the one after lines up
+    again. A truncation, or a caption changing a line, misses once too.
   - There are as many pieces as turns after the mark: dozens, or more than
     a hundred in a busy group. They aren't merged, since merging would
     change the previous request's split. OpenAI's cache works on token

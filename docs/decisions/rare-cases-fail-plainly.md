@@ -46,6 +46,9 @@ stops.)
 
 ## Intent keeps only the debounce, the small model and a cap
 
+The debounce went later, on what production showed of it:
+[Direct triggers aren't held back](no-debounce.md).
+
 Removed from [Intent](../design/intent.md):
 
 - the Haskell version's gate: chatter was classified only if it contained

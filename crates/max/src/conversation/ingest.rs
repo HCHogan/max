@@ -53,8 +53,6 @@ pub struct Committed {
     pub command: Option<Command>,
     /// Why it is addressed to Max, if it is.
     pub direct: Option<Direct>,
-    /// What the sender wrote, without the @ of Max.
-    pub text: String,
 }
 
 /// How many of the conversation's latest rows a quote is looked for in by
@@ -169,7 +167,6 @@ pub async fn inbound(
         sender,
         command,
         direct,
-        text,
     })
 }
 

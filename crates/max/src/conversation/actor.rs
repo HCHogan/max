@@ -316,19 +316,14 @@ impl Conversation {
     }
 
     fn deadline(&self) -> Option<Instant> {
-        let core = self.core.as_ref().and_then(|active| {
-            if self.stopping.is_some() {
-                self.stopping
-            } else if active.run.is_idle() {
-                Some(active.idle_since + self.idle_window(active))
-            } else {
-                None
-            }
-        });
-        [core, self.intent.deadline().map(Instant::from_std)]
-            .into_iter()
-            .flatten()
-            .min()
+        let active = self.core.as_ref()?;
+        if self.stopping.is_some() {
+            self.stopping
+        } else if active.run.is_idle() {
+            Some(active.idle_since + self.idle_window(active))
+        } else {
+            None
+        }
     }
 
     async fn handle(&mut self, event: Event) -> Result<()> {
@@ -479,11 +474,9 @@ impl Conversation {
         }
         let entry = Entry {
             id: committed.message.id,
-            sender: committed.sender.identity,
             kind,
-            text: committed.text,
         };
-        let decisions = self.intent.observe(&entry, std::time::Instant::now());
+        let decisions = self.intent.observe(&entry);
         self.decide(decisions).await
     }
 
@@ -592,8 +585,7 @@ impl Conversation {
                 self.end(End::Idle).await?;
             }
         }
-        let decisions = self.intent.tick(now.into_std());
-        self.decide(decisions).await
+        Ok(())
     }
 
     /// Whether the conversation refuses what an event asks: the one place

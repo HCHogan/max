@@ -187,8 +187,7 @@ The tasks fall into three kinds, by what they produce:
    [Processing flow](design/actor.md#processing-flow)): fed to the running
    core, or starting one.
    - What comes with messages is judged by intent inside the actor (see
-     [Intent](design/intent.md)): @ mentions and replies are rules,
-     messages that look unfinished are debounced for a few seconds, and
+     [Intent](design/intent.md)): @ mentions and replies are rules, and
      other messages are classified by the small model in `side`, with
      wakes by verdict capped per hour. Every `Wake` is filtered by `seen`.
    - What comes from outside the chat: `maxx wake` from a unit or program

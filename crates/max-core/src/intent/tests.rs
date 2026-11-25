@@ -1,7 +1,6 @@
-use super::*;
+use std::time::Duration;
 
-const XIAOMING: IdentityId = IdentityId::new(20);
-const XIAOHONG: IdentityId = IdentityId::new(21);
+use super::*;
 
 struct Clock(Instant);
 
@@ -11,17 +10,15 @@ impl Clock {
     }
 }
 
-fn entry(id: i64, sender: IdentityId, kind: EntryKind, text: &str) -> Entry {
+fn entry(id: i64, kind: EntryKind) -> Entry {
     Entry {
         id: MessageId::new(id),
-        sender,
         kind,
-        text: text.into(),
     }
 }
 
 fn chat(id: i64) -> Entry {
-    entry(id, XIAOMING, EntryKind::Chatter, "今天吃什么")
+    entry(id, EntryKind::Chatter)
 }
 
 fn direct(ids: &[i64]) -> Decision {
@@ -40,37 +37,11 @@ fn verdict(trigger: bool) -> Option<Verdict> {
 
 #[test]
 fn a_direct_trigger_wakes_at_once() {
-    let clock = Clock(Instant::now());
     let mut intent = Intent::new();
-    let e = entry(1, XIAOMING, EntryKind::Direct, "这个怎么修？");
-    assert_eq!(intent.observe(&e, clock.at(0)), [direct(&[1])]);
-    assert_eq!(intent.deadline(), None);
-}
-
-#[test]
-fn a_trigger_mid_sentence_waits_for_the_rest() {
-    let clock = Clock(Instant::now());
-    let mut intent = Intent::new();
-    let e = entry(1, XIAOMING, EntryKind::Direct, "我跟你讲，");
-    assert!(intent.observe(&e, clock.at(0)).is_empty());
-    assert_eq!(intent.deadline(), Some(clock.at(10)));
-    // Someone else's message neither merges nor delays it, nor does a
-    // command.
-    intent.observe(
-        &entry(2, XIAOHONG, EntryKind::Command, "/status"),
-        clock.at(2),
-    );
-    intent.observe(
-        &entry(3, XIAOMING, EntryKind::Chatter, "昨天那个bug"),
-        clock.at(3),
-    );
-    intent.observe(
-        &entry(4, XIAOMING, EntryKind::Command, "/status"),
-        clock.at(3),
-    );
-    assert!(intent.tick(clock.at(12)).is_empty());
-    assert_eq!(intent.tick(clock.at(13)), [direct(&[1, 3])]);
-    assert_eq!(intent.deadline(), None);
+    let e = entry(1, EntryKind::Direct);
+    assert_eq!(intent.observe(&e), [direct(&[1])]);
+    // A command wakes nobody: the actor runs it.
+    assert!(intent.observe(&entry(2, EntryKind::Command)).is_empty());
 }
 
 #[test]
@@ -80,12 +51,12 @@ fn judged_wakes_are_capped() {
     let mut woken = 0;
     for i in 0..10 {
         let at = clock.at(i * 60);
-        intent.observe(&chat(i.try_into().unwrap()), at);
+        intent.observe(&chat(i.try_into().unwrap()));
         woken += intent.verdict(verdict(true), at).len();
     }
     assert_eq!(woken, JUDGED_WAKES_PER_HOUR);
     // An hour after the first, there is room again.
-    intent.observe(&chat(20), clock.at(3600));
+    intent.observe(&chat(20));
     assert_eq!(intent.verdict(verdict(true), clock.at(3600)).len(), 1);
 }
 
@@ -93,12 +64,12 @@ fn judged_wakes_are_capped() {
 fn proactive_off_leaves_only_direct_triggers() {
     let clock = Clock(Instant::now());
     let mut intent = Intent::new();
-    intent.observe(&chat(1), clock.at(0));
-    intent.observe(&chat(2), clock.at(10));
+    intent.observe(&chat(1));
+    intent.observe(&chat(2));
     intent.set_proactive(false);
     // Neither the verdict in flight nor what waited behind it wakes anyone.
     assert!(intent.verdict(verdict(true), clock.at(20)).is_empty());
-    assert!(intent.observe(&chat(3), clock.at(30)).is_empty());
-    let e = entry(4, XIAOMING, EntryKind::Direct, "在吗？");
-    assert_eq!(intent.observe(&e, clock.at(40)), [direct(&[4])]);
+    assert!(intent.observe(&chat(3)).is_empty());
+    let e = entry(4, EntryKind::Direct);
+    assert_eq!(intent.observe(&e), [direct(&[4])]);
 }

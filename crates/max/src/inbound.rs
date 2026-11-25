@@ -81,8 +81,8 @@ pub enum InNode {
 }
 
 impl Inbound {
-    /// What the sender wrote, without the @ of Max: a command's text, and
-    /// what intent's gate reads.
+    /// What the sender wrote, without the @ of Max: what a command is read
+    /// from.
     #[must_use]
     pub fn plain_text(&self) -> String {
         let mut text = String::new();

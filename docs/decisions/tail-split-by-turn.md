@@ -42,4 +42,5 @@ points come from `turns.from_id`.
 
 A busy group's request has dozens to more than a hundred user messages
 before a truncation, and they can't be merged without missing once. A call
-right after someone spoke during a debounce misses once.
+right after someone spoke between the waking row and the turn's start
+misses once.

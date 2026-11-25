@@ -24,7 +24,6 @@ async fn mentions_quotes_and_commands(pool: PgPool) {
         .await
         .unwrap();
     assert_eq!(first.direct, Some(Direct::MentionsMe));
-    assert_eq!(first.text, "在吗 @小红");
     assert!(first.command.is_none());
     let row = ledger::row(&mut conn, place.conversation, first.message.id)
         .await

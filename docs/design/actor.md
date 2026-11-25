@@ -64,9 +64,9 @@ pub enum Event {
 }
 ```
 
-The main loop waits on the mailbox and on one deadline, the earliest of
-the idle window, intent's debounce and the stop grace (a single
-`sleep_until`). After every event it calls `advance`:
+The main loop waits on the mailbox and on one deadline, the idle window's
+end or the stop grace's (a single `sleep_until`). After every event it
+calls `advance`:
 
 1. If the core has I/O in flight, there is nothing to do.
 2. If Max is stopping and the core is idle, the core ends.
@@ -94,11 +94,11 @@ Handling an event does two things, in this order:
    - If there is a core, the entry is fed to it, except what Max's own
      account said or did through a tool, which isn't fed back to the core
      whoever called the tool.
-   - Every entry goes to `intent.observe`, verdicts to `intent.verdict`,
-     and `intent.tick` runs at its deadline. A returned `Wake` is dropped
-     if none of its messages is past `seen`; otherwise it is fed to the
-     core as `Input::Wake`, or starts a core if there is none (step 3 of
-     the [Processing flow](#processing-flow)). `Classify` spawns the small
+   - Every entry goes to `intent.observe`, and verdicts to
+     `intent.verdict`. A returned `Wake` is dropped if none of its
+     messages is past `seen`; otherwise it is fed to the core as
+     `Input::Wake`, or starts a core if there is none (step 3 of the
+     [Processing flow](#processing-flow)). `Classify` spawns the small
      model in `side`.
    - `ModelDone` and `ToolDone` are fed to the core; those from a task
      not in `live` are dropped.
@@ -137,11 +137,10 @@ Each step is the actor handling one event.
      running. Private chats don't pass this check: one gets a
      conversation the first time someone writes.
 2. **Intent.** Every entry goes to [Intent](intent.md), which decides
-   when to wake the core: an @ or a reply to Max wakes it at once, after
-   a few seconds' wait if the message looks unfinished; other messages are
-   judged by the small model. Wakes from outside the chat (`maxx wake`,
-   the VM service, another conversation's question or answer) don't go
-   through intent; they are triggers themselves.
+   when to wake the core: an @ or a reply to Max wakes it at once; other
+   messages are judged by the small model. Wakes from outside the chat
+   (`maxx wake`, the VM service, another conversation's question or
+   answer) don't go through intent; they are triggers themselves.
    - With a core running, messages are fed to it at once, but only
      triggers make it call the model.
    - With no core, a trigger goes on to step 3; anything else is left on
@@ -155,11 +154,11 @@ Each step is the actor handling one event.
    base context is projected from the ledger (rows up to `from`) and the
    memory file, within the budget; see [Context projection](context.md).
    The first inputs are in its volatile block: the trigger, with the
-   `Wake` carrying the messages it concerns (several from one person when
-   debounced). `TurnStarted` is written with the trigger and `from`, and
-   `Run::new` is called. If the first inputs alone are over the limit, the
-   core is at its limit from the start: it fails with `ContextExhausted`,
-   and the trigger gets a one-line reply.
+   `Wake` carrying the messages it concerns (several when the classifier
+   judged a batch). `TurnStarted` is written with the trigger and `from`,
+   and `Run::new` is called. If the first inputs alone are over the limit,
+   the core is at its limit from the start: it fails with
+   `ContextExhausted`, and the trigger gets a one-line reply.
 4. **Advancing.** Each time the core has no I/O in flight, the actor asks
    for the next step. No turn record is written midway.
    - `CallModel`: each `Said` is entered and handed to the sender; on
@@ -300,9 +299,8 @@ resumed; why is in
   one the in-memory `head` and `seen` may not match the database.
 - **Questions** another conversation asked the running core go
   unanswered; who asked hears so and may ask again.
-- **Intent's state** is lost: hourly counts start at zero, chatter
-  awaiting classification isn't classified, and direct triggers still in
-  their debounce go unanswered.
+- **Intent's state** is lost: hourly counts start at zero, and chatter
+  awaiting classification isn't classified.
 
 At startup every turn without an outcome is recorded as `Lost`: a normal
 restart leaves none, so any left were running at a crash. What such a
@@ -333,7 +331,7 @@ of shutdown has to be asked again.
 - The core and intent have synchronous unit tests that feed inputs from a
   script and check outputs, with no tokio and no fake provider; intent's
   time is passed in. Intent's cover direct triggers waking at once, the
-  debounce, the hourly cap and `/proactive`. The core's cover when inputs
+  hourly cap and `/proactive`. The core's cover when inputs
   take effect, no model call for chatter alone, the results filled in on
   interruption, malformed calls, the limit, and that the record is what
   the model saw and said.
@@ -345,7 +343,7 @@ of shutdown has to be asked again.
   wake by the classifier's verdict, what a program says, and what a stopped
   conversation refuses. Actor tests use real time, not `start_paused`:
   while the actor waits on Postgres a paused clock jumps to the next
-  deadline, so the idle window and the debounce would come early. Their
+  deadline, so the idle window would come early. Their
   waits are short and bounded. Purely time-based logic (`Scope`, a model
   call's retries) uses `start_paused`.
 - The protocol adapters are tested against recorded Responses and Chat

@@ -295,8 +295,8 @@ enum Outcome { Answered, Silent, Interrupted, Failed { reason: FailReason }, Los
 | A crash | nothing; a `Lost` outcome is added at startup |
 
 - **The trigger is in `TurnStarted`**: a direct trigger could be derived
-  from its message, but a verdict, the messages a debounce merged or a
-  program's wake couldn't.
+  from its message, but a verdict, the batch it judged or a program's
+  wake couldn't.
 - **One snapshot per turn**, written at the end in the outcome's row. The
   core writes nothing midway, so there is never one copy in the database
   and another in memory.
