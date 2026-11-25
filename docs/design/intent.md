@@ -56,20 +56,27 @@ options.
   returns, the latest 30 messages (`BATCH`). So classification keeps pace
   with the small model: in a lively chat one batch follows another, rather
   than one call per message.
-- **Input**: the first 500 characters of the persona, the latest 15
-  messages as context (the tail's line format), and the messages to judge.
-  `[mention#N]` becomes `@name`, and an @ of Max `@maxx`: the small model
-  has no roster, so it tells from names whom a message is for.
-- **Output**: one line of JSON, `trigger` and a short `reason` (cut at 40
-  characters, as it becomes the `[判定 …]` line). The prompt names when Max
-  should join in (addressed by name without an @; a topic where Max can add
-  something concrete and useful) and when not (members talking to each
-  other, @-ing or replying to someone else included; telling someone to go
-  ask an AI; merely mentioning Max; finding Max annoying; other bots;
-  pasted code or notifications). When in doubt, Max stays out. A follow-up
-  to Max's own words isn't a reason: answers to Max are replies or @s,
-  which wake it directly, and a small model that sees Max just spoke
-  calls whatever comes next a follow-up.
+- **Input**: the latest 15 messages as context (the tail's line format)
+  and the messages to judge. `[mention#N]` becomes `@name`, and an @ of
+  Max `@maxx`: the small model has no roster, so it tells from names whom
+  a message is for. The prompt says in a line what maxx can do, and
+  nothing of its persona: a small model reads a persona that likes to
+  join in as a reason to.
+- **Output**: one line of JSON, a short `reason` (cut at 40 characters, as
+  it becomes the `[判定 …]` line) and then `trigger`, in that order, so
+  that the verdict follows what the model has just said the message is.
+  The prompt says most messages are members talking to each other, and
+  names the two cases that wake Max, each with examples: someone calls it
+  or wants something of it without an @, a hand-typed "@maxx" among them;
+  someone asks the whole chat a question that nobody has answered. The
+  rest is false, and the prompt gives examples of it rather than rules:
+  a short answer to someone else, an @ of or a reply to another member,
+  telling someone to go ask an AI, talk about Max, telling Max off, small
+  talk, other bots' announcements, pasted code and notices. A follow-up to Max's own words
+  isn't a reason: answers to Max are replies or @s, which wake it
+  directly, and a small model that sees Max just spoke calls whatever
+  comes next a follow-up. Why the prompt is written so is in
+  [decisions/classifier-by-example.md](../decisions/classifier-by-example.md).
 - **Where a verdict goes**: it comes back to the mailbox and the actor
   passes it to `intent.verdict`. With one classification in flight and its
   batch remembered, no task id is needed; a failed or panicked

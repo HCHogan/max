@@ -44,8 +44,6 @@ pub struct Job {
     pub place: Arc<Place>,
     /// The classifier's model.
     pub chosen: Chosen,
-    /// The conversation's persona, of which the classifier reads the start.
-    pub persona: String,
     /// The rows to judge.
     pub batch: Vec<MessageId>,
     /// How many rows before them it is shown.
@@ -113,7 +111,7 @@ async fn run(job: &Job) -> Result<Option<Verdict>> {
         .collect();
     names.insert(place.me.principal, place.my_name.clone());
     drop(conn);
-    let system = classify::system(&job.persona);
+    let system = classify::SYSTEM.to_owned();
     let user = classify::user(
         &classify::named(&context, &names),
         &classify::named(&new, &names),

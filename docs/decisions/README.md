@@ -16,6 +16,7 @@ Why Max is built the way it is: one file for each decision that was a real trade
 - [Rare cases fail plainly](rare-cases-fail-plainly.md)
 - [Direct triggers aren't held back](no-debounce.md)
 - [Max says little, and joins in seldom](max-says-little.md)
+- [The classifier wakes Max in two cases, given by example](classifier-by-example.md)
 
 ## Tools and programs
 

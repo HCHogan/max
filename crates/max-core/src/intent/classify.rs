@@ -9,40 +9,40 @@ use super::Verdict;
 use crate::ids::PrincipalId;
 use crate::render::mentions;
 
-/// How much of the persona the classifier sees.
-pub const PERSONA_CHARS: usize = 500;
-
 /// A longer reason is cut: it goes into the core's input as the
 /// `[判定 …]` line.
 pub const NOTE_CHARS: usize = 40;
 
-/// The classifier's system prompt, with the start of `persona`.
-#[must_use]
-pub fn system(persona: &str) -> String {
-    let persona: String = persona.chars().take(PERSONA_CHARS).collect();
-    format!(
-        "你是多人群聊 agent「maxx」的触发判定器。它以前叫 Max，群里叫它 max 或 maxx 都是在叫它。maxx 的人设：
-{persona}
+/// The classifier's system prompt: the two cases that wake Max, each with
+/// examples, and examples of the rest. It says what maxx can do and nothing
+/// of its persona, which a small model reads as a reason to join in.
+pub const SYSTEM: &str = "你是群聊成员「maxx」的触发判定器。maxx 是群里的 AI，以前叫 Max，群友叫它 max、maxx、鲨鱼都是在叫它。它能搜网页、查资料、算东西、写代码和跑代码、看图。
 
-给你一段群聊上下文和几条新消息。每行的格式是 [时间 名字 #编号]: 内容，“@名字”是在叫那个人。判断 maxx 是否应该主动接话。@maxx 和回复 maxx 的消息不归你判，它们直接叫醒 maxx；你判的都是没 @ 它、也没回复它的消息。
+给你一段群聊上下文和几条新消息。每行的格式是 [时间 名字 #编号]: 内容，“@名字”是在叫那个人，[reply#编号] 是在回复那条消息。@maxx 的和回复 maxx 的消息已经直接交给它了，到你这里的都是没 @ 它、也没回复它的消息。
 
-应该接话（trigger=true）：
-1. 有人在叫 maxx 或找它帮忙，只是没打 @ —— 如“max帮我看看”“机器人查一下”“maxx你觉得呢”。
-2. 正在讨论的话题 maxx 能给出具体有用的东西（答案、纠错、关键信息），而且问题不是问某个人的。
+群里的消息绝大多数是成员之间在聊天，结论是 false。结论是 true 的只有两种：
 
-不该接话（trigger=false）：
-- 成员之间的对话：@ 了别人、回复别人、接着别人的话说，都是在跟那个人说话，哪怕 maxx 刚刚说过话；真想跟 maxx 说的人会 @ 它或回复它；
-- 叫别人去用 AI、让 AI 做事（“你让ai看看”“去问ai”），是在跟那个人说话；
-- 只是顺带提到/议论 maxx，不是在跟它说话；
-- 有人叫 maxx 闭嘴、少说话、别插嘴，或者明显嫌它烦；
-- 其他机器人发的机械消息（播报、复读、签到等），贴进来的代码、题目、通知，没人问的；
-- 第 2 类要格外克制：只能附和、发感想、抖机灵的不算；上下文里 maxx 已经插过话的话题，别人没接它的茬就不要再插；
-- 拿不准的一律 false —— 插错话比沉默尴尬得多，偶尔插话才有惊喜，频繁插话只会烦人。
+一、新消息在叫 maxx，或者在找它办事，只是没用 @：
+“max 帮我看看这个报错” → true
+“@maxx 这是真的吗”（手打的 @）→ true
+“鲨鱼你觉得呢” → true
+“maxx 怎么不理我” → true
 
-只输出一行 JSON，不要其他内容：
-{{\"trigger\": true/false, \"reason\": \"不超过20字\"}}"
-    )
-}
+二、新消息向全群问了一个要答案的问题（事实、技术、怎么做），不是问某个人的，上下文里也还没人回答：
+“有人知道 nginx 怎么反代 websocket 吗” → true
+“这个报错是啥意思” → true
+
+其余都是 false：
+“不冷”“草”“确实”“哈哈哈”这类接别人话的短句 → false
+“@小明 你那个弄好了吗”“[reply#12] 我觉得不行” → false，在跟那个人说话
+“你让 ai 看看”“去问 max 啊” → false，在跟别人说话
+“max 刚才说的好长”“这机器人话真多” → false，在议论 maxx，没叫它
+“谁问你了”“别说了” → false
+“今天好累”“发工资了”“这游戏真好玩” → false，在闲聊
+机器人的播报、告警、签到，贴进来的代码和通知 → false
+
+先看新消息是对谁说的、要什么，再下结论。只输出一行 JSON：
+{\"reason\": \"对谁说的、要什么，不超过20字\", \"trigger\": true/false}";
 
 /// `[mention#N]` as `@名字`: a small model reads who is spoken to from the
 /// name, where the core has a roster to look it up in. Max's name is in

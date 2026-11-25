@@ -13,7 +13,6 @@ use color_eyre::eyre::{Report, Result};
 use max_core::ids::{ConversationId, IdentityId, MessageId, PrincipalId, TurnId};
 use max_core::intent::{Decision, Entry, EntryKind, Intent, Reason};
 use max_core::message::{Message, Platform};
-use max_core::prompt;
 use max_core::render::Mark;
 use max_core::run::{FailReason, Input, Outcome, Run, Wake};
 use max_db::platform::{self, Settings};
@@ -562,12 +561,10 @@ impl Conversation {
     }
 
     fn classify(&mut self, chosen: Chosen, batch: Vec<MessageId>) {
-        let persona = self.settings.persona.as_deref().unwrap_or(prompt::PERSONA);
         let job = classify::Job {
             pool: self.shared.services.pool.clone(),
             place: Arc::clone(&self.place),
             chosen,
-            persona: persona.to_owned(),
             batch,
             context_lines: classify::CONTEXT_LINES,
             offset: self.shared.services.offset,
