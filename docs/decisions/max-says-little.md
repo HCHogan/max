@@ -51,10 +51,9 @@ sworn at, it answers `[silence]` or a word and lets the matter drop.
 
 Beside these: jokes, jabs and self-mockery season one reply in ten, and a
 serious question gets a plain answer; what Max isn't sure of, or what may
-be out of date, it looks up before it speaks; a message's `#number` is
-for Max alone, and it names an earlier message to the chat by who said it
-and when; and how long and in what manner it spoke before, in the record,
-is no measure of how to speak now.
+be out of date, it looks up before it speaks; and a message's `#number`
+is for Max alone, so that it names an earlier message to the chat by who
+said it and when.
 
 ## Why
 
@@ -100,8 +99,9 @@ is no measure of how to speak now.
   characters, 5 of them over 200. And it is tuned on two models of one
   family and fifty turns; another model may keep it more or less closely.
 - For some days the record still shows the long replies, which a model
-  imitates. The prompt says they are no measure; how well that holds shows
-  only in service.
+  imitates, and the prompt says nothing of them: the replays above had a
+  line that did, so the first days in service may run longer than they
+  show.
 
 ## Alternatives
 
@@ -114,3 +114,6 @@ is no measure of how to speak now.
   the concrete ones were kept to the letter. The persona and the examples
   are Chinese either way.
 - **Lengths as what is usual, without a number.** Tried first; see Why.
+- **A line saying that Max's earlier replies are no measure.** It would
+  matter for the few days until the record is of short replies, and the
+  prompt keeps to what holds for good.
