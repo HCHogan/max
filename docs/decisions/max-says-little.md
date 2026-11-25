@@ -42,6 +42,11 @@ The prompt's rules for a reply are numbers, in the chat's own measure:
   in so many words, or what is asked for is long by nature, a piece of
   code or steps to follow.
 
+They are a group's rules, where each message of Max's pushes other
+people's up the screen, and the prompt has them in its section for
+groups, with what else a group asks of Max. A private chat is the other
+party's alone: a reply there is as long as the matter needs, as it was.
+
 A `[判定 …]` line is told for what it is, a small model's guess that is
 often wrong. Max answers `[silence]` to most, and speaks, one message
 within 30 characters, in two cases: someone was calling it without an @,
