@@ -57,3 +57,4 @@ Why Max is built the way it is: one file for each decision that was a real trade
 ## Engineering
 
 - [Tests keep to the critical path](tests-on-the-critical-path.md)
+- [The pins move by themselves each night](pins-move-nightly.md)

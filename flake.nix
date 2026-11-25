@@ -24,11 +24,10 @@
       url = "github:microvm-nix/microvm.nix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    # pi, the background agents, in the guest. nix/pi.sh relies on this
-    # one's (pi 1.6.0's) models.json, settings and sessions: moving the
-    # pin means running scripts/check-pi (see "Background agents" in
-    # docs/design/jobs.md).
-    llm-agents.url = "github:numtide/llm-agents.nix/a59764a6424689d67c1bd9070fd48afa44a47ee0";
+    # pi, the background agents, in the guest. nix/pi.sh relies on pi's
+    # models.json, settings and sessions: the `pi` check says whether a
+    # pin's pi keeps them (see "Background agents" in docs/design/jobs.md).
+    llm-agents.url = "github:numtide/llm-agents.nix";
   };
 
   outputs =
@@ -119,6 +118,22 @@
             }
           );
 
+          # What the nightly workflow runs, with the pinned cargo.
+          update-pins = pkgs.writeShellApplication {
+            name = "update-pins";
+            runtimeInputs = [
+              toolchain
+              pkgs.coreutils
+              pkgs.curl
+              pkgs.gawk
+              pkgs.git
+              pkgs.jq
+            ];
+            # Backticks inside single quotes are the report's Markdown.
+            excludeShellChecks = [ "SC2016" ];
+            text = builtins.readFile ./scripts/update-pins.sh;
+          };
+
           # The groups' VMs boot this; nix/guest.nix. What max needs to start
           # one is a JSON file: the kernel, the initrd and the command line,
           # which max appends the VM's own parameters to.
@@ -181,13 +196,13 @@
           inherit pkgs toolchain;
 
           packages = {
-            inherit max postgresql;
+            inherit max postgresql update-pins;
             default = max;
           }
           // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux { inherit guest; };
 
           checks = {
-            inherit max;
+            inherit max update-pins;
 
             fmt = craneLib.cargoFmt commonArgs;
 

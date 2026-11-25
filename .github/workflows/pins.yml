@@ -1,0 +1,58 @@
+# Each night update-pins moves Cargo.lock and the flake's inputs, checks
+# them as CI checks a push, and what passes is pushed to main. What didn't
+# pass is in one issue, which the next night they all pass closes. Why:
+# docs/decisions/pins-move-nightly.md.
+name: Pins
+
+on:
+  schedule:
+    # 21:17 in China, and done before nix-config's updater on tank takes
+    # max's main, at 16:00 UTC.
+    - cron: "17 13 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency: pins
+
+jobs:
+  move:
+    runs-on: ubuntu-latest
+    # A night when the gate fails runs it once more for each pin that moved.
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v31
+
+      - uses: cachix/cachix-action@v16
+        with:
+          name: devenv
+
+      - name: Move the pins
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          REPORT="$RUNNER_TEMP/report.md" nix run .#update-pins
+
+      # Refused if main moved meanwhile: the next night starts from there.
+      - name: Push what passed
+        run: git push origin HEAD:main
+
+      - name: Say what stayed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="Pins that stayed"
+          open=$(gh issue list --state open --search "in:title \"$title\"" --json number --jq '.[0].number // empty')
+          if [ -s "$RUNNER_TEMP/report.md" ]; then
+            if [ -n "$open" ]; then
+              gh issue comment "$open" --body-file "$RUNNER_TEMP/report.md"
+            else
+              gh issue create --title "$title" --body-file "$RUNNER_TEMP/report.md"
+            fi
+          elif [ -n "$open" ]; then
+            gh issue close "$open" --comment "They all moved."
+          fi

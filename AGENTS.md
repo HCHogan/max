@@ -85,6 +85,20 @@ chat handles in tests, docs and examples; real ones live only in sops.
 The QQ bot's AppID and secret are in the gitignored `.env` for local
 runs; never print or commit them.
 
+## Pins
+
+`Cargo.lock` and the flake's `crane`, `rust-overlay`, `microvm`,
+`llm-agents` and `advisory-db` move by themselves. Each night
+`.github/workflows/pins.yml` runs `nix run .#update-pins`
+(`scripts/update-pins.sh`): a commit each, crates only to releases out for
+seven days, and what `nix flake check --impure` passes is pushed to main.
+What it drops is in the issue "Pins that stayed". So main may have moved
+overnight: pull before pushing. A fix that can't wait its seven days is
+taken by hand, `cargo update --package <name> --precise <version>`. The
+nixpkgs revisions, `rust-toolchain.toml` and `Cargo.toml`'s ranges move by
+hand. Why is in
+[docs/decisions/pins-move-nightly.md](docs/decisions/pins-move-nightly.md).
+
 ## Toolchain
 
 Stable Rust, edition 2024. `rust-toolchain.toml` pins an exact version
