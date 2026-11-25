@@ -159,10 +159,10 @@ Checked with pi 1.6.0:
   cuts off fails once: the next try waits at max's socket for the max that
   comes.
 
-pi comes from numtide's llm-agents.nix, pinned in the flake. So
-`scripts/check-pi` runs after moving the pin or changing `pi.sh` or
-`pi-system.md`: the wrapper with the pinned pi against a fake `/llm`, for
-the default model and effort, the system text, another model by max's
+pi comes from numtide's llm-agents.nix, pinned in the flake. So the
+flake's `pi` check, which `scripts/check-pi` runs by hand, covers a move
+of the pin and a change to `pi.sh` or `pi-system.md`: the wrapper with
+the pinned pi against a fake `/llm`, for the default model and effort, the system text, another model by max's
 name, going on with a session, the refusal in another directory, max out
 of reach, and the rest of pi's files kept. What surrounds pi is in the
 NixOS test `checks.<system>.jobs`, and `max vm-check` runs one agent in a

@@ -26,10 +26,12 @@ other project. Without a terminal, start it with `PC_TUI_ENABLED=0 devenv up`.
 
 ## Background agents' harness
 
-After moving pi's pin, or changing `nix/pi.sh` or `nix/pi-system.md`,
-run `scripts/check-pi` in the dev shell as well. It runs the guest's pi
-with the pinned pi against a fake `/llm`, without real model calls. An
-agent in a background command is covered with the guest's jobs, below.
+The flake's `pi` check runs the guest's pi, `nix/pi.sh`, with the pinned
+pi against a fake `/llm`, without real model calls: it is what says
+whether a move of pi's pin, or a change to `nix/pi.sh` or
+`nix/pi-system.md`, keeps what Max rests on. `scripts/check-pi` runs the
+same in the dev shell. An agent in a background command is covered with
+the guest's jobs, below.
 
 ## The guest's jobs
 

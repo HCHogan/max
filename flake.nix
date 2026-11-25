@@ -254,6 +254,26 @@
             # Built on its own, max-core gets chrono without the clock that
             # the max crate turns on, so a Utc::now in the core won't compile.
             max-core-alone = cargoCheck "max-core-alone" [ ] "cargo check --package max-core";
+
+            # The pinned pi keeps what nix/pi.sh rests on, against a fake
+            # /llm; scripts/check-pi runs the same by hand.
+            pi =
+              pkgs.runCommand "check-pi"
+                {
+                  nativeBuildInputs = [
+                    pkgs.nodejs
+                    pkgs.curl
+                    pkgs.jq
+                  ];
+                }
+                ''
+                  mkdir -p scripts nix
+                  cp ${./scripts/check-pi.js} scripts/check-pi.js
+                  cp ${./nix/pi.sh} nix/pi.sh
+                  cp ${./nix/pi-system.md} nix/pi-system.md
+                  node scripts/check-pi.js ${inputs.llm-agents.packages.${system}.pi}/bin/pi
+                  touch $out
+                '';
           }
           // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
             module = import ./nix/tests/module.nix {
