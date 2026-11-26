@@ -16,6 +16,7 @@ use max_core::run::{Context, Input, Wake};
 use max_db::ledger::{self, Delivery, Row};
 use max_db::links::{self, Peer};
 use max_db::platform::{self, ConversationKind};
+use max_db::questions::{self, Waiting};
 use max_db::turns::{self, TailEnd};
 use sqlx::PgConnection;
 
@@ -158,11 +159,27 @@ impl Projection<'_> {
         roster.insert(self.place.me.principal);
         let askable = links::asked(conn, conversation).await?;
         let askers = links::askers(conn, conversation).await?;
+        let (to_answer, unanswered) = questions::waiting(conn, conversation, self.now).await?;
+        let asked_at = |waiting: &Waiting| {
+            let at = waiting.asked_at.with_timezone(&self.offset);
+            format!("{}（{} 问的）", waiting.peer, at.format("%m-%d %H:%M"))
+        };
         let volatile = Volatile {
             now: self.now,
             roster: roster_lines(conn, self.place, &roster, project::roster_line).await?,
             askable: askable.iter().map(Peer::to_string).collect(),
             askers: askers.iter().map(Peer::to_string).collect(),
+            to_answer: to_answer
+                .iter()
+                .map(|waiting| {
+                    let (number, question) = (waiting.number, &waiting.question);
+                    format!("ask#{number} {}\n{question}", asked_at(waiting))
+                })
+                .collect(),
+            unanswered: unanswered
+                .iter()
+                .map(|waiting| format!("{}\n{}", asked_at(waiting), waiting.question))
+                .collect(),
             memory: self.memory,
             quoted: quoted_text,
             first: first_text,

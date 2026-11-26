@@ -19,6 +19,7 @@ pub mod ledger;
 pub mod links;
 pub mod media;
 pub mod platform;
+pub mod questions;
 pub mod recall;
 pub mod stickers;
 pub mod tool_calls;
@@ -80,6 +81,7 @@ mod tests {
                 "message_media",
                 "messages",
                 "principals",
+                "questions",
                 "summaries",
                 "summary_runs",
                 "tool_calls",

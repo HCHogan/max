@@ -26,7 +26,8 @@ impl Conversation {
                 let _ = reply.send(asked);
             }
             Request::Answer { to, text, reply } => {
-                let _ = reply.send(self.answer_question(to, &text));
+                let answered = self.answer_question(to, &text).await?;
+                let _ = reply.send(answered);
             }
             Request::Wake { text, reply } => {
                 let woke = self.woken(&text).await?;

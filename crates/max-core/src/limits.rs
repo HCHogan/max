@@ -73,6 +73,14 @@ pub const SENT_VOICE_BYTES: u64 = 16 << 20;
 /// and of its answer; a longer one is refused, not cut.
 pub const ASK_CHARS: u32 = 2_000;
 
+/// How many days a question waits for its answer: an older one is
+/// neither shown nor answered.
+pub const ASK_DAYS: u32 = 7;
+
+/// The most questions of one conversation's that wait in another at
+/// once: `ask` is refused past it.
+pub const ASK_WAITING: u32 = 10;
+
 // Memory.
 
 /// The most tokens of the memory file a core is shown.

@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select nextval(pg_get_serial_sequence('questions', 'id')) as \"number!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "number!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "c4e6606785e077f2e0cddca2fcb8fb6a862432a2f303c0d5bcdf53355c0c2240"
+}

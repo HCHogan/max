@@ -21,7 +21,7 @@ use super::follow_up::Voice;
 use super::{Active, Conversation, Does, End, failure};
 use crate::conversation::ingest::By;
 use crate::conversation::project::Projection;
-use crate::conversation::{TaskId, Unanswered, model, tool};
+use crate::conversation::{TaskId, model, tool};
 use crate::scope::Scope;
 use crate::vm::{self, Vms};
 use crate::{llm, service, tokens};
@@ -234,8 +234,6 @@ impl Conversation {
         };
         // Aborts the model call in flight: started now, not waited for.
         drop(active.io);
-        // What it was asked and didn't answer, nobody will.
-        self.refuse_questions(Unanswered::TurnOver);
         if let Some(text) = active.voice.cut_off() {
             let tokens = tokens::count(&text);
             if let Err(rejected) = active.run.partial_output(text, tokens) {

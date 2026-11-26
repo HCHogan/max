@@ -19,7 +19,6 @@ use tracing::warn;
 use super::{Conversation, End};
 use crate::bind::Pending;
 use crate::command::{self, Choice, Command, Config, Persona};
-use crate::conversation::Unanswered;
 use crate::conversation::ingest::{By, Committed};
 use crate::llm::Chosen;
 use crate::vm;
@@ -175,7 +174,7 @@ impl Conversation {
         // the classifier, wake nobody now.
         self.intent.forget();
         // Nor is anything another conversation asked answered.
-        self.refuse_questions(Unanswered::Stopped);
+        self.refuse_questions().await?;
         self.kill(committed, "stop").await?;
         let how = command::how(self.place.kind, &self.place.my_name, "/start");
         Ok(format!(

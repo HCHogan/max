@@ -58,6 +58,8 @@ fn the_base_context() {
         roster: vec!["[mention#12] 小明".into()],
         askable: Vec::new(),
         askers: Vec::new(),
+        to_answer: Vec::new(),
+        unanswered: Vec::new(),
         memory: "# 记忆\n- 群友叫你小鲨鲨（2026-08-28 #3）".into(),
         quoted: String::new(),
         first: "[14:04 小明 #9 @你]: 在吗\n".into(),
@@ -65,6 +67,8 @@ fn the_base_context() {
     let linked = Volatile {
         askable: vec!["c#9 示波器同好会".into(), "c#12".into()],
         askers: vec!["c#3 小明".into()],
+        to_answer: vec!["ask#5 c#3 小明（10-27 22:10 问的）\n周五的聚会老王来吗".into()],
+        unanswered: vec!["c#12（10-28 09:30 问的）\n谁借走了探头\n型号也说一下".into()],
         ..volatile.clone()
     };
     let volatile = volatile.render(china());
@@ -72,12 +76,13 @@ fn the_base_context() {
         volatile,
         "[现在] 2026-10-28 周三 14:05\n\n[上下文里的人]\n[mention#12] 小明\n\n[记忆]\n# 记忆\n- 群友叫你小鲨鲨（2026-08-28 #3）\n\n[新消息]\n[14:04 小明 #9 @你]: 在吗\n"
     );
-    // Whom Max here may ask, and who may ask it, after the people.
+    // Whom Max here may ask, who may ask it, and the questions that
+    // wait either way, after the people.
     assert_eq!(
         linked.render(china()),
         volatile.replace(
             "小明\n\n[记忆]",
-            "小明\n\n[能问的会话]\nc#9 示波器同好会\nc#12\n\n[能进来的会话]\nc#3 小明\n\n[记忆]"
+            "小明\n\n[能问的会话]\nc#9 示波器同好会\nc#12\n\n[能进来的会话]\nc#3 小明\n\n[等你回答的问题]\nask#5 c#3 小明（10-27 22:10 问的）\n周五的聚会老王来吗\n\n[问出去还没回的]\nc#12（10-28 09:30 问的）\n谁借走了探头\n型号也说一下\n\n[记忆]"
         )
     );
     let context = context(

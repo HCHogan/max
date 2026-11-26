@@ -18,7 +18,7 @@ use std::sync::Arc;
 use max_core::ids::{CallId, ConversationId, EndpointId, MessageId};
 use max_core::intent::Verdict;
 use max_core::item::{ModelOutput, Timing, ToolOutput};
-use max_core::limits::Setting;
+use max_core::limits::{ASK_DAYS, ASK_WAITING, Setting};
 use max_core::message::{Draft, Message, Platform};
 use max_core::segment::Segment;
 use max_db::links::Peer;
@@ -205,11 +205,18 @@ pub enum Refused {
         "can't ask c#{0}: there is no link from here to it, or no such conversation; whom Max here may ask is listed under [能问的会话]"
     )]
     NotLinked(ConversationId),
-    /// `answer`: no question of that number is kept.
+    /// `ask`: as many questions from here wait there as may.
     #[error(
-        "there is no ask#{0} to answer: no such question, or it was answered already, or it was asked in an earlier turn, which ended without answering it; nothing was sent"
+        "c#{0} has yet to answer {most} questions from here, the most that wait at once, so this one wasn't asked; they are listed under [问出去还没回的]",
+        most = ASK_WAITING
     )]
-    NoQuestion(u32),
+    TooMany(ConversationId),
+    /// `answer`: no question of that number waits here.
+    #[error(
+        "there is no ask#{0} to answer here: no such question, or it was answered already, or it was asked over {days} days ago; nothing was sent. What waits is listed under [等你回答的问题]",
+        days = ASK_DAYS
+    )]
+    NoQuestion(i64),
     /// Nothing in a draft could be said.
     #[error("there was nothing in it to send")]
     NothingToSay,
@@ -247,11 +254,11 @@ pub enum Request {
         /// Where the name of whom it went to goes.
         reply: Reply<String>,
     },
-    /// Answer question `to`, as it was numbered here, which Max in
-    /// another conversation asked: whom the answer went to.
+    /// Answer question `to`, which Max in another conversation asked:
+    /// whom the answer went to.
     Answer {
-        /// The question's number here.
-        to: u32,
+        /// The question's number.
+        to: i64,
         /// The answer.
         text: String,
         /// Where the name of whom it went to goes.
@@ -285,9 +292,9 @@ impl Request {
     }
 }
 
-/// What Max in one conversation asks Max in another, on its way there.
-/// Nothing waits for the answer: the question carries who asked, which
-/// is all that lets the one asked reach the asker, once.
+/// What Max in one conversation asks Max in another, on its way there:
+/// the actor it reaches keeps it as a row, which is all that lets the
+/// one asked reach the asker, once.
 #[derive(Clone, Debug)]
 pub struct Question {
     /// The conversation that asks, as the one asked names it.
@@ -320,10 +327,6 @@ pub enum Unanswered {
     /// Max is shutting down there.
     #[error("Max is restarting there")]
     Restarting,
-    /// The core that read the question ended with it still there: its
-    /// idle window ran out, or the turn was killed or failed.
-    #[error("Max there ended its turn without answering")]
-    TurnOver,
     /// The conversation table found no chat to start its actor in.
     #[error("Max serves no chat of that conversation")]
     NoChat,
@@ -507,7 +510,7 @@ impl Poster {
     ///
     /// [`Refused`]: the conversation is gone or stopped, or no question has
     /// that number.
-    pub async fn answer(&self, to: u32, text: String) -> Result<String, Refused> {
+    pub async fn answer(&self, to: i64, text: String) -> Result<String, Refused> {
         self.request(|reply| Request::Answer { to, text, reply })
             .await
     }

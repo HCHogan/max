@@ -1,0 +1,42 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "delete from questions where id = $1 and asked_id = $2 and asked_at > $3\n         returning asker_id, question",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "asker_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "questions",
+            "name": "asker_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "question",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "questions",
+            "name": "question"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "ae9ee0b8963bd6073cb74461c7f7d7fde42e0d954548ae00f1a744f052bb40b9"
+}

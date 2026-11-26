@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "delete from questions where asked_at <= $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0d8f07f760a9d6d8d9dd0f6d401020c4358e56704e0134cd21de5a4ebab469de"
+}

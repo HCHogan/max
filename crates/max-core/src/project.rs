@@ -103,6 +103,13 @@ pub struct Volatile {
     pub askable: Vec<String>,
     /// The conversations whose Max may ask Max here, and enter its VM.
     pub askers: Vec<String>,
+    /// What other conversations asked Max here that it has yet to
+    /// answer, each its number, who asked and when on a line, and then
+    /// the question.
+    pub to_answer: Vec<String>,
+    /// What Max here asked other conversations and has no answer to,
+    /// each who was asked and when on a line, and then the question.
+    pub unanswered: Vec<String>,
     /// Max's memory file, as [`memory`] shows it; empty without one.
     pub memory: String,
     /// Rendered rows the context refers to but doesn't show, such as the
@@ -122,6 +129,8 @@ impl Volatile {
             ("[上下文里的人]", &self.roster),
             ("[能问的会话]", &self.askable),
             ("[能进来的会话]", &self.askers),
+            ("[等你回答的问题]", &self.to_answer),
+            ("[问出去还没回的]", &self.unanswered),
         ];
         for (label, lines) in lists {
             if !lines.is_empty() {

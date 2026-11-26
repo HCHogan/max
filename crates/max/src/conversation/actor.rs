@@ -26,7 +26,7 @@ use self::follow_up::Voice;
 use super::ingest::{self, By};
 use super::notice::Notice;
 use super::project;
-use super::{Event, Place, Receipt, Refusal, Signal, Subscription, TaskId, Unanswered, classify};
+use super::{Event, Place, Receipt, Refusal, Signal, Subscription, TaskId, classify};
 use crate::bind::Binds;
 use crate::causes;
 use crate::code::Codes;
@@ -138,9 +138,6 @@ pub struct Conversation {
     mailbox: UnboundedSender<Event>,
     /// Who addressed Max in the last [`FOLLOW_UP`], and when they last did.
     addressed: HashMap<IdentityId, Instant>,
-    /// What Max in other conversations asked Max here, kept for its
-    /// answers.
-    asked: asking::Asked,
     /// The wakes from the group's programs lately, and the held ones.
     woken: woken::Woken,
     /// What the group's programs said lately.
@@ -217,7 +214,6 @@ impl Conversation {
             next_task: 0,
             mailbox,
             addressed: HashMap::new(),
-            asked: asking::Asked::default(),
             woken: woken::Woken::default(),
             subscribers: broadcast::Sender::new(SUBSCRIBED_ROWS),
         })
@@ -292,7 +288,6 @@ impl Conversation {
     /// group's VM runs on: it isn't the actor's.
     async fn give_up(&mut self, error: &Report) {
         let core = self.core.take();
-        self.refuse_questions(Unanswered::TurnOver);
         let why = causes::chain(&**error);
         if let Err(error) = self.wind_up(core, &why).await {
             let conversation = self.place.conversation;

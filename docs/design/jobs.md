@@ -591,7 +591,7 @@ edges and their direction is in
 
   `/link` codes are kept apart from `/bind`'s (`code::Codes`). A isn't told
   when its code is used; its `/status` shows the edge.
-- **Stored** in `links`: `asker_id`, `asked_id`, `made_at`, keyed by the pair.
+- **Edges are stored** in `links`: `asker_id`, `asked_id`, `made_at`, keyed by the pair.
   Mutable, like `conversation_settings`; the commands that changed it are rows
   of the ledger. No rule derives edges: on QQ a person's openid differs per
   group and in private chat, so even "a person's private chat may ask the
@@ -608,9 +608,9 @@ edges and their direction is in
 - **Tools** (`service/ask.rs`): `ask({ to, question })` returns
   `{ asked: "c#9 <title>" }` at once, and the answer wakes Max later;
   `to` is the conversation's number. `answer({ to, text })` answers question
-  `ask#N` by its number and returns `{ to: "c#7 <title>" }`. A question or
-  answer is at most 2,000 characters (`ASK_CHARS`), and a longer one is
-  refused, not cut. A program in the VM can call both, as any tool; an agent
+  `ask#N` by its number, in the turn that was shown it or any later one, and
+  returns `{ to: "c#7 <title>" }`. A question or answer is at most 2,000
+  characters (`ASK_CHARS`), and a longer one is refused, not cut. A program in the VM can call both, as any tool; an agent
   asks its own Max with its last words, and another conversation with `maxx
   ask`, whose answer wakes Max.
 - **Neither is said in a chat.** A question and its answer reach the other
@@ -619,13 +619,13 @@ edges and their direction is in
 
   | Conversation | When | Item |
   | --- | --- | --- |
-  | B | the question arrives | `[ask#5 问] c#7 <title>`, the question, and a line saying to answer with `answer` in this turn, that the asker hears it wasn't answered if the turn ends first, and that neither goes to the chat |
+  | B | the question arrives | `[ask#5 问] c#7 <title>`, the question, and a line saying to answer with `answer`, that it may ask its people first since the question is listed in every later turn until it is answered, for 7 days, and that neither goes to the chat |
   | A | the answer arrives | `[回答] c#9 <title>`, then `问：` the question again and `答：` the answer |
-  | A | it can't be asked, or B's turn ends or B is stopped before answering | `[没答成] c#9 <title>：<why>`, then the question |
+  | A | it can't be asked, or B is stopped before answering | `[没答成] c#9 <title>：<why>`, then the question |
 
   A's `ask` and B's `answer` are tool calls in their own transcripts. The
-  answer's item repeats the question because nothing in A kept it, and the core
-  that asked may be gone. The chats' people see nothing unless Max says so.
+  answer's item repeats the question because the core that asked may be
+  gone. The chats' people see nothing unless Max says so.
   What was asked and answered is in the turns' records (`turns.trigger`,
   `turn_outcomes.run`), not where `history` and `maxx events` look.
 - **What Max is told**: the conversations it may ask and enter are listed in
@@ -633,27 +633,43 @@ edges and their direction is in
   those that may ask and enter it under `[能进来的会话]`, read from `links`
   when a core starts (none, no block), so the system prompt stays the same for
   every conversation, and an edge made during a core shows from the next
-  (`ask` checks the edge when called). The tools' guides say the rest; when to
+  (`ask` checks the edge when called). After them come the questions that
+  wait, read from `questions`: under `[等你回答的问题]` those Max here has yet
+  to answer, each as `ask#5 c#7 <title>（11-27 14:05 问的）` and the question
+  below it, and under `[问出去还没回的]` those it asked and has no answer to,
+  each as `c#9 <title>（11-27 14:05 问的）` and the question. So a core that
+  starts when a person comes back with what was asked knows which question
+  to answer, and one whose people ask whether an answer came can say. The tools' guides say the rest; when to
   ask and what to answer is Max's to judge on each side.
 - **The transcript stays append-only**: a question or an answer reaches a
   running core as a wake's item at the end of its input
   (`Conversation::wake_with`), or starts a core among its first inputs. B's wake
   has the reason `asked`, A's `answered`.
-- **Nothing waits and nothing is timed.** A keeps nothing of a question: no
-  number, no job, no timer. The question carries who asks and whom, and B's
-  actor keeps it, numbered `ask#N`, for as long as the core that read it runs
-  (`actor/asking.rs`); that entry is all that lets B's Max reach A, with one
-  answer. The answer goes back through the table (`Signal::Heard`), which starts
-  A's actor if needed and wakes A's Max with the question and the answer. When
-  B's core ends with the question unanswered (idle window, killed, failed),
-  B's actor answers for it as on `/stop`: A hears `[没答成] c#9 <title>：Max there
-  ended its turn without answering`, and whether to ask again is A's to judge.
-  An `answer` to a number not kept (answered, or from an earlier turn) is
-  refused.
-- **No answer**: A hears why, as `[没答成] …`. B can't be asked when it is
-  stopped, Max is restarting there, or Max serves no chat of B (B's Max isn't
-  told of such a question); or B was asked and didn't answer. Only a restart of
-  max is silent: it forgets what B kept. A conversation A has no edge to and one
-  that doesn't exist are refused alike, so asking tells nothing of which exist.
+- **A question waits as a row, and nothing is timed.** B's actor gives a
+  question its number, wakes Max with it and then keeps it in `questions`
+  (`asker_id`, `asked_id`, `question`, `asked_at`; the row's id is the
+  number), where it stays until `answer` names it: in the core that was
+  shown it, or in a later one, hours or days on, when the person Max asked
+  in B's chat has said. `answer` deletes the row and sends the answer back
+  through the table (`Signal::Heard`), which starts A's actor if needed and
+  wakes A's Max with the question and the answer; an `answer` to a number
+  with no row (answered, or another conversation's) is refused. The actors
+  keep nothing: no job, no timer, nothing a restart of max loses. The row
+  comes after the wake because a core the question starts reads what waits
+  for its base context, and has this one among its first inputs already.
+- **A question waits 7 days** (`ASK_DAYS`): the queries leave out an older
+  one, so it is neither listed nor answered, and the next question kept
+  deletes it. Nobody is told when that happens; a Max that wants to hear
+  sooner sets a timer unit that wakes it. At most 10 of A's questions wait
+  in B at once (`ASK_WAITING`): `ask` is refused past that, so what B's Max
+  is shown at each core's start stays bounded.
+- **No answer**: A hears why, as `[没答成] …`, only when B's Max can't answer
+  at all. B can't be asked when it is stopped, Max is restarting there, Max
+  serves no chat of B, or its core couldn't start (B's Max isn't told of such
+  a question, and no row is kept); and `/stop` in B takes out every question
+  that waits there and tells each asker. `/unlink` deletes what waits between
+  the two, either way, and tells nobody. A conversation A has no edge to and
+  one that doesn't exist are refused alike, so asking tells nothing of which
+  exist.
 - **Not done**: a chain of origin when B asks C to answer A; files, which can't
   cross from one `/work` to another; derived edges; any record in the ledger.

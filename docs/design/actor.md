@@ -29,7 +29,6 @@ pub struct Conversation {
     side: Scope,                // the classifier, and the calls of programs in the VM
     stopping: Option<Instant>,  // when the stop grace runs out
     addressed: HashMap<IdentityId, Instant>, // who addressed Max lately; see "Starting a model call over"
-    asked: asking::Asked,       // questions from other conversations, kept for their answers
     woken: woken::Woken,        // the VM's wakes in the last hour, shown to Max with each wake
     subscribers: broadcast::Sender<Arc<Message>>, // every row entered, for `maxx events`
     // plus shared handles and the sending end of its own mailbox, handed to tasks
@@ -244,9 +243,8 @@ enum End {
 ```
 
 `end` drops `io` (aborting the model stream and tool calls: started at
-once, not waited for), refuses the questions the turn was asked, records
-what a cut-off model call had said as `partial_output`, interrupts or
-fails the run, writes the snapshot and outcome in one transaction
+once, not waited for), records what a cut-off model call had said as
+`partial_output`, interrupts or fails the run, writes the snapshot and outcome in one transaction
 (`turns::finish`), and for a failure or a stop sends the line above.
 
 - Events tasks in `io` already sent arrive after their numbers left

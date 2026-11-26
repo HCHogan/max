@@ -90,13 +90,22 @@ pub async fn link(
     Ok(made.rows_affected() > 0)
 }
 
-/// Removes the edges between two conversations, both ways: how many
-/// there were.
+/// Removes the edges between two conversations, both ways, and what
+/// either asked the other that waits for an answer: how many edges there
+/// were.
 pub async fn unlink(
     conn: &mut PgConnection,
     one: ConversationId,
     other: ConversationId,
 ) -> sqlx::Result<u64> {
+    sqlx::query!(
+        "delete from questions
+         where (asker_id = $1 and asked_id = $2) or (asker_id = $2 and asked_id = $1)",
+        one.get(),
+        other.get()
+    )
+    .execute(&mut *conn)
+    .await?;
     let removed = sqlx::query!(
         "delete from links
          where (asker_id = $1 and asked_id = $2) or (asker_id = $2 and asked_id = $1)",

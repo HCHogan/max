@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "delete from questions\n         where (asker_id = $1 and asked_id = $2) or (asker_id = $2 and asked_id = $1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f83e027a2f7ffdcbfee86cdcfc2598b9303f83538f9168c79393de92280ecffa"
+}

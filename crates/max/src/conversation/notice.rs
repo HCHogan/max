@@ -9,6 +9,7 @@
 use std::borrow::Cow;
 
 use max_core::item::{Item, ItemKind};
+use max_core::limits::ASK_DAYS;
 use max_core::render::EXCERPT_CHARS;
 use max_db::links::Peer;
 
@@ -23,15 +24,15 @@ pub(super) enum Notice<'a> {
     /// The VM service, on the group's VM.
     Vm { text: &'a str },
     /// Max in another conversation asks Max here: `answer` names
-    /// `number` to answer it, while this core runs.
+    /// `number` to answer it, in this core or a later one.
     Asked {
-        number: u32,
+        number: i64,
         from: &'a Peer,
         question: &'a str,
     },
     /// What Max in the conversation `by` said to what Max here asked it,
-    /// or why it says nothing: with the question again, since nothing
-    /// here kept it, and the core that asked may be gone.
+    /// or why it says nothing: with the question again, since the core
+    /// that asked may be gone.
     Answered {
         by: &'a Peer,
         question: &'a str,
@@ -68,7 +69,7 @@ impl Notice<'_> {
                 question,
             } => {
                 format!(
-                    "[ask#{number} 问] {from}\n{}\n（那个会话的 Max 问你的：用 answer 回答，to 填 {number}，就在这一轮里答。这一轮结束还没答，它会收到一句没答成，要不要再问由它那边定。这个问题和你的回答都不会发到这边的聊天里）",
+                    "[ask#{number} 问] {from}\n{}\n（那个会话的 Max 问你的：用 answer 回答，to 填 {number}。要先问这边的人才知道的，就先问，知道了再答：没答的问题之后每一轮都列在 [等你回答的问题] 里，{ASK_DAYS} 天内哪一轮都能答。这个问题和你的回答都不会发到这边的聊天里）",
                     fitted(question, single),
                 )
             }
