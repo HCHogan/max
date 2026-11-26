@@ -22,7 +22,7 @@ and why fx in
   report last. The unit is a background command's, `max-job-…`: its limit
   (6 hours, or `timeout_ms` up to 24), its output in `/work/.max/out/`,
   and its line in `systemctl list-units 'max-job-*'`. The session's name
-  is Max's, one for each piece of work.
+  is Max's to choose.
 - **The end** is the background command's notice: `[max-job-… 完成] $ cd
   /work/max && fx ask --session review-pr-25 <<'EOF'`, the exit status,
   the end of what fx printed and the output's file. That end is the
@@ -90,10 +90,13 @@ and why fx in
   agent, not into the turn (reading a whole repository, reviewing or changing
   code, installing, building, testing, opening PRs, reading many pages or
   files); Max says in the chat that it has taken it on and about how long it
-  will take, then runs fx. The prompt says how: the command, a new name for
-  each piece of work, the models, what the task must carry since the agent
-  doesn't see the chat, and going on with the same name and directory,
-  stopping a running one first. What a few steps answer, it does itself.
+  will take, then runs fx. The prompt gives the command, the models, and
+  what the task must carry since the agent doesn't see the chat. Of
+  sessions it says what is so and leaves the rest to Max: a name used
+  before in a directory goes on with that conversation and a new one
+  starts another; a running agent hears nothing new, and can be stopped,
+  which reports nothing and loses the step it was in, with the
+  conversation kept. What a few steps answer, Max does itself.
 - **Project directories**: the directory is the one Max goes into; the VM,
   not the directory, is the boundary. fx reads the directory's `AGENTS.md`,
   and its parents' below `/work`.
