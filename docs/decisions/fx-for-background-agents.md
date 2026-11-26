@@ -18,7 +18,7 @@ Only `fx ask` is used. Telling a running agent more, over `fx acp`, is not built
 
 - **The way to a running agent is the harness's own.** With fx a driver would speak a documented protocol, where pi's needed a plugin on an extension API with no version, or its RPC mode.
 - **It takes max's models as they are.** A custom connection is a base URL, a protocol and the request fields each effort stands for, so both of max's protocols and every effort a provider spells go through without a table of fx's own models. A Responses call carries its reasoning back by itself.
-- **It is small.** One binary of 12 MB, where pi's closure with Node was 214 MB of the guest's image.
+- **It is small.** One binary of 15 MB that needs only glibc, where pi's closure with Node was 214 MB of the guest's image.
 - **An agent's output says what it did.** fx prints what the agent says and runs as it goes, so the output file of an agent that ran out of time, or was stopped, has how far it got; pi's had nothing until the end.
 
 Staying on pi was the other way: it worked, and its sessions took a name. libfx, fx as a library, has no shell or file tools of its own, and would have left them to be written here.
