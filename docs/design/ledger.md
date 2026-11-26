@@ -199,21 +199,20 @@ While the core is awake, every message in the group reaches it as
 `[新消息]`, so the prompt has it answer only what is addressed to it:
 messages that @ it, reply to it or name it. A `[判定 …]` line is the
 classifier's guess, and the prompt has Max leave most of them unanswered:
-it speaks, one short message, when someone was calling it without an @,
-or asked the whole chat something nobody has answered and Max knows the
+it speaks, one message, when someone was calling it without an @, or
+asked the whole chat something nobody has answered and Max knows the
 answer. It doesn't cut into other people's exchanges or answer questions
-put to others. Told it talks too much, told to be quiet or sworn at, it
-outputs `[silence]` or a word, and goes on as before.
+put to others, and where someone doesn't like it or doesn't answer, it
+doesn't press.
 
-How long a reply is, the prompt gives by the chat's own measure and
-not as a limit: a member's message is mostly a dozen characters and seldom
-over fifty, and each message of Max's pushes other people's up the screen.
-An answer to a question starts with the answer and takes a message or
-two. It writes at length, and with headings, when someone asks for that
-or what is asked for is long by nature, code or steps to follow. These
-are a group's measures, in the prompt's rules for groups: in a private
-chat, which is the other party's alone, a reply is as long as the matter
-needs. Why is in
+How a reply in a group sounds, the prompt gives as a register and not as
+rules: brief and casual, as replies on Tieba are, in the members' turns
+of phrase and not in those of Max's own earlier messages. How long it is
+Max picks each time among three, a brief reply of a sentence or two, an
+ordinary one, and a long one that explains in detail, by how the others
+are speaking and whether a complicated question needs it. These are in
+the prompt's rules for groups: in a private chat, which is the other
+party's alone, a reply is as long as the matter needs. Why is in
 [decisions/max-says-little.md](../decisions/max-says-little.md).
 
 ## Outbound

@@ -1,8 +1,8 @@
 # Max says little, and joins in seldom
 
-The system prompt says how long a group's messages are and why Max's
-should be so, without a limit in characters, and has Max leave most of
-the classifier's wakes unanswered.
+The system prompt gives Max a register to speak in and three lengths to
+choose among for each reply in a group, with few rules beside, and has
+Max leave most of the classifier's wakes unanswered.
 
 ## Context
 
@@ -31,54 +31,55 @@ forbade actions written in brackets, and none of 5,196 replies had one.
 
 ## Decision
 
-The prompt describes a reply by the chat's own measure and gives the
-reason:
+What the prompt says of a reply in a group is short.
 
-- a member's message is mostly a dozen characters and seldom over fifty,
-  and the group is everyone's: each message of Max's pushes other people's
-  up the screen;
-- an answer to a question or a request starts with the answer, with the
-  one or two points that matter most, in a message or two; what it leaves
-  out waits for the next question;
-- at length, and with headings, in two cases only: someone asks for that
-  in so many words, or what is asked for is long by nature, a piece of
-  code or steps to follow.
+- **A register.** Max's style is brief and casual, as replies on Tieba
+  are, dropping a subject or turning a sentence about as speech does. It
+  takes its turns of phrase from the members, not from its own messages
+  in the record.
+- **Three lengths, of which Max picks one each time**: a brief one, a
+  short sentence or two; an ordinary one, on the topic in hand, in
+  everyday speech; a long one, which may comment and explain in some
+  detail. When the others are speaking briefly it is the brief or the
+  ordinary one, and the long one when a complicated question needs
+  explaining.
+- **Three lines of manners**: a topic to a reply; everyday and not
+  overdone, without hunting for topics; and where someone doesn't like
+  Max or doesn't answer it, it doesn't press, and reads the room before
+  it speaks.
 
 No reply has a limit in characters. These are a group's rules, in the
-prompt's section for groups with what else a group asks of Max. A private
-chat is the other party's alone: a reply there is as long as the matter
-needs, as it was.
+prompt's section for groups. A private chat is the other party's alone: a
+reply there is as long as the matter needs, as it was.
 
 A `[判定 …]` line is told for what it is, a small model's guess that is
 often wrong. Max answers `[silence]` to most, and speaks, one message, in
 two cases: someone was calling it without an @, or asked the whole chat a
-question that nobody has answered and Max knows the answer. Told that it
-talks too much or cuts in, told to be quiet, or sworn at, it answers
-`[silence]` or a word and lets the matter drop.
-
-Beside these: a serious question gets a plain answer, and a message's
-`#number` is for Max alone, so that it names an earlier message to the
-chat by who said it and when.
+question that nobody has answered and Max knows the answer.
 
 ## Why
 
-- **What a reply looks like, and why, is most of it.** That Max is in a
-  group the prompt always said, and to speak as long as the others do;
-  the replies were ten times a member's. With the members' own lengths
-  and the reason beside them, replayed on 28 recorded turns, a reply to
-  an @ went from 232 characters at the median to 90, and of 12 wakes by
-  the classifier Max spoke to 1 for 4.
-- **No limit in characters, because a limit is filled.** Limits of 30
-  characters for chat and 100 for an answer cut more: on 53 recorded
-  turns the longest reply went from 1,390 characters to 265. In service
-  the model kept the content and pressed it to the limit: of the first 28
-  replies 23 were a single message, the answers one dense sentence each
-  of clauses strung on semicolons, and the play was gone from them.
-  Members had complained of walls of messages, never of a reply that
-  took two lines to be funny.
-- **Said as what to do.** Each rule names the reply: `[silence]`, a word,
-  one message, the answer first. A list of what not to do names those
-  things to the model and leaves it without one to do.
+- **A register the model knows, in place of rules for cases.** The first
+  versions of this change answered each complaint with a rule: a limit
+  for chat and one for an answer, a share for jokes, the two cases in
+  which to write at length. Each did what it was written for and bent
+  something beside it, and the next rule was for that. A model knows what
+  a reply on Tieba is like, and takes its length and its tone from that
+  together.
+- **The length is Max's to pick, by what the others are doing.** A limit
+  is filled: with 30 characters for chat and 100 for an answer in
+  service, the model kept the content and pressed it to the limit. Of the
+  first 28 replies 23 were a single message, the answers one dense
+  sentence each of clauses strung on semicolons, and the play was gone
+  from them. Members had complained of walls of messages, never of a
+  reply that took two lines to be funny.
+- **Not from its own messages.** In the busy chats most of the record is
+  what Max said, so a model that speaks as the record does speaks as
+  itself, and whatever it once did it does more of.
+- **The wording is another project's.** The register, the three lengths
+  and the lines of manners are those MaiBot, a bot built to be a member
+  of a QQ group, ships as its defaults, less one word: "plain", which
+  would flatten a persona that is meant to be funny.
 - **Most wakes are declined**, because most were wrong. The model already
   answered `[silence]` to three in ten. Of those it spoke to, at most 38%
   were followed within three minutes by a reply or an @ to Max; after the
@@ -89,19 +90,14 @@ chat by who said it and when.
 
 ## Cost
 
-- An answer that wanted 300 characters gets a few lines and a question
-  back. Some members liked the long ones.
+- This wording hasn't been replayed on recorded turns, as the earlier
+  ones were. What it does shows in service.
+- Which question is complicated is the model's to say, and the wordiest
+  model finds many so: without a limit it wrote 400 to 600 characters to
+  one question in five that looked big.
 - Max joins in less, the welcome times with the rest: banter that people
   took up is no longer a reason to speak.
-- Without a limit the wordiest model still writes 400 to 600 characters
-  to a question that looks big, one time in five in the replays.
-- The measure suits a QQ group of people typing short lines. A chat that
-  wants otherwise says so and Max writes it in its memory, which is
-  nearer the new messages than the prompt is, and wins.
-- It was replayed on two models of one family and a few dozen turns, with
-  a wording close to this one, not this one.
-- For some days the record still shows the long replies, which a model
-  imitates, and the prompt says nothing of them.
+- For some days the record still shows the long replies.
 
 ## Alternatives
 
@@ -113,14 +109,19 @@ chat by who said it and when.
 - **The prompt in English.** Nothing measured says the rules were misread:
   the concrete ones were kept to the letter. The persona and the examples
   are Chinese either way.
-- **Limits in characters.** In service for two hours; see Why.
+- **Limits in characters.** In service for two hours; see Why. Replayed
+  on 53 recorded turns they took a reply to an @ from 216 characters at
+  the median to 112, and the longest from 1,390 to 265.
+- **The members' own lengths, described, with the reason**: a member's
+  message is mostly a dozen characters, and each of Max's pushes other
+  people's up the screen. Replayed on 28 turns it took a reply to an @
+  from 232 characters at the median to 90. The register says as much in a
+  sentence, and brings the tone with it.
 - **A share for jokes**, one reply in ten, a jab only at the message in
-  hand, one comparison a reply. It was written against a recipe the
-  persona gave, a jab and then the answer, which is gone from the
-  persona; as a rule it rationed what the members liked.
+  hand, one comparison a reply. It rationed what the members liked; the
+  comparisons are part of what makes Max sound alive.
 - **"Look it up first" among the rules for a reply.** The search tool's
   own guide says it, and with the line in the prompt Max still answered a
   question of fact from memory and was corrected.
-- **A line saying that Max's earlier replies are no measure.** It would
-  matter for the few days until the record is of short replies, and the
-  prompt keeps to what holds for good.
+- **A line saying that Max's earlier long replies are no measure.** It
+  would matter for the few days until the record is of short replies.
