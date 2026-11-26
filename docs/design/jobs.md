@@ -141,7 +141,7 @@ without a key:
 
 ### What the guest's fx relies on in fx
 
-Checked with fx 0.0.17:
+Checked with fx 0.0.18:
 
 - `fx ask` takes the task as its arguments, or from standard input when
   there are none, so a heredoc is the task. It writes each text the agent
@@ -160,10 +160,10 @@ Checked with fx 0.0.17:
 - fx exits at once on SIGTERM, and the command it was running is killed.
   A run that goes on shows the model that call as aborted, and a note
   that the turn was cut and what it ran may have partly happened.
-- Its `shell` tool waits for a command up to 30 seconds and then hands
-  it back still running; the model waits on it again, up to 5 minutes a
-  call, so a long build costs a model call every 5 minutes. What still
-  runs when fx exits is killed.
+- Its `shell` tool waits for a command 30 seconds, or as long as the
+  model asks up to 5 minutes, and then hands it back still running, to be
+  waited on again: a long build costs a model call every 5 minutes. What
+  still runs when fx exits is killed.
 - A session is a workspace's, the directory fx ran in, and is kept under
   the fx home, `FX_HOME`, which must be an absolute path. `fx sessions
   --json` counts the directory's, and with `--all` says each one's
@@ -179,9 +179,9 @@ Checked with fx 0.0.17:
   names none. An effort the model doesn't declare isn't sent, with a
   notice. `yolo_acknowledged` is fx's note that full access was
   explained: without it fx writes it, and a copy of the file, each run.
-- A Responses call is sent with `store: false` and asks for the
-  reasoning encrypted, which the next call carries back: max passes
-  both on as they are.
+- A Responses call is sent with `store: false`, its system text as the
+  first item of `input`, and asks for the reasoning encrypted, which the
+  next call carries back: max passes all of it on as it is.
 - `AGENTS.md` in the fx home goes after fx's own prompt, and the
   directory's after that. fx reads `AGENTS.md` alone: a `CLAUDE.md` only
   as a link from one.
