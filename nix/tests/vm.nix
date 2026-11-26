@@ -147,9 +147,9 @@ pkgs.testers.runNixOSTest {
     # the guest tells of its end.
     assert "It runs in the background as max-job-" in shown, shown
     assert "后台命令结束的通知：[max-job-" in shown and "exit status 0, ran for" in shown, shown
-    # A background agent is one too: the guest's pi, its model calls
+    # A background agent is one too: the guest's fx, its model calls
     # through max, and its last words in the notice.
-    assert "后台 agent 的报告：[max-job-" in shown and "完成] $ pi -p --no-session" in shown, shown
+    assert "后台 agent 的报告：[max-job-" in shown and "完成] $ fx ask <<<" in shown, shown
     assert "vm-check 的 agent 说完了" in shown, shown
     assert "后台 agent 的模型调用：1 次\n" in shown, shown
     # A unit in /work/.max/systemd, started by maxx units apply, with the

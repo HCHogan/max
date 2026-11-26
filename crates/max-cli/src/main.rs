@@ -285,7 +285,7 @@ async fn start(config: Config, on: Platforms) -> Result<Running> {
     let apis = Arc::new(service::api::Apis::load(&config.api)?);
     let agents = models.job().transpose()?.map(Arc::new);
     if agents.is_none() {
-        info!("no model for background agents: pi in a VM has none of max's");
+        info!("no model for background agents: fx in a VM has none of max's");
     }
     let vms = match config.vm {
         Some(vm) => Some(Vms::start(

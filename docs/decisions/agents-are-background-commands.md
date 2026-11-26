@@ -2,6 +2,8 @@
 
 Max hands work of many steps to pi by running it, `pi -p`, in a background command; there is no agent tool. What runs is [Background agents](../design/jobs.md#background-agents).
 
+The harness is fx since [Background agents run fx](fx-for-background-agents.md), run the same way: what is said of pi here is why an agent is a background command.
+
 ## Context
 
 Agents were a tool of the guest's: `maxx agent start`, `steer`, `models` and `ask`, a starter script that numbered them, gave each a unit of its own kind and a directory of files under `/run/max/jobs`, and a plugin in pi that read steers from an inbox at each turn's end, held an agent that had asked something for ten minutes, warned it five minutes before its limit, took SIGUSR2 to stop with a report, wrote the report to a file and kept notes for each directory. A wrapper built pi's configuration for each run. Ending one had a notice of its own kind, and taking up an ended one a fork with a new number. Together they were the largest part of the guest's scripts, and the plugin rested on pi's extension API, which has no version.

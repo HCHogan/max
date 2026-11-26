@@ -26,16 +26,16 @@ other project. Without a terminal, start it with `PC_TUI_ENABLED=0 devenv up`.
 
 ## Background agents' harness
 
-The flake's `pi` check runs the guest's pi, `nix/pi.sh`, with the pinned
-pi against a fake `/llm`, without real model calls: it is what says
-whether a move of pi's pin, or a change to `nix/pi.sh` or
-`nix/pi-system.md`, keeps what Max rests on. `scripts/check-pi` runs the
+The flake's `fx` check runs the guest's fx, `nix/fx.sh`, with the pinned
+fx against a fake `/llm`, without real model calls: it is what says
+whether a move of fx's pin, or a change to `nix/fx.sh` or
+`nix/fx-system.md`, keeps what Max rests on. `scripts/check-fx` runs the
 same in the dev shell. An agent in a background command is covered with
 the guest's jobs, below.
 
 ## The guest's jobs
 
-After changing `nix/max-jobs.sh`, `nix/max-units.sh`, `nix/pi.nix`,
+After changing `nix/max-jobs.sh`, `nix/max-units.sh`, `nix/fx.nix`,
 `nix/maxx.nix`, `nix/local.json` or `nix/jobs.nix`, build
 `.#checks.<system>.jobs` for a Linux system (`aarch64-linux` on a Mac
 with a Linux builder): a NixOS test of what Max runs in a VM as units,

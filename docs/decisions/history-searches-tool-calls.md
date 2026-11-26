@@ -32,7 +32,7 @@ with every turn.
   migration fills in the runs before with the same function.
 - **Read by `t#N.n`**, the n-th call of turn t#N, whole and in pages.
 - **Not reasoning**, which stays its turn's own, and not background
-  agents' calls, which are in pi's sessions in the VM.
+  agents' calls, which are in their harness's sessions in the VM.
 
 ## Why
 

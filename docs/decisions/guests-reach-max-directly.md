@@ -22,8 +22,8 @@ protect: a call in flight at the moment max restarts.
 - max restarted about three times a day. The agents' model calls, while
   they were still timed, were in flight for 0.6% to 3.4% of a day, 1.9% on
   average. At that rate a restart cuts a call about once in two weeks, more
-  often in so far as deploys and agents share the daytime, and pi tries a
-  failed call again by itself.
+  often in so far as deploys and agents share the daytime, and the agents'
+  harness tries a failed call again by itself.
 - The forwarder cost more than that. It was as old as its VM's boot, so
   three generations of code spoke to each other, the guest's, the
   forwarder's and max's, and the configuration could only grow in ways an
@@ -68,8 +68,8 @@ protect: a call in flight at the moment max restarts.
 ## Cost
 
 - A model's or a keyed API's call in flight when max restarts is cut off.
-  pi tries again; a `git push` through `/api` fails, and is run again by
-  whoever ran it.
+  The agents' harness tries again; a `git push` through `/api` fails, and
+  is run again by whoever ran it.
 - max asks systemd once for every connection it takes, one after another:
   a few milliseconds each.
 - A guest's kept-alive connection now ends at max. One that max closes as

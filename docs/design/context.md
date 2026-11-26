@@ -330,7 +330,7 @@ choices are in
   call's arguments, a line `key: value` for each, and the text of its
   result, as the model saw it (a `run_code` or `shell` result cut to 16
   KiB as it was). Not reasoning, and not background agents' calls, which
-  are pi's. The rows are written with the turn's outcome, from its run, by
+  are fx's. The rows are written with the turn's outcome, from its run, by
   the SQL function `tool_calls_of`, in the same statement.
   - `query` is required, keywords as above, matched in the arguments and
     the result together, on a trigram index of the two. `who` doesn't go

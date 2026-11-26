@@ -64,7 +64,7 @@ switch.
   reproducible as before, and the issue says which advisory: that is the
   news, and by hand is how a fix younger than seven days is taken.
 - **The guest's pins move too.** `microvm` and `llm-agents` change the
-  guest's image. The gate has `pi` for what `nix/pi.sh` rests on, `jobs`
+  guest's image. The gate has `fx` for what `nix/fx.sh` rests on, `jobs`
   for what surrounds it, and `guest-evaluates`, which says only that the
   image still evaluates. That it builds and boots is checked on tank, by
   its system's build and the nested test, before `maxx` moves. A deploy
@@ -87,8 +87,9 @@ switch.
 - The night's commits get no CI run of their own: a push with the
   workflow's token starts no workflow. The workflow ran the same checks
   on them before pushing.
-- pi can move a minor version in a night. The `pi` check covers what the
-  wrapper rests on, not everything an agent does with pi.
+- fx can move a version in a night, and its releases break things. The
+  `fx` check covers what the wrapper rests on, not everything an agent
+  does with fx.
 - More deploys change the guest's image, and so restart the VMs.
 - A pin the guest's image no longer builds or boots with gets to max's
   main: the gate doesn't build the image. tank's updater then leaves

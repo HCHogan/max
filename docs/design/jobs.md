@@ -8,35 +8,38 @@ as the turn that read them. Why lifetimes are the guest's is in
 
 ## Background agents
 
-Work of many steps runs apart from the turn, as an agent of Max's: pi, in
+Work of many steps runs apart from the turn, as an agent of Max's: fx, in
 the group's VM, on a task Max wrote for it, for hours if need be, while Max
 goes on in the chat. An agent is a background command (below) that runs
-pi; it has no tool of its own, and max keeps nothing of it. Why is in
-[decisions/agents-are-background-commands.md](../decisions/agents-are-background-commands.md).
+fx; it has no tool of its own, and max keeps nothing of it. Why is in
+[decisions/agents-are-background-commands.md](../decisions/agents-are-background-commands.md),
+and why fx in
+[decisions/fx-for-background-agents.md](../decisions/fx-for-background-agents.md).
 
 - **Running one**: Max runs, with `shell` and `background`, `cd <dir> &&
-  pi -p --session-id <name> <<'EOF'`, the task, and `EOF`. pi works in
-  print mode until it settles, and prints its last text, the report. The
-  unit is a background command's, `max-job-…`: its limit (6 hours, or
-  `timeout_ms` up to 24), its output in `/work/.max/out/`, and its line in
-  `systemctl list-units 'max-job-*'`. The session's name is Max's, one for
-  each piece of work.
+  fx ask --session <name> <<'EOF'`, the task, and `EOF`. fx works until it
+  settles, printing what it says and the commands it runs as it goes, its
+  report last. The unit is a background command's, `max-job-…`: its limit
+  (6 hours, or `timeout_ms` up to 24), its output in `/work/.max/out/`,
+  and its line in `systemctl list-units 'max-job-*'`. The session's name
+  is Max's, one for each piece of work.
 - **The end** is the background command's notice: `[max-job-… 完成] $ cd
-  /work/max && pi -p --session-id review-pr-25 <<'EOF'`, the exit status,
-  the end of what pi printed (the report, or why its last model call
-  failed) and the output's file. The title is the command's first line, so
+  /work/max && fx ask --session review-pr-25 <<'EOF'`, the exit status,
+  the end of what fx printed and the output's file. That end is the
+  report, after the last of what the agent said and ran on the way, or
+  why a model call was refused. The title is the command's first line, so
   the notice says which directory and session it was, and a turn that
   didn't start the agent can go on with it. At its limit or when stopped
-  (`systemctl stop`, `/kill`), pi exits at once with no report, and at most
-  `Request aborted` for the model call it was in: the
-  notice at the limit says it is out of time, and a stop tells nobody.
-- **Going on**: the same `--session-id` in the same directory goes on with
+  (`systemctl stop`, `/kill`), fx exits at once with no report, and the
+  output ends with the step it was in: the notice at the limit says it is
+  out of time, and a stop tells nobody.
+- **Going on**: the same `--session` in the same directory goes on with
   the agent's whole conversation, all it read and did, and then the new
   task: an answer to its question, more to go on, a change of direction, a
   redo, or work that ran out of time. A running agent can't be told
-  anything: Max stops it and runs it again, and the step it was in is lost.
-  The run may name another model or effort; `--fork <id>` takes the
-  conversation into another directory.
+  anything: Max stops it and runs it again, and the step it was in is
+  lost, which the agent is told. The run may name another model or
+  effort.
 - **Questions**: an agent stuck on what only Max or the people know decides
   what it can and says in its report what it assumed; when it can't go on,
   its last words are the question, and the run ends. Max answers by running
@@ -44,22 +47,23 @@ pi; it has no tool of its own, and max keeps nothing of it. Why is in
   conversation, the agent runs `maxx ask` as Max would; the answer wakes
   Max, who passes it on.
 - **Models.** `job = { model, effort }` in `[llm]` is the agents' default;
-  without it there are no agents. pi holds no key: its calls go to
+  without it there are no agents. fx holds no key: its calls go to
   `http://127.0.0.1:7777/llm/<endpoint>`, where max sends a
   call that names a configured model (`provider/model`, as `/model` names
   them) to that provider and any other to the agents' own, replaces `model`
   with the provider's id, adds the provider's key and headers, and passes
-  the rest on as pi wrote it; the answer streams back unchanged. A provider
-  quiet for `stream_idle_timeout_secs` is cut off, and pi retries. Only the
-  endpoint of the model's protocol is accepted.
+  the rest on as fx wrote it; the answer streams back unchanged. A provider
+  quiet for `stream_idle_timeout_secs` is cut off, and fx tries again. Only
+  the endpoint of the model's protocol is accepted.
   - `GET /llm` says what a harness must know before it calls: `{api, model,
     window, max_output, effort}` for the agents' own, and under `models` the
     same for every configured model, without the effort; 404 when there are
-    no agents. The guest's pi writes it into its own files (below).
-  - `pi --list-models` lists the models with their windows, and `--model
-    <name>` and `--thinking <level>` run an agent on another. There is no
-    list of models agents may use: whatever `/model` offers a turn, an
-    agent can run on, priced ones too.
+    no agents. `api` is `openai-chat-completions` or `openai-responses`.
+    The guest's fx writes it into fx's settings (below).
+  - `fx models` lists the models with their windows, and `--model <name>`
+    and `--effort <level>` run an agent on another. There is no list of
+    models agents may use: whatever `/model` offers a turn, an agent can
+    run on, priced ones too.
   - **No sessions**: `/llm` takes any call on a VM's socket, and nothing
     knows which agent called. So anything in the VM can spend on any
     configured model, which is accepted, as the VM is the group's own and
@@ -72,7 +76,9 @@ pi; it has no tool of its own, and max keeps nothing of it. Why is in
 - **Tools**: an agent is a program, which calls every tool with `maxx` from
   its shell (`maxx history`, `maxx web-search`, `webread`), with no tools of
   its own on the host. It could speak in the chat too; its system text tells
-  it not to, and nothing enforces that.
+  it not to, and nothing enforces that. fx's own tools are its to use: the
+  shell, files, and agents of its own within the run, which report to it
+  and end with it.
 - **No limits of their own**: as many run at once as background commands
   do, and each has its unit's time.
 - **What max shows**: `/status` lists no agents; the guest's systemd lists
@@ -84,90 +90,122 @@ pi; it has no tool of its own, and max keeps nothing of it. Why is in
   agent, not into the turn (reading a whole repository, reviewing or changing
   code, installing, building, testing, opening PRs, reading many pages or
   files); Max says in the chat that it has taken it on and about how long it
-  will take, then runs pi. The prompt says how: the command, a new name for
+  will take, then runs fx. The prompt says how: the command, a new name for
   each piece of work, the models, what the task must carry since the agent
   doesn't see the chat, and going on with the same name and directory,
   stopping a running one first. What a few steps answer, it does itself.
 - **Project directories**: the directory is the one Max goes into; the VM,
-  not the directory, is the boundary. pi reads the directory's `AGENTS.md`
-  or `CLAUDE.md`, and its parents', and `~/.pi/agent/AGENTS.md`; a
-  project's `.pi/` is trusted only with `--approve`.
+  not the directory, is the boundary. fx reads the directory's `AGENTS.md`,
+  and its parents' below `/work`.
 
-### pi in the VM
+### fx in the VM
 
-`pi` on the guest's PATH is the pinned pi behind a wrapper,
-`nix/pi.sh`, so that anything in the VM can run it on max's models
+`fx` on the guest's PATH is the pinned fx behind a wrapper,
+`nix/fx.sh`, so that anything in the VM can run it on max's models
 without a key:
 
 - **Models**: before each run the wrapper asks `GET /llm` and writes every
-  model max serves into pi's `models.json`, in `~/.pi/agent` under `/work`,
-  as a model of the provider `max`: by max's name for it (`--model
-  cliproxy/gpt-5.6-luna`, or `max/cliproxy/gpt-5.6-luna`), over its
-  protocol, with its window and output limit. Any may be asked to think,
-  and `xhigh` and `max` go as they are. Into `settings.json` go the
-  agents' default model and effort as pi's defaults, `off` without an
-  effort (pi then sends none), and at least 8 retries, to outlast a restart
-  of max. The rest of both files, and of the directory, is whoever's runs
-  pi. With max out of reach a run goes on with what an earlier one wrote.
-- **System text**: `nix/pi-system.md`, as the directory's
-  `APPEND_SYSTEM.md`, after pi's own prompt: it is Max's background agent
+  model max serves into fx's `settings.json`, as models of two custom
+  connections, `max` for Chat Completions and `max-responses` for
+  Responses, since a connection of fx's has one protocol: each by max's
+  name for it (`--model cliproxy/gpt-5.6-luna`), with its window and
+  output limit, and the efforts it may be asked for, `minimal` to `max`
+  and the one max names. The agents' default goes in with its effort,
+  and a run that names a model is passed that model's connection,
+  `--provider`.
+  fx waits 15 minutes for an answer to start or to go on, longer than max
+  waits for a provider, so that max is the one to give up on a call.
+  With max out of reach a run goes on with what an earlier one was told,
+  kept in `~/.max/fx/about.json`. `fx models` is the wrapper's own, from
+  the same answer: fx's lists one connection's models.
+- **System text**: `nix/fx-system.md`, as `AGENTS.md` in the fx home,
+  after fx's own prompt: it is Max's background agent
   and doesn't see the chat; `maxx history`, `maxx web-search` and
   `webread`; not to speak in the chat; its last message is its report; to
   decide what it can and say what it assumed, and to end with its question
   when it can't go on; the environment; that it is stopped at its limit
   with nothing reported, so long work keeps what it has in files.
-- **Sessions** are a directory's: `--session-id ID` starts a session by
-  that name, or goes on with the current directory's. The wrapper refuses
-  an id pi keeps only for other directories, with status 2 and where it
-  is: pi would start a new session by that name, saying so only on stderr.
+- **Sessions**: fx names its sessions itself, and `fx ask` goes on with
+  one by fx's id or with the directory's last. So `--session NAME` is the
+  wrapper's: each name has an fx home of its own,
+  `~/.max/fx/sessions/NAME` under `/work`, where the directory's last
+  session is that name's, and the wrapper passes `--resume last` when
+  there is one. It refuses a name whose session is kept only for other
+  directories, with status 2 and where it is, where fx would start anew;
+  and a name that isn't of letters, digits, `-`, `_` and `.`, as it is a
+  directory's. A run without a name keeps no session (`--no-save`), in
+  the fx home `~/.max/fx/home`, which is also where anything but `ask`
+  runs.
+- **Nobody to ask**: every `ask` runs with `--full-access`, fx's
+  permission checks off, as the VM is the boundary.
 
-### What the guest's pi relies on in pi
+### What the guest's fx relies on in fx
 
-Checked with pi 1.6.0:
+Checked with fx 0.0.17:
 
-- Print mode writes the last text to stdout and exits 0; when the last
-  model call fails it writes the error to stderr and exits 1. The session
-  is kept either way. A background command's unit writes both to its
-  output file.
-- pi exits at once on SIGTERM, with status 143 and nothing on stdout; a
-  model call under way leaves `Request aborted` on stderr, which the unit
-  writes to the output file with the rest.
-- Standard input that isn't a terminal goes before the first prompt, so a
-  heredoc is the task; as an argument, a leading `@` would be read as a
-  file.
-- `--session-id ID` takes the current directory's session of that name or
-  makes one, warning on stderr; the id is letters, digits, `-`, `_` and
-  `.`. Sessions are in the agent directory's `sessions/`, a directory for
-  each working directory; with `--session-dir` they are all in that one,
-  and pi still takes an id only for the working directory's. `--session
-  <id>` from another directory asks on standard input whether to fork it,
-  which a background command's empty input answers no, and exits 0 having
-  done nothing; the prompt doesn't use it. `--fork` copies a session into
-  the current directory.
-- A model of `models.json` takes its own `api`. One with `reasoning` is
-  sent `reasoning_effort` as the thinking level says, none for `off`, and
-  `xhigh` and `max` as `thinkingLevelMap` maps them; one without is never
-  sent any. `defaultProvider`, `defaultModel` and `defaultThinkingLevel` in
-  `settings.json` stand when the command line names none, and a model is
-  found by its id alone too.
-- `APPEND_SYSTEM.md` in the agent directory goes after pi's own prompt; a
-  project's `.pi/APPEND_SYSTEM.md` would take its place, but print mode
-  trusts a project's `.pi/` only with `--approve`. Context files load
-  whatever the trust.
-- pi retries a failed model call 3 times by default, about 14 seconds in
-  all; `retry.maxRetries` gives it longer. A call that a restart of max
-  cuts off fails once: the next try waits at max's socket for the max that
-  comes.
+- `fx ask` takes the task as its arguments, or from standard input when
+  there are none, so a heredoc is the task. It writes each text the agent
+  says to stdout as it comes, the report last, and to stderr the commands
+  it runs with their output and its own notices; it exits 0. A background
+  command's unit writes both to its output file.
+- A model call the provider or max refuses (4xx) ends the run at once:
+  `fx ask: API request failed · HTTP 404 · <the error's message>` on
+  stderr, status 1. A call that fails otherwise (5xx, or an answer cut
+  off midway) is tried again after a growing wait, 1, 2, 4, 7, 14, 29
+  seconds and on, without end, each wait a `[notice]` on stderr: nothing
+  caps the tries, and an agent whose provider stays down runs to its
+  unit's limit. A call that a restart of max cuts off fails once: the
+  next try waits at max's socket for the max that comes. The session is
+  kept either way.
+- fx exits at once on SIGTERM, and the command it was running is killed.
+  A run that goes on shows the model that call as aborted, and a note
+  that the turn was cut and what it ran may have partly happened.
+- Its `shell` tool waits for a command up to 30 seconds and then hands
+  it back still running; the model waits on it again, up to 5 minutes a
+  call, so a long build costs a model call every 5 minutes. What still
+  runs when fx exits is killed.
+- A session is a workspace's, the directory fx ran in, and is kept under
+  the fx home, `FX_HOME`, which must be an absolute path. `fx sessions
+  --json` counts the directory's, and with `--all` says each one's
+  `workspace_root`. `--resume last` goes on with the directory's latest,
+  and `--no-save` keeps none. A session gone on with stays on the
+  connection it began on unless the run names one, `--provider`, and
+  then goes on over that one's protocol with the whole conversation.
+- `settings.json` in the fx home: `providers.<name>` with `protocol`,
+  `base_url` (fx adds `/chat/completions` or `/responses`; plain HTTP
+  for loopback only), `auth`, `timeouts` and `model_metadata`, whose
+  `reasoning_efforts` maps a level's name to the request fields that ask
+  for it; `provider`, `models` and `effort` stand when the command line
+  names none. An effort the model doesn't declare isn't sent, with a
+  notice. `yolo_acknowledged` is fx's note that full access was
+  explained: without it fx writes it, and a copy of the file, each run.
+- A Responses call is sent with `store: false` and asks for the
+  reasoning encrypted, which the next call carries back: max passes
+  both on as they are.
+- `AGENTS.md` in the fx home goes after fx's own prompt, and the
+  directory's after that. fx reads `AGENTS.md` alone: a `CLAUDE.md` only
+  as a link from one.
+- With `auto_upgrade` off (`FX_AUTO_UPGRADE=0`) fx calls nothing but the
+  model: checked in a network namespace with no way out.
+- fx holds the agent to the task's language when the task reads as
+  English: an answer in another script is asked for again once, and then
+  the run fails with status 1. A task in Chinese is held to nothing. The
+  same check runs on a turn that a report of fx's own agents starts.
+- With a session kept, fx gives the agent a `subagent` tool, agents of
+  its own in the same process and session; `fx ask` ends when they have.
+  `fx ask` has no way to leave the tool out.
 
-pi comes from numtide's llm-agents.nix, pinned in the flake's lock, which
-[moves each night](../decisions/pins-move-nightly.md). So the flake's
-`pi` check, which `scripts/check-pi` runs by hand, covers a move
-of the pin and a change to `pi.sh` or `pi-system.md`: the wrapper with
-the pinned pi against a fake `/llm`, for the default model and effort, the system text, another model by max's
-name, going on with a session, the refusal in another directory, max out
-of reach, and the rest of pi's files kept. What surrounds pi is in the
-NixOS test `checks.<system>.jobs`, and `max vm-check` runs one agent in a
-real VM against a provider of its own.
+fx comes from numtide's llm-agents.nix, pinned in the flake's lock, which
+[moves each night](../decisions/pins-move-nightly.md). fx calls itself
+experimental and changes its command line and settings between releases,
+so the flake's `fx` check, which `scripts/check-fx` runs by hand, is
+what lets a pin move: the wrapper with the pinned fx against a fake
+`/llm`, for the default model, its protocol and effort, the system text,
+another model by max's name over the other protocol, going on with a
+session and on another model, the refusal in another directory, the models listed, max out of
+reach, and no call of anything else. What surrounds fx is in the NixOS
+test `checks.<system>.jobs`, and `max vm-check` runs one agent in a real
+VM against a provider of its own.
 
 Another harness would need only a wrapper of its own that tells it of
 the models from `GET /llm`: a background command is the rest.

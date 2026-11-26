@@ -434,7 +434,7 @@ pub struct Llm {
     /// has to see pictures. Without it, nothing is captioned.
     pub caption: Option<Selection>,
     /// The model background agents run on, unless Max runs one on another
-    /// of the configured models: pi, in the group's VM, which reaches them
+    /// of the configured models: fx, in the group's VM, which reaches them
     /// through max's service to the VM. Without it, there are no
     /// background agents, and nothing in a VM calls a model.
     pub job: Option<Selection>,

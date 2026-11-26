@@ -1,18 +1,18 @@
-//! The background agents' model calls: pi in a VM posts them to
+//! The background agents' model calls: fx in a VM posts them to
 //! `/llm/…`, and they go on to the provider with the provider's key, as
-//! they came but for the model id: the other fields are passed on as pi
+//! they came but for the model id: the other fields are passed on as fx
 //! wrote them, not parsed. The answer streams back as it is, and is
 //! broken off if the provider keeps quiet as long as max-llm would wait:
-//! pi takes it for a failed call, and retries.
+//! fx takes it for a failed call, and retries.
 //!
 //! A call names its model as the configuration does, `provider/model`,
-//! and any configured model can be named: Max runs pi on the one it
-//! wants, which the guest's pi (nix/pi.sh) knows from `GET /llm`. A call
+//! and any configured model can be named: Max runs fx on the one it
+//! wants, which the guest's fx (nix/fx.sh) knows from `GET /llm`. A call
 //! that names none, or one that isn't configured, goes to the agents'
 //! own, `llm.job`.
 //!
 //! max serves this beside its tools, so a call in flight ends with max,
-//! as at a deploy: pi takes that for a failed call too, and its next try
+//! as at a deploy: fx takes that for a failed call too, and its next try
 //! waits at max's socket for the max that comes.
 //!
 //! Any call at max's socket is taken: nothing in the VM holds a key or
@@ -78,11 +78,11 @@ pub fn router(models: Option<Arc<Upstreams>>) -> Router {
 const NONE: &str = "no model is configured for background agents";
 
 /// What an agent's harness needs to know of a model before it calls it:
-/// the protocol, as pi names it, the name to call it by, the window, and
+/// the protocol, as fx names it, the name to call it by, the window, and
 /// the most it writes.
 fn described(name: &str, upstream: &Upstream) -> serde_json::Value {
     let api = match upstream.protocol {
-        Protocol::Chat => "openai-completions",
+        Protocol::Chat => "openai-chat-completions",
         Protocol::Responses => "openai-responses",
     };
     json!({
@@ -239,7 +239,7 @@ fn chunks(answer: reqwest::Response, idle: Duration) -> impl Stream<Item = io::R
     })
 }
 
-/// An error as OpenAI's APIs put it, which pi shows the model.
+/// An error as OpenAI's APIs put it, whose message fx prints.
 fn refuse(status: StatusCode, message: &str) -> Response {
     let body = json!({ "error": { "message": message } }).to_string();
     Response::builder()

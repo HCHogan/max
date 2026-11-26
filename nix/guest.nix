@@ -14,7 +14,7 @@
   config,
   lib,
   pkgs,
-  pi,
+  fx,
   ...
 }:
 let
@@ -476,9 +476,9 @@ in
     # A page's text, as Markdown; PDFs through pdftotext.
     (import ./webread.nix { inherit pkgs; })
     # Background agents' harness, which programs can run too, on the
-    # models max serves the VM (pi.nix). maxx, Max's tools from shell
+    # models max serves the VM (fx.nix). maxx, Max's tools from shell
     # commands and programs in any language, is with the jobs (jobs.nix).
-    (import ./pi.nix { inherit pkgs pi; })
+    (import ./fx.nix { inherit pkgs fx; })
     # tools.video's copies for the model, and programs' own.
     ffmpeg-headless
     poppler-utils

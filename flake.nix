@@ -24,9 +24,9 @@
       url = "github:microvm-nix/microvm.nix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    # pi, the background agents, in the guest. nix/pi.sh relies on pi's
-    # models.json, settings and sessions: the `pi` check says whether a
-    # pin's pi keeps them (see "Background agents" in docs/design/jobs.md).
+    # fx, the background agents, in the guest. nix/fx.sh relies on fx's
+    # settings, sessions and command line: the `fx` check says whether a
+    # pin's fx keeps them (see "Background agents" in docs/design/jobs.md).
     llm-agents.url = "github:numtide/llm-agents.nix";
   };
 
@@ -153,7 +153,7 @@
                     {
                       nix.registry.nixpkgs.flake = nixpkgs;
                       nix.nixPath = [ "nixpkgs=${nixpkgs}" ];
-                      _module.args.pi = inputs.llm-agents.packages.${system}.pi;
+                      _module.args.fx = inputs.llm-agents.packages.${system}.fx;
                     }
                   ]
                   ++ more;
@@ -270,10 +270,10 @@
             # the max crate turns on, so a Utc::now in the core won't compile.
             max-core-alone = cargoCheck "max-core-alone" [ ] "cargo check --package max-core";
 
-            # The pinned pi keeps what nix/pi.sh rests on, against a fake
-            # /llm; scripts/check-pi runs the same by hand.
-            pi =
-              pkgs.runCommand "check-pi"
+            # The pinned fx keeps what nix/fx.sh rests on, against a fake
+            # /llm; scripts/check-fx runs the same by hand.
+            fx =
+              pkgs.runCommand "check-fx"
                 {
                   nativeBuildInputs = [
                     pkgs.nodejs
@@ -283,10 +283,10 @@
                 }
                 ''
                   mkdir -p scripts nix
-                  cp ${./scripts/check-pi.js} scripts/check-pi.js
-                  cp ${./nix/pi.sh} nix/pi.sh
-                  cp ${./nix/pi-system.md} nix/pi-system.md
-                  node scripts/check-pi.js ${inputs.llm-agents.packages.${system}.pi}/bin/pi
+                  cp ${./scripts/check-fx.js} scripts/check-fx.js
+                  cp ${./nix/fx.sh} nix/fx.sh
+                  cp ${./nix/fx-system.md} nix/fx-system.md
+                  node scripts/check-fx.js ${inputs.llm-agents.packages.${system}.fx}/bin/fx
                   touch $out
                 '';
           }
@@ -299,7 +299,7 @@
             # machine, so this one runs wherever the module's does.
             jobs = import ./nix/tests/jobs.nix {
               inherit pkgs;
-              inherit (inputs.llm-agents.packages.${system}) pi;
+              inherit (inputs.llm-agents.packages.${system}) fx;
             };
             # The guest's image evaluates, with the pins as they are. To
             # build it is to fetch its whole closure, several GiB, and to

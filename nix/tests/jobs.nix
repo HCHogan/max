@@ -3,13 +3,13 @@
 # background command's notice, and what becomes of each when it is
 # stopped, when max is away, and when its caller is; what max asks the
 # guest's systemd of them; a call of maxx's made while max restarts,
-# which waits; a background agent, the guest's pi (nix/pi.sh) in a
+# which waits; a background agent, the guest's fx (nix/fx.sh) in a
 # background command against a model that says what the test has it say,
 # and the same agent going on; and a unit that /work/.max/systemd keeps
 # (nix/max-units.sh). The machine has the guest's jobs without a VM's
 # shares; a fake max at 127.0.0.1:7777 keeps what wakes it and answers
 # for the agents' model.
-{ pkgs, pi }:
+{ pkgs, fx }:
 let
   # The machine's own, by the same name: a program requires its tools.
   maxx = import ../maxx.nix {
@@ -25,8 +25,8 @@ let
     const said = n => [{ tool: "sleep 3; echo 查过了" }, { content: "报告：做完了" }][n] ?? { content: "多说了" };
     const text = message => (typeof message.content === "string" ? message.content : (message.content ?? []).map(part => part.text ?? "").join(""));
     // The models max says a call can name: the agents' own, and another.
-    const own = { api: "openai-completions", model: "test/m", window: 100000, max_output: null };
-    const wide = { api: "openai-completions", model: "test/team/wide", window: 200000, max_output: null };
+    const own = { api: "openai-chat-completions", model: "test/m", window: 100000, max_output: null };
+    const wide = { api: "openai-chat-completions", model: "test/team/wide", window: 200000, max_output: null };
     const model = (body, res) => {
       const { messages, model, reasoning_effort } = JSON.parse(body);
       const users = messages.filter(message => message.role === "user").map(text);
@@ -37,7 +37,7 @@ let
       const { content, tool } = said(n);
       const delta = { role: "assistant", content };
       if (tool) {
-        const call = { name: "bash", arguments: JSON.stringify({ command: tool }) };
+        const call = { name: "shell", arguments: JSON.stringify({ action: "run", command: tool }) };
         delta.tool_calls = [{ index: 0, id: "call_" + n, type: "function", function: call }];
       }
       res.writeHead(200, { "content-type": "text/event-stream" });
@@ -78,7 +78,7 @@ pkgs.testers.runNixOSTest {
     { pkgs, ... }:
     {
       imports = [ ../jobs.nix ];
-      # pi and what it runs take more than the default.
+      # fx and what it runs take more than the default.
       virtualisation.memorySize = 2048;
       # As the guest: units find the system's commands.
       systemd.settings.Manager.DefaultEnvironment = "PATH=/run/wrappers/bin:/run/current-system/sw/bin HOME=/work";
@@ -88,7 +88,7 @@ pkgs.testers.runNixOSTest {
         # A program of Max's own.
         pkgs.nodejs
         # The background agents' harness, as the guest has it.
-        (import ../pi.nix { inherit pkgs pi; })
+        (import ../fx.nix { inherit pkgs fx; })
       ];
       systemd.services.fake-max = {
         wantedBy = [ "multi-user.target" ];
@@ -370,11 +370,11 @@ pkgs.testers.runNixOSTest {
         machine.wait_until_succeeds(f"test $(wc -l < /run/wakes) -ge {count}", timeout=180)
         return wakes()[count - 1]
 
-    with subtest("an agent is pi in a background command, whose last words wake Max and whose session goes on"):
+    with subtest("an agent is fx in a background command, whose last words wake Max and whose session goes on"):
         # As Max runs one: in its directory, by a name, the task on
         # standard input. The notice names it by the command's first line.
         machine.succeed("mkdir -p /work/proj")
-        first = "cd /work/proj && pi -p --session-id weather <<'EOF'"
+        first = "cd /work/proj && fx ask --session weather <<'EOF'"
         agent = start(f"{first}\n查一下明天的天气\nEOF", limit=600)
         notice = woken(5)
         assert notice.startswith(f"[{agent} 完成] $ {first}\nexit status 0, ran for "), notice
@@ -384,7 +384,7 @@ pkgs.testers.runNixOSTest {
         assert machine.succeed("sort -u /run/llm-asked") == '["test/m",null]\n'
         # The same name in the same directory goes on with all of it, on
         # the model and effort named.
-        again = start("cd /work/proj && pi -p --session-id weather --model test/team/wide --thinking xhigh 顺便看后天", limit=600, title="$ again")
+        again = start("cd /work/proj && fx ask --session weather --model test/team/wide --effort xhigh 顺便看后天", limit=600, title="$ again")
         notice = woken(6)
         assert notice.startswith(f"[{again} 完成] $ again\nexit status 0, "), notice
         heard = json.loads(machine.succeed("tail -n 1 /run/llm-heard"))
@@ -392,7 +392,7 @@ pkgs.testers.runNixOSTest {
         assert machine.succeed("tail -n 1 /run/llm-asked") == '["test/team/wide","xhigh"]\n'
         # In another directory it is refused, before any call.
         calls = machine.succeed("wc -l < /run/llm-heard")
-        said = call("pi -p --session-id weather 接着", limit=60)
+        said = call("fx ask --session weather 接着", limit=60)
         assert said["status"] == "2" and "the session weather is in /work/proj, not /work" in said["out"]["head"], said
         assert machine.succeed("wc -l < /run/llm-heard") == calls
 

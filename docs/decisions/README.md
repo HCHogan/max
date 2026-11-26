@@ -29,6 +29,7 @@ Why Max is built the way it is: one file for each decision that was a real trade
 - [One conversation's Max can ask another's](asking-another-conversation.md)
 - [Max enters a linked conversation's VM by ssh, through max](ssh-along-a-link.md)
 - [A background agent is pi in a background command](agents-are-background-commands.md)
+- [Background agents run fx](fx-for-background-agents.md)
 - [An ended agent is taken up by a fork](resume-by-fork.md) (replaced by the one above)
 
 ## VMs and processes

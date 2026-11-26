@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Checks that the pinned fx keeps what Max rests on when it runs the
+# guest's fx, nix/fx.sh, in a background command, against a fake /llm
+# (check-fx.js). The flake's `fx` check runs the same in a build, so CI
+# covers a move of the llm-agents pin and a change to fx.sh or
+# fx-system.md; this one runs in the dev shell, which has Node and jq,
+# and FX=path/to/fx runs another fx. What surrounds fx in the guest has
+# the NixOS test, checks.<system>.jobs.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+fx=${FX:-$(nix build --no-link --print-out-paths --inputs-from . 'llm-agents#fx')/bin/fx}
+node scripts/check-fx.js "$fx"

@@ -28,7 +28,7 @@ pub const RUN_TIME_MAX: Duration = Duration::from_secs(600);
 /// A background command's wall clock, unless the call asks for another.
 pub const BACKGROUND_TIME: Duration = Duration::from_secs(6 * 60 * 60);
 /// The most wall clock a background command may ask for. A background
-/// agent, pi in such a command, costs model calls for as long as it runs,
+/// agent, fx in such a command, costs model calls for as long as it runs,
 /// and has the same.
 pub const BACKGROUND_TIME_MAX: Duration = Duration::from_secs(24 * 60 * 60);
 /// Output past this many bytes is cut to its head and tail, each half of
