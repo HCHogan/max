@@ -205,17 +205,15 @@ answer. It doesn't cut into other people's exchanges or answer questions
 put to others. Told it talks too much, told to be quiet or sworn at, it
 outputs `[silence]` or a word, and goes on as before.
 
-How long a reply is, the prompt gives in the chat's own measure: a member's
-message is mostly a dozen characters and seldom over fifty, and so is
-Max's when it chats or joins in, one message of one sentence. An answer
-to a question starts with the answer and takes a message or two. It
-writes at length, and with headings, when someone asks for that or what
-is asked for is long by nature: code, steps, a comparison of what it
-found. These are a group's measures, in the prompt's rules for groups:
-in a private chat, which is the other party's alone, a reply is as long
-as the matter needs. Jokes and
-jabs are the seasoning of a reply in ten, and what Max isn't sure of or
-may be out of date it looks up first. Why is in
+How long a reply is, the prompt gives by the chat's own measure and
+not as a limit: a member's message is mostly a dozen characters and seldom
+over fifty, and each message of Max's pushes other people's up the screen.
+An answer to a question starts with the answer and takes a message or
+two. It writes at length, and with headings, when someone asks for that
+or what is asked for is long by nature, code or steps to follow. These
+are a group's measures, in the prompt's rules for groups: in a private
+chat, which is the other party's alone, a reply is as long as the matter
+needs. Why is in
 [decisions/max-says-little.md](../decisions/max-says-little.md).
 
 ## Outbound
