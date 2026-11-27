@@ -501,25 +501,28 @@ maxx show /work/.max/check.txt > /dev/null"#;
 
 /// vm-check's tab in the browser: how long the browser took to start and
 /// the page to load, the snapshot, a field filled by its ref, a screenshot
-/// in /work, and what the browser tells the page it is.
+/// in /work, and what the browser tells the page it is. The snapshot it
+/// returns is of the page as it leaves it, for the next program's ref.
 const BROWSE: &str = r#"const started = Date.now();
 const page = await (await max.browser()).newPage();
 const connected = Date.now();
 await page.goto("data:text/html;charset=utf-8," + encodeURIComponent(
-  "<html lang=zh-CN><title>检查</title><h1>你好，浏览器</h1><input name=q placeholder=搜索><button id=go>搜索</button>"));
+  "<html lang=zh-CN><title>检查</title><h1>你好，浏览器</h1><input name=q placeholder=搜索><button id=go onclick=\"this.dataset.hit = 1\">搜索</button>"));
 const loaded = Date.now();
-const tree = await max.snapshot(page);
-const ref = /textbox "搜索" \[ref=(e\d+)\]/.exec(tree)[1];
+const ref = /textbox "搜索" \[ref=(e\d+)\]/.exec(await max.snapshot(page))[1];
 await page.locator(`aria-ref=${ref}`).fill("还在");
+const tree = await max.snapshot(page);
 await page.screenshot({ path: "/work/.max/browser-check.png" });
 const seen = await page.evaluate(() => [navigator.userAgent, navigator.webdriver, navigator.language]);
 return { tree, connect_ms: connected - started, page_ms: loaded - connected, seen };"#;
 
-/// The next program finds the tab as the last one left it; and the most
-/// memory the browser has used, in MiB.
+/// The next program finds the tab as the last one left it, and the
+/// button by the ref that program's snapshot gave it; and the most memory
+/// the browser has used, in MiB.
 const BROWSE_AGAIN: &str = r#"const page = await max.page();
 const kept = await page.inputValue("input");
+await page.locator("aria-ref=e4").click();
+const clicked = await page.evaluate(() => document.getElementById("go").dataset.hit ?? null);
 await page.close();
-const fs = await import("node:fs");
-const peak = Number(fs.readFileSync("/sys/fs/cgroup/system.slice/max-browser.service/memory.peak", "utf8"));
-return { kept, peak_mib: Math.round(peak / 2 ** 20) };"#;
+const peak = Number(require("node:fs").readFileSync("/sys/fs/cgroup/system.slice/max-browser.service/memory.peak", "utf8"));
+return { kept, clicked, peak_mib: Math.round(peak / 2 ** 20) };"#;

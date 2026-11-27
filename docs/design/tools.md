@@ -387,11 +387,25 @@ over CDP, so a page the model looked at is still there for the next
   waits 10 seconds for its element and a navigation 30 for its page, unless
   the call gives a `timeout`: Playwright's 30 for both made a click on what
   isn't there cost half a minute.
-  `await max.snapshot(page, {selector?, depth?})` is Playwright's
-  `ariaSnapshot({mode: "ai"})` after the title and URL: each element carries
-  `[ref=e5]` (`f1e2` in iframes), found with `page.locator("aria-ref=e5")`.
-  The refs live in a script the connection injects, so a new program takes a
-  snapshot first; an unchanged page keeps them.
+- **Snapshots and refs**: `await max.snapshot(page, {selector?, depth?})` is
+  Playwright's `ariaSnapshot({mode: "ai"})` after the title and URL: each
+  element carries `[ref=e5]` (`f1e2` in iframes), found with
+  `page.locator("aria-ref=e5")`. A ref is of the page's last snapshot, and
+  the next program uses it as the one that took the snapshot does, which is
+  the SDK's doing: Playwright's refs are numbers its script in the page
+  gives elements, and each connection has its own script, which counts
+  from e1 again. So `max.snapshot` leaves the tree in the document (a
+  property of its window, which goes when the page navigates, as the refs
+  do), and a program that connects takes the same snapshot of each tab that
+  has one and reads the two side by side: up to the first line that
+  differs, a line of each is the same element, and `page.locator` turns the
+  ref the model has into the one this connection gives that element. A ref
+  after that line, one the snapshot didn't have, and one on a page with no
+  snapshot are refused where the locator is made, with what to do, instead
+  of Playwright's wait for an element that isn't coming. Lines are compared
+  without their refs and without an element's state of the moment
+  (`[active]`, `[checked]`). Why is in
+  [decisions/refs-across-programs.md](../decisions/refs-across-programs.md).
 - **A program of Max's own**, not run_code's, has the same three with
   `require("/run/max/browser.js")`; it ends with `process.exit()`, since
   the connection keeps Node running.
@@ -419,7 +433,8 @@ over CDP, so a page the model looked at is still there for the next
   `OPENCLI_CDP_ENDPOINT=http://127.0.0.1:9222` makes it use the group's
   browser.
 - **Tests**: vm-check starts the browser, opens a data: page, takes a
-  snapshot and a screenshot, and loads an MV3 extension through the flags
+  snapshot and a screenshot, clicks in the next program by a ref of that
+  snapshot, and loads an MV3 extension through the flags
   file and checks its mark on a page. The first start after a boot took 22
   seconds in the nested test (cold store reads over virtiofs under nested
   virtualisation), a second 4.3, a page 0.4; two contexts held 370 to 410 MiB

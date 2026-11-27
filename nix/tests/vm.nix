@@ -125,6 +125,8 @@ pkgs.testers.runNixOSTest {
     assert '"tree":"检查\\n' in shown and 'button \\"搜索\\" [ref=e4]' in shown, shown
     # The next program finds its tab as it left it.
     assert '"kept":"还在"' in shown, shown
+    # The next program clicks by the ref the first one's snapshot gave.
+    assert '"clicked":"1"' in shown, shown
     # The browser loads an extension by Max's own flags.
     assert "浏览器重启了" in shown and '"hello":"扩展在"' in shown, shown
     # The guest's ffmpeg made a clip and the model's copy of it, and
