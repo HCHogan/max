@@ -91,6 +91,11 @@ pub enum Mark {
     /// maxx said it on Max's account: a command's answer, or a notice
     /// that a trigger went unanswered.
     Host,
+    /// Something in the group's VM woke Max with it, `maxx wake`: Max
+    /// alone is shown it, and the chat never was.
+    Wake,
+    /// The VM service told Max of the group's VM, as a wake does.
+    Vm,
 }
 
 /// Renders rows as the model reads them.
@@ -164,7 +169,13 @@ impl<P: People> Render<'_, P> {
 
     fn header(&self, message: &Message, mark: Mark) -> String {
         let time = message.at.with_timezone(&self.offset).format("%H:%M");
-        let name = message.sender.name.replace(['\n', '\r'], " ");
+        // What woke Max is nobody's words in the chat: its row has a
+        // tag where a name would be.
+        let name = match mark {
+            Mark::Wake => "max-wake".to_owned(),
+            Mark::Vm => "VM".to_owned(),
+            _ => message.sender.name.replace(['\n', '\r'], " "),
+        };
         let note = match mark {
             Mark::MentionsYou => " @你",
             Mark::RepliesToYou => " 回复你",

@@ -180,8 +180,8 @@ there isn't asked by a tool of its own, in
 - **What runs there is B's.** Everything in a VM is one caller, so `maxx`
   in B's VM is B's whoever runs it: `maxx history` reads B's chat, `maxx
   say` says in it, and `maxx wake '…'` wakes B's Max with those words, as
-  a program of B's own would. B's Max sees a `[max-wake]`; who woke it
-  and what for is whatever the words say. Nothing comes back by itself:
+  a program of B's own would. B's Max sees a row tagged `max-wake`; who
+  woke it and what for is whatever the words say. Nothing comes back by itself:
   B has no way to A, so what Max in A wants of B it looks for there
   again, in B's history or a file in its `/work`.
 - **Permission is an edge between conversations**, not a person's: below a
@@ -237,7 +237,7 @@ there isn't asked by a tool of its own, in
   next (max checks the edge at every connection). The system prompt's
   legend says how to enter, that `maxx` there is that conversation's, with
   `history`, `say` and `wake` as examples, that Max there has no way back,
-  and that a `[max-wake]` here may be a linked conversation's doing.
+  and that a `max-wake` row here may be a linked conversation's doing.
 - **The way is max's.** The guest's ssh_config sends `Host *.max` through
   `maxx connect %h` (`nix/connect.js`), which asks max at
   `127.0.0.1:7777` for `/connect/9` as an HTTP upgrade (`Connection:

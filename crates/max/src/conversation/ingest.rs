@@ -230,11 +230,15 @@ fn words(text: &str) -> String {
 }
 
 /// Who said a row of Max's account that Max didn't, under
-/// [`SAID_BY`](ledger::SAID_BY): [`PROGRAM`] or [`HOST`]. Max's own rows
-/// have none.
+/// [`SAID_BY`](ledger::SAID_BY): [`PROGRAM`], [`HOST`], [`WAKE`] or
+/// [`VM`]. Max's own rows have none.
 pub const PROGRAM: &str = "program";
 /// The host said it: a command's answer, or a notice.
 pub const HOST: &str = "host";
+/// Something in the VM woke Max with it.
+pub const WAKE: &str = "wake";
+/// The VM service told Max of its VM.
+pub const VM: &str = "vm";
 
 /// Who says a row of Max's account.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -246,6 +250,20 @@ pub enum By {
     /// maxx itself: a command's answer, or a notice that a trigger went
     /// unanswered. Max didn't write it, and mustn't take it for its own.
     Host,
+    /// Something in the group's VM, with `maxx wake`: a row Max is
+    /// shown, in the turn it wakes and in later ones, and that is never
+    /// sent to the chat.
+    Wake,
+    /// The VM service, about the group's VM: a row as a wake's is.
+    Vm,
+}
+
+impl By {
+    /// Whether what it says goes to the chat. What woke Max doesn't.
+    #[must_use]
+    pub fn sends(self) -> bool {
+        !matches!(self, Self::Wake | Self::Vm)
+    }
 }
 
 /// Who said `message`, a row of Max's account.
@@ -254,6 +272,8 @@ pub fn by(message: &Message) -> By {
     match message.raw.get(ledger::SAID_BY).and_then(|by| by.as_str()) {
         Some(PROGRAM) => By::Program,
         Some(HOST) => By::Host,
+        Some(WAKE) => By::Wake,
+        Some(VM) => By::Vm,
         _ => By::Max,
     }
 }
@@ -281,9 +301,11 @@ pub async fn said(
     let mut tx = conn.begin().await?;
     let mut draft = draft;
     if let Some(target) = draft.reply_to {
+        // A row that woke Max is no message of the chat's either.
         let row = ledger::row(&mut tx, place.conversation, target).await?;
-        let quotable =
-            row.is_some_and(|row| matches!(row.message.content, Content::Message { .. }));
+        let quotable = row.is_some_and(|row| {
+            matches!(row.message.content, Content::Message { .. }) && self::by(&row.message).sends()
+        });
         if !quotable {
             warn!(conversation = %place.conversation, %target, "dropped a quote of no message here");
             draft.reply_to = None;
@@ -367,6 +389,8 @@ pub async fn said(
         By::Max => serde_json::Value::Null,
         By::Program => serde_json::json!({ ledger::SAID_BY: PROGRAM }),
         By::Host => serde_json::json!({ ledger::SAID_BY: HOST }),
+        By::Wake => serde_json::json!({ ledger::SAID_BY: WAKE }),
+        By::Vm => serde_json::json!({ ledger::SAID_BY: VM }),
     };
     let message = mine(&mut tx, place, content, &rendered, raw, turn, segment, now).await?;
     for (ordinal, sha256) in (0..).zip(&files) {

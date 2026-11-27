@@ -128,7 +128,12 @@ impl Projection<'_> {
 
         let mut first_lines = Vec::new();
         for row in &triggers {
-            let mark = self.trigger_mark(conn, &row.message).await?;
+            // A row that woke Max is marked as what it is; a person's,
+            // by how it is addressed to Max.
+            let mark = match own_mark(row) {
+                Mark::None => self.trigger_mark(conn, &row.message).await?,
+                own => own,
+            };
             let line = shown_line(&render, &row.message, mark, budgets.single);
             first_lines.push((&row.message, line));
         }
@@ -295,6 +300,8 @@ pub fn own_mark(row: &Row) -> Mark {
             By::Max => Mark::None,
             By::Program => Mark::Program,
             By::Host => Mark::Host,
+            By::Wake => Mark::Wake,
+            By::Vm => Mark::Vm,
         },
     }
 }

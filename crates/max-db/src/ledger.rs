@@ -690,7 +690,8 @@ pub async fn record_delivery(
 }
 
 /// At a sender's start: what Max committed on the platform's endpoints
-/// and never heard back about is marked unknown, not sent again.
+/// and never heard back about is marked unknown, not sent again. A row
+/// that woke Max was never for the platform.
 pub async fn mark_unknown(
     conn: &mut PgConnection,
     platform: Platform,
@@ -703,6 +704,7 @@ pub async fn mark_unknown(
         from messages m join endpoints e on e.id = m.endpoint_id
         where e.platform = $1 and m.sender_identity_id = e.self_identity_id
           and m.native_id is null
+          and coalesce(m.raw ->> 'said_by', '') not in ('wake', 'vm')
           and not exists (
               select from deliveries d where d.message_id = m.id and d.endpoint_id = m.endpoint_id
           )

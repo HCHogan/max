@@ -12,6 +12,7 @@ use chrono::{DateTime, Utc};
 use color_eyre::eyre::{Report, Result};
 use max_core::ids::{ConversationId, IdentityId, MessageId, PrincipalId, TurnId};
 use max_core::intent::{Decision, Entry, EntryKind, Intent, Reason};
+use max_core::item::{Item, ItemKind};
 use max_core::message::{Message, Platform};
 use max_core::render::Mark;
 use max_core::run::{FailReason, Input, Outcome, Run, Wake};
@@ -24,7 +25,6 @@ use tracing::{debug, warn};
 
 use self::follow_up::Voice;
 use super::ingest::{self, By};
-use super::notice::Notice;
 use super::project;
 use super::{Event, Place, Receipt, Refusal, Subscription, TaskId, classify};
 use crate::bind::Binds;
@@ -37,6 +37,7 @@ use crate::llm::{Chosen, Models};
 use crate::media::pictures::Pictures;
 use crate::scope::Scope;
 use crate::service;
+use crate::tokens;
 use crate::vm::Vms;
 use crate::worker::Rows;
 
@@ -524,8 +525,11 @@ impl Conversation {
                         continue;
                     }
                     let item = match &reason {
+                        // Only the model reads why it was woken: no row.
                         Reason::Judged { note } => {
-                            Some(Notice::Judged { note }.item(self.single()))
+                            let text = format!("[判定：{note}]");
+                            let tokens = tokens::count(&text);
+                            Some(Item::new(ItemKind::user(text), tokens))
                         }
                         _ => None,
                     };

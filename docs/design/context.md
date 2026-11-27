@@ -56,9 +56,10 @@ alone:
   needn't quote a message in every segment, and may answer at more length;
   the red lines stay.
 - When someone appears for the first time, a roster line is added.
-- Wakes from outside the chat are lines of their own: a background
-  command's end, a background agent's report among them, as `[max-wake]
-  [max-job-… 完成] …`; see [Jobs](jobs.md).
+- Wakes from outside the chat are rows of the timeline, shown like any
+  other with a tag for a name: a background command's end, a background
+  agent's report among them, as `[12:00 max-wake #45]: [max-job-… 完成]
+  …`; see [The timeline](ledger.md#the-timeline).
 - **A cap per item**: a message or a wake shows at most
   `min(C × 15%, 25k)` tokens, and at least 2k (`Budgets::single`); the same
   in the tail and in the first inputs. Past it, the first ~2,000

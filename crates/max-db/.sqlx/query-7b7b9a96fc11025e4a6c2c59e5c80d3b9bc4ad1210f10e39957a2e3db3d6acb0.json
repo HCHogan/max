@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        insert into deliveries (message_id, endpoint_id, status, at)\n        select m.id, m.endpoint_id, 'unknown', $2\n        from messages m join endpoints e on e.id = m.endpoint_id\n        where e.platform = $1 and m.sender_identity_id = e.self_identity_id\n          and m.native_id is null\n          and coalesce(m.raw ->> 'said_by', '') not in ('wake', 'vm')\n          and not exists (\n              select from deliveries d where d.message_id = m.id and d.endpoint_id = m.endpoint_id\n          )\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7b7b9a96fc11025e4a6c2c59e5c80d3b9bc4ad1210f10e39957a2e3db3d6acb0"
+}

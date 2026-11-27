@@ -1,23 +1,28 @@
 //! Wakes from outside the chat: `maxx wake` from something in the group's
-//! own VM, and what the VM service says about the VM. See "Resident
-//! programs" in docs/design/jobs.md.
+//! own VM, and what the VM service says about the VM. Each is a row of
+//! the timeline that is never sent: the core it wakes is shown it, and so
+//! is every later one, which would otherwise see what Max said and not
+//! why. See "Resident programs" in docs/design/jobs.md.
 
 use std::collections::VecDeque;
+use std::sync::Arc;
 
+use chrono::Utc;
 use color_eyre::eyre::Result;
 use max_core::intent::Reason;
 use max_core::limits::HOUR;
+use max_core::message::{Draft, DraftNode};
 use max_core::project::Budgets;
+use max_core::render::Mark;
+use max_core::run::{Input, Wake};
 use tokio::time::Instant;
-use tracing::info;
+use tracing::{info, warn};
 
 use super::{Conversation, Does};
-use crate::conversation::notice::Notice;
+use crate::conversation::ingest::{self, By};
 
-/// When the group's programs woke Max, in the last hour. Not a cap: Max
-/// is shown the count with each wake, so a program that wakes it too
-/// often shows even in a turn that didn't see the other wakes, which
-/// aren't rows of the timeline.
+/// When the group's programs woke Max, in the last hour, for `/status`.
+/// Not a cap.
 #[derive(Default)]
 pub(super) struct Woken(VecDeque<Instant>);
 
@@ -44,19 +49,57 @@ impl Conversation {
     pub(super) async fn woken(&mut self, text: &str) -> Result<String> {
         let count = self.woken.count(Instant::now());
         info!(conversation = %self.place.conversation, count, "a program wakes Max");
-        let item = Notice::Woken { text, count }.item(self.single());
-        self.wake_with(Reason::Program, item).await?;
+        self.wake(By::Wake, text).await?;
         Ok("woke Max".to_owned())
     }
 
-    /// The VM service on the group's VM: a wake, in the running core or
-    /// a new one. Stopped, Max isn't told.
+    /// The VM service on the group's VM. Stopped, Max isn't told.
     pub(super) async fn vm_notice(&mut self, text: &str) -> Result<()> {
         if self.refuses(Does::STARTS).is_some() {
             return Ok(());
         }
-        let item = Notice::Vm { text }.item(self.single());
-        self.wake_with(Reason::Program, item).await
+        self.wake(By::Vm, text).await
+    }
+
+    /// Wakes Max with `text`, `by` what: a row of the timeline, which
+    /// the sender never sees, fed to the running core or the first input
+    /// of a new one, and the trigger either way.
+    async fn wake(&mut self, by: By, text: &str) -> Result<()> {
+        let draft = Draft {
+            reply_to: None,
+            nodes: vec![DraftNode::Text {
+                text: text.trim().to_owned(),
+            }],
+        };
+        let mut conn = self.shared.services.pool.acquire().await?;
+        let (now, offset) = (Utc::now(), self.shared.services.offset);
+        let said = ingest::said(&mut conn, &self.place, draft, None, None, by, now, offset);
+        let said = said.await?;
+        drop(conn);
+        let Some(message) = said else {
+            return Ok(());
+        };
+        let message = Arc::new(message);
+        self.committed(&message);
+        let mark = match by {
+            By::Vm => Mark::Vm,
+            _ => Mark::Wake,
+        };
+        self.feed(&[(&message, mark)]).await?;
+        let wake = Wake {
+            ids: vec![message.id],
+            reason: Reason::Program,
+            item: None,
+        };
+        match self.core.as_mut() {
+            Some(active) => {
+                if let Err(rejected) = active.run.input(Input::Wake(wake)) {
+                    warn!(turn = %active.turn, %rejected, "a wake didn't fit the core");
+                }
+            }
+            None => self.start_core(wake).await?,
+        }
+        Ok(())
     }
 
     /// The most tokens one item may take: the running core's, or the

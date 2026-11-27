@@ -54,8 +54,9 @@ shows `may enter` and `open to`.
 None is built. Each would let B's Max put words before A's:
 
 - **A reply right read from the record**: B may wake A while a wake from A
-  is less than some days old. It needs wakes to be rows of the ledger,
-  with where they came from, and a `wake` that names another
+  is less than some days old. Wakes are rows of the ledger (see
+  [What wakes Max from outside the chat is a row](wakes-are-rows.md)); it
+  needs them to say where they came from, and a `wake` that names another
   conversation.
 - **A token A leaves in B**, which wakes A when `maxx wake` is given it:
   A hands the right over, and anything in B's VM that reads it holds it
@@ -75,11 +76,8 @@ None is built. Each would let B's Max put words before A's:
   people and hear what they said when they say it, hours or days later:
   it has to look again, in B's history or a file B's Max was asked to
   write, or keep a watcher of its own.
-- **A wake in B doesn't say whose it is.** B's Max sees `[max-wake]` and
-  the words, as from a program of its own; who asked and what for is in
+- **A wake in B doesn't say whose it is.** B's Max sees a row tagged
+  `max-wake` and the words, as from a program of its own; who asked and what for is in
   the words or nowhere, and the host can't vouch for it.
-- **A wake isn't kept.** It is shown to the core that runs or starts and
-  lives on only in that turn's record, so a later core in B doesn't see
-  what an earlier one was asked.
 - **Waking B's Max costs B's VM a boot** if it wasn't running, where a
   question went from actor to actor.

@@ -362,6 +362,48 @@ async fn kill_stops_the_core_quietly(pool: PgPool) {
     assert!(h.outbound.try_recv().is_err(), "/kill isn't answered");
 }
 
+/// What wakes Max from outside the chat is a row nobody is sent: the
+/// core it starts is shown it, and so is a later one, before what Max
+/// said to it.
+#[sqlx::test(migrator = "max_db::MIGRATOR")]
+async fn a_wake_is_a_row_later_cores_read(pool: PgPool) {
+    let mut h = Harness::unprompted(pool, 300).await;
+    h.script.push(Answer::says("CI 挂了，我去看看"));
+    let woke = h.poster().wake("CI 挂了".into()).await;
+    assert_eq!(woke, Ok("woke Max".to_owned()));
+    // The first thing sent is Max's answer: the wake's row wasn't.
+    let (answer, said) = h.said().await;
+    assert_eq!(said, "CI 挂了，我去看看");
+    let row: i64 = h
+        .count("select id from messages where raw->>'said_by' = 'wake'")
+        .await;
+    let line = format!(" max-wake #{row}]: CI 挂了\n");
+    let shown = h.request_tail(0);
+    assert!(shown.contains(&line), "{shown}");
+
+    h.send(from_xiaohong(1, vec![me(), text("/kill")]));
+    let deadline = Instant::now() + PATIENCE;
+    while h.turns().await[0].1.is_none() {
+        assert!(Instant::now() < deadline, "the core didn't end");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    h.script.push(Answer::says("还没好"));
+    h.send(at_max(2, " 修好了吗"));
+    assert_eq!(h.said().await.1, "还没好");
+    let shown: String = h.script.requests.lock().unwrap()[1]
+        .items
+        .iter()
+        .filter_map(|item| match &item.kind {
+            ItemKind::User { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    let woken = shown.find(&line).unwrap_or_else(|| panic!("{shown}"));
+    let answered = shown.find(&format!(" #{}]: CI 挂了，我去看看", answer.id));
+    assert!(answered.is_some_and(|answered| woken < answered), "{shown}");
+    h.stop().await;
+}
+
 /// A post that waits to hear how it went.
 fn post(act: Act) -> (Post, oneshot::Receiver<Result<MessageId, Refused>>) {
     let (receipt, sent) = oneshot::channel();

@@ -30,12 +30,28 @@ some position on it.**
   event is handled. Within a conversation, the order of ids, of commits and
   of handling are the same, and a position is simply a message id.
 - On the timeline: other people's messages and events (edits,
-  retractions), commands, every segment Max says, and everything Max does
-  in the chat. All of it goes through the actor: the chat's connection only
-  normalises and the sender only sends; a tool that says or does something
-  sends the actor a `Post`.
+  retractions), commands, every segment Max says, everything Max does
+  in the chat, and what wakes Max from outside it (below). All of it goes
+  through the actor: the chat's connection only normalises and the sender
+  only sends; a tool that says or does something sends the actor a `Post`.
 - Not on it: platform receipts (in `deliveries`) and what Max did behind
   the scenes (in [turn records](#turn-records)).
+
+What wakes Max from outside the chat is a row too, though nobody said it
+there: the words of a `maxx wake`, a background command's or an agent's
+end among them, and what the VM service tells Max of its VM. The row is
+of Max's account, with `raw` `{"said_by": "wake"}` or `{"said_by":
+"vm"}`, and is never handed to the sender: it has no delivery, and the
+sweep that marks unanswered deliveries unknown leaves it alone. It is fed
+to the running core, or is the first input of the one it starts, and is
+that core's trigger, as an @ is; later cores read it in their tail, before
+what Max said to it. It renders with a tag where the name would be
+(`Mark::Wake`, `Mark::Vm`): `[12:00 max-wake #45]: [max-job-… 完成] …`,
+`[12:00 VM #46]: …`, in the tail and in `history` alike. Since it isn't
+the chat's, Max can't quote it, the classifier's context leaves it out,
+and `maxx events` doesn't give it; `rows` does, with its `said_by`. Why
+it is a row is in
+[decisions/wakes-are-rows.md](../decisions/wakes-are-rows.md).
 
 The actor tracks three positions:
 
@@ -78,7 +94,8 @@ Each message stores two things:
   truth: the nodes can be rebuilt from it if the normaliser changes, and a
   future mirror would need it for native round trips. The nodes are a
   cache shared by every reader. Rows read back carry only its `said_by`
-  (who spoke for Max's account; see [Outbound](#outbound)).
+  (who a row of Max's account is by, when not Max: `program`, `host`,
+  `wake` or `vm`; see [Outbound](#outbound) and [The timeline](#the-timeline)).
 
 Nothing is downgraded on storage. Each boundary has a type of its own:
 

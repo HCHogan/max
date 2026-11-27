@@ -138,8 +138,9 @@ Each step is the actor handling one event.
 2. **Intent.** Every entry goes to [Intent](intent.md), which decides
    when to wake the core: an @ or a reply to Max wakes it at once; other
    messages are judged by the small model. Wakes from outside the chat
-   (`maxx wake`, the VM service) don't go through intent; they are
-   triggers themselves.
+   (`maxx wake`, the VM service) don't go through intent: each is entered
+   as a row that isn't sent, and that row is the trigger (see
+   [The timeline](ledger.md#the-timeline)).
    - With a core running, messages are fed to it at once, but only
      triggers make it call the model.
    - With no core, a trigger goes on to step 3; anything else is left on

@@ -7,12 +7,12 @@ use std::path::Path;
 use chrono::Utc;
 use color_eyre::eyre::{Result, eyre};
 use max_core::intent::Reason;
-use max_core::item::{Item, ModelOutput, Timing};
+use max_core::item::{ModelOutput, Timing};
 use max_core::limits::MEMORY_FILE_BYTES;
 use max_core::message::{Draft, DraftNode};
 use max_core::project::MEMORY_FILE;
 use max_core::prompt;
-use max_core::run::{FailReason, Fill, Input, Run, RunSpec, Step, Wake};
+use max_core::run::{FailReason, Fill, Run, RunSpec, Step, Wake};
 use max_db::{turns, usage};
 use tokio::time::Instant;
 use tracing::{info, warn};
@@ -207,24 +207,6 @@ impl Conversation {
             Some(timing),
         );
         llm::record(&self.shared.services.pool, &call).await;
-        Ok(())
-    }
-
-    /// Wakes Max with `item`: in the running core, or a new one.
-    pub(super) async fn wake_with(&mut self, reason: Reason, item: Item) -> Result<()> {
-        let wake = Wake {
-            ids: Vec::new(),
-            reason,
-            item: Some(item),
-        };
-        match self.core.as_mut() {
-            Some(active) => {
-                if let Err(rejected) = active.run.input(Input::Wake(wake)) {
-                    warn!(turn = %active.turn, %rejected, "a wake didn't fit the core");
-                }
-            }
-            None => self.start_core(wake).await?,
-        }
         Ok(())
     }
 

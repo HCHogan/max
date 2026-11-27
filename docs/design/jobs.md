@@ -380,16 +380,19 @@ tool.
   (see [Resources](vm.md#resources)).
 - **Waking**: `maxx wake '…'` is a call of the tool `wake`, through the
   conversation table to the actor (started if not running), which the
-  tool asks with `Request::Wake`. The reason
-  is `Reason::Program`, and the model sees `[max-wake] …`, cut to one item's
-  cap; it is input to the running core or starts one. The program is told
-  Max was woken. There is no limit on how often, but from the second wake in
-  an hour the line ends with `（这一小时第 N 次）`, so a turn that didn't see the
-  earlier wakes (they are no rows) still knows, and Max can find which program
-  it is; `/status` shows `woken`.
+  tool asks with `Request::Wake`. The actor
+  enters the words as a row that is never sent (see
+  [The timeline](ledger.md#the-timeline)), which the model sees as
+  `[12:00 max-wake #45]: …`, cut to one item's cap; the row is fed to the
+  running core or is the first input of a new one, and its trigger, with
+  the reason `Reason::Program`. The program is told Max was woken. There
+  is no limit on how often: every wake is in the record, where a turn
+  that didn't see the earlier ones reads them, and Max can find which
+  program it is; `/status` shows `woken`, the hour's count.
 - **Failing to boot**: each time a group's VM fails to start or stops by
   itself, it is counted, kept or not. Twice within 30 minutes and the next
-  boot adds `max.units=off`, and Max is told (`Signal::Vm`, `[VM] …`). A VM
+  boot adds `max.units=off`, and Max is told (`Signal::Vm`), in a row as
+  a wake's is, `[12:00 VM #46]: …`. A VM
   that comes up so is kept on as any other whose `/work` has units, and
   runs them again once Max has fixed them and run `maxx units apply`. If it
   fails even without units, they aren't the cause: it isn't kept, and boots
@@ -465,7 +468,8 @@ caps, is in
   and the program asks again from its last row.
 - **A line**: `{id, at, sender, person, by, reply_to, text}`. `at` is local
   RFC 3339; `person` is the sender's person number, which `[mention#person]`
-  takes; `by` is `max` or `program`, absent for members; `text` is what
+  takes; `by` is `max` or `program`, absent for members (a row that woke
+  Max isn't the chat's, and isn't given); `text` is what
   follows the colon in a `history` line (`Render::body`), never cut. Commands,
   edits (`[edit#…]`) and retractions (`[unsend#…]`) are included, as in
   `history`. With `--full` (`tools.events({full: true})`, `?full=1`) each line
@@ -540,6 +544,6 @@ checks, results and failures, what the guest's commands print, and what the
 VM service, the sender and the search tell a failed tool; a failure's code
 follows its message in brackets, ` (not_found)`. Chinese stays in the system
 prompt's own prose, the notices Max is shown and their tags (`[max-job-…
-完成]`, `[max-wake]`, which English guides quote as they are), the timeline's
+完成]`, `max-wake`, which English guides quote as they are), the timeline's
 marks, what stands in for a picture left out, the agent's own prompt, and what
 `vm-check` prints.

@@ -26,6 +26,7 @@ Why Max is built the way it is: one file for each decision that was a real trade
 - [The browser is a resident Chromium](resident-chromium.md)
 - [A snapshot's refs hold in the next program](refs-across-programs.md)
 - [Resident programs are systemd units Max writes](resident-programs.md)
+- [What wakes Max from outside the chat is a row](wakes-are-rows.md)
 - [Programs have every tool, and no caps](no-limits-for-programs.md)
 - [One conversation's Max can ask another's](asking-another-conversation.md)
 - [Max enters a linked conversation's VM by ssh, through max](ssh-along-a-link.md)

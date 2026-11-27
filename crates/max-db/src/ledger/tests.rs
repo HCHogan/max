@@ -103,6 +103,13 @@ async fn deliveries_and_platform_ids(pool: PgPool) -> sqlx::Result<()> {
     record_delivery(&mut conn, sent, endpoint, &delivered, at(0)).await?;
     let refused = Sent::Failed { error: "风控" };
     record_delivery(&mut conn, failed, endpoint, &refused, at(1)).await?;
+    // What woke Max is a row of its account that was never for the
+    // platform.
+    let woke = commit(&mut conn, &group, &max, &said("CI 挂了"), 4).await?;
+    sqlx::query(r#"update messages set raw = '{"said_by": "wake"}' where id = $1"#)
+        .bind(woke.get())
+        .execute(&mut *conn)
+        .await?;
     // Only the third, which never heard back, is unknown; and only once.
     assert_eq!(mark_unknown(&mut conn, Platform::Qq, at(9)).await?, 1);
     assert_eq!(mark_unknown(&mut conn, Platform::Qq, at(9)).await?, 0);

@@ -23,7 +23,7 @@ use tracing::warn;
 
 use super::project::{direct_mark, people, shown_line};
 use super::report::Report;
-use super::{Event, Place};
+use super::{Event, Place, ingest};
 use crate::causes;
 use crate::llm::Chosen;
 
@@ -83,6 +83,8 @@ async fn run(job: &Job) -> Result<Option<Verdict>> {
         ledger::recent(&mut conn, place.conversation, *first, job.context_lines)
             .await?
             .into_iter()
+            // What woke Max wasn't said in the chat the classifier reads.
+            .filter(|row| ingest::by(&row.message).sends())
             .map(|row| (row.message, Mark::None))
             .collect();
     let messages = context.iter().chain(&new).map(|(message, _)| message);

@@ -201,6 +201,13 @@ async fn backlog(
     Ok(ids.into())
 }
 
+/// Whether a row is of the chat: what woke Max is a row only Max reads,
+/// and a program that follows the chat and wakes Max for what it sees
+/// would be woken by its own wakes.
+fn chat(message: &Message) -> bool {
+    ingest::by(message).sends()
+}
+
 /// A program's stream: the backlog, then the rows as they come.
 struct Following {
     subscription: Subscription,
@@ -232,13 +239,20 @@ impl Following {
     /// A page of the backlog, a row just committed, or the heartbeat;
     /// None once the stream ends.
     async fn next(&mut self) -> sqlx::Result<Option<Bytes>> {
-        if !self.backlog.is_empty() {
+        while !self.backlog.is_empty() {
             let page: Vec<MessageId> = self.backlog.drain(..self.backlog.len().min(PAGE)).collect();
             let mut conn = self.subscription.services.pool.acquire().await?;
             let conversation = self.subscription.place.conversation;
             let rows = ledger::picked(&mut conn, conversation, &page).await?;
             drop(conn);
-            let messages: Vec<Message> = rows.into_iter().map(|row| row.message).collect();
+            let messages: Vec<Message> = rows
+                .into_iter()
+                .map(|row| row.message)
+                .filter(chat)
+                .collect();
+            if messages.is_empty() {
+                continue;
+            }
             return self.written(&messages).await.map(Some);
         }
         loop {
@@ -248,7 +262,7 @@ impl Following {
                 () = sleep(HEARTBEAT) => return Ok(Some(Bytes::from_static(b"\n"))),
             };
             match received {
-                Ok(message) if Some(message.id) <= self.last => {}
+                Ok(message) if Some(message.id) <= self.last || !chat(&message) => {}
                 Ok(message) => return self.written(std::slice::from_ref(&message)).await.map(Some),
                 // Too far behind, the program asks again from its last
                 // row, which the database has; or the actor stopped.
