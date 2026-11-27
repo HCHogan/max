@@ -383,12 +383,18 @@ over CDP, so a page the model looked at is still there for the next
   `context.pages()` gives later connections the tabs in attach order (and
   once the new-tab page Chromium opens at startup). Then Playwright as usual.
   A program connects once; when it ends it only disconnects, the tabs stay
-  for the next, and programs close the tabs they are done with.
+  for the next, and programs close the tabs they are done with. An action
+  waits 10 seconds for its element and a navigation 30 for its page, unless
+  the call gives a `timeout`: Playwright's 30 for both made a click on what
+  isn't there cost half a minute.
   `await max.snapshot(page, {selector?, depth?})` is Playwright's
   `ariaSnapshot({mode: "ai"})` after the title and URL: each element carries
   `[ref=e5]` (`f1e2` in iframes), found with `page.locator("aria-ref=e5")`.
   The refs live in a script the connection injects, so a new program takes a
   snapshot first; an unchanged page keeps them.
+- **A program of Max's own**, not run_code's, has the same three with
+  `require("/run/max/browser.js")`; it ends with `process.exit()`, since
+  the connection keeps Node running.
 - **Packaging**: `nix/maxx.nix` bundles the runner, the SDK and
   playwright-core 1.59.0 (no dependencies), and the guest's
   `/run/max/runner.js` links into it.

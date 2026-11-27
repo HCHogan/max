@@ -2,7 +2,8 @@
 // programs drive with Playwright over CDP; see "The browser" in
 // docs/design/tools.md. The first program that wants it starts it. Its
 // tabs outlive the program, and its profile the VM: the next program finds
-// them as this one left them.
+// them as this one left them. A program of Max's own requires this file
+// as /run/max/browser.js.
 "use strict";
 
 const { execFile } = require("node:child_process");
@@ -10,15 +11,21 @@ const { promisify } = require("node:util");
 
 const CDP = "http://127.0.0.1:9222";
 
+// How long an action waits for its element, and a navigation for its
+// page, unless the call gives a timeout: Playwright's 30 seconds for both
+// had a click on what isn't there cost half a minute.
+const ACTION_MS = 10_000;
+const NAVIGATION_MS = 30_000;
+
 let connected;
 
 // The browser's one context: its tabs, cookies and logins.
-async function browser() {
+function browser() {
   connected ??= connect().catch(error => {
     connected = undefined;
     throw error;
   });
-  return (await connected).contexts()[0];
+  return connected;
 }
 
 // The tab last opened or brought to the front (page.bringToFront()), or a
@@ -52,7 +59,10 @@ async function connect() {
   }
   // Returns once the browser takes connections.
   await promisify(execFile)("systemctl", ["start", "max-browser.service"]);
-  return chromium.connectOverCDP(CDP);
+  const context = (await chromium.connectOverCDP(CDP)).contexts()[0];
+  context.setDefaultTimeout(ACTION_MS);
+  context.setDefaultNavigationTimeout(NAVIGATION_MS);
+  return context;
 }
 
 // The page as the model reads it: its title, address and accessibility

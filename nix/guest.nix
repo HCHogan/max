@@ -221,10 +221,12 @@ in
       if [ -n "''${git:-}" ]; then
         printf '[user]\n\tname = %s\n\temail = %s\n' "''${git%%,*}" "''${git#*,}" > /etc/gitconfig
       fi
-      # run_code's runner, where max runs it, and Max's tools for a
-      # program of its own in JS, where one requires them (tools.js).
+      # run_code's runner, where max runs it, and Max's tools and the
+      # browser for a program of its own in JS, where one requires them
+      # (tools.js, browser.js).
       ln -sfn ${maxx}/lib/max-runner/runner.js /run/max/runner.js
       ln -sfn ${maxx}/lib/max-runner/tools.js /run/max/tools.js
+      ln -sfn ${maxx}/lib/max-runner/browser.js /run/max/browser.js
     '';
   };
 
