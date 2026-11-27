@@ -1,5 +1,5 @@
-//! Which conversation's Max may ask which other's: the edges `/link`
-//! makes. See "Asking another conversation" in docs/design/jobs.md.
+//! Which conversation's Max may enter which other's VM: the edges `/link`
+//! makes. See "Entering another conversation's VM" in docs/design/vm.md.
 
 use std::fmt::{self, Write};
 
@@ -70,19 +70,19 @@ pub async fn peer(
     }))
 }
 
-/// Lets Max in `asker` ask Max in `asked`, and not the other way: false
+/// Lets Max in `from` enter the VM of `to`, and not the other way: false
 /// if it already could. The two must differ.
 pub async fn link(
     conn: &mut PgConnection,
-    asker: ConversationId,
-    asked: ConversationId,
+    from: ConversationId,
+    to: ConversationId,
     at: DateTime<Utc>,
 ) -> sqlx::Result<bool> {
     let made = sqlx::query!(
-        "insert into links (asker_id, asked_id, made_at) values ($1, $2, $3)
+        "insert into links (from_id, to_id, made_at) values ($1, $2, $3)
          on conflict do nothing",
-        asker.get(),
-        asked.get(),
+        from.get(),
+        to.get(),
         at
     )
     .execute(conn)
@@ -90,25 +90,16 @@ pub async fn link(
     Ok(made.rows_affected() > 0)
 }
 
-/// Removes the edges between two conversations, both ways, and what
-/// either asked the other that waits for an answer: how many edges there
-/// were.
+/// Removes the edges between two conversations, both ways: how many
+/// there were.
 pub async fn unlink(
     conn: &mut PgConnection,
     one: ConversationId,
     other: ConversationId,
 ) -> sqlx::Result<u64> {
-    sqlx::query!(
-        "delete from questions
-         where (asker_id = $1 and asked_id = $2) or (asker_id = $2 and asked_id = $1)",
-        one.get(),
-        other.get()
-    )
-    .execute(&mut *conn)
-    .await?;
     let removed = sqlx::query!(
         "delete from links
-         where (asker_id = $1 and asked_id = $2) or (asker_id = $2 and asked_id = $1)",
+         where (from_id = $1 and to_id = $2) or (from_id = $2 and to_id = $1)",
         one.get(),
         other.get()
     )
@@ -117,27 +108,27 @@ pub async fn unlink(
     Ok(removed.rows_affected())
 }
 
-/// Whether Max in `asker` may ask Max in `asked`.
+/// Whether Max in `from` may enter the VM of `to`.
 pub async fn linked(
     conn: &mut PgConnection,
-    asker: ConversationId,
-    asked: ConversationId,
+    from: ConversationId,
+    to: ConversationId,
 ) -> sqlx::Result<bool> {
     sqlx::query_scalar!(
-        r#"select exists (select 1 from links where asker_id = $1 and asked_id = $2) as "linked!""#,
-        asker.get(),
-        asked.get()
+        r#"select exists (select 1 from links where from_id = $1 and to_id = $2) as "linked!""#,
+        from.get(),
+        to.get()
     )
     .fetch_one(conn)
     .await
 }
 
-/// The conversations Max in `asker` may ask, by id.
-pub async fn asked(conn: &mut PgConnection, asker: ConversationId) -> sqlx::Result<Vec<Peer>> {
+/// The conversations whose VMs Max in `from` may enter, by id.
+pub async fn enterable(conn: &mut PgConnection, from: ConversationId) -> sqlx::Result<Vec<Peer>> {
     let rows = sqlx::query!(
-        "select c.id, c.title from links l join conversations c on c.id = l.asked_id
-         where l.asker_id = $1 order by c.id",
-        asker.get()
+        "select c.id, c.title from links l join conversations c on c.id = l.to_id
+         where l.from_id = $1 order by c.id",
+        from.get()
     )
     .fetch_all(conn)
     .await?;
@@ -150,12 +141,12 @@ pub async fn asked(conn: &mut PgConnection, asker: ConversationId) -> sqlx::Resu
         .collect())
 }
 
-/// The conversations whose Max may ask Max in `asked`, by id.
-pub async fn askers(conn: &mut PgConnection, asked: ConversationId) -> sqlx::Result<Vec<Peer>> {
+/// The conversations whose Max may enter the VM of `to`, by id.
+pub async fn enterers(conn: &mut PgConnection, to: ConversationId) -> sqlx::Result<Vec<Peer>> {
     let rows = sqlx::query!(
-        "select c.id, c.title from links l join conversations c on c.id = l.asker_id
-         where l.asked_id = $1 order by c.id",
-        asked.get()
+        "select c.id, c.title from links l join conversations c on c.id = l.from_id
+         where l.to_id = $1 order by c.id",
+        to.get()
     )
     .fetch_all(conn)
     .await?;

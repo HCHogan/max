@@ -1,7 +1,6 @@
 //! Wakes from outside the chat: `maxx wake` from something in the group's
-//! own VM, what the VM service says about the VM, and a question or an
-//! answer from another conversation (`asking`). See "Resident programs"
-//! in docs/design/jobs.md.
+//! own VM, and what the VM service says about the VM. See "Resident
+//! programs" in docs/design/jobs.md.
 
 use std::collections::VecDeque;
 
@@ -13,7 +12,6 @@ use tokio::time::Instant;
 use tracing::info;
 
 use super::{Conversation, Does};
-use crate::conversation::Heard;
 use crate::conversation::notice::Notice;
 
 /// When the group's programs woke Max, in the last hour. Not a cap: Max
@@ -51,18 +49,9 @@ impl Conversation {
         Ok("woke Max".to_owned())
     }
 
-    /// What Max hears from outside its chat: each a wake, in the running
-    /// core or a new one.
-    pub(super) async fn heard(&mut self, heard: Heard) -> Result<()> {
-        match heard {
-            Heard::Vm(text) => self.vm_notice(&text).await,
-            Heard::Asked(question) => self.asked(question).await,
-            Heard::Answered(answer) => self.answered(answer).await,
-        }
-    }
-
-    /// The VM service on the group's VM. Stopped, Max isn't told.
-    async fn vm_notice(&mut self, text: &str) -> Result<()> {
+    /// The VM service on the group's VM: a wake, in the running core or
+    /// a new one. Stopped, Max isn't told.
+    pub(super) async fn vm_notice(&mut self, text: &str) -> Result<()> {
         if self.refuses(Does::STARTS).is_some() {
             return Ok(());
         }

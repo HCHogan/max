@@ -275,10 +275,8 @@ async fn start(config: Config, on: Platforms) -> Result<Running> {
     };
     let mut services = Scope::new();
     let vm_dir = config.vm.as_ref().map(|vm| vm.dir.clone());
-    // What the VMs have for the conversations, such as a wake, and what
-    // one conversation's actor has for another: a question for its Max.
+    // What the VMs have for the conversations, such as a wake.
     let (signals, signals_rx) = mpsc::unbounded_channel();
-    let asking = signals.clone();
     // What the VMs call besides Max's tools: the APIs the host keeps the
     // keys of, and the models, the background agents' own and any other
     // one is run on.
@@ -333,7 +331,6 @@ async fn start(config: Config, on: Platforms) -> Result<Running> {
         owners,
         binds: Arc::default(),
         links: Arc::default(),
-        signals: asking,
         rows,
         vms,
         vm_dir,

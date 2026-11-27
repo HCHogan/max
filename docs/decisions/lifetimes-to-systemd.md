@@ -32,7 +32,7 @@ Everything in a VM is one caller: a turn's program, a background command, an age
 
 - **To read:** the history and its searches, the stickers, `/events`, a file of the chat's record.
 - **To act:** say something, send a picture or a file, take a message back, mute someone. Each is committed to the ledger before it is sent, and `/stop` refuses them.
-- **To wake Max:** put some words before the model, in the turn that runs or a new one. Asking another conversation's Max, and answering one, are wakes over a link.
+- **To wake Max:** put some words before the model, in the turn that runs or a new one.
 - **To spend:** `/llm`, `/api` and `web_search`, where the host adds the key and records the use.
 
 The host does three things to a VM: it starts a unit and waits for it, it stops a unit or all of them, and it boots, stops or switches the VM itself. A person has `/kill`, `/stop` and `/start`.
@@ -65,7 +65,7 @@ These are all the lifetimes the host has: the process; a conversation's actor, f
 - **An agent is a program.** It calls Max's tools with `maxx`, every one of them, and only its prompt keeps it from speaking in the chat. The tools marked `job` were never a wall.
 - **A running VM moves to a new image without stopping, where it can.** (Replaced: a VM on another image than max boots is stopped, and there is no contract number; see [A new image restarts its VMs](a-new-image-restarts-its-vms.md).) The contract is a number the guest's build writes. When max attaches to a VM booted with another number, it restarts that VM at once. One with the same number but an older image is switched where it runs, with `switch-to-configuration` in the guest, and its jobs and resident programs run on. Only if the kernel or the initrd changed too is it then restarted, once it has no job and nobody has used it for a while, so that a VM kept on for its units gets them as well.
 - **A client retries over the gap.** While max restarts, a call from a guest is refused for some tens of seconds; `client.js` tries again. No file descriptor store. (Replaced: the socket is systemd's and a call waits at it; see [max's socket is systemd's](max-socket-is-systemds.md).)
-- **A link stays one way.** A→B lets A's Max ask B's. B answers through the record of a question it was asked, once, not through an edge back.
+- **A link stays one way.** A→B lets A's Max ask B's. B answers through the record of a question it was asked, once, not through an edge back. (Replaced: nothing is asked or answered across a link; see [A link lets Max into a VM, and nothing asks across it](links-enter-only.md).)
 
 ## What was verified first
 

@@ -55,8 +55,8 @@ pub enum Event {
     ModelDone { task, out },
     ToolDone { task, call, out },
     Verdict(Option<Verdict>),   // the classifier's answer; None if it failed
-    Request(Request),           // a tool asks something of the conversation: configure, ask, answer, wake, may a mute go ahead
-    Heard(Heard),               // a wake from outside the chat: the VM service, or another conversation's question or answer
+    Request(Request),           // a tool asks something of the conversation: configure, wake, may a mute go ahead
+    Vm(String),                 // the VM service has something to tell Max about the group's VM
     Call { tool, args, reply }, // something in the group's VM calls one of Max's tools
     Subscribe(reply),           // a program in the VM follows the timeline: `maxx events`
     Stop,                       // Max restarts
@@ -138,8 +138,8 @@ Each step is the actor handling one event.
 2. **Intent.** Every entry goes to [Intent](intent.md), which decides
    when to wake the core: an @ or a reply to Max wakes it at once; other
    messages are judged by the small model. Wakes from outside the chat
-   (`maxx wake`, the VM service, another conversation's question or
-   answer) don't go through intent; they are triggers themselves.
+   (`maxx wake`, the VM service) don't go through intent; they are
+   triggers themselves.
    - With a core running, messages are fed to it at once, but only
      triggers make it call the model.
    - With no core, a trigger goes on to step 3; anything else is left on
@@ -295,8 +295,6 @@ resumed; why is in
   conversation's next message; messages arriving at the very moment it
   exits are lost with it. Errors aren't isolated per event, because after
   one the in-memory `head` and `seen` may not match the database.
-- **Questions** another conversation asked the running core go
-  unanswered; who asked hears so and may ask again.
 - **Intent's state** is lost: hourly counts start at zero, and chatter
   awaiting classification isn't classified.
 

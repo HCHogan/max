@@ -37,11 +37,9 @@ impl Setup {
             .unwrap();
         drop(conn);
         let script = Arc::new(Script::default());
-        let (mut shared, outbound) = shared(&pool, &script, 300, BTreeSet::from([owner.principal]));
-        // As in main: the actors' questions and the VMs' signals come to
-        // the table on one channel.
-        let (signals, signals_rx) = mpsc::unbounded_channel();
-        shared.signals = signals;
+        let (shared, outbound) = shared(&pool, &script, 300, BTreeSet::from([owner.principal]));
+        // No VM has anything for a conversation here.
+        let (_, signals_rx) = mpsc::unbounded_channel();
         let me = Me {
             account,
             name: "maxx".into(),

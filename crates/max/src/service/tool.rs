@@ -17,7 +17,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use tracing::warn;
 
-use super::ask::{Answer, Ask};
 use super::chat_file::File;
 use super::config::Config;
 use super::find_stickers::FindStickers;
@@ -98,8 +97,6 @@ pub static TOOLS: LazyLock<Vec<Spec>> = LazyLock::new(|| {
         spec::<RecallMessage>(),
         spec::<MuteMember>(),
         spec::<FindStickers>(),
-        spec::<Ask>(),
-        spec::<Answer>(),
         spec::<Config>(),
         spec::<Say>(),
         spec::<Wake>(),

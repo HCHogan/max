@@ -1,7 +1,6 @@
 //! Max's tools, which programs in a group's VM call through max's
 //! service; see "The guest's calls". Each declares itself as a [`tool::Tool`].
 
-mod ask;
 mod chat_file;
 mod config;
 mod find_stickers;

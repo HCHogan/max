@@ -5,6 +5,10 @@ A link from A to B lets Max in A into B's VM as root: `ssh c9.max`, with
 connection, and the guest's sshd asks for no password or key. The design is in
 [Entering another conversation's VM](../design/vm.md#entering-another-conversations-vm).
 
+Entering is all a link gives since
+[A link lets Max into a VM, and nothing asks across it](links-enter-only.md):
+what is said below of asking was so when this was decided.
+
 ## Context
 
 Along a link, two Maxes could only trade a question and an answer of at most

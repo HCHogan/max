@@ -53,7 +53,6 @@ pub(crate) fn shared(
         owners,
         binds: Arc::default(),
         links: Arc::default(),
-        signals: mpsc::unbounded_channel().0,
         rows: Rows::default(),
         pictures: None,
         vms: None,
@@ -66,11 +65,7 @@ pub(crate) fn shared(
 
 /// A QQ group with Max in it.
 pub(crate) async fn group(conn: &mut PgConnection) -> Place {
-    group_named(conn, "group:GROUP1").await
-}
-
-pub(crate) async fn group_named(conn: &mut PgConnection, native_id: &str) -> Place {
-    place(conn, native_id, ConversationKind::Group).await
+    place(conn, "group:GROUP1", ConversationKind::Group).await
 }
 
 async fn place(conn: &mut PgConnection, native_id: &str, kind: ConversationKind) -> Place {

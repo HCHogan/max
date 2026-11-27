@@ -18,10 +18,9 @@ use std::sync::Arc;
 use max_core::ids::{CallId, ConversationId, EndpointId, MessageId};
 use max_core::intent::Verdict;
 use max_core::item::{ModelOutput, Timing, ToolOutput};
-use max_core::limits::{ASK_DAYS, ASK_WAITING, Setting};
+use max_core::limits::Setting;
 use max_core::message::{Draft, Message, Platform};
 use max_core::segment::Segment;
-use max_db::links::Peer;
 use max_db::platform::{Account, ConversationKind};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{broadcast, oneshot};
@@ -72,8 +71,8 @@ pub enum Event {
     /// A tool asks something of the conversation, and waits for the
     /// answer.
     Request(Request),
-    /// Something from outside the chat that Max is to hear.
-    Heard(Heard),
+    /// The VM service has something to tell Max about the group's VM.
+    Vm(String),
     /// Something in the group's VM calls a tool, and waits for the
     /// result.
     Call {
@@ -104,8 +103,7 @@ pub enum ModelFailed {
 
 /// What goes to a conversation's actor by its conversation, whatever chat
 /// it is in, through the conversation table, which starts the actor if it
-/// isn't running: what the VM service has for it, and a question or an
-/// answer from another conversation's actor.
+/// isn't running: what the VM service has for it.
 #[derive(Debug)]
 pub enum Signal {
     /// Something in the VM calls a tool: the conversation's actor runs
@@ -120,12 +118,12 @@ pub enum Signal {
         /// Where the result goes.
         reply: oneshot::Sender<Result<serde_json::Value, service::Failure>>,
     },
-    /// Something from outside the chat that Max there is to hear.
-    Heard {
-        /// Whose Max is to hear it.
+    /// Something about the conversation's VM that Max there is told.
+    Vm {
+        /// Whose VM it is.
         conversation: ConversationId,
-        /// What there is to hear.
-        heard: Heard,
+        /// What Max is told.
+        text: String,
     },
     /// A program in the VM follows the conversation's timeline.
     Subscribe {
@@ -134,20 +132,6 @@ pub enum Signal {
         /// Where the subscription goes.
         reply: oneshot::Sender<Subscription>,
     },
-}
-
-/// What Max hears from outside its chat, each a wake with some words:
-/// one event, whoever it is from.
-#[derive(Debug)]
-pub enum Heard {
-    /// The VM service, about the group's VM.
-    Vm(String),
-    /// Max in another conversation asks Max here. See "Asking another
-    /// conversation" in docs/design/jobs.md.
-    Asked(Question),
-    /// Max in another conversation answers what Max here asked it, or it
-    /// can't be asked, and why.
-    Answered(Answer),
 }
 
 /// The timeline from `head` on, for a program in the group's VM: every
@@ -199,24 +183,6 @@ pub enum Refused {
     /// The stop rule: Max is stopped here, or stopping.
     #[error(transparent)]
     Rule(#[from] Refusal),
-    /// `ask`: no edge leads to that conversation, or there is none. The
-    /// two are refused alike: asking tells nothing of which there are.
-    #[error(
-        "can't ask c#{0}: there is no link from here to it, or no such conversation; whom Max here may ask is listed under [能问的会话]"
-    )]
-    NotLinked(ConversationId),
-    /// `ask`: as many questions from here wait there as may.
-    #[error(
-        "c#{0} has yet to answer {most} questions from here, the most that wait at once, so this one wasn't asked; they are listed under [问出去还没回的]",
-        most = ASK_WAITING
-    )]
-    TooMany(ConversationId),
-    /// `answer`: no question of that number waits here.
-    #[error(
-        "there is no ask#{0} to answer here: no such question, or it was answered already, or it was asked over {days} days ago; nothing was sent. What waits is listed under [等你回答的问题]",
-        days = ASK_DAYS
-    )]
-    NoQuestion(i64),
     /// Nothing in a draft could be said.
     #[error("there was nothing in it to send")]
     NothingToSay,
@@ -245,25 +211,6 @@ pub enum Request {
         /// Where the limits as they are then go.
         reply: Reply<Vec<Configured>>,
     },
-    /// Ask Max in conversation `to`: whom it went to.
-    Ask {
-        /// The conversation asked.
-        to: ConversationId,
-        /// What is asked.
-        question: String,
-        /// Where the name of whom it went to goes.
-        reply: Reply<String>,
-    },
-    /// Answer question `to`, which Max in another conversation asked:
-    /// whom the answer went to.
-    Answer {
-        /// The question's number.
-        to: i64,
-        /// The answer.
-        text: String,
-        /// Where the name of whom it went to goes.
-        reply: Reply<String>,
-    },
     /// Wake Max with a program's `text`: what the program is told.
     Wake {
         /// What the program says.
@@ -285,67 +232,7 @@ impl Request {
         match self {
             Self::Act { reply } => drop(reply.send(Err(why))),
             Self::Configure { reply, .. } => drop(reply.send(Err(why))),
-            Self::Ask { reply, .. } | Self::Answer { reply, .. } | Self::Wake { reply, .. } => {
-                drop(reply.send(Err(why)))
-            }
-        }
-    }
-}
-
-/// What Max in one conversation asks Max in another, on its way there:
-/// the actor it reaches keeps it as a row, which is all that lets the
-/// one asked reach the asker, once.
-#[derive(Clone, Debug)]
-pub struct Question {
-    /// The conversation that asks, as the one asked names it.
-    pub from: Peer,
-    /// The conversation asked, as the asker names it.
-    pub to: Peer,
-    /// The question.
-    pub text: String,
-}
-
-/// The answer to a [`Question`], on its way back to who asked.
-#[derive(Clone, Debug)]
-pub struct Answer {
-    /// The conversation that answers, as the asker names it.
-    pub by: Peer,
-    /// What was asked: the asker kept nothing of it.
-    pub question: String,
-    /// What Max there said; or why nothing comes, where that can be
-    /// told.
-    pub said: Result<String, Unanswered>,
-}
-
-/// Why Max in another conversation gives no answer, as the asker is
-/// told.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-pub enum Unanswered {
-    /// `/stop` stopped Max there.
-    #[error("Max is stopped there (/stop)")]
-    Stopped,
-    /// Max is shutting down there.
-    #[error("Max is restarting there")]
-    Restarting,
-    /// The conversation table found no chat to start its actor in.
-    #[error("Max serves no chat of that conversation")]
-    NoChat,
-    /// The table couldn't start its actor.
-    #[error("Max couldn't start on that conversation")]
-    NotStarted,
-}
-
-impl Question {
-    /// What tells the asker `said` of it: an answer, or why none comes.
-    #[must_use]
-    pub fn answered(self, said: Result<String, Unanswered>) -> Signal {
-        Signal::Heard {
-            conversation: self.from.conversation,
-            heard: Heard::Answered(Answer {
-                by: self.to,
-                question: self.text,
-                said,
-            }),
+            Self::Wake { reply, .. } => drop(reply.send(Err(why))),
         }
     }
 }
@@ -484,34 +371,6 @@ impl Poster {
         changes: Vec<(Setting, Option<u64>)>,
     ) -> Result<Vec<Configured>, Refused> {
         self.request(|reply| Request::Configure { changes, reply })
-            .await
-    }
-
-    /// Asks Max in conversation `to`: whom the question went to, or why
-    /// it wasn't asked.
-    ///
-    /// # Errors
-    ///
-    /// [`Refused`]: the conversation is gone, Max is stopped or stopping, or
-    /// no link leads to `to`.
-    pub async fn ask(&self, to: ConversationId, question: String) -> Result<String, Refused> {
-        let ask = |reply| Request::Ask {
-            to,
-            question,
-            reply,
-        };
-        self.request(ask).await
-    }
-
-    /// Answers question `to`, which Max in another conversation asked:
-    /// whom it went to, or why it wasn't taken.
-    ///
-    /// # Errors
-    ///
-    /// [`Refused`]: the conversation is gone or stopped, or no question has
-    /// that number.
-    pub async fn answer(&self, to: i64, text: String) -> Result<String, Refused> {
-        self.request(|reply| Request::Answer { to, text, reply })
             .await
     }
 

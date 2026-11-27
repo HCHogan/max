@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select c.id, c.title from links l join conversations c on c.id = l.asked_id\n         where l.asker_id = $1 order by c.id",
+  "query": "select c.id, c.title from links l join conversations c on c.id = l.to_id\n         where l.from_id = $1 order by c.id",
   "describe": {
     "columns": [
       {
@@ -36,5 +36,5 @@
       true
     ]
   },
-  "hash": "f82730072b5561bc26bbbfc897a5a19d1fffeb03424e9ee0b1cca8773eef2623"
+  "hash": "ebd3994181429cb7f927b2868ecc1a0b6ff6b20c3742da9a85685097197ce406"
 }

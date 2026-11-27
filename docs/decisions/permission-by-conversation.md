@@ -18,7 +18,7 @@ acting on someone's machines) looks as if it wants a check of who asked.
 ## Decision
 
 - **Nothing below a conversation is enforced.** Max's tools, the keyed
-  APIs, the VM and everything in it, and the conversations it may ask are
+  APIs, the VM and everything in it, and the conversations it may enter are
   the conversation's. A turn answers the conversation, not a person, and no
   tool checks who started it.
 - **Max's judgement, not a gate.** Max sees who said what and can decline,
@@ -35,8 +35,8 @@ acting on someone's machines) looks as if it wants a check of who asked.
   through commands that check the sender's rank (see
   [Who may run what](../design/commands.md#who-may-run-what)).
 - **Between conversations, an edge.** One conversation reaches another only
-  by a link that the asked side makes, and the link exposes all of it (see
-  [One conversation's Max can ask another's](asking-another-conversation.md)).
+  by a link that the entered side makes, and the link exposes all of it (see
+  [A link lets Max into a VM, and nothing asks across it](links-enter-only.md)).
 
 ## Why
 
@@ -76,7 +76,8 @@ acting on someone's machines) looks as if it wants a check of who asked.
 
 - [One conversation's Max can ask another's](asking-another-conversation.md):
   `/link` and the edges between conversations, along which
-  [Max enters another conversation's VM](ssh-along-a-link.md).
+  [Max enters another conversation's VM](ssh-along-a-link.md), and
+  [does nothing else](links-enter-only.md).
 - [Max joins tailnets itself](max-joins-tailnets-itself.md): a tailnet Max
   joins is its conversation's.
 - The group management tools, gated by Max's rules and judgement only.

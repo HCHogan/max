@@ -30,16 +30,6 @@ pub enum Reason {
     /// command and a background agent do when they end, or the VM service
     /// has something to say about the VM: the wake's item says what.
     Program,
-    /// Max in another conversation asks Max here: the wake's item is the
-    /// question.
-    Asked,
-    /// Max in another conversation answers what Max here asked it, or
-    /// says why it doesn't: the wake's item is the answer. Read too from
-    /// the wakes the ledger has as `job`, with a job's handle beside it:
-    /// the host's jobs of before, a question that waited or a background
-    /// agent, whose end woke Max so.
-    #[serde(alias = "job")]
-    Answered,
 }
 
 /// The most messages one classification looks at.

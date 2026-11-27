@@ -26,7 +26,7 @@ use self::follow_up::Voice;
 use super::ingest::{self, By};
 use super::notice::Notice;
 use super::project;
-use super::{Event, Place, Receipt, Refusal, Signal, Subscription, TaskId, classify};
+use super::{Event, Place, Receipt, Refusal, Subscription, TaskId, classify};
 use crate::bind::Binds;
 use crate::causes;
 use crate::code::Codes;
@@ -64,7 +64,7 @@ impl Does {
     /// Starts work that says and does nothing by itself: a program's call
     /// of a tool, which is refused in its turn if it would act.
     pub(super) const RUNS: Self = Self::new(false, true);
-    /// Starts something Max is to act on: a question, an answer, a wake.
+    /// Starts something Max is to act on: a wake.
     pub(super) const STARTS: Self = Self::new(true, true);
 
     const fn new(acts: bool, starts: bool) -> Self {
@@ -87,11 +87,8 @@ pub struct Shared {
     /// The codes of `/bind`.
     pub binds: Arc<Binds>,
     /// The codes of `/link`: each is for the conversation whose Max is to
-    /// ask.
+    /// enter another's VM.
     pub links: Arc<Codes<ConversationId>>,
-    /// To the conversation table, for another conversation's actor: a
-    /// question for its Max.
-    pub signals: UnboundedSender<Signal>,
     /// The derived-data workers, which hear of every committed row.
     pub rows: Rows,
     /// None when no VMs are configured: the tools say so.
@@ -376,7 +373,7 @@ impl Conversation {
                 self.decide(decisions).await
             }
             Event::Request(request) => self.request(request).await,
-            Event::Heard(heard) => self.heard(heard).await,
+            Event::Vm(text) => self.vm_notice(&text).await,
             Event::Call { tool, args, reply } => {
                 self.program_call(tool, args, reply);
                 Ok(())
@@ -607,7 +604,6 @@ fn failure(what: &str, reason: &str) -> String {
     command::fenced("text", &line)
 }
 
-mod asking;
 mod commands;
 mod follow_up;
 mod links;

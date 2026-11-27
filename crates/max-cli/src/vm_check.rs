@@ -22,7 +22,7 @@ use max_db::platform::{Account, ConversationKind};
 use tokio::sync::mpsc;
 
 use max::config::{self, Config};
-use max::conversation::{Heard, Place, Signal};
+use max::conversation::{Place, Signal};
 use max::llm::{Models, Upstreams};
 use max::media::store::Store;
 use max::scope::Scope;
@@ -215,12 +215,9 @@ fn hearing(
                     let _ = reply.send(service::call(&tool, &called, args).await);
                     continue;
                 }
-                Signal::Heard {
-                    heard: Heard::Vm(text),
-                    ..
-                } => (text, None),
+                Signal::Vm { text, .. } => (text, None),
                 // vm-check has no timeline, and one conversation.
-                Signal::Subscribe { .. } | Signal::Heard { .. } => continue,
+                Signal::Subscribe { .. } => continue,
             };
             // Noted before maxx wake hears back, and vm-check goes on.
             noted

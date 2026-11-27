@@ -194,29 +194,5 @@ pub async fn tail_ends(
         .collect())
 }
 
-/// The earliest message that woke a turn still running in the
-/// conversation: from there on, the conversation isn't settled.
-pub async fn running_since(
-    conn: &mut PgConnection,
-    conversation: ConversationId,
-) -> sqlx::Result<Option<MessageId>> {
-    let triggers = sqlx::query_scalar!(
-        r#"select trigger as "trigger: Json<Vec<Input>>" from turns t
-           where conversation_id = $1
-             and not exists (select from turn_outcomes o where o.turn_id = t.id)"#,
-        conversation.get()
-    )
-    .fetch_all(conn)
-    .await?;
-    Ok(triggers
-        .iter()
-        .flat_map(|Json(inputs)| inputs)
-        .filter_map(|input| match input {
-            Input::Wake(wake) => wake.ids.iter().min().copied(),
-            Input::Messages { .. } => None,
-        })
-        .min())
-}
-
 #[cfg(test)]
 mod tests;

@@ -1,8 +1,9 @@
 # One conversation's Max can ask another's
 
-Max in one conversation can put a question to Max in another, over a link
-made with `/link` by the people the two conversations belong to. The design is in
-[Asking another conversation](../design/jobs.md#asking-another-conversation).
+Replaced by [A link lets Max into a VM, and nothing asks across it](links-enter-only.md): `ask`, `answer` and the questions that waited are gone. What is said here of edges, their direction and who may make one still holds, and is in [Entering another conversation's VM](../design/vm.md#entering-another-conversations-vm).
+
+Max in one conversation could put a question to Max in another, over a link
+made with `/link` by the people the two conversations belong to.
 
 ## Decisions
 

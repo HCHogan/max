@@ -6,7 +6,7 @@
 use std::time::Duration;
 
 use crate::limits::{
-    ASK_DAYS, EVENTS_CAUGHT_UP, MEMORY_TOKENS, PICTURES_PER_RUN, VIDEO_SECONDS, WEBREAD_CHARS,
+    EVENTS_CAUGHT_UP, MEMORY_TOKENS, PICTURES_PER_RUN, VIDEO_SECONDS, WEBREAD_CHARS,
 };
 use crate::render::span;
 
@@ -40,10 +40,8 @@ fn rules(idle: Option<Duration>) -> String {
   原始记录           最近的消息，一行一条，按时间先后分在几条消息里；换日有日期行，隔久了有间隔行。更早的原文不在上下文里：要找以前的事就用 history 查，能按内容搜，也能按人、按时间读原文。
   [现在]             当前时间。
   [上下文里的人]     [mention#编号] 名字，标着“（你）”的是你自己。
-  [能问的会话]       你能用 ask 去问的别的会话（别的群或私聊），一行一个：c#编号 名字。它们的 VM 你也能进：ssh c9.max 就是以 root 登进 c#9 的 VM 的 /work，scp 同理；在那边跑 maxx 用的是那边的工具，比如 maxx say 会说到那边的聊天里。没有这一块就是没有。
-  [能进来的会话]     能用 ask 问你、也能 ssh 进你这个 VM 的别的会话，一行一个。没有这一块就是没有。
-  [等你回答的问题]   别的会话的 Max 问过你、你还没答的：ask#编号 c#编号 名字（什么时候问的），下面是问题。用 answer 答，哪一轮都能答；答过的、问了超过 {ASK_DAYS} 天的不再列，也答不了了。
-  [问出去还没回的]   你用 ask 问过别的会话、还没收到回答的：c#编号 名字（什么时候问的），下面是问题。那边答了，回答会作为 [回答] 来；超过 {ASK_DAYS} 天没回的不再列。
+  [能进的会话]       你能进的别的会话（别的群或私聊）的 VM，一行一个：c#编号 名字。ssh c9.max 就是以 root 登进 c#9 的 VM 的 /work，scp 同理。在那边跑的 maxx 是那边的：ssh c9.max maxx history 查的是那边的聊天记录，maxx say 说到那边的聊天里，maxx wake 叫醒那边的 Max、给它看一段话。那边的 Max 看到的只是一条 [max-wake]，是谁叫的、要它做什么都写在这段话里；它没有办法回话给你，要看结果就自己再过去看。没有这一块就是没有。
+  [能进来的会话]     能 ssh 进你这个 VM 的别的会话，一行一个。它们的 Max 在这里跑的 maxx 就是你的，你收到的 [max-wake] 也可能是它们叫的。没有这一块就是没有。
   [记忆]             你自己记的笔记，就是 /work/.max/memory.md，每次都带上。
   [引用的消息]       新消息引用、但上面没出现的消息。
   [新消息]           这次要你看的消息。之后再来的消息也会以 [新消息] 块接在后面。

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select exists (select 1 from links where asker_id = $1 and asked_id = $2) as \"linked!\"",
+  "query": "select exists (select 1 from links where from_id = $1 and to_id = $2) as \"linked!\"",
   "describe": {
     "columns": [
       {
@@ -20,5 +20,5 @@
       null
     ]
   },
-  "hash": "2d76be8c0f5a5087eca33c730ad76fc1ec25d618f95e166a6f3075bb08864529"
+  "hash": "a24633e8a64b681e48aac6c5318163db0b5f07e45b222889e1a2d4a8235cb2a6"
 }

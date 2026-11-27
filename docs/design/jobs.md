@@ -1,9 +1,8 @@
-# Jobs: agents, commands, programs and questions
+# Jobs: agents, commands and programs
 
 What runs apart from a turn: background agents, background commands and
 resident programs, all units of the guest's systemd that max keeps no
-state about, and questions between conversations, which live only as long
-as the turn that read them. Why lifetimes are the guest's is in
+state about. Why lifetimes are the guest's is in
 [decisions/lifetimes-to-systemd.md](../decisions/lifetimes-to-systemd.md).
 
 ## Background agents
@@ -43,9 +42,7 @@ and why fx in
 - **Questions**: an agent stuck on what only Max or the people know decides
   what it can and says in its report what it assumed; when it can't go on,
   its last words are the question, and the run ends. Max answers by running
-  it again. Nothing holds an agent for an answer. To ask another
-  conversation, the agent runs `maxx ask` as Max would; the answer wakes
-  Max, who passes it on.
+  it again. Nothing holds an agent for an answer.
 - **Models.** `job = { model, effort }` in `[llm]` is the agents' default;
   without it there are no agents. fx holds no key: its calls go to
   `http://127.0.0.1:7777/llm/<endpoint>`, where max sends a
@@ -83,9 +80,9 @@ and why fx in
   do, and each has its unit's time.
 - **What max shows**: `/status` lists no agents; the guest's systemd lists
   them with the other background commands, by their command lines.
-  `agent#3` and `max-agent-3`, as agents were once named, are still read
-  from the wakes the ledger kept, as the reason `job` (`Reason::Answered`'s
-  alias).
+  `agent#3` and `max-agent-3`, as agents were once named, are still in
+  the wakes the turns' records kept, with the reason `job`; nothing reads
+  a record's reason back.
 - **When to hand off**: the system prompt says work of many steps goes to an
   agent, not into the turn (reading a whole repository, reviewing or changing
   code, installing, building, testing, opening PRs, reading many pages or
@@ -381,8 +378,9 @@ tool.
   slots are full: its VM then stops when idle, its units with it, and they
   start again at its next boot. A kept but idle VM still drops its caches
   (see [Resources](vm.md#resources)).
-- **Waking**: `maxx wake '…'` is `Request::Wake`, through the conversation
-  table to the actor (started if not running) as `Event::Heard`. The reason
+- **Waking**: `maxx wake '…'` is a call of the tool `wake`, through the
+  conversation table to the actor (started if not running), which the
+  tool asks with `Request::Wake`. The reason
   is `Reason::Program`, and the model sees `[max-wake] …`, cut to one item's
   cap; it is input to the running core or starts one. The program is told
   Max was woken. There is no limit on how often, but from the second wake in
@@ -391,7 +389,7 @@ tool.
   it is; `/status` shows `woken`.
 - **Failing to boot**: each time a group's VM fails to start or stops by
   itself, it is counted, kept or not. Twice within 30 minutes and the next
-  boot adds `max.units=off`, and Max is told (`Heard::Vm`, `[VM] …`). A VM
+  boot adds `max.units=off`, and Max is told (`Signal::Vm`, `[VM] …`). A VM
   that comes up so is kept on as any other whose `/work` has units, and
   runs them again once Max has fixed them and run `maxx units apply`. If it
   fails even without units, they aren't the cause: it isn't kept, and boots
@@ -525,7 +523,7 @@ One function answers what an event may do (`Conversation::refuses`):
   is stopped here (/stop), so this wasn't done`: `say`, `send_image`,
   `send_file`, `send_voice` and `recall_message` as their posts reach the actor;
   `mute_member`, which asks the actor first (`Request::Act`); starting a
-  background command, an agent among them; `ask`, `answer` and `wake`. VM notices are dropped.
+  background command, an agent among them; and `wake`. VM notices are dropped.
   What reads still works: `history`, the searches, `/api`, `maxx events`.
   `/start` lets them through again. See [Commands](context.md#commands).
 - As Max shuts down, what starts work is refused (`Max is restarting, so this
@@ -533,8 +531,7 @@ One function answers what an event may do (`Conversation::refuses`):
 - Looking, steering and changing a setting are never refused.
 
 Every tool's request of the actor is one event, `Event::Request`, whose
-`Request` has a kind for each thing asked (configure, ask, answer, wake,
-act), each carrying where its answer goes; `actor/requests.rs` does them once
+`Request` has a kind for each thing asked (configure, wake, act), each carrying where its answer goes; `actor/requests.rs` does them once
 the rule has let them through.
 
 What the actor tells a tool or program, refusals and errors alike, is in
@@ -543,133 +540,6 @@ checks, results and failures, what the guest's commands print, and what the
 VM service, the sender and the search tell a failed tool; a failure's code
 follows its message in brackets, ` (not_found)`. Chinese stays in the system
 prompt's own prose, the notices Max is shown and their tags (`[max-job-…
-完成]`, `[ask#5 问]`, which English guides quote as they are), the timeline's
+完成]`, `[max-wake]`, which English guides quote as they are), the timeline's
 marks, what stands in for a picture left out, the agent's own prompt, and what
 `vm-check` prints.
-
-## Asking another conversation
-
-Max in one conversation can ask Max in another, which answers by its own
-rules, with its own memory and people at hand, and can enter its VM (see
-[Entering another conversation's VM](vm.md#entering-another-conversations-vm)).
-A question gets the answer and nothing else, never the other conversation's
-context; its VM, with its `/work` and its memory file, is the asker's Max's
-as root. Without a link conversations are isolated (`history`, the VM and
-`/work` are each one conversation's; only the sticker library is shared). The reasoning behind
-edges and their direction is in
-[decisions/asking-another-conversation.md](../decisions/asking-another-conversation.md).
-
-- **Permission is an edge between conversations**, not a person's: below a
-  conversation nothing could be enforced, since its members share one VM as
-  root and one context. A person's own permission is their private chat's;
-  see [decisions/permission-by-conversation.md](../decisions/permission-by-conversation.md).
-- **An edge has a direction.** A→B lets Max in A ask Max in B and enter B's
-  VM, not the other way, and what it exposes is B: anyone in A can have A's
-  Max do in B's VM what B's Max can, the [tailnets](vm.md#tailnets) it is on
-  and the logins in its browser included, or ask B's Max, whose answering
-  core is the one serving B's own chat, with all its tools. An edge into B is
-  a membership of B's VM, if not of its chat, made only where that is
-  acceptable.
-- **`/link` makes one**, with a code, as `/bind` does: `/link` in A answers
-  with a six-digit code, valid 10 minutes and held in memory; `/link <code>`
-  in B makes A→B. The side to be asked redeems the code, since it is the one
-  exposed. Both directions take two links. `/unlink c#N` removes the edges
-  between this conversation and that one, both ways, from either side. All
-  three are for the people a conversation belongs to: a group's owner, not its
-  administrators; the other party of a private chat; and Max's owners (see
-  [Who may run what](commands.md#who-may-run-what)). The answers say which way
-  an edge runs:
-
-  | Command | Answer |
-  | --- | --- |
-  | `/link` in A | `code issued: 123456 lets Max here ask Max in another conversation and enter its VM, and not the other way`, then `send /link 123456 there (in a group: @maxx /link 123456)` and `valid for 10 minutes, once` |
-  | `/link 123456` in B | `linked: Max in c#7 <title> may ask Max here and enter this VM now, and not the other way`, then `@maxx /unlink c#7 removes it`; or `skipped: Max in c#7 <title> may ask Max here already` |
-  | `/link 123456` in A itself | `error: that code was issued here; send it in the conversation Max here is to ask` (the code is looked at before it is used, `Codes::peek`, so the slip doesn't use it up) |
-  | a wrong, used or expired code | `error: no such code, or it has run out` |
-  | `/unlink c#7` | `unlinked: Max here and Max in c#7 <title> can't ask each other or enter each other's VM any more`, or `skipped: no link with c#7` |
-  | `/status` | `may ask   c#9 · c#12` and `asked by  c#7`, each only when there is someone |
-
-  `/link` codes are kept apart from `/bind`'s (`code::Codes`). A isn't told
-  when its code is used; its `/status` shows the edge.
-- **Edges are stored** in `links`: `asker_id`, `asked_id`, `made_at`, keyed by the pair.
-  Mutable, like `conversation_settings`; the commands that changed it are rows
-  of the ledger. No rule derives edges: on QQ a person's openid differs per
-  group and in private chat, so even "a person's private chat may ask the
-  groups they're in" can't be derived.
-- **Names**: a conversation's handle is `c#N`, shown with
-  `conversations.title` when there is one (`links::Peer`). A group's actor asks
-  QQ's `info` for the group's name once as it starts, in a `side` task, and
-  stores it as the title (`Conversation::learn_title`); a failure is only
-  logged, and a renamed group is known by its new name after max restarts. A
-  private chat on QQ has no name (see [The official QQ bot](qq.md#inbound)), so
-  it is told apart by its number; how to name one is open. A title is a name
-  its people chose and goes into what Max is shown, so it is one line,
-  control characters as spaces, cut at 40 characters.
-- **Tools** (`service/ask.rs`): `ask({ to, question })` returns
-  `{ asked: "c#9 <title>" }` at once, and the answer wakes Max later;
-  `to` is the conversation's number. `answer({ to, text })` answers question
-  `ask#N` by its number, in the turn that was shown it or any later one, and
-  returns `{ to: "c#7 <title>" }`. A question or answer is at most 2,000
-  characters (`ASK_CHARS`), and a longer one is refused, not cut. A program in the VM can call both, as any tool; an agent
-  asks its own Max with its last words, and another conversation with `maxx
-  ask`, whose answer wakes Max.
-- **Neither is said in a chat.** A question and its answer reach the other
-  side's Max as a wake's item, shown to the model alone, like an agent's
-  report. Nothing is a row of the ledger or goes to QQ:
-
-  | Conversation | When | Item |
-  | --- | --- | --- |
-  | B | the question arrives | `[ask#5 问] c#7 <title>`, the question, and a line saying to answer with `answer`, that it may ask its people first since the question is listed in every later turn until it is answered, for 7 days, and that neither goes to the chat |
-  | A | the answer arrives | `[回答] c#9 <title>`, then `问：` the question again and `答：` the answer |
-  | A | it can't be asked, or B is stopped before answering | `[没答成] c#9 <title>：<why>`, then the question |
-
-  A's `ask` and B's `answer` are tool calls in their own transcripts. The
-  answer's item repeats the question because the core that asked may be
-  gone. The chats' people see nothing unless Max says so.
-  What was asked and answered is in the turns' records (`turns.trigger`,
-  `turn_outcomes.run`), not where `history` and `maxx events` look.
-- **What Max is told**: the conversations it may ask and enter are listed in
-  the volatile block after the people, under `[能问的会话]`, a line each, and
-  those that may ask and enter it under `[能进来的会话]`, read from `links`
-  when a core starts (none, no block), so the system prompt stays the same for
-  every conversation, and an edge made during a core shows from the next
-  (`ask` checks the edge when called). After them come the questions that
-  wait, read from `questions`: under `[等你回答的问题]` those Max here has yet
-  to answer, each as `ask#5 c#7 <title>（11-27 14:05 问的）` and the question
-  below it, and under `[问出去还没回的]` those it asked and has no answer to,
-  each as `c#9 <title>（11-27 14:05 问的）` and the question. So a core that
-  starts when a person comes back with what was asked knows which question
-  to answer, and one whose people ask whether an answer came can say. The tools' guides say the rest; when to
-  ask and what to answer is Max's to judge on each side.
-- **The transcript stays append-only**: a question or an answer reaches a
-  running core as a wake's item at the end of its input
-  (`Conversation::wake_with`), or starts a core among its first inputs. B's wake
-  has the reason `asked`, A's `answered`.
-- **A question waits as a row, and nothing is timed.** B's actor gives a
-  question its number, wakes Max with it and then keeps it in `questions`
-  (`asker_id`, `asked_id`, `question`, `asked_at`; the row's id is the
-  number), where it stays until `answer` names it: in the core that was
-  shown it, or in a later one, hours or days on, when the person Max asked
-  in B's chat has said. `answer` deletes the row and sends the answer back
-  through the table (`Signal::Heard`), which starts A's actor if needed and
-  wakes A's Max with the question and the answer; an `answer` to a number
-  with no row (answered, or another conversation's) is refused. The actors
-  keep nothing: no job, no timer, nothing a restart of max loses. The row
-  comes after the wake because a core the question starts reads what waits
-  for its base context, and has this one among its first inputs already.
-- **A question waits 7 days** (`ASK_DAYS`): the queries leave out an older
-  one, so it is neither listed nor answered, and the next question kept
-  deletes it. Nobody is told when that happens; a Max that wants to hear
-  sooner sets a timer unit that wakes it. At most 10 of A's questions wait
-  in B at once (`ASK_WAITING`): `ask` is refused past that, so what B's Max
-  is shown at each core's start stays bounded.
-- **No answer**: A hears why, as `[没答成] …`, only when B's Max can't answer
-  at all. B can't be asked when it is stopped, Max is restarting there, Max
-  serves no chat of B, or its core couldn't start (B's Max isn't told of such
-  a question, and no row is kept); and `/stop` in B takes out every question
-  that waits there and tells each asker. `/unlink` deletes what waits between
-  the two, either way, and tells nobody. A conversation A has no edge to and
-  one that doesn't exist are refused alike, so asking tells nothing of which
-  exist.
-- **Not done**: a chain of origin when B asks C to answer A; files, which can't
-  cross from one `/work` to another; derived edges; any record in the ledger.

@@ -4,20 +4,16 @@
 
 use std::time::Duration;
 
-use max_core::ids::ConversationId;
 use max_core::item::ItemKind;
 use max_core::message::{Content, Draft, DraftNode, Node};
 use max_core::run::Outcome;
 use max_db::PgPool;
-use max_db::links::Peer;
 use tokio::sync::{mpsc, oneshot};
 
 use super::*;
 use crate::command;
-use crate::conversation::testing::{
-    from_xiaohong, from_xiaoming, group, group_named, shared, text,
-};
-use crate::conversation::{Act, Heard, Post, Poster, Question, Refused};
+use crate::conversation::testing::{from_xiaohong, from_xiaoming, group, shared, text};
+use crate::conversation::{Act, Post, Poster, Refused};
 use crate::inbound::InNode;
 use crate::llm::testing::{Answer, Script};
 
@@ -366,69 +362,6 @@ async fn kill_stops_the_core_quietly(pool: PgPool) {
     assert!(h.outbound.try_recv().is_err(), "/kill isn't answered");
 }
 
-/// Until turn `n` has ended.
-async fn turn_ends(h: &Harness, n: usize) {
-    let deadline = Instant::now() + PATIENCE;
-    while h.turns().await.get(n).is_none_or(|turn| turn.1.is_none()) {
-        assert!(Instant::now() < deadline, "the core didn't end");
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-}
-
-#[sqlx::test(migrator = "max_db::MIGRATOR")]
-async fn a_question_is_answered_in_a_later_core(pool: PgPool) {
-    let mut h = Harness::unprompted(pool, 300).await;
-    let mut conn = h.pool.acquire().await.unwrap();
-    let here = group(&mut conn).await.conversation;
-    let asker = group_named(&mut conn, "group:GROUP2").await.conversation;
-    drop(conn);
-    // A row, which a core is projected from.
-    h.script.push(Answer::says("早"));
-    h.send(at_max(0, " 早"));
-    assert_eq!(h.said().await.1, "早");
-    h.send(from_xiaohong(1, vec![me(), text("/kill")]));
-    turn_ends(&h, 0).await;
-
-    // The question starts a core, which is shown it once, as what woke
-    // it, and asks the people here.
-    let peer = |conversation| Peer {
-        conversation,
-        title: None,
-    };
-    let question = Question {
-        from: peer(asker),
-        to: peer(here),
-        text: "老王周五来吗".into(),
-    };
-    h.script.push(Answer::says("老王，周五来吗"));
-    h.mailbox
-        .send(Event::Heard(Heard::Asked(question)))
-        .unwrap();
-    assert_eq!(h.said().await.1, "老王，周五来吗");
-    let number = h.count("select id from questions").await;
-    let shown = h.request_tail(1);
-    let woke = format!("[ask#{number} 问] c#{asker}\n老王周五来吗\n");
-    assert!(shown.contains(&woke), "{shown}");
-    assert!(!shown.contains("\n[等你回答的问题]\n"), "{shown}");
-    h.send(from_xiaohong(2, vec![me(), text("/kill")]));
-    turn_ends(&h, 1).await;
-
-    // It waits past that core: the next one is shown it among what
-    // waits, and answers it, once.
-    h.script.push(Answer::says("好"));
-    h.send(at_max(3, " 我来"));
-    assert_eq!(h.said().await.1, "好");
-    let shown = h.request_tail(2);
-    let waits = format!("\n[等你回答的问题]\nask#{number} c#{asker}（");
-    assert!(shown.contains(&waits), "{shown}");
-    assert!(shown.contains(" 问的）\n老王周五来吗\n"), "{shown}");
-    let answered = h.poster().answer(number, "来".into()).await;
-    assert_eq!(answered, Ok(format!("c#{asker}")));
-    let again = h.poster().answer(number, "来".into()).await;
-    assert_eq!(again, Err(Refused::NoQuestion(number)));
-    h.stop().await;
-}
-
 /// A post that waits to hear how it went.
 fn post(act: Act) -> (Post, oneshot::Receiver<Result<MessageId, Refused>>) {
     let (receipt, sent) = oneshot::channel();
@@ -536,9 +469,7 @@ async fn stop_ends_the_turn_and_nothing_starts_until_start(pool: PgPool) {
         h.poster().wake("CI 挂了".into()).await,
         Err(stopped.clone())
     );
-    h.mailbox
-        .send(Event::Heard(Heard::Vm("VM 起不来了".into())))
-        .unwrap();
+    h.mailbox.send(Event::Vm("VM 起不来了".into())).unwrap();
     let (reply, muted) = oneshot::channel();
     let call = Event::Call {
         tool: "mute_member".into(),
@@ -548,8 +479,6 @@ async fn stop_ends_the_turn_and_nothing_starts_until_start(pool: PgPool) {
     h.mailbox.send(call).unwrap();
     let refused = service::Failure::new("refused", stopped.to_string());
     assert_eq!(muted.await.unwrap().unwrap_err(), refused);
-    let asked = h.poster().ask(ConversationId::new(9), "在吗".into()).await;
-    assert_eq!(asked.unwrap_err(), stopped);
     assert_eq!(h.turns().await.len(), 1);
 
     // 小明 is Max's owner here.

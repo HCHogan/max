@@ -173,8 +173,6 @@ impl Conversation {
         // An @ held for the rest of its sentence, and chatter waiting for
         // the classifier, wake nobody now.
         self.intent.forget();
-        // Nor is anything another conversation asked answered.
-        self.refuse_questions().await?;
         self.kill(committed, "stop").await?;
         let how = command::how(self.place.kind, &self.place.my_name, "/start");
         Ok(format!(
@@ -230,7 +228,7 @@ impl Conversation {
     /// its value a line, maxx's version first, a line under a key's first
     /// one going without the key. `/model` and `/persona` show those.
     async fn status(&self) -> Result<String> {
-        let [may_ask, asked_by] = self.linked().await?;
+        let [may_enter, open_to] = self.linked().await?;
         let settings = &self.settings;
         let mut lines = Vec::new();
         let mut line = |key: &str, value: String| lines.push(format!("{key:<10}{value}"));
@@ -259,11 +257,11 @@ impl Conversation {
         if let Some(set) = self.config_status() {
             line("config", set);
         }
-        if let Some(peers) = may_ask {
-            line("may ask", peers);
+        if let Some(peers) = may_enter {
+            line("may enter", peers);
         }
-        if let Some(peers) = asked_by {
-            line("asked by", peers);
+        if let Some(peers) = open_to {
+            line("open to", peers);
         }
         line(
             "core",

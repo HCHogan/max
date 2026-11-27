@@ -40,8 +40,8 @@ pub enum Command {
     /// `/bind`, `/bind <legacy group>` in a private chat, `/bind <code>` in
     /// a group.
     Bind(Option<String>),
-    /// `/link`, where Max is to ask, or `/link <code>`, where it is to be
-    /// asked.
+    /// `/link`, where Max is to enter another conversation's VM, or
+    /// `/link <code>`, in the conversation whose VM it is.
     Link(Option<String>),
     /// `/unlink c#N`.
     Unlink(Option<String>),

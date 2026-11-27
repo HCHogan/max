@@ -167,13 +167,77 @@ is in [decisions/lifetimes-to-systemd.md](../decisions/lifetimes-to-systemd.md).
 
 ## Entering another conversation's VM
 
-Along a link from A to B (see
-[Asking another conversation](jobs.md#asking-another-conversation)), Max
-in A may enter B's VM: `ssh c9.max` in A's VM is root in conversation 9's,
-in its `/work`, and `scp` and `sftp` go the same way. What runs there is
-B's: `maxx say` there says in B's chat. Why it is ssh, through max, is in
-[decisions/ssh-along-a-link.md](../decisions/ssh-along-a-link.md).
+Along a link from A to B, Max in A may enter B's VM: `ssh c9.max` in A's
+VM is root in conversation 9's, in its `/work`, and `scp` and `sftp` go
+the same way. That is all a link gives, and all there is between two
+conversations: without one they are isolated (`history`, the VM and
+`/work` are each one conversation's; only the sticker library is shared).
+Why it is ssh, through max, is in
+[decisions/ssh-along-a-link.md](../decisions/ssh-along-a-link.md); why Max
+there isn't asked by a tool of its own, in
+[decisions/links-enter-only.md](../decisions/links-enter-only.md).
 
+- **What runs there is B's.** Everything in a VM is one caller, so `maxx`
+  in B's VM is B's whoever runs it: `maxx history` reads B's chat, `maxx
+  say` says in it, and `maxx wake '…'` wakes B's Max with those words, as
+  a program of B's own would. B's Max sees a `[max-wake]`; who woke it
+  and what for is whatever the words say. Nothing comes back by itself:
+  B has no way to A, so what Max in A wants of B it looks for there
+  again, in B's history or a file in its `/work`.
+- **Permission is an edge between conversations**, not a person's: below a
+  conversation nothing could be enforced, since its members share one VM as
+  root and one context. A person's own permission is their private chat's;
+  see [decisions/permission-by-conversation.md](../decisions/permission-by-conversation.md).
+- **An edge has a direction.** A→B lets Max in A into B's VM, not the other
+  way, and what it exposes is B: anyone in A can have A's Max do in B's VM
+  what B's Max can, the [tailnets](#tailnets) it is on and the logins in
+  its browser included. An edge into B is a membership of B's VM, if not
+  of its chat, made only where that is acceptable. B gets into A only by a
+  link B→A.
+- **`/link` makes one**, with a code, as `/bind` does: `/link` in A answers
+  with a six-digit code, valid 10 minutes and held in memory; `/link <code>`
+  in B makes A→B. The side to be entered redeems the code, since it is the
+  one exposed. Both directions take two links. `/unlink c#N` removes the
+  edges between this conversation and that one, both ways, from either
+  side. All three are for the people a conversation belongs to: a group's
+  owner, not its administrators; the other party of a private chat; and
+  Max's owners (see [Who may run what](commands.md#who-may-run-what)). The
+  answers say which way an edge runs:
+
+  | Command | Answer |
+  | --- | --- |
+  | `/link` in A | `code issued: 123456 lets Max here enter another conversation's VM, and not the other way`, then `send /link 123456 there (in a group: @maxx /link 123456)` and `valid for 10 minutes, once` |
+  | `/link 123456` in B | `linked: Max in c#7 <title> may enter this VM now, with all that Max here has, and not the other way`, then `@maxx /unlink c#7 removes it`; or `skipped: Max in c#7 <title> may enter this VM already` |
+  | `/link 123456` in A itself | `error: that code was issued here; send it in the conversation whose VM Max here is to enter` (the code is looked at before it is used, `Codes::peek`, so the slip doesn't use it up) |
+  | a wrong, used or expired code | `error: no such code, or it has run out` |
+  | `/unlink c#7` | `unlinked: Max here and Max in c#7 <title> can't enter each other's VM any more`, or `skipped: no link with c#7` |
+  | `/status` | `may enter c#9 · c#12` and `open to   c#7`, each only when there is someone |
+
+  `/link` codes are kept apart from `/bind`'s (`code::Codes`). A isn't told
+  when its code is used; its `/status` shows the edge.
+- **Edges are stored** in `links`: `from_id`, `to_id`, `made_at`, keyed by
+  the pair. Mutable, like `conversation_settings`; the commands that
+  changed it are rows of the ledger. No rule derives edges: on QQ a
+  person's openid differs per group and in private chat, so even "a
+  person's private chat may enter the groups they're in" can't be derived.
+- **Names**: a conversation's handle is `c#N`, shown with
+  `conversations.title` when there is one (`links::Peer`). A group's actor asks
+  QQ's `info` for the group's name once as it starts, in a `side` task, and
+  stores it as the title (`Conversation::learn_title`); a failure is only
+  logged, and a renamed group is known by its new name after max restarts. A
+  private chat on QQ has no name (see [The official QQ bot](qq.md#inbound)), so
+  it is told apart by its number; how to name one is open. A title is a name
+  its people chose and goes into what Max is shown, so it is one line,
+  control characters as spaces, cut at 40 characters.
+- **What Max is told**: the conversations whose VMs it may enter are listed
+  in the volatile block after the people, under `[能进的会话]`, a line each,
+  and those that may enter its own under `[能进来的会话]`, read from `links`
+  when a core starts (none, no block), so the system prompt stays the same
+  for every conversation, and an edge made during a core shows from the
+  next (max checks the edge at every connection). The system prompt's
+  legend says how to enter, that `maxx` there is that conversation's, with
+  `history`, `say` and `wake` as examples, that Max there has no way back,
+  and that a `[max-wake]` here may be a linked conversation's doing.
 - **The way is max's.** The guest's ssh_config sends `Host *.max` through
   `maxx connect %h` (`nix/connect.js`), which asks max at
   `127.0.0.1:7777` for `/connect/9` as an HTTP upgrade (`Connection:
@@ -196,15 +260,10 @@ B's: `maxx say` there says in B's chat. Why it is ssh, through max, is in
   A's ssh offers nothing and checks no host key, since each VM's is made
   at its boot. This holds only while vsock is the one way to a guest's
   sshd: its TCP listener doesn't start, and taps don't reach each other.
-- **One way only.** A→B lets A into B; B gets into A only by a link B→A.
 - **A connection holds B's VM**, as a call does: B isn't stopped as idle
   while one is open. It ends when either end closes, or as max stops,
   which ends every one. `/unlink` refuses the next; one that is open runs
   on until it ends.
-- **What Max is told**: the volatile block's `[能问的会话]` lists the
-  conversations Max may enter as well as ask, and the system prompt's
-  legend says how; `[能进来的会话]` lists those that may ask and enter
-  Max's own.
 
 ## Resources
 

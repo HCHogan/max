@@ -19,9 +19,9 @@ async fn an_edge_runs_one_way(pool: PgPool) -> sqlx::Result<()> {
         conversation,
         title: None,
     };
-    assert_eq!(asked(&mut conn, here).await?, [peer(there)]);
-    assert_eq!(askers(&mut conn, there).await?, [peer(here)]);
-    assert_eq!(asked(&mut conn, there).await?, []);
-    assert_eq!(askers(&mut conn, here).await?, []);
+    assert_eq!(enterable(&mut conn, here).await?, [peer(there)]);
+    assert_eq!(enterers(&mut conn, there).await?, [peer(here)]);
+    assert_eq!(enterable(&mut conn, there).await?, []);
+    assert_eq!(enterers(&mut conn, here).await?, []);
     Ok(())
 }

@@ -192,9 +192,7 @@ The tasks fall into three kinds, by what they produce:
      wakes by verdict capped per hour. Every `Wake` is filtered by `seen`.
    - What comes from outside the chat: `maxx wake` from a unit or program
      in the group's VM (see [Resident programs](design/jobs.md#resident-programs)),
-     what the VM service says about the VM, and questions and answers
-     between conversations (see
-     [Asking another conversation](design/jobs.md#asking-another-conversation)).
+     and what the VM service says about the VM.
      Timers and watches are units Max keeps in its VM, so there is no
      scheduler in max.
 

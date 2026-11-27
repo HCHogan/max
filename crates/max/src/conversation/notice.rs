@@ -1,19 +1,15 @@
 //! What maxx tells Max: notices only the model reads, each the item of a
 //! wake and never a row of the timeline. A program's wake, which is how a
 //! background command and a background agent say they ended, a word about
-//! the VM, a question from another conversation, the answer to one put
-//! to another, and why the classifier woke Max. How each is worded is here, in one place; the
-//! prompt and the tools' guides describe them. The run's own two
+//! the VM, and why the classifier woke Max. How each is worded is here,
+//! in one place; the prompt and the tools' guides describe them. The run's own two
 //! reminders are in max-core, with the run.
 
 use std::borrow::Cow;
 
 use max_core::item::{Item, ItemKind};
-use max_core::limits::ASK_DAYS;
 use max_core::render::EXCERPT_CHARS;
-use max_db::links::Peer;
 
-use super::Unanswered;
 use crate::tokens;
 
 pub(super) enum Notice<'a> {
@@ -23,21 +19,6 @@ pub(super) enum Notice<'a> {
     Woken { text: &'a str, count: usize },
     /// The VM service, on the group's VM.
     Vm { text: &'a str },
-    /// Max in another conversation asks Max here: `answer` names
-    /// `number` to answer it, in this core or a later one.
-    Asked {
-        number: i64,
-        from: &'a Peer,
-        question: &'a str,
-    },
-    /// What Max in the conversation `by` said to what Max here asked it,
-    /// or why it says nothing: with the question again, since the core
-    /// that asked may be gone.
-    Answered {
-        by: &'a Peer,
-        question: &'a str,
-        said: &'a Result<String, Unanswered>,
-    },
 }
 
 impl Notice<'_> {
@@ -63,26 +44,6 @@ impl Notice<'_> {
                 }
             }
             Notice::Vm { text } => format!("[VM] {text}"),
-            Notice::Asked {
-                number,
-                from,
-                question,
-            } => {
-                format!(
-                    "[ask#{number} 问] {from}\n{}\n（那个会话的 Max 问你的：用 answer 回答，to 填 {number}。要先问这边的人才知道的，就先问，知道了再答：没答的问题之后每一轮都列在 [等你回答的问题] 里，{ASK_DAYS} 天内哪一轮都能答。这个问题和你的回答都不会发到这边的聊天里）",
-                    fitted(question, single),
-                )
-            }
-            Notice::Answered { by, question, said } => {
-                let question = fitted(question, single);
-                match said {
-                    Ok(answer) => format!(
-                        "[回答] {by}\n问：{question}\n答：{}",
-                        fitted(answer, single)
-                    ),
-                    Err(why) => format!("[没答成] {by}：{why}\n问：{question}"),
-                }
-            }
         }
     }
 }

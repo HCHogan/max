@@ -20,7 +20,7 @@ use super::machine::{self, BOOT, Boot, Booted, Guest, Machine};
 use super::ssh::{self, Closes, Connection};
 use super::{NoVm, Request, Vm, busy, idle, units, with_units, work};
 use crate::config;
-use crate::conversation::{Heard, Signal};
+use crate::conversation::Signal;
 use crate::scope::Scope;
 
 /// How often idle and dead VMs are looked for, and kept ones that are
@@ -485,11 +485,7 @@ impl Service {
         // Max was told when it booted so.
         if !units && !attached {
             let text = "这个群的 VM 最近两次没开起来，或者开着开着自己停了，这次开机就没装 /work/.max/systemd 里的 unit。多半是哪个 unit 的问题：用 systemctl、journalctl 查清楚、改好，再跑 maxx units apply。".to_owned();
-            let heard = Heard::Vm(text);
-            let _ = self.signals.send(Signal::Heard {
-                conversation,
-                heard,
-            });
+            let _ = self.signals.send(Signal::Vm { conversation, text });
         }
     }
 

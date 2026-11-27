@@ -1,6 +1,6 @@
 //! `/connect/<n>` on max's service to the VMs: a guest's ssh into another
-//! conversation's VM, along a link. Max in A may enter B's VM where it may
-//! ask B's Max. A's ssh asks for an upgrade at `/connect/9` (`maxx
+//! conversation's VM, along a link from A to B. A's ssh asks for an
+//! upgrade at `/connect/9` (`maxx
 //! connect`, the guest's ProxyCommand); max checks the link, boots B's VM
 //! if it isn't running, and once the upgrade is done copies the bytes both
 //! ways between the connection and B's sshd. A connection holds B's VM as
@@ -42,8 +42,7 @@ pub(super) fn router(pool: PgPool, vms: Vms, joins: UnboundedSender<Join>) -> Ro
 }
 
 impl Enter {
-    /// Whether `from`'s VM may enter `to`'s: whether Max there may ask
-    /// Max in `to`.
+    /// Whether Max in `from` may enter `to`'s VM.
     async fn linked(&self, from: ConversationId, to: ConversationId) -> sqlx::Result<bool> {
         let mut conn = self.pool.acquire().await?;
         links::linked(&mut conn, from, to).await
