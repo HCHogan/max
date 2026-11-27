@@ -13,6 +13,7 @@
 // program returned, 1 when it threw.
 "use strict";
 
+const { createRequire } = require("node:module");
 const { format, inspect } = require("node:util");
 const { browser, page, snapshot } = require("./browser.js");
 const { MAX, ToolError } = require("./client.js");
@@ -84,8 +85,10 @@ async function main() {
   }
   const max = Object.freeze({ raw, cancel, race, browser, page, snapshot });
   const AsyncFunction = (async () => {}).constructor;
-  const program = new AsyncFunction("tools", "max", "args", input.code);
-  return program(Object.freeze(tools), max, input.args);
+  // Node's require, as a file in /work would have it: a function made
+  // from a string has none of its own, and programs reach for fs.
+  const program = new AsyncFunction("tools", "max", "args", "require", input.code);
+  return program(Object.freeze(tools), max, input.args, createRequire(`${work}/`));
 }
 
 function shown(value) {
@@ -98,16 +101,20 @@ function shown(value) {
   return inspect(value, { depth: 6 });
 }
 
-// The error and the program's own frames, by its own line numbers: the
-// function's header takes two lines.
+// The error's whole message and the program's own frames, by its own
+// line numbers: the function's header takes two lines. Playwright says
+// why in the lines after the first: what a click waited for and what was
+// in its way, which elements a selector matched.
 function failure(error) {
   if (!(error instanceof Error)) return `threw ${shown(error)}`;
-  const [first, ...frames] = String(error.stack ?? error).split("\n");
-  const own = frames.flatMap(line => {
+  const lines = String(error.stack ?? error).trimEnd().split("\n");
+  const first = lines.findIndex(line => /^ {4}at /.test(line));
+  const message = first < 0 ? lines : lines.slice(0, first);
+  const own = lines.slice(message.length).flatMap(line => {
     const at = /<anonymous>:(\d+):(\d+)\)$/.exec(line);
     return at ? [`    at the program's line ${at[1] - 2}, column ${at[2]}`] : [];
   });
-  return [first, ...own].join("\n");
+  return [message.join("\n").trimEnd(), ...own].join("\n");
 }
 
 function exit(text, code) {

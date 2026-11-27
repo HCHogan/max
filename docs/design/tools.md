@@ -144,9 +144,12 @@ protocol or ABI.
   `run_code` the unit runs `node /run/max/runner.js`, read-only in the guest
   image; stdin carries the program and its arguments; the result and the
   console come back as files of the unit. Exit 0 is a normal return, 1 an
-  exception, reported with the program's own line number. Each run goes
-  through `bash -lc`, so a program's children have a login environment.
-  Nothing is resident, so runs share no state.
+  exception, reported as its whole message and the program's own line
+  numbers: Playwright says why in the lines after the first, what a click
+  waited for and what was in its way, which elements a selector matched.
+  A program has Node's `require`, resolving as a file in `/work` would.
+  Each run goes through `bash -lc`, so a program's children have a login
+  environment. Nothing is resident, so runs share no state.
 - **Startup**: the VM starts on demand and runs commands after about 4.5
   seconds, and stops after two idle hours. It starts as soon as a `run_code`
   or `shell` call appears in the model's stream, overlapping with the time

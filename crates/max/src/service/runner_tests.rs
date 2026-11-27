@@ -141,6 +141,22 @@ async fn programs_call_max_tools_and_return(pool: PgPool) {
         ran.stdout
     );
 
+    // An error's message is shown whole: Playwright's says why in the
+    // lines after the first.
+    let ran = run(
+        &url,
+        r#"throw new Error("等不到\nCall log:\n  - 被挡住了")"#,
+    )
+    .await;
+    assert_eq!(
+        ran.stdout,
+        "Error: 等不到\nCall log:\n  - 被挡住了\n    at the program's line 1, column 7"
+    );
+
+    // A program has Node's require.
+    let ran = run(&url, r#"return require("node:path").basename("/a/b.txt")"#).await;
+    assert_eq!(ran.stdout, "b.txt", "{}", ran.stderr);
+
     let raw = format!(
         "const [a, b] = await Promise.all([max.raw('history', {{around: {id}}}), \
          max.raw('history', {{around: {}}})]); return [a.ok, b.ok, b.error.code]",
