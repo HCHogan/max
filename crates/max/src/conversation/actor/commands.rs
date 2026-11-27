@@ -233,7 +233,8 @@ impl Conversation {
         let mut lines = Vec::new();
         let mut line = |key: &str, value: String| lines.push(format!("{key:<10}{value}"));
         line("version", format!("maxx {}", crate::VERSION));
-        for (key, value) in self.machine().await {
+        let (machine, vm_up) = self.machine().await;
+        for (key, value) in machine {
             line(key, value);
         }
         // What the next reply uses; a running core keeps the one it began with.
@@ -292,6 +293,9 @@ impl Conversation {
             line(key, spent.to_string());
         }
         let mut up = span(self.shared.started.elapsed());
+        if let Some(vm) = vm_up {
+            let _ = write!(up, " · vm {}", span(vm));
+        }
         if let Some(host) = host_uptime() {
             let _ = write!(up, " · host {}", span(host));
         }
@@ -305,8 +309,9 @@ impl Conversation {
     /// counts on its own side; and Max's units, the files in /work, each
     /// as the guest's systemd has it, or by name alone when nothing says.
     /// The guest is asked while /work is counted, and neither is waited
-    /// for longer than `VM_WAIT`.
-    async fn machine(&self) -> Vec<(&'static str, String)> {
+    /// for longer than `VM_WAIT`. With them, how long a guest that
+    /// answered has been up.
+    async fn machine(&self) -> (Vec<(&'static str, String)>, Option<Duration>) {
         let conversation = self.place.conversation;
         let work = self.shared.vm_dir.as_deref();
         let work = work.map(|dir| vm::work(dir, conversation));
@@ -337,8 +342,10 @@ impl Conversation {
 
         let mut lines = Vec::new();
         let mut units = Vec::new();
+        let mut up = None;
         match guest {
             Some(Guest::Up(about)) => {
+                up = Some(about.up);
                 let arch = std::env::consts::ARCH;
                 lines.push(("vm", format!("NixOS {} · {arch}", about.version)));
                 let memory = format!("{} of {}", size(about.used), size(about.memory));
@@ -368,7 +375,7 @@ impl Conversation {
         {
             lines.push(("", format!("and {more} more")));
         }
-        lines
+        (lines, up)
     }
 
     /// What this conversation's model calls used in the last day and

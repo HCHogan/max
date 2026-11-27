@@ -81,7 +81,9 @@ only`. The ranks themselves are in [Permissions](identity.md#permissions).
   the last 24 hours and 7 days, a line each
   (`24h       in 34.2M · out 360k · cache 79.8% · $5.31`: input and output
   tokens, the share of input from the cache, and the cost at list prices;
-  `none` without calls); and the uptime of maxx and of the host. The persona
+  `none` without calls); and the uptime of maxx, of the conversation's VM
+  when its guest answers, and of the host
+  (`uptime    2m 42s · vm 3d 4h · host 4d 2h`). The persona
   isn't shown; see `/persona`.
 - **The VM in `/status`**:
 

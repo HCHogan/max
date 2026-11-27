@@ -17,6 +17,8 @@ use super::ssh;
 pub struct About {
     /// Its NixOS, as /run/current-system names it: 26.05.20261108.ac588ef.
     pub version: String,
+    /// How long it has been up.
+    pub up: Duration,
     /// The memory in use there, in bytes: all of it but what the kernel
     /// counts as available.
     pub used: u64,
@@ -97,8 +99,9 @@ pub(super) fn read(said: &str) -> Result<About> {
         }
     }
     match (up, total, available) {
-        (Some(_), Some(memory), Some(available)) if !version.is_empty() => Ok(About {
+        (Some(up), Some(memory), Some(available)) if !version.is_empty() => Ok(About {
             version: version.to_owned(),
+            up,
             used: memory.saturating_sub(available),
             memory,
             units,
