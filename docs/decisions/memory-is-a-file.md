@@ -1,56 +1,80 @@
-# Memory is a file Max writes itself
+# Memory is a file Max writes and tidies itself
 
-Each conversation's memory is one Markdown file that Max writes itself and
-every turn carries. The design is in [Memory](../design/context.md#memory).
+Each conversation's memory is one Markdown file that Max writes, keeps in
+order and carries in every turn. Nothing on the host extracts memories or
+tidies the file. The design is in [Memory](../design/context.md#memory).
 
 ## Context
 
-- In the Haskell version, memory was entries the historian extracted. Of
-  733 entries, 85% were written automatically; most of those labelled
-  group rules were technical knowledge, while what should have been
-  permanent, such as what people call Max, wasn't recorded. Of 101 dated
-  commitments, 88 had expired unattended. Injection picked the 12 most
-  recently changed, which had nothing to do with importance.
-- maxx went live with no memory. People called Max "小鲨鲨" and it didn't
-  know the name; only when told "不记得了" did it search, and
-  it found the answer at once.
-- [MemoryTax](https://arxiv.org/html/2610.29823): with a strong
-  enough model, keeping raw records and letting the model search works
-  better and costs less than pre-extracted memory (Mem0, Zep). Max has the
-  raw records and the search (the ledger and `history`). But the paper's
-  questions all prompt the model to look something up; in a group chat,
-  memory is often needed with no such prompt, and the model doesn't know
-  what it has forgotten.
+Max has the raw records and a search over them (the ledger and
+`history`). With a strong enough model, keeping raw records and letting
+the model search works better and costs less than pre-extracted memory
+such as Mem0 or Zep ([MemoryTax](https://arxiv.org/html/2610.29823)). But
+that paper's questions all prompt the model to look something up. In a
+group chat, memory is often needed with no such prompt, and the model
+doesn't know what it has forgotten: with no memory at all, people call
+Max "小鲨鲨" and it doesn't know the name, though it finds the answer at
+once when told it has forgotten.
 
 ## Decision
 
-Something carried in every turn, with the main model deciding what to
-record, modelled on Claude Code's auto memory: one Markdown file per
-conversation in its VM's `/work`, injected into the volatile block, kept
-under a cap, and tidied nightly by a model of the host's, the dreamer. No
-memory table, categories or expiry. The Haskell version's memories were moved into an
-initial file per group by hand, by a sub-agent, dropping everything of no
-use.
+Something is carried in every turn, and the main model decides what goes
+into it, modelled on Claude Code's auto memory:
 
-## What was learned in use
+- One Markdown file per conversation in its VM's `/work`, injected into
+  the volatile block and kept under a cap.
+- No memory table, categories or expiry.
+- Max appends a line with `echo`; a new line stays at the end until Max
+  rewrites the file.
+- The prompt says that recording comes first, before the reply, and that
+  a round of waiting for it is fine.
+- Tidying is Max's own. The prompt says nobody tidies the file for it,
+  and the cap's reminder is what has it go over the whole file.
 
-- **Append, don't insert**: on its first day Max wrote to the file once in
-  90 turns. It had been asked to insert entries by section and
-  person, which is laborious with `shell`, and a prompt line ("每多跑一次
-  run_code 群友就多等一轮") made it reluctant to make an extra call. It now
-  appends one line with `echo`.
-- **The dreamer** was added because the model only ever added and never
-  tidied. It is gone since: see
-  [Max tidies its own memory](max-tidies-its-own-memory.md).
-- **Record first, then reply**: the prompt had asked Max to put
-  the reply and the recording command in one output, reply first, and write
-  `[silence]` after recording; it never did. Its only write that day came
-  when someone asked it to delete an entry, and asked whether it had
-  recorded anything lately, it argued from the rules that nothing had been
-  worth it. The prompt now says plainly that recording comes first and a
-  round of waiting is fine.
+## Why
+
+- **The model that reads the memory writes it**, in the turn where it
+  learns something, and knows what would change how it speaks and acts.
+- **Appending, not inserting.** Asked to insert entries by section and
+  person, which is laborious with `shell`, Max writes to the file once in
+  90 turns. A line at the end costs the model that reads the file
+  nothing: each carries the name it is about and its date.
+- **Recording first.** Asked to put the reply and the recording command
+  in one output, reply first, Max doesn't record, and argues from the
+  rules that nothing was worth it. So does a prompt line that makes an
+  extra call sound costly to the people waiting.
+- **What the cap needs is a smaller file**, and only Max can make one: a
+  tidy that may change no meaning can't move details out to another file.
+- **Nothing else decides what Max's notes look like**, and there is no
+  second model, key and failure to keep.
 
 ## Cost
 
-Up to 3k uncached tokens a turn, and memory written in the VM, where the
-host sees it only at the next projection.
+- Up to 3k uncached tokens a turn.
+- Memory is written in the VM, where the host sees it only at the next
+  projection.
+- An entry past its date, or said twice, stays until Max next goes over
+  the file, which may be weeks.
+- Going over the file happens in a turn somebody waits for.
+
+## Alternatives
+
+- **Entries a second model extracts from the chat**, stored in a table
+  and picked at injection. Of 733 entries so made, 85% were written
+  automatically; most of those labelled group rules were technical
+  knowledge, while what should have been permanent, such as what people
+  call Max, wasn't recorded. Of 101 dated commitments, 88 had expired
+  unattended. Injection picked the 12 most recently changed, which has
+  nothing to do with importance.
+- **No memory**, only the records and search: see Context.
+- **A nightly tidy by a model on the host**, one call a file that
+  rewrites it whole: appended lines put under their headings, entries
+  that say the same thing merged, those past their date dropped. Over
+  three weeks it ran 51 times. Of the 28 runs the journal still had, 21
+  left the file with as many lines as it had, and 7 changed the count by
+  one to three. The files are far under the cap, 4 to 87 lines, so there
+  was next to nothing to merge or drop, and what it did was put the day's
+  line under a heading. The one file that did shrink, from 84 lines to 38
+  with details moved to a file beside it, was rewritten by Max from its
+  VM, as the cap's reminder asks. Four runs failed on the provider's
+  errors.

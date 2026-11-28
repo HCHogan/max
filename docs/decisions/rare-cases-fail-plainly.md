@@ -1,74 +1,71 @@
 # Rare cases fail plainly
 
 Where something is rare and the cost of not handling it is that someone
-asks again, Max has no machinery for it: a turn cut off by a restart isn't
-resumed, a core at its limit isn't handed over, and intent has few rules.
-These were cut together when the Rust version first ran in a group.
+asks again, Max has no machinery for it: a turn cut off by a restart
+isn't resumed, a core at its limit isn't handed over, and intent has few
+rules.
 
-## Restarts interrupt a turn instead of resuming it
+## A restart interrupts a turn
 
-Before: at a normal restart a running turn was suspended at its next
-boundary and a snapshot stored; after the restart it was resumed within a
-window, with unfinished tools given "进程重启，结果未知". That needed attempts,
-several snapshots per turn, `TurnResumed`, an `Expired` outcome and
-permissions checked again on resumption.
+The turn gets a grace and is interrupted when it runs out
+([Restarts](../design/actor.md#restarts)). A turn is rarely running at
+the moment of a deploy, and whoever was interrupted can ask again.
 
-Now: the turn gets a grace and is interrupted when it runs out
-([Restarts](../design/actor.md#restarts)), as the Haskell version did. A
-turn is rarely running at the moment of a deploy, and whoever was
-interrupted can ask again. Migration 0006 dropped what recovery used.
+The other way is to suspend a running turn at its next boundary, store a
+snapshot, and resume it after the restart within a window, with
+unfinished tools given "进程重启，结果未知". That takes attempts, several
+snapshots per turn, an event for a turn resumed, an outcome for one that
+expired, and permissions checked again on resumption.
 
-## The core is no longer stored as an input log
+## A run stores what it showed the model
 
-Before: the inputs fed to the core were stored, and a core was rebuilt by
-replaying them. Once recovery was gone, replay served only tests, while
-model output was stored twice, in the log and in the transcript, and
-reasoning blobs with it. Now a run stores what it showed the model: the
-base context and the transcript
-([principle 3](../architecture.md#principles-of-the-data-and-execution-model)).
-Starting a model call and starting a tool batch, recorded as inputs so that
-replay could tell them apart, became phase changes inside `next_step`.
+A run stores the base context and the transcript
+([principle 3](../architecture.md#principles-of-the-data-and-execution-model)),
+not the inputs fed to its core.
 
-## A core at its limit gives up, with no handover
+Storing the inputs lets a core be rebuilt by replaying them, which is
+what resuming a turn needs. With no resuming, replay serves only tests,
+while model output is stored twice, in the log and in the transcript, and
+reasoning blobs with it.
 
-Before: a core at its limit was replaced. Its unhandled triggers went to a
-new core with a one-line handover note listing the calls with side effects
-the old one had made, so they wouldn't be made again; a trigger could be
-handed over once; and a turn had a 30-minute wall clock. A first batch too
-big for a core started none and recorded `InputTooLarge`.
+## A core at its limit gives up
 
-Now: the run fails with `ContextExhausted` and the unhandled direct
-triggers get a one-line reply ("At the limit" in
+The run fails with `ContextExhausted` and the unhandled direct triggers
+get a one-line reply ("At the limit" in
 [The core](../design/core.md#what-the-core-decides)); the next trigger
-projects afresh. At the time not one turn had reached the limit. (A run
-near its limit is warned, so that it reports what it found before it
-stops.)
+projects afresh. A run near its limit is warned, so that it reports what
+it found before it stops. Turns hardly ever reach the limit.
 
-## Intent keeps only the debounce, the small model and a cap
+The other way is to replace the core: its unhandled triggers go to a new
+core with a handover note that lists the calls with side effects the old
+one made, so they aren't made again; a trigger may be handed over once;
+and a turn has a wall clock.
 
-The debounce went later, on what production showed of it:
-[Direct triggers aren't held back](no-debounce.md).
+## Intent keeps a small model and a cap
 
-Removed from [Intent](../design/intent.md):
+[Intent](../design/intent.md) wakes Max at once for a direct trigger,
+asks a small model about the rest, and caps the wakes that model causes
+in an hour. It has no configuration. The small model judges alone, and a
+rule is added only when it is shown to be needed.
 
-- the Haskell version's gate: chatter was classified only if it contained
-  "max" or Max had spoken in the last 3 minutes, and other chatter at most
-  once every 15 minutes;
-- its three verdict categories (called, followup, topic) and the topic
-  cooldown;
-- signals added the day before: the group's participation counts ("你近 1
-  小时发言 N 次…", as "本群情况"), Max's uptake rate (whether anyone answered
-  an interjection within minutes), and "found annoying" (`dismiss`), which
-  survives only as a line in the classification prompt;
-- the `[intent]` configuration section.
+Not there:
 
-The plan was to see how well the small model judges alone, and to add
-rules back only if needed. The "follow-up to Max" situation went from the
-prompt too: whenever the 4B model saw Max had just spoken, it
-called whatever came next a follow-up, and verdict wakes chained one after
-another.
+- **A gate before the model**: chatter classified only if it contains
+  "max" or Max spoke in the last minutes, and other chatter at most once
+  in a while.
+- **Categories of verdict** (called, follow-up, topic) with a cooldown
+  for topics.
+- **Signals in the prompt**: how often Max has spoken in the last hour,
+  how often people took up what it said, whether someone found it
+  annoying. The last is a line of the classifier's prompt.
+- **"A follow-up to Max" as a case that wakes it.** Whenever a model of
+  four billion parameters sees that Max has just spoken, it calls
+  whatever comes next a follow-up, and verdict wakes chain one after
+  another. Answers to Max are replies or @s, which wake it directly.
+- **A wait for a second half of an @**: see
+  [Direct triggers aren't held back](no-debounce.md).
 
 ## See also
 
-- [Features deliberately removed](features-removed.md).
+- [Features deliberately left out](features-removed.md).
 - [Matrix is deferred](matrix-deferred.md).

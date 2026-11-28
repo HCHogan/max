@@ -4,7 +4,7 @@ Intent decides when to wake the core. **Every inbound message goes
 through it**, @s and replies included, so it sees everything, and the
 rules and the small model's classification are in one place. What is left
 is deliberately small: the rule for direct triggers, the small model, and
-an hourly cap; why the Haskell version's gates and signals went is in
+an hourly cap; why it has no gates or signals beside is in
 [decisions/rare-cases-fail-plainly.md](../decisions/rare-cases-fail-plainly.md).
 
 Like [the core](core.md), intent is a pure state machine in `max-core`

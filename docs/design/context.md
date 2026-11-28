@@ -194,10 +194,8 @@ Every command and who may run it is in [Permissions](identity.md#permissions).
 ## Memory
 
 Memory is a file Max writes itself, keeps in order itself and carries in
-every turn; why not extracted entries is in
-[decisions/memory-is-a-file.md](../decisions/memory-is-a-file.md), and why
-nothing tidies it for Max in
-[decisions/max-tidies-its-own-memory.md](../decisions/max-tidies-its-own-memory.md).
+every turn; why not extracted entries, and why nothing tidies it for Max,
+is in [decisions/memory-is-a-file.md](../decisions/memory-is-a-file.md).
 
 - **The file**: `/work/.max/memory.md` in the conversation's VM, on the
   host `<vm.dir>/<conversation id>/work/.max/memory.md`. Max edits it with
@@ -255,9 +253,9 @@ nothing tidies it for Max in
 
 One tool, `history` (`max/src/service/history.rs`), searches and reads the
 conversation's records: searching and reading apply the same filters (who,
-when) and differ only in whether there is a query. Measurements behind its
-choices are in
-[decisions/history-tool.md](../decisions/history-tool.md).
+when) and differ only in whether there is a query. Why it is one tool, on
+keywords, with tool calls behind a switch, and the measurements behind
+that, are in [decisions/history-tool.md](../decisions/history-tool.md).
 
 - **Scope**: this conversation only.
   - Search looks at rows of kind chat, not commands or events, and not
@@ -301,8 +299,7 @@ choices are in
     read the whole index for a two-character term.
   - **No search by meaning**: a word written another way (自由～的～光
     for 自由的光) is found by searching again with shorter or other
-    keywords; see
-    [decisions/keywords-not-vectors.md](../decisions/keywords-not-vectors.md).
+    keywords.
   - **Ranking**: the share of the terms matched, ties newest first; 3 ×
     limit candidates are fetched. Messages are deduplicated by body,
     keeping the latest. `limit` is 10 by default, at most 30; no paging.
@@ -343,8 +340,7 @@ choices are in
     `{ call: "t#N.n" }`, which reads the call whole, in pages, and goes
     only with `page`.
   - A switch, off by default, so that a search of the chat isn't crowded
-    by tool output, and old output isn't taken for news unasked; see
-    [decisions/history-searches-tool-calls.md](../decisions/history-searches-tool-calls.md).
+    by tool output, and old output isn't taken for news unasked.
 - The system prompt's line on records says older material isn't in the
   context, and that `history` finds the past by content, or reads it by
   person and time.
