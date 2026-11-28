@@ -126,7 +126,20 @@ async fn a_runs_tool_calls_read_back_as_text(pool: PgPool) -> sqlx::Result<()> {
         limit: 10,
     };
     let found = matching(&mut conn, &query).await?;
-    assert_eq!(found, [(second, vec![0]), (first, vec![1])]);
+    assert_eq!(found, [(second.clone(), vec![0]), (first.clone(), vec![1])]);
+
+    // The latest, the newest first, in the stretch asked for.
+    let all = latest(&mut conn, conversation, None, None, 10).await?;
+    assert_eq!(all, [second.clone(), first]);
+    assert_eq!(
+        latest(&mut conn, conversation, None, None, 1).await?,
+        [second]
+    );
+    let after = MessageId::new(from.get() + 1);
+    assert_eq!(
+        latest(&mut conn, conversation, Some(after), None, 10).await?,
+        []
+    );
     Ok(())
 }
 

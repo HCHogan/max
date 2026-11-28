@@ -323,22 +323,26 @@ that, are in [decisions/history-tool.md](../decisions/history-tool.md).
     forward from the row after the last for a read from `from`, backward
     from the first for a read of the latest. `who` and `limit` carry over.
     An empty range gives one line, `（没有这样的消息）`.
-- **Tool calls** (`tools: true`): the search looks through the calls of
+- **Tool calls** (`tools: true`): it looks through the calls of
   the conversation's turns instead of its rows, in `tool_calls`: each
   call's arguments, a line `key: value` for each, and the text of its
   result, as the model saw it (a `run_code` or `shell` result cut to 16
   KiB as it was). Not reasoning, and not background agents' calls, which
   are fx's. The rows are written with the turn's outcome, from its run, by
   the SQL function `tool_calls_of`, in the same statement.
-  - `query` is required, keywords as above, matched in the arguments and
-    the result together, on a trigram index of the two. `who` doesn't go
-    with it; `from` and `to` keep to the turns whose context ends in the
-    stretch (`turns.from_id`). Ranked by the share of terms, then newest.
+  - With `query`, keywords as above, it searches: they are matched in
+    the arguments and the result together, on a trigram index of the two,
+    and ranked by the share of terms, then newest. Without, the results
+    are the latest calls, the newest first: what Max did a turn or two
+    ago is asked for more often by when than by a word in it. `who`
+    doesn't go with either; `from` and `to` keep to the turns whose
+    context ends in the stretch (`turns.from_id`); `limit` is a search's.
   - Results: `{ ref, time, tool, text, read }`: `ref` is `t#N.n`, turn
     t#N's n-th call; `time` when the turn started; `text` the arguments,
-    `→` and the result, cut around the match as a row's is; `read` is
-    `{ call: "t#N.n" }`, which reads the call whole, in pages, and goes
-    only with `page`.
+    `→` and the result, cut around the match as a row's is, or from the
+    start where there was no query; `read` is `{ call: "t#N.n" }`, which
+    reads the call whole, in pages, and goes only with `page` (`tools:
+    true` beside it is let pass).
   - A switch, off by default, so that a search of the chat isn't crowded
     by tool output, and old output isn't taken for news unasked.
 - The system prompt's line on records says older material isn't in the

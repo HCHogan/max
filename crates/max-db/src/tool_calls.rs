@@ -87,6 +87,44 @@ pub async fn matching(
         .collect())
 }
 
+/// The conversation's latest calls, the newest first, `limit` at most. A
+/// turn is in `from` and `until` by where its context ends, as for
+/// [`matching`].
+pub async fn latest(
+    conn: &mut PgConnection,
+    conversation: ConversationId,
+    from: Option<MessageId>,
+    until: Option<MessageId>,
+    limit: i64,
+) -> sqlx::Result<Vec<Call>> {
+    let rows = sqlx::query!(
+        "select t.ordinal, c.n, c.name, c.arguments, c.output, t.started_at
+         from turns t join tool_calls c on c.turn_id = t.id
+         where t.conversation_id = $1
+           and ($2::bigint is null or t.from_id >= $2)
+           and ($3::bigint is null or t.from_id < $3)
+         order by t.ordinal desc, c.n desc
+         limit $4",
+        conversation.get(),
+        from.map(MessageId::get),
+        until.map(MessageId::get),
+        limit
+    )
+    .fetch_all(conn)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| Call {
+            turn: row.ordinal,
+            n: row.n,
+            name: row.name,
+            arguments: row.arguments,
+            output: row.output,
+            started: row.started_at,
+        })
+        .collect())
+}
+
 /// The `n`-th call of the conversation's turn t#`turn`.
 pub async fn call(
     conn: &mut PgConnection,

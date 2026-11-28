@@ -3,9 +3,9 @@
 //! reads rows in order (see `read`): around a row, or a stretch of the
 //! timeline, a sender's rows in it if asked. A stretch runs from or to a
 //! day, a moment or a row, worked out as row ids once, so that a search
-//! and a read keep to the same rows. With `tools: true` a search looks
-//! through the tool calls of the conversation's turns instead, and `call`
-//! reads one whole. See "Recall".
+//! and a read keep to the same rows. With `tools: true` it looks through
+//! the tool calls of the conversation's turns instead, those a query
+//! matches or the latest, and `call` reads one whole. See "Recall".
 
 mod read;
 mod search;
@@ -65,7 +65,7 @@ pub(super) struct Args {
     #[schemars(range(min = 1), description = "which page of a read, 1 by default")]
     page: Option<usize>,
     #[schemars(
-        description = "true: search the tool calls of this conversation's turns, not the chat"
+        description = "true: the tool calls of this conversation's turns, not the chat: those that match query, or without one the latest"
     )]
     tools: Option<bool>,
     #[schemars(description = "read one tool call whole: t#12.3 is turn t#12's third")]
@@ -100,7 +100,7 @@ enum Bound {
 
 impl Tool for History {
     const NAME: &'static str = "history";
-    const DESCRIPTION: &'static str = "Looks through this conversation's chat records, with the descriptions of pictures and stickers: by content, speaker or time, or around one message. With query it returns the passages that match; without, the messages themselves in order of time. With tools: true it searches the tool calls of this conversation's turns instead.";
+    const DESCRIPTION: &'static str = "Looks through this conversation's chat records, with the descriptions of pictures and stickers: by content, speaker or time, or around one message. With query it returns the passages that match; without, the messages themselves in order of time. With tools: true it looks through the tool calls of this conversation's turns instead: those that match query, or the latest.";
 
     type Args = Args;
     type Output = Found;
@@ -113,7 +113,7 @@ impl Tool for History {
             Without query it reads the messages themselves, a line each in order of time, as in the context, the long ones only their beginning: with from, forward from there; without, the newest (up to to); limit is {} by default and at most {}. When there is more, next holds the arguments to go on with, passed back as they are: forward from a read with from, backward from a read of the newest. Give at least one of who, from and to.\n  \
             around reads that message with before and after messages on each side ({AROUND} by default, at most {MOST_AROUND}), and goes with no other filter; with before and after both 0 it reads that one message alone, whole however long.\n  \
             A read comes in pages, none longer than one message may be in the context: pages is how many there are, and page picks one. What /clear --all cleared is only out of the context, and is found all the same.\n  \
-            With tools: true and query it searches your own tool calls in this conversation's turns instead of the chat: what each call was given and what it returned, as you saw it then, long output cut as it was; not reasoning, nor background agents' calls. who doesn't go with it; from and to keep to the turns of that stretch. A result's ref is t#N.n, turn t#N's n-th call, with its tool and when the turn started; read, passed back as it is, reads that call whole, in pages, and goes only with page. What a call returned was so then: a page, a price or a file may have changed since.",
+            With tools: true it looks through your own tool calls in this conversation's turns instead of the chat: what each call was given and what it returned, as you saw it then, long output cut as it was; not reasoning, nor background agents' calls. With query it searches them; without, it gives the latest, the newest first, each with the start of what it was given. who doesn't go with it; from and to keep to the turns of that stretch; limit is as a search's. A result's ref is t#N.n, turn t#N's n-th call, with its tool and when the turn started; read, passed back as it is, reads that call whole, in pages, and goes only with page. What a call returned was so then: a page, a price or a file may have changed since.",
             search::DEFAULT,
             search::MOST,
             read::DEFAULT,
@@ -130,8 +130,9 @@ async fn history(context: &Context, args: Args) -> Result<Found, Failure> {
     let wrong = |message: &str| Err(Failure::new("bad_arguments", message));
     let filtered = args.who.is_some() || args.from.is_some() || args.to.is_some();
     if let Some(call) = &args.call {
+        // `tools: true` beside it says nothing more.
         let others =
-            filtered || args.query.is_some() || args.limit.is_some() || args.tools.is_some();
+            filtered || args.query.is_some() || args.limit.is_some() || args.tools == Some(false);
         if others || args.around.is_some() || args.before.is_some() || args.after.is_some() {
             return wrong("call goes only with page");
         }
@@ -149,17 +150,17 @@ async fn history(context: &Context, args: Args) -> Result<Found, Failure> {
         return wrong("before and after go only with around");
     }
     if args.tools == Some(true) {
-        let Some(query) = &args.query else {
-            return wrong("tools: true searches: it needs query");
-        };
         if args.who.is_some() {
             return wrong("who doesn't go with tools: the calls are your own");
         }
         if args.page.is_some() {
-            return wrong("a search has no pages: page is for a read");
+            return wrong("tools: true gives results, which have no pages: page is for a read");
         }
         let filters = filters(context, &args).await?;
-        let results = search::calls(context, query, &filters, args.limit).await?;
+        let results = match &args.query {
+            Some(query) => search::calls(context, query, &filters, args.limit).await?,
+            None => search::latest_calls(context, &filters, args.limit).await?,
+        };
         return Ok(Found::Search { results });
     }
     let filters = filters(context, &args).await?;

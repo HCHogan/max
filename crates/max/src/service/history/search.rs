@@ -1,7 +1,8 @@
 //! `history` with a query: where in this conversation's history its terms
 //! are, among its rows (with their pictures' and stickers' captions), or
 //! with `tools: true` among its turns' tool calls, under the read's
-//! filters; each result says how `history` reads it. See "Recall".
+//! filters; each result says how `history` reads it. With `tools: true`
+//! and no query, the latest calls are the results. See "Recall".
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -116,23 +117,53 @@ pub(super) async fn calls(
     let hits = found
         .into_iter()
         .map(|(call, has)| {
-            let handle = format!("t#{}.{}", call.turn, call.n);
-            let body = format!("{}\n→ {}", call.arguments, call.output);
-            Hit {
-                time: moment(call.started, context.services.offset),
-                tool: Some(call.name),
-                text: snippet(&body, &chosen(&terms, &has)),
-                read: Read::Call {
-                    call: handle.clone(),
-                },
-                score: has.len() as f32 / terms.len() as f32,
-                at: call.started,
-                key: handle.clone(),
-                handle,
-            }
+            let score = has.len() as f32 / terms.len() as f32;
+            call_hit(context, call, &chosen(&terms, &has), score)
         })
         .collect();
     Ok(choose(hits, limit))
+}
+
+/// The conversation's latest `limit` tool calls, ten by default, the
+/// newest first: each with the start of what it was given.
+pub(super) async fn latest_calls(
+    context: &Context,
+    filters: &Filters,
+    limit: Option<usize>,
+) -> Result<Vec<Hit>, Failure> {
+    let limit = limit.unwrap_or(DEFAULT).min(MOST);
+    let mut conn = context.services.pool.acquire().await?;
+    let calls = tool_calls::latest(
+        &mut conn,
+        context.place.conversation,
+        filters.from,
+        filters.until,
+        i64::try_from(limit).unwrap_or(i64::MAX),
+    )
+    .await?;
+    Ok(calls
+        .into_iter()
+        .map(|call| call_hit(context, call, &[], 1.0))
+        .collect())
+}
+
+/// A tool call as a result: what it was given, `→` and what it returned,
+/// around the first of `words` in them, or from the start without any.
+fn call_hit(context: &Context, call: tool_calls::Call, words: &[&str], score: f32) -> Hit {
+    let handle = format!("t#{}.{}", call.turn, call.n);
+    let body = format!("{}\n→ {}", call.arguments, call.output);
+    Hit {
+        time: moment(call.started, context.services.offset),
+        tool: Some(call.name),
+        text: snippet(&body, words),
+        read: Read::Call {
+            call: handle.clone(),
+        },
+        score,
+        at: call.started,
+        key: handle.clone(),
+        handle,
+    }
 }
 
 /// The rows the terms are in, as their lines show them, captions and

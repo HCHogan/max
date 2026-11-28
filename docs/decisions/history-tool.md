@@ -3,8 +3,9 @@
 Max recalls with one tool, `history`, which searches when given a query
 and reads without one. It and `find_stickers` find text by its keywords
 alone: there is no search by meaning, no embedding model and no pgvector.
-With `tools: true`, `history` searches the tool calls of the
-conversation's turns instead of its chat. The design is in
+With `tools: true`, `history` looks through the tool calls of the
+conversation's turns instead of its chat: those a query matches, or the
+latest. The design is in
 [Recall](../design/context.md#recall) and
 [Sending images](../design/media.md#sending-images).
 
@@ -40,6 +41,9 @@ conversation's turns instead of its chat. The design is in
 - **Tool calls behind a switch, off by default.** A search goes through
   the chat unless it asks for tool calls; one search looks at one or the
   other.
+- **Without a query the switch gives the latest calls**, as a read
+  without a query gives the latest messages: a fifth of the times Max
+  set the switch it gave no query, to see what it had just done.
 - **A table of text for them**, `tool_calls`: per call, the tool, its
   arguments a line `key: value` each, and the text of its result, under a
   trigram index as messages' text has. It is derived in the database, by
