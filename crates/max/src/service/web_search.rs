@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use super::tool::Tool;
 use super::{Context, Failure};
-use crate::search::{Error, Found};
+use crate::search::{Error, Found, SNIPPET};
 
 const DEFAULT: u8 = 5;
 const MOST: u8 = 10;
@@ -38,7 +38,7 @@ impl Tool for WebSearch {
     fn guide() -> String {
         format!(
             "Searches the web: the first results' titles, links, summaries and publication dates, where known. For facts, prices, news, plots and whatever else you aren't sure of or may be out of date, search before answering, and don't go by memory. What you know ends with your training, often months or years before [现在]: versions, releases, prices, schedules, who holds which post and recent events may have changed since, so search first even when you feel sure, and go by the results dated nearest [现在].\n  \
-            limit is 1 to {MOST}, {DEFAULT} by default. For several searches use Promise.all. To read a page in full, run webread <url> with shell."
+            limit is 1 to {MOST}, {DEFAULT} by default; a summary is at most {SNIPPET} characters, so {DEFAULT} results come to about 4 KB. For several searches use Promise.all. To read a page in full, run webread <url> with shell."
         )
     }
 

@@ -15,9 +15,12 @@ use tracing::warn;
 pub const EXA: &str = "https://api.exa.ai/search";
 /// Searches at once, from every conversation.
 const AT_ONCE: usize = 4;
-/// What the model sees of a result, in characters.
+/// What the model sees of a result, in characters. Most summaries are as
+/// long as they may be, and a program that searches several things at
+/// once gets them all in one result, of which `run_code` shows
+/// [`SHOWN_BYTES`](max_core::limits::SHOWN_BYTES).
 const TITLE: usize = 200;
-const SNIPPET: usize = 800;
+pub(crate) const SNIPPET: usize = 400;
 
 pub struct Search {
     http: Client,

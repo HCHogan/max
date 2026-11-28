@@ -336,7 +336,10 @@ extracted, on models that can (`video = true`; the Gemini models on tank).
   (`type: auto`, with highlights), the key staying there (`[search]
   api_key_file`, `search-exa-api-key` in sops; without it, `unavailable`). It returns the title, link,
   summary and date of the top results, `limit` 1 to 10, 5 by default, titles
-  cut at 200 characters and summaries at 800. At most 4 searches run at once
+  cut at 200 characters and summaries at 400: Exa's highlights mostly run
+  longer, five results cut so come to about 4 KB, and a program that makes
+  four searches at once still gets them whole in the 16 KiB `run_code`
+  shows of a result, as the guide says. At most 4 searches run at once
   across all groups, within the call time. Exa goes out through the host's
   Japanese exit and its Chinese results are middling; Bocha or Zhipu,
   reachable within China, could stand behind the same signature.
