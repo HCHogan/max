@@ -105,17 +105,41 @@ impl Limits {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Search {
-    pub api_key_file: PathBuf,
+    /// Whether to search without a key first, while Exa's endpoint for
+    /// that answers; true unless set.
+    #[serde(default = "yes")]
+    pub free: bool,
+    /// The file Exa's keys are in, one a line, tried in that order after
+    /// the search without one; blank lines and `#` comments apart.
+    pub api_key_file: Option<PathBuf>,
+}
+
+fn yes() -> bool {
+    true
 }
 
 impl Search {
-    /// The key, read from its file.
+    /// The keys, read from their file, in its order; none without a
+    /// file.
     ///
     /// # Errors
     ///
-    /// If the key's file can't be read.
-    pub fn api_key(&self) -> Result<String> {
-        secret(&self.api_key_file)
+    /// If the file can't be read, or has no key in it.
+    pub fn api_keys(&self) -> Result<Vec<String>> {
+        let Some(file) = &self.api_key_file else {
+            return Ok(Vec::new());
+        };
+        let keys = lines(file)?;
+        ensure!(!keys.is_empty(), "no key in {}", file.display());
+        Ok(keys)
+    }
+
+    fn check(&self) -> Result<()> {
+        ensure!(
+            self.free || self.api_key_file.is_some(),
+            "nothing to search with: free is false and there is no api_key_file"
+        );
+        Ok(())
     }
 }
 
@@ -740,6 +764,9 @@ impl Config {
         config.limits.check().wrap_err("in limits")?;
         if let Some(vm) = &config.vm {
             vm.check().wrap_err("in vm")?;
+        }
+        if let Some(search) = &config.search {
+            search.check().wrap_err("in search")?;
         }
         if let Some(github) = &config.github {
             github.check().wrap_err("in github")?;

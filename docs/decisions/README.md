@@ -24,6 +24,7 @@ got so is in git's history.
 
 - [A guest's calls come straight to max, over plain HTTP](guests-reach-max-directly.md)
 - [Keyed APIs are forwarded by the host, GitHub among them](host-keyed-apis.md)
+- [A search goes without a key first, then by each key in turn](search-free-first.md)
 - [The browser is a resident Chromium, and a snapshot's refs hold](resident-chromium.md)
 - [Resident programs are systemd units Max writes, with every tool](resident-programs.md)
 - [What wakes Max from outside the chat is a row](wakes-are-rows.md)

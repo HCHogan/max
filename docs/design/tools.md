@@ -341,9 +341,9 @@ extracted, on models that can (`video = true`; the Gemini models on tank).
 
 ## Web search
 
-- **`web_search({query, limit?})`** calls Exa's REST API on the host
-  (`type: auto`, with highlights), the key staying there (`[search]
-  api_key_file`, `search-exa-api-key` in sops; without it, `unavailable`). It returns the title, link,
+- **`web_search({query, limit?})`** searches with Exa, from the host
+  (`type: auto`, with highlights), the keys staying there; without
+  `[search]`, `unavailable`. It returns the title, link,
   summary and date of the top results, `limit` 1 to 10, 5 by default, titles
   cut at 200 characters and summaries at 400: Exa's highlights mostly run
   longer, five results cut so come to about 4 KB, and a program that makes
@@ -352,6 +352,28 @@ extracted, on models that can (`video = true`; the Gemini models on tank).
   across all groups, within the call time. Exa goes out through the host's
   Japanese exit and its Chinese results are middling; Bocha or Zhipu,
   reachable within China, could stand behind the same signature.
+- **Without a key first, then by each key in turn** (`search.rs`). With
+  `[search]`, a search goes to Exa's MCP server, `https://mcp.exa.ai/mcp`,
+  which takes no key and allows so many a second and a day from one
+  address (`free = false` leaves it out); then to Exa's search API with
+  each key of `api_key_file`, one a line in the order they are tried
+  (`search-exa-api-key` in sops), blank lines and `#` comments apart.
+  - A source that fails passes the search on to the next; only a query Exa
+    refuses ends it. The last source's failure is the tool's.
+  - A source that says it is used up is left out, in max's memory: the
+    endpoint without a key for as long as its `Retry-After` says, a key
+    without credit or one Exa doesn't know (402, 401, 403) for an hour, a
+    key asked too fast for as long as it says. A rest of a minute or more
+    is a warning in the log, `a search source is out`, with the source as
+    `free` or `key 2`, never the key.
+  - One search at a time goes without a key, and the others wait for it
+    rather than spend a key.
+  - The MCP server's answer is text: a result is its lines `Title:`,
+    `URL:`, `Published:` and `Author:`, then the excerpts, and the next
+    starts where those four lines do again.
+
+  Why is in
+  [decisions/search-free-first.md](../decisions/search-free-first.md).
 - It stays among the prompt's declarations, not in a skill: hidden in a
   skill in the Haskell version, it went unused and the model answered prices
   and plots from memory (a51424d). Its guide says to search before answering

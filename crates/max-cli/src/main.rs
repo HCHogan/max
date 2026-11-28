@@ -267,7 +267,14 @@ async fn start(config: Config, on: Platforms) -> Result<Running> {
     let mut workers = Scope::new();
     let Derived { rows, pictures } = derived(&config, &pool, &models, &mut workers).await?;
     let search = match &config.search {
-        Some(search) => Some(Arc::new(Search::new(search::EXA, search.api_key()?)?)),
+        Some(search) => {
+            let free = search.free.then_some(search::EXA_FREE);
+            Some(Arc::new(Search::new(
+                free,
+                search::EXA,
+                search.api_keys()?,
+            )?))
+        }
         None => {
             info!("no search: web_search says so");
             None
