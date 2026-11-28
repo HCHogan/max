@@ -33,9 +33,7 @@ got so is in git's history.
 - [Resident programs are systemd units Max writes](resident-programs.md)
 - [What wakes Max from outside the chat is a row](wakes-are-rows.md)
 - [Programs have every tool, and no caps](no-limits-for-programs.md)
-- [One conversation's Max can ask another's](asking-another-conversation.md)
-- [Max enters a linked conversation's VM by ssh, through max](ssh-along-a-link.md)
-- [A link lets Max into a VM, and nothing asks across it](links-enter-only.md)
+- [A link lets Max into another conversation's VM, and that is all](links-enter-only.md)
 - [A background agent is fx in a background command](agents-are-background-commands.md)
 
 ## VMs and processes

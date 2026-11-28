@@ -172,9 +172,8 @@ VM is root in conversation 9's, in its `/work`, and `scp` and `sftp` go
 the same way. That is all a link gives, and all there is between two
 conversations: without one they are isolated (`history`, the VM and
 `/work` are each one conversation's; only the sticker library is shared).
-Why it is ssh, through max, is in
-[decisions/ssh-along-a-link.md](../decisions/ssh-along-a-link.md); why Max
-there isn't asked by a tool of its own, in
+Why it is ssh, through max, and why Max there isn't asked by a tool of its
+own, is in
 [decisions/links-enter-only.md](../decisions/links-enter-only.md).
 
 - **What runs there is B's.** Everything in a VM is one caller, so `maxx`
