@@ -180,10 +180,9 @@ protocol or ABI.
 
 Processes in the VM call the host's tools over plain HTTP, through the
 guest's one client: `run_code`'s runner, `maxx`, and programs of Max's own
-that require the tools. The guest's own tools ask the host nothing. The
-history of this channel, from MCP to plain HTTP and from per-run sessions to
-one caller, is in
-[decisions/plain-http-for-the-guest.md](../decisions/plain-http-for-the-guest.md).
+that require the tools. The guest's own tools ask the host nothing. Why the
+channel is plain HTTP, and every caller in a VM one caller, is in
+[decisions/guests-reach-max-directly.md](../decisions/guests-reach-max-directly.md).
 
 - **The channel**: with cloud-hypervisor's hybrid vsock, a guest connecting
   to a port on the host lands on the UNIX socket `<vsock socket>_<port>`.
@@ -505,7 +504,7 @@ Max has its own GitHub account, a machine account the owner created
 forwarding address, which Max doesn't touch. When someone asks for a PR, Max
 forks, clones, pushes, opens it, and later revises it, closes it and answers
 comments, with git and the REST API through two keyed APIs. Why not host
-tools is in [decisions/github-through-keyed-apis.md](../decisions/github-through-keyed-apis.md).
+tools is in [decisions/host-keyed-apis.md](../decisions/host-keyed-apis.md).
 
 - **The token stays on the host**: whatever is in the VM (environment,
   `~/.config/gh`, a browser login) group members can have read out. It is a

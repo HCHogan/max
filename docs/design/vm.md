@@ -374,8 +374,7 @@ with no process between them. Why is in
 - **The socket is systemd's**, a unit (`maxx.socket`) that gives it to max
   as max's standard input (`StandardInput=socket`; `vm::given`); under
   vm-check and in a terminal max binds it itself. A deploy restarts max in
-  one step (`stopIfChanged = false`) and leaves the socket; why it is so is
-  in [decisions/max-socket-is-systemds.md](../decisions/max-socket-is-systemds.md).
+  one step (`stopIfChanged = false`) and leaves the socket.
 - **Whose VM a call is from is the process's that made its connection.** A
   guest's connection to the host is made for it by its VM's
   cloud-hypervisor, the main process of the VM's unit. Of each connection
@@ -398,8 +397,7 @@ with no process between them. Why is in
 - **An API's hourly limit is all the chats' together**, counted in max's
   memory: the count starts over with max.
 - **A model call from a VM isn't recorded**: its usage isn't read on its
-  way back; see
-  [decisions/forwarder-keeps-no-count.md](../decisions/forwarder-keeps-no-count.md).
+  way back.
 - **vm-check** has a provider of its own for the agents, which counts what
   it is asked.
 

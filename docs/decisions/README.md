@@ -25,9 +25,8 @@ got so is in git's history.
 
 ## Tools and programs
 
-- [The guest calls the host over plain HTTP, as one caller](plain-http-for-the-guest.md)
-- [Keyed APIs are forwarded by the host](host-keyed-apis.md)
-- [GitHub through keyed APIs, not host tools](github-through-keyed-apis.md)
+- [A guest's calls come straight to max, over plain HTTP](guests-reach-max-directly.md)
+- [Keyed APIs are forwarded by the host, GitHub among them](host-keyed-apis.md)
 - [The browser is a resident Chromium](resident-chromium.md)
 - [A snapshot's refs hold in the next program](refs-across-programs.md)
 - [Resident programs are systemd units Max writes](resident-programs.md)
@@ -41,11 +40,8 @@ got so is in git's history.
 - [The VMs run without a broker or root](vms-without-a-broker.md)
 - [What runs in a VM is systemd's to keep](lifetimes-to-systemd.md)
 - [What leaves the host process](what-leaves-the-host.md)
-- [max's socket is systemd's](max-socket-is-systemds.md)
-- [A guest's calls come straight to max](guests-reach-max-directly.md)
 - [A guest reset ends its VM](a-guest-reset-ends-its-vm.md)
 - [A new image restarts its VMs](a-new-image-restarts-its-vms.md)
-- [A forwarder keeps no count](forwarder-keeps-no-count.md)
 - [Idle guests drop their caches; the VMs' sizes stay](idle-guests-drop-caches.md)
 - [Max joins tailnets itself](max-joins-tailnets-itself.md)
 - [The derived-data workers share conventions, not a framework](no-worker-framework.md)

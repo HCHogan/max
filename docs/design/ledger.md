@@ -446,7 +446,7 @@ Tables kept with their rows but no longer read or written:
 ([decisions/no-summaries.md](../decisions/no-summaries.md)),
 and `llm_usage` rows of purpose `historian`. `llm_usage` rows of purpose
 `job`, a background agent's calls, are no longer written
-([decisions/forwarder-keeps-no-count.md](../decisions/forwarder-keeps-no-count.md));
+([decisions/guests-reach-max-directly.md](../decisions/guests-reach-max-directly.md));
 `/status` sums those its window still holds.
 
 ## Import

@@ -68,7 +68,7 @@ fx, is in
   call on and its answer back without reading what it used, and `/status`
   shows what Max's own calls used. What the agents spend is in the
   provider's records, for all the groups together; why is in
-  [decisions/forwarder-keeps-no-count.md](../decisions/forwarder-keeps-no-count.md).
+  [decisions/guests-reach-max-directly.md](../decisions/guests-reach-max-directly.md).
 - **Tools**: an agent is a program, which calls every tool with `maxx` from
   its shell (`maxx history`, `maxx web-search`, `webread`), with no tools of
   its own on the host. It could speak in the chat too; its system text tells
