@@ -404,7 +404,7 @@ over CDP, so a page the model looked at is still there for the next
   of Playwright's wait for an element that isn't coming. Lines are compared
   without their refs and without an element's state of the moment
   (`[active]`, `[checked]`). Why is in
-  [decisions/refs-across-programs.md](../decisions/refs-across-programs.md).
+  [decisions/resident-chromium.md](../decisions/resident-chromium.md).
 - **A program of Max's own**, not run_code's, has the same three with
   `require("/run/max/browser.js")`; it ends with `process.exit()`, since
   the connection keeps Node running.

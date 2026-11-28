@@ -413,7 +413,7 @@ tool.
 Programs use the same tools as Max (see [maxx](tools.md#maxx-one-command-for-everything-in-the-vm)):
 a call is the VM's, whatever made it. Why programs have every tool, and no
 caps, is in
-[decisions/no-limits-for-programs.md](../decisions/no-limits-for-programs.md).
+[decisions/resident-programs.md](../decisions/resident-programs.md).
 
 - **Every tool**, plus `say` and `wake`, which the prompt doesn't declare
   (`service/program.rs`). Only `show` and `video` fail outside a call, as
