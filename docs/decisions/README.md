@@ -1,6 +1,11 @@
 # Decisions
 
-Why Max is built the way it is: one file for each decision that was a real trade-off, with its context, what was decided, why, and what it costs. How each part works now is in [design/](../design/); these say why it isn't otherwise.
+Why Max is built the way it is now: one file for each subject that was a
+real trade-off, with its context, what is decided, why, what it costs and
+the alternatives that lost. How each part works is in
+[design/](../design/); these say why it isn't otherwise. They are kept
+true as the design is: a decision that changes is rewritten, and how it
+got so is in git's history.
 
 ## The agent and its context
 

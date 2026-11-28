@@ -171,16 +171,18 @@ each kind in its place:
   dates and no "until", "previously" or "changed on". When you change how
   something works, change its description in the same commit. A short "why"
   belongs there; the story of how it got so doesn't.
-- **`docs/decisions/` says why**, one decision a file, named for what it
-  decides (`own-llm-client.md`) and listed by subject in
-  [docs/decisions/README.md](docs/decisions/README.md). It reads as any
-  project's design note does: a line or two on what was decided, then
-  Context, Decision, Why and Cost, with the alternatives that were looked
-  at. It gives the reasons, not who decided or on which day, and what
-  happened on the way only where that is a reason. Write one for a genuine
-  trade-off, or when a design is replaced; link it from the design and add
-  it to the index. A decision that a later one replaces stays, with a line
-  pointing to the new one.
+- **`docs/decisions/` says why it is so**, one subject a file, named for
+  what it decides (`own-llm-client.md`) and listed in
+  [docs/decisions/README.md](docs/decisions/README.md). It is kept true as
+  the design is: the present tense, no dates, and nothing of what was
+  there before. It reads as any project's design note does: a line or two
+  on what is decided, then Context, Decision, Why and Cost, with the
+  alternatives that were looked at and why each lost. It gives the
+  reasons, not who decided or on which day. Write one for a genuine
+  trade-off; link it from the design and add it to the index. When a
+  decision changes, rewrite its file in the same commit: what it replaces
+  stays only as an alternative, with the reason it lost, and a subject
+  that is gone takes its file with it. How it got so is in git's history.
 - **Open questions** go in an "Open" section at the end of their design
   file, not scattered through it.
 - **`docs/research/`** is what was looked at; **`docs/archive/`** finished

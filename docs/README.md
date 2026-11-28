@@ -7,7 +7,7 @@ then read the part of [design/](design/) you are working on.
 | --- | --- |
 | [architecture.md](architecture.md) | Goals, principles, the task tree, the technology and the crates |
 | [design/](design/) | Each part of Max as it is now |
-| [decisions/](decisions/) | Why things are as they are: one decision a file, [listed by subject](decisions/README.md) |
+| [decisions/](decisions/) | Why each part is as it is now: one subject a file, [listed](decisions/README.md) |
 | [research/](research/) | What was looked at and what came of it |
 | [archive/](archive/) | Finished history: v1, the rewrite's go-live, the import, the parity checklist with the Haskell version, and the steps by which lifetimes moved to systemd |
 
