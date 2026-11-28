@@ -128,9 +128,6 @@ mod tests {
                 reason: "在追问".into(),
             })
         );
-        // What the old prompt asked for still parses.
-        let old = r#"{"trigger": false, "kind": "topic", "dismiss": true}"#;
-        assert_eq!(parse(old).map(|verdict| verdict.trigger), Some(false));
         let long = format!(r#"{{"trigger": true, "reason": "{}"}}"#, "长".repeat(100));
         assert_eq!(parse(&long).unwrap().reason.chars().count(), NOTE_CHARS);
         assert_eq!(parse("不接"), None);

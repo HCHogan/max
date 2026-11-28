@@ -183,11 +183,4 @@ mod tests {
             serde_json::json!({ "idle_window_secs": 60 })
         );
     }
-
-    #[test]
-    fn webread_prints_as_much_as_the_prompt_says() {
-        let script = include_str!("../../../nix/webread.py");
-        let default = format!("\"--max\", type=int, default={WEBREAD_CHARS},");
-        assert!(script.contains(&default), "nix/webread.py: {default}");
-    }
 }

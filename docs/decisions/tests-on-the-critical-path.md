@@ -1,7 +1,7 @@
 # Tests keep to the critical path
 
-Max's tests cover the critical path and little else: about a hundred
-tests in under 5,000 lines. Which tests there are, and how one is
+Max's tests cover the critical path and little else: some ninety tests
+in under 5,000 lines. Which tests there are, and how one is
 written, is in [AGENTS.md](../../AGENTS.md#testing) and
 [the actor's Testing](../design/actor.md#testing).
 

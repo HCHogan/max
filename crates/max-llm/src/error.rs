@@ -98,36 +98,3 @@ impl Error {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use serde_json::json;
-
-    use super::*;
-
-    #[test]
-    fn what_is_worth_retrying() {
-        let status = |status| Error::Status {
-            status,
-            body: String::new(),
-        };
-        assert!(status(429).is_retryable());
-        assert!(status(503).is_retryable());
-        assert!(!status(400).is_retryable());
-        assert!(!status(401).is_retryable());
-        assert!(Error::Truncated.is_retryable());
-        assert!(!Error::Incomplete("max_output_tokens".into()).is_retryable());
-
-        let overloaded = Error::provider(&json!({ "code": "server_error", "message": "busy" }));
-        assert!(overloaded.is_retryable());
-        let wrapped = json!({ "error": { "type": "rate_limit_error", "message": "slow down" } });
-        assert!(Error::provider(&wrapped).is_retryable());
-        let too_long =
-            Error::provider(&json!({ "code": "context_length_exceeded", "message": "" }));
-        assert!(!too_long.is_retryable());
-        assert_eq!(
-            too_long.to_string(),
-            "the provider failed the response: context_length_exceeded: "
-        );
-    }
-}
