@@ -1,5 +1,35 @@
 [
   {
+    "name": "webread",
+    "words": ["webread"],
+    "run": "node",
+    "turn": true,
+    "description": "Reads a web page's main text as Markdown, or a PDF's text: maxx webread <url> [--offset N] [--max N]",
+    "guide": "Reads a page of the web by its address: a web page's main text as Markdown, a PDF's text, plain text and JSON as they are. text is max characters of it from offset, 12000 from the start by default; length is how long the whole text is, and file where the whole of it is kept, under /work/.max/web/: a read with an offset reads on from there without fetching again. For several pages use Promise.all, and return the parts you need or give a smaller max: run_code shows 16 KiB of a result. A page that needs JavaScript or a login is the browser's.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "url": { "type": "string", "description": "the page's address, http:// or https://" },
+        "offset": { "type": "integer", "description": "the character to start from, 0 by default" },
+        "max": { "type": "integer", "description": "how many characters at most, 12000 by default" }
+      },
+      "required": ["url"]
+    },
+    "outputSchema": {
+      "type": "object",
+      "properties": {
+        "url": { "type": "string" },
+        "title": { "type": "string" },
+        "text": { "type": "string" },
+        "start": { "type": "integer" },
+        "end": { "type": "integer" },
+        "length": { "type": "integer" },
+        "file": { "type": "string" }
+      },
+      "required": ["url", "title", "text", "start", "end", "length", "file"]
+    }
+  },
+  {
     "name": "show",
     "words": ["show"],
     "run": "node",

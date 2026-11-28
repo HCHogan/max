@@ -72,14 +72,15 @@ background command.
   through exit codes. The cost the other way is that each `maxx` starts Node,
   a few tens of milliseconds, so a loop of a hundred calls belongs in
   `run_code`.)
-- **The guest's tools**: `show` and `video`, which leave the model
+- **The guest's tools**: `webread`, a page's text (see
+  [Web search](#web-search)); `show` and `video`, which leave the model
   something to see; `events`, the chat's rows as they come; and `units
   apply`, which makes the units Max keeps the ones that run (see
   [Resident programs](jobs.md#resident-programs)). A guest tool goes by its
   words (`maxx units apply`), and in a program by its name
   (`tools.units_apply`).
-- **Declared in the prompt**: `show`, `video` and `units_apply`, with the
-  host's tools. `events` is a program's, and can be called without being
+- **Declared in the prompt**: `webread`, `show`, `video` and
+  `units_apply`, with the host's tools. `events` is a program's, and can be called without being
   declared, as `say` and `wake` can.
 - **What systemd does needs no tool.** What runs in the VM Max sees and
   stops with `systemctl`: `systemctl list-units 'max-job-*'` lists its
@@ -363,9 +364,17 @@ extracted, on models that can (`video = true`; the Gemini models on tank).
   trafilatura extracts the main text as Markdown (and handles legacy
   encodings such as GBK), PDFs go through `pdftotext`. It follows up to 5
   redirects, within 20 seconds and 10 MB, prints the first 12,000 characters
-  (`WEBREAD_CHARS`, checked by a test against the Python) and writes the
+  (`WEBREAD_CHARS`, as the Python's `--max` defaults to) and writes the
   whole to `/work/.max/web/`, where `--offset` reads on. nft keeps the VM off internal
   networks. Pages needing JS or a login are the browser's.
+- **`tools.webread({url, offset?, max?})`** is the same command as one of
+  the guest's tools (`nix/local.json`; `maxx webread` on the command
+  line): Node runs `webread --json`, and the result is `{url, title, text,
+  start, end, length, file}`. So a program reads what its search found,
+  several pages at once, and returns the parts that matter: with the
+  search a tool and the reading a command, each page took a round of its
+  own, and a round costs a model call. A command reads a page with
+  `webread <url>` as before, which prints the text and not JSON.
 - Not done: answer synthesis, the model APIs' built-in search (the tools
   array is fixed, and programs couldn't get those results), caching, image
   search.

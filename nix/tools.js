@@ -3,12 +3,13 @@
 // require of this file are all this, so none has a tool another lacks. A
 // tool is the host's, called through its service (client.js), or the
 // guest's own, in local.json: one the guest's systemd does, which `maxx
-// <words> <json>` runs, or one of Node's own here, which leaves the
-// model something to see (shown.js, video.js). Nothing here is about one
+// <words> <json>` runs, or one of Node's own here: show and video, which
+// leave the model something to see (shown.js, video.js), and webread,
+// which runs the guest's command of that name. Nothing here is about one
 // tool but those last. See "maxx" in docs/design/tools.md.
 "use strict";
 
-const { spawn } = require("node:child_process");
+const { execFile, spawn } = require("node:child_process");
 const { MAX, ToolError, connect, events } = require("./client.js");
 const { failed, image } = require("./shown.js");
 const { watch } = require("./video.js");
@@ -32,6 +33,29 @@ const OWN = {
   video: (work, { path, start, end }) => {
     if (typeof path !== "string") return failed("bad_arguments", "video takes {path}, such as /work/chat/a.mp4, with start and end");
     return watch(work, path, { start, end });
+  },
+  // The guest's webread, which says a page as JSON when asked to
+  // (webread.py): from the PATH, as ffmpeg is.
+  webread: (_work, { url, offset, max }) => {
+    const count = value => value === undefined || (Number.isInteger(value) && value >= 0);
+    if (typeof url !== "string" || !count(offset) || !count(max)) {
+      return failed("bad_arguments", "webread takes {url}, with offset and max, which are whole numbers of characters");
+    }
+    const options = [["--offset", offset], ["--max", max]].flatMap(([flag, value]) => (value === undefined ? [] : [flag, String(value)]));
+    return new Promise(resolve => {
+      execFile(process.env.MAXX_WEBREAD ?? "webread", ["--json", ...options, "--", url], { maxBuffer: 64 << 20 }, (error, stdout, stderr) => {
+        if (error) {
+          // Its own word for it, after its name; 2 is a wrong address.
+          const why = stderr.trim().replace(/^webread[：:]\s*/, "") || error.message;
+          return resolve(failed(error.code === 2 ? "bad_arguments" : typeof error.code === "number" ? "failed" : "unreachable", why));
+        }
+        try {
+          resolve({ ok: true, value: JSON.parse(stdout) });
+        } catch {
+          resolve(failed("failed", `webread didn't say what it read: ${stdout.slice(0, 300)}`));
+        }
+      });
+    });
   },
 };
 

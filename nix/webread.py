@@ -1,7 +1,7 @@
 """webread: a page's text, for programs and commands in a group's VM. See
 "Web search" in docs/design/tools.md.
 
-    webread <url> [--offset N] [--max N]
+    webread <url> [--offset N] [--max N] [--json]
 
 Prints one line about the page, then its text from character N (0 by
 default), at most --max characters (12000 by default). A web page comes
@@ -9,10 +9,14 @@ as Markdown, its main text only; a PDF as pdftotext lays it out; plain
 text, JSON and the like as they are. The whole text is written to
 /work/.max/web/, named by the address asked for; with --offset past 0,
 that file is read instead of fetching again.
+
+With --json it prints one JSON object instead, {url, title, text, start,
+end, length, file}: what Max's webread tool returns (tools.js).
 """
 
 import argparse
 import hashlib
+import json
 import os
 import re
 import subprocess
@@ -142,6 +146,7 @@ def main():
     parser.add_argument("url")
     parser.add_argument("--offset", type=int, default=0, help="the character to start from")
     parser.add_argument("--max", type=int, default=12000, help="how many characters to print at most")
+    parser.add_argument("--json", action="store_true", help="print one JSON object: the page, the text and where it is")
     args = parser.parse_args()
     if not re.match(r"^https?://", args.url):
         print("webread: the address must start with http:// or https://", file=sys.stderr)
@@ -164,6 +169,21 @@ def main():
     start = max(args.offset, 0)
     shown = text[start : start + max(args.max, 0)]
     end = start + len(shown)
+    if args.json:
+        # The header as it is kept: the address, the title, the type.
+        url, *title, _kind = header.removeprefix("URL: ").split(" | ")
+        title = " | ".join(title)
+        json.dump({
+            "url": url,
+            "title": "" if title == "(no title)" else title,
+            "text": shown,
+            "start": start,
+            "end": end,
+            "length": len(text),
+            "file": saved,
+        }, sys.stdout, ensure_ascii=False)
+        print()
+        return 0
     print(f"{header} | characters {start}–{end} of {len(text)}, the whole text in {saved}")
     print(shown)
     return 0
