@@ -46,11 +46,10 @@ function connect({ url = MAX } = {}) {
   // once: while max restarts the request waits on the host, at max's
   // socket, and the max that comes answers it. The VM, and what runs in
   // it, outlives max.
-  async function ask(method, path, body, signal) {
+  async function ask(method, path, body) {
     try {
       const response = await fetch(new URL(path, url), {
         method,
-        signal,
         ...(body === undefined ? {} : { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }),
       });
       const text = await response.text();
@@ -60,10 +59,6 @@ function connect({ url = MAX } = {}) {
         return { ok: false, error: { code: "refused", message: `max answered ${response.status}: ${text.slice(0, 200)}` } };
       }
     } catch (error) {
-      // As the host says when it cancels a call.
-      if (error.name === "AbortError") {
-        return { ok: false, error: { code: "cancelled", message: "the call was cancelled; what acts in the chat may have taken effect: look at the records before trying again" } };
-      }
       // Nothing listens for max, or max went with the call in its
       // hands: either way the connection only closes.
       return { ok: false, error: { code: "unreachable", message: `max didn't answer (${error.message}); if it had begun the call, what acts in the chat may have taken effect: look at the records before trying again` } };
@@ -71,8 +66,8 @@ function connect({ url = MAX } = {}) {
   }
 
   // One call of a tool: its outcome is max's answer.
-  async function request(tool, args, signal) {
-    const answer = await ask("POST", `/tools/${encodeURIComponent(tool)}`, args, signal);
+  async function request(tool, args) {
+    const answer = await ask("POST", `/tools/${encodeURIComponent(tool)}`, args);
     if (!answer.ok) return answer;
     const outcome = answer.value;
     if (outcome?.ok === true) return { ok: true, value: outcome.value };

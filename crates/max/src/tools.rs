@@ -138,7 +138,7 @@ async fn call(tool: Tool, vms: Option<&Vms>, context: &Context) -> ToolOutput {
         .map_or(RUN_TIME, Duration::from_millis)
         .clamp(Duration::from_secs(1), RUN_TIME_MAX);
     let ran = match tool {
-        Tool::RunCode { code, args, .. } => run_code(&vm, &code, args, limit).await,
+        Tool::RunCode { code, .. } => run_code(&vm, &code, limit).await,
         Tool::Shell {
             command, workdir, ..
         } => shell(&vm, &command, workdir.as_deref(), limit).await,

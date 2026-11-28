@@ -45,7 +45,7 @@ pub static TOOLS: LazyLock<[ToolSpec; 2]> = LazyLock::new(|| {
                 {run} seconds by default, timeout_ms at most {run_max}. A result or an output over \
                 {shown} KiB comes back as its head and tail, the whole of it stored under /work/.max/out/."
             ),
-            parameters: r#"{"type":"object","properties":{"code":{"type":"string","description":"the body of an async function"},"args":{"description":"what the program reads as args"},"timeout_ms":{"type":"integer","minimum":1}},"required":["code"]}"#,
+            parameters: r#"{"type":"object","properties":{"code":{"type":"string","description":"the body of an async function"},"timeout_ms":{"type":"integer","minimum":1}},"required":["code"]}"#,
         },
         ToolSpec {
             name: SHELL,
@@ -80,8 +80,6 @@ pub enum Tool {
     RunCode {
         /// The body of an async function.
         code: String,
-        /// What the program reads as `args`.
-        args: Option<serde_json::Value>,
         /// Its wall clock, if not the default.
         timeout_ms: Option<u64>,
     },
@@ -100,7 +98,6 @@ pub enum Tool {
 #[derive(Deserialize)]
 struct RunCodeArgs {
     code: String,
-    args: Option<serde_json::Value>,
     timeout_ms: Option<u64>,
 }
 
@@ -164,19 +161,12 @@ pub fn parse(call: &ToolCall) -> Result<Call, Malformed> {
     let empty = |tool, field| Malformed::Empty { tool, field };
     let tool = match call.name.as_str() {
         RUN_CODE => {
-            let RunCodeArgs {
-                code,
-                args,
-                timeout_ms,
-            } = serde_json::from_str(&call.arguments).map_err(arguments(RUN_CODE))?;
+            let RunCodeArgs { code, timeout_ms } =
+                serde_json::from_str(&call.arguments).map_err(arguments(RUN_CODE))?;
             if code.trim().is_empty() {
                 return Err(empty(RUN_CODE, "code"));
             }
-            Tool::RunCode {
-                code,
-                args,
-                timeout_ms,
-            }
+            Tool::RunCode { code, timeout_ms }
         }
         SHELL => {
             let ShellArgs {

@@ -237,7 +237,6 @@ fn hearing(
 fn program(code: &str) -> Tool {
     Tool::RunCode {
         code: code.into(),
-        args: None,
         timeout_ms: None,
     }
 }

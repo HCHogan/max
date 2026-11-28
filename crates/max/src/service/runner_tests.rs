@@ -43,11 +43,7 @@ async fn served(scope: &mut Scope, context: Context) -> String {
 }
 
 async fn run(url: &str, code: &str) -> Ran {
-    run_with(
-        json!({ "code": code, "args": { "n": 2 }, "url": url }),
-        None,
-    )
-    .await
+    run_with(json!({ "code": code, "url": url }), None).await
 }
 
 /// Runs `input` with Max's tools, as part of the call whose directory is
@@ -99,7 +95,7 @@ async fn programs_call_max_tools_and_return(pool: PgPool) {
     let url = served(&mut scope, Context::check(Services::bare(pool), place)).await;
     let id = hello.message.id.get();
 
-    let ran = run(&url, "return args.n + 1").await;
+    let ran = run(&url, "return 2 + 1").await;
     assert_eq!(
         (ran.status, ran.stdout.as_str()),
         (0, "3"),

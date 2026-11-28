@@ -2,7 +2,7 @@
 // `node /run/max/runner.js`; see "Running in the group's VM" in
 // docs/design/tools.md.
 //
-// stdin is one JSON object: {code, args, tools}. code is an async
+// stdin is one JSON object: {code, tools}. code is an async
 // function body; tools.<name>(args) calls one of Max's tools, the host's
 // through its service or the guest's own, as maxx does on the command
 // line (tools.js): tools.show() and tools.video() leave the model
@@ -38,43 +38,23 @@ async function main() {
   process.env.MAXX_URL = url;
   const { request, follow } = open({ url, work });
 
-  // A call's promise, and what cancels it. Using one without await reads
-  // a field of a Promise; say so instead of quietly giving undefined.
-  const controllers = new WeakMap();
-  const tracked = (promise, controller) => {
-    const proxy = new Proxy(promise, {
-      get(target, key) {
-        if (key === "then" || key === "catch" || key === "finally") return target[key].bind(target);
-        if (typeof key === "symbol") return target[key];
-        throw new TypeError("a tool call returns a Promise: await it first, as in const r = await tools.name(args)");
-      },
-    });
-    controllers.set(proxy, controller);
-    return proxy;
-  };
+  // A call's promise. Using one without await reads a field of a
+  // Promise; say so instead of quietly giving undefined.
+  const tracked = promise => new Proxy(promise, {
+    get(target, key) {
+      if (key === "then" || key === "catch" || key === "finally") return target[key].bind(target);
+      if (typeof key === "symbol") return target[key];
+      throw new TypeError("a tool call returns a Promise: await it first, as in const r = await tools.name(args)");
+    },
+  });
   const raw = (tool, args = {}) => {
     if (!args || typeof args !== "object" || Array.isArray(args)) throw new TypeError("a tool's arguments must be an object");
-    const controller = new AbortController();
-    return tracked(request(tool, args, controller.signal), controller);
+    return tracked(request(tool, args));
   };
-  const call = (tool, args) => {
-    const outcome = raw(tool, args);
-    const value = outcome.then(outcome => {
-      if (outcome.ok) return outcome.value;
-      throw new ToolError(tool, outcome.error);
-    });
-    return tracked(value, controllers.get(outcome));
-  };
-  const cancel = promise => controllers.get(promise)?.abort();
-  // The first call to settle; the others are cancelled.
-  const race = promises => {
-    const list = Array.from(promises);
-    const others = index => list.forEach((promise, i) => i !== index && cancel(promise));
-    return Promise.race(list.map((promise, index) => promise.then(
-      value => { others(index); return value; },
-      error => { others(index); throw error; },
-    )));
-  };
+  const call = (tool, args) => tracked(raw(tool, args).then(outcome => {
+    if (outcome.ok) return outcome.value;
+    throw new ToolError(tool, outcome.error);
+  }));
 
   // The host's tools, by the names it gave, and the guest's own. One
   // that isn't a call gives what it follows, to read with for await.
@@ -83,12 +63,12 @@ async function main() {
   for (const tool of LOCAL) {
     tools[tool.name] = tool.stream ? (args = {}) => follow({ after: args?.after, full: args?.full }) : args => call(tool.name, args);
   }
-  const max = Object.freeze({ raw, cancel, race, browser, page, snapshot });
+  const max = Object.freeze({ raw, browser, page, snapshot });
   const AsyncFunction = (async () => {}).constructor;
   // Node's require, as a file in /work would have it: a function made
   // from a string has none of its own, and programs reach for fs.
-  const program = new AsyncFunction("tools", "max", "args", "require", input.code);
-  return program(Object.freeze(tools), max, input.args, createRequire(`${work}/`));
+  const program = new AsyncFunction("tools", "max", "require", input.code);
+  return program(Object.freeze(tools), max, createRequire(`${work}/`));
 }
 
 function shown(value) {

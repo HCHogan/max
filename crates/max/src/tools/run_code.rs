@@ -10,12 +10,11 @@ use super::{Call, Ran, Told, shell, shown, wait, with};
 use crate::service;
 use crate::vm::Vm;
 
-/// What the runner reads on its stdin: the program, its arguments, and
-/// the names of Max's tools.
+/// What the runner reads on its stdin: the program, and the names of
+/// Max's tools.
 #[derive(Serialize)]
 struct RunnerInput<'a> {
     code: &'a str,
-    args: Option<serde_json::Value>,
     tools: &'static [&'static str],
 }
 
@@ -26,15 +25,9 @@ static TOOL_NAMES: LazyLock<Vec<&'static str>> =
 
 /// What the model is told of the program. The result and the console are
 /// cut as `shell`'s output is.
-pub(super) async fn run_code(
-    vm: &Vm,
-    code: &str,
-    args: Option<serde_json::Value>,
-    limit: Duration,
-) -> Result<Told> {
+pub(super) async fn run_code(vm: &Vm, code: &str, limit: Duration) -> Result<Told> {
     let input = RunnerInput {
         code,
-        args,
         tools: &TOOL_NAMES,
     };
     let input = serde_json::to_vec(&input).expect("the runner's input is JSON");

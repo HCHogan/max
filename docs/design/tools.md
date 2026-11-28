@@ -12,7 +12,7 @@ call. The host's tools are in `crates/max/src/service`, the guest's side in
   never invalidates the request's prefix; what matters is that the set is
   fixed, not that it is small. A round may hold several calls, each run
   independently.
-- **`run_code({code, args?, timeout_ms?})`**: `code` is the body of an async
+- **`run_code({code, timeout_ms?})`**: `code` is the body of an async
   function, and what it `return`s is the result.
 - **`shell({command, workdir?, timeout_ms?, background?})`**, close to
   Codex's shell tool: `bash -lc` in the group's VM, in `/work` by default.
@@ -28,10 +28,9 @@ call. The host's tools are in `crates/max/src/service`, the guest's side in
 - **Max's tools from a program**: `tools.<name>(args)` returns a Promise, so
   `Promise.all` gives concurrency. `tools.x()` throws `ToolError` on
   failure; `max.raw` doesn't, and returns `{ok: true, value}` or
-  `{ok: false, error: {code, message}}`; `max.cancel` aborts a request, and
-  `max.race` takes whichever call ends first and cancels the rest. Reading a
-  field of a call not awaited fails at once, with a hint to await it. `max`
-  also has the browser's `page`, `browser` and `snapshot`.
+  `{ok: false, error: {code, message}}`. Reading a field of a call not
+  awaited fails at once, with a hint to await it. `max` also has the
+  browser's `page`, `browser` and `snapshot`.
 - **Max's tools from a command**: `maxx` (below), so `shell` and programs in
   any language call the same tools.
 - **Declarations**: the system prompt holds the TypeScript declarations of
@@ -204,7 +203,7 @@ channel is plain HTTP, and every caller in a VM one caller, is in
   while max restarts waits on the host and is answered by the max that comes
   (see [A VM outlives max](vm.md#a-vm-outlives-max)); the guest's client
   asks once. Closing the connection cancels the call,
-  and `max.cancel` simply aborts the fetch.
+  as when the program that made it ends.
 - **One caller**: a call is the VM's. It goes to the conversation's actor
   (`Signal::Call`, `Conversation::program_call`), which runs it in `side`
   within the conversation's `call_time_secs`, with a `Poster` that names no

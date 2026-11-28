@@ -38,10 +38,8 @@ const OWN = {
 // One of the guest's commands: maxx with its words and its arguments as
 // JSON, which bin/maxx gives the tool's script. Its outcome is the JSON
 // it printed, or why it failed.
-function command(tool, args, signal) {
+function command(tool, args) {
   return new Promise(resolve => {
-    const cancelled = { ok: false, error: { code: "cancelled", message: "the call was cancelled; what it started may run on" } };
-    if (signal?.aborted) return resolve(cancelled);
     let child;
     try {
       child = spawn(process.env.MAXX_COMMAND ?? "maxx", [...tool.words, JSON.stringify(args)], { stdio: ["ignore", "pipe", "pipe"] });
@@ -52,11 +50,8 @@ function command(tool, args, signal) {
     const err = [];
     child.stdout.on("data", chunk => out.push(chunk));
     child.stderr.on("data", chunk => err.push(chunk));
-    const gone = () => resolve(cancelled);
-    signal?.addEventListener("abort", gone, { once: true });
     child.on("error", error => resolve(failed("unreachable", `maxx didn't start: ${error.message}`)));
     child.on("close", status => {
-      signal?.removeEventListener("abort", gone);
       const said = Buffer.concat(out).toString("utf8");
       const why = Buffer.concat(err).toString("utf8").trim();
       if (status !== 0) {
@@ -72,7 +67,7 @@ function command(tool, args, signal) {
   });
 }
 
-// Max's tools at url, with /work at work: request(name, args, signal)
+// Max's tools at url, with /work at work: request(name, args)
 // calls one, the guest's own or the host's, and its outcome is {ok:
 // true, value} or {ok: false, error: {code, message}}; list() is all of
 // them with their schemas, the host's first; follow(args) is the chat's
@@ -80,12 +75,12 @@ function command(tool, args, signal) {
 function open({ url = MAX, work = "/work" } = {}) {
   const client = connect({ url });
 
-  async function request(name, args, signal) {
+  async function request(name, args) {
     const tool = local.get(name);
-    if (!tool) return client.request(name, args, signal);
+    if (!tool) return client.request(name, args);
     if (tool.stream) return failed("bad_arguments", `${name} isn't a call: it gives the rows as they come, for await (const row of tools.${name}(args))`);
     if (tool.run === "node") return OWN[name](work, args);
-    return command(tool, args, signal);
+    return command(tool, args);
   }
 
   async function list() {
