@@ -10,10 +10,9 @@ state about. Why lifetimes are the guest's is in
 Work of many steps runs apart from the turn, as an agent of Max's: fx, in
 the group's VM, on a task Max wrote for it, for hours if need be, while Max
 goes on in the chat. An agent is a background command (below) that runs
-fx; it has no tool of its own, and max keeps nothing of it. Why is in
-[decisions/agents-are-background-commands.md](../decisions/agents-are-background-commands.md),
-and why fx in
-[decisions/fx-for-background-agents.md](../decisions/fx-for-background-agents.md).
+fx; it has no tool of its own, and max keeps nothing of it. Why, and why
+fx, is in
+[decisions/agents-are-background-commands.md](../decisions/agents-are-background-commands.md).
 
 - **Running one**: Max runs, with `shell` and `background`, `cd <dir> &&
   fx ask --session <name> <<'EOF'`, the task, and `EOF`. fx works until it

@@ -36,9 +36,7 @@ got so is in git's history.
 - [One conversation's Max can ask another's](asking-another-conversation.md)
 - [Max enters a linked conversation's VM by ssh, through max](ssh-along-a-link.md)
 - [A link lets Max into a VM, and nothing asks across it](links-enter-only.md)
-- [A background agent is pi in a background command](agents-are-background-commands.md)
-- [Background agents run fx](fx-for-background-agents.md)
-- [An ended agent is taken up by a fork](resume-by-fork.md) (replaced by the one above)
+- [A background agent is fx in a background command](agents-are-background-commands.md)
 
 ## VMs and processes
 
