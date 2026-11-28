@@ -39,7 +39,6 @@ got so is in git's history.
 
 - [The VMs run without a broker or root](vms-without-a-broker.md)
 - [What runs in a VM is systemd's to keep](lifetimes-to-systemd.md)
-- [What leaves the host process](what-leaves-the-host.md)
 - [A guest reset ends its VM](a-guest-reset-ends-its-vm.md)
 - [A new image restarts its VMs](a-new-image-restarts-its-vms.md)
 - [Idle guests drop their caches; the VMs' sizes stay](idle-guests-drop-caches.md)
