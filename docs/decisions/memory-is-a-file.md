@@ -36,13 +36,13 @@ into it, modelled on Claude Code's auto memory:
 - **The model that reads the memory writes it**, in the turn where it
   learns something, and knows what would change how it speaks and acts.
 - **Appending, not inserting.** Asked to insert entries by section and
-  person, which is laborious with `shell`, Max writes to the file once in
-  90 turns. A line at the end costs the model that reads the file
-  nothing: each carries the name it is about and its date.
+  person, which is laborious with `shell`, and told that every extra call
+  keeps people waiting a round, Max writes to the file once in 90 turns.
+  A line at the end costs the model that reads the file nothing: each
+  carries the name it is about and its date.
 - **Recording first.** Asked to put the reply and the recording command
   in one output, reply first, Max doesn't record, and argues from the
-  rules that nothing was worth it. So does a prompt line that makes an
-  extra call sound costly to the people waiting.
+  rules that nothing was worth it.
 - **What the cap needs is a smaller file**, and only Max can make one: a
   tidy that may change no meaning can't move details out to another file.
 - **Nothing else decides what Max's notes look like**, and there is no
