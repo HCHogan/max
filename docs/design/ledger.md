@@ -403,6 +403,12 @@ read and migrations undoing one another.
   `principal_id`; platform accounts are `identities`.
 - **JSONB holds three kinds of data**: `nodes`, `raw`, and blobs stored and
   loaded whole (runs, `opaque`, tool output). Everything else is columns.
+- **A NUL is stored as U+FFFD.** Postgres's text and jsonb can't hold
+  U+0000, which a tool's output, the model's text or a platform's payload
+  may have; a row of the ledger or of the turn records has each replaced
+  as it is written (`max-db`'s `text` and `json`), so it reads back with
+  U+FFFD where the NUL was rather than failing to write and stopping the
+  actor.
 - The ledger and the turn records are append-only
   ([principle 1](../architecture.md#principles-of-the-data-and-execution-model)).
 - Naming: the primary key is `id`, foreign keys `<table>_id`, times

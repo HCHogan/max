@@ -8,7 +8,7 @@ use sqlx::types::Json;
 
 use crate::captions;
 use crate::platform::role;
-use crate::{named, unknown};
+use crate::{json, named, text, unknown};
 
 /// A row to commit.
 #[derive(Clone, Debug)]
@@ -142,6 +142,9 @@ fn content(
 /// Commits a row to the timeline: its id.
 pub async fn insert(conn: &mut PgConnection, new: &NewMessage<'_>) -> sqlx::Result<MessageId> {
     let columns = columns(new.content, new.command);
+    let nodes = json(serde_json::to_value(columns.nodes))?;
+    let raw = json(serde_json::to_value(new.raw))?;
+    let (sender_name, rendered) = (text(&new.sender.name), text(new.text));
     let id = sqlx::query_scalar!(
         r#"
         insert into messages (
@@ -156,7 +159,7 @@ pub async fn insert(conn: &mut PgConnection, new: &NewMessage<'_>) -> sqlx::Resu
         new.conversation.get(),
         new.endpoint.get(),
         new.sender.identity.get(),
-        new.sender.name,
+        &*sender_name,
         new.sender.role.map(Role::as_str),
         new.native_id,
         new.quote_id,
@@ -166,9 +169,9 @@ pub async fn insert(conn: &mut PgConnection, new: &NewMessage<'_>) -> sqlx::Resu
         columns.event,
         columns.reply_to,
         columns.target,
-        Json(columns.nodes) as _,
-        new.raw,
-        new.text,
+        nodes,
+        raw,
+        &*rendered,
         new.turn.map(TurnId::get),
         new.segment
     )

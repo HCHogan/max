@@ -61,6 +61,19 @@ async fn every_kind_of_row_reads_back_as_written(pool: PgPool) -> sqlx::Result<(
 }
 
 #[sqlx::test]
+async fn a_nul_reads_back_as_a_replacement_character(pool: PgPool) -> sqlx::Result<()> {
+    let mut conn = pool.acquire().await?;
+    let group = group(&mut conn, "group:30001").await?;
+    let xiaoming = sender(group.xiaoming, "小\0明", None);
+    let id = commit(&mut conn, &group, &xiaoming, &said("a\0b"), 1).await?;
+    let rows = rows(&mut conn, group.endpoint.conversation, None, id).await?;
+    let message = &rows[0].message;
+    assert_eq!(message.content, said("a\u{FFFD}b"));
+    assert_eq!(message.sender.name, "小\u{FFFD}明");
+    Ok(())
+}
+
+#[sqlx::test]
 async fn a_row_belongs_to_its_conversation(pool: PgPool) -> sqlx::Result<()> {
     let mut conn = pool.acquire().await?;
     let group = group(&mut conn, "group:30001").await?;

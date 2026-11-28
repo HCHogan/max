@@ -5,9 +5,8 @@ use chrono::{DateTime, Utc};
 use max_core::ids::{ConversationId, MessageId, TurnId};
 use max_core::run::{FailReason, Input, Outcome, RunRecord};
 use sqlx::PgConnection;
-use sqlx::types::Json;
 
-use crate::unknown;
+use crate::{json, text, unknown};
 
 /// A turn as it starts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -25,6 +24,7 @@ pub async fn start(
     from: MessageId,
     at: DateTime<Utc>,
 ) -> sqlx::Result<Started> {
+    let trigger = json(serde_json::to_value(trigger))?;
     let row = sqlx::query!(
         r#"
         insert into turns (conversation_id, ordinal, trigger, from_id, started_at)
@@ -33,7 +33,7 @@ pub async fn start(
         returning id, ordinal
         "#,
         conversation.get(),
-        Json(trigger) as _,
+        trigger,
         from.get(),
         at
     )
@@ -85,6 +85,8 @@ async fn insert(
         },
         Outcome::Lost => ("lost", None, None),
     };
+    let error = error.map(text);
+    let run = run.map(|run| json(serde_json::to_value(run))).transpose()?;
     sqlx::query!(
         "with outcome as (
              insert into turn_outcomes (turn_id, outcome, failure, error, run, finished_at)
@@ -98,8 +100,8 @@ async fn insert(
         turn.get(),
         outcome,
         failure,
-        error,
-        run.map(Json) as _,
+        error.as_deref(),
+        run,
         at
     )
     .execute(conn)

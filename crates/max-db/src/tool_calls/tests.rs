@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use max_core::ids::CallId;
 use max_core::item::{Item, ItemKind, ModelTag, Part, Protocol, ToolCall, ToolOutput};
-use max_core::run::{Context, Outcome, RunRecord, RunSpec};
+use max_core::run::{Context, FailReason, Outcome, RunRecord, RunSpec};
 use sqlx::PgPool;
 
 use super::*;
@@ -127,6 +127,65 @@ async fn a_runs_tool_calls_read_back_as_text(pool: PgPool) -> sqlx::Result<()> {
     };
     let found = matching(&mut conn, &query).await?;
     assert_eq!(found, [(second, vec![0]), (first, vec![1])]);
+    Ok(())
+}
+
+/// A NUL in a call's output, which Postgres can't hold, is kept as U+FFFD;
+/// arguments that escape one, `\u0000`, which jsonb refuses, are kept as
+/// the model wrote them.
+#[sqlx::test]
+async fn a_nul_in_a_call_is_kept_as_a_replacement_character(pool: PgPool) -> sqlx::Result<()> {
+    let mut conn = pool.acquire().await?;
+    let group = testing::group(&mut conn, "group:30001").await?;
+    let max = testing::sender(group.max, "Max", None);
+    let from = testing::commit(&mut conn, &group, &max, &testing::said("早"), 0).await?;
+    let conversation = group.endpoint.conversation;
+    let spec = RunSpec {
+        model: ModelTag {
+            protocol: Protocol::Chat,
+            model: "qwen".into(),
+        },
+        window: 128_000,
+        max_output: None,
+    };
+    let base = Context {
+        items: Vec::new(),
+        roster: Default::default(),
+    };
+    let arguments = r#"{"command": "printf 'a\u0000b'"}"#;
+    let transcript = [call("a", "shell", arguments), result("a", &["a\0b"])];
+    let run = RunRecord {
+        spec: &spec,
+        base: &base,
+        transcript: &transcript,
+    };
+    let started = turns::start(&mut conn, conversation, &[], from, at(1)).await?;
+    let failed = Outcome::Failed {
+        reason: FailReason::Model {
+            error: "502\0".into(),
+        },
+    };
+    turns::finish(&mut conn, started.turn, &run, &failed, at(2)).await?;
+    let read = call_of(&pool, conversation, started.ordinal, 1).await?;
+    assert_eq!(
+        read,
+        Some(Call {
+            turn: started.ordinal,
+            n: 1,
+            name: "shell".into(),
+            arguments: arguments.into(),
+            output: "a\u{FFFD}b".into(),
+            started: at(1),
+        })
+    );
+    let outcome = turns::outcome(&mut conn, started.turn).await?;
+    let error = "502\u{FFFD}".to_owned();
+    assert_eq!(
+        outcome,
+        Some(Outcome::Failed {
+            reason: FailReason::Model { error }
+        })
+    );
     Ok(())
 }
 

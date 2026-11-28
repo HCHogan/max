@@ -28,8 +28,10 @@ pub mod usage;
 #[cfg(test)]
 mod testing;
 
+use std::borrow::Cow;
 use std::str::FromStr;
 
+use serde_json::Value;
 pub use sqlx::{PgConnection, PgPool};
 
 /// The migrations in `migrations/`, embedded.
@@ -49,6 +51,52 @@ where
 {
     name.parse()
         .map_err(|error: T::Err| sqlx::Error::Decode(error.into()))
+}
+
+/// What stands for U+0000, which Postgres's text and jsonb can't hold. A
+/// tool's output, the model's text or a platform's payload can have one,
+/// and the row would fail to write.
+const NUL: &str = "\u{FFFD}";
+
+/// `text` as a text column can hold it.
+fn text(text: &str) -> Cow<'_, str> {
+    if text.contains('\0') {
+        Cow::Owned(text.replace('\0', NUL))
+    } else {
+        Cow::Borrowed(text)
+    }
+}
+
+/// A value serialized for a jsonb column, as one can hold it.
+fn json(value: serde_json::Result<Value>) -> sqlx::Result<Value> {
+    let mut value = value.map_err(|error| sqlx::Error::Encode(error.into()))?;
+    storable(&mut value);
+    Ok(value)
+}
+
+fn storable(value: &mut Value) {
+    let clean = |string: &mut String| {
+        if let Cow::Owned(owned) = text(string) {
+            *string = owned;
+        }
+    };
+    match value {
+        Value::String(string) => clean(string),
+        Value::Array(items) => items.iter_mut().for_each(storable),
+        Value::Object(fields) => {
+            if fields.keys().any(|key| key.contains('\0')) {
+                *fields = std::mem::take(fields)
+                    .into_iter()
+                    .map(|(mut key, value)| {
+                        clean(&mut key);
+                        (key, value)
+                    })
+                    .collect();
+            }
+            fields.values_mut().for_each(storable);
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
 }
 
 #[cfg(test)]
