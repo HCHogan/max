@@ -144,8 +144,13 @@ pub enum Malformed {
         /// The argument that is blank.
         field: &'static str,
     },
-    /// No tool has that name.
-    #[error("there is no tool named {0}: only {RUN_CODE} and {SHELL}")]
+    /// No tool has that name. It is mostly one of Max's, which the system
+    /// prompt declares as functions: the model is told how those are
+    /// called.
+    #[error(
+        "there is no tool named {0}: only {RUN_CODE} and {SHELL}. One of Max's tools is called from \
+         a program: {RUN_CODE} with code such as `return await tools.{0}(args)`"
+    )]
     Unknown(String),
 }
 

@@ -36,7 +36,9 @@ call. The host's tools are in `crates/max/src/service`, the guest's side in
   any language call the same tools.
 - **Declarations**: the system prompt holds the TypeScript declarations of
   Max's tools, return types included, generated from the tools themselves
-  (see [Tool contract](#tool-contract)).
+  (see [Tool contract](#tool-contract)). A model sometimes calls one as a
+  tool of its own, `web_search` mostly: the call's result says there are
+  only the two, and how the one it named is called from a program.
 - **No skills yet.** If they come, a skill is only documentation: loading
   one appends its manual to the context, and the tools array doesn't change,
   so the core needs no active tool set, and neither Responses'
