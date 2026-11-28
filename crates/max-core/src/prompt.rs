@@ -134,7 +134,7 @@ pub fn system(
     idle: Option<Duration>,
 ) -> String {
     let mut prompt = format!(
-        "{}\n\n{}\n\nMax 的工具（只能在 run_code 的程序里调）：\n{tools}\n",
+        "{}\n\n{}\n\nMax 的工具（在 run_code 的程序里是 tools.名字(args)，在 shell 的命令里是 maxx 名字）：\n{tools}\n",
         persona.trim(),
         rules(idle),
     );
