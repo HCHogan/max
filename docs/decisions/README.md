@@ -46,7 +46,7 @@ got so is in git's history.
 - [The conversation is the finest grain of permission](permission-by-conversation.md)
 - [A platform is an adapter crate behind max's trait](platform-adapters.md)
 - [QQ through the official bot API](official-qq-bot.md)
-- [WeChat through the desktop client](wechat-through-the-desktop-client.md) (removed for now)
+- [WeChat through the desktop client](wechat-through-the-desktop-client.md) (on hold)
 - [No matching people by avatar](no-avatar-matching.md)
 - [Matrix is deferred](matrix-deferred.md)
 - [Features deliberately removed](features-removed.md)

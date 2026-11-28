@@ -1,18 +1,16 @@
 # WeChat through the desktop client
 
-Max is on WeChat through the official desktop client for Linux in a VM,
-read through the accessibility bus and driven with synthetic input, by
-wxdesk.
-
-Max isn't on WeChat for now: `max-wechat` and its design were removed,
-and the rows from then keep their platform. The design is in the history,
-`git show 8b33f38d:docs/design/wechat.md`, and the adapter in
-`crates/max-wechat` at the same commit.
+Max isn't on WeChat for now. The way onto it that was built is the
+official desktop client for Linux in a VM, read through the accessibility
+bus and driven with synthetic input, by wxdesk.
+Its design is `git show 8b33f38d:docs/design/wechat.md`, and the adapter
+`crates/max-wechat` at the same commit; the rows from then keep their
+platform.
 
 ## Context
 
-Max was wanted in one WeChat group, and in private chats with a few
-people. WeChat has no bot API for personal accounts' groups:
+Max is wanted in a WeChat group, and in private chats with a few people.
+WeChat has no bot API for personal accounts' groups:
 
 - **iLink**, WeChat's channel for bots, is private chats only, with a
   limit on how many messages answer one.
@@ -27,11 +25,11 @@ people. WeChat has no bot API for personal accounts' groups:
 
 ## Decision
 
-Run the official WeChat for Linux in a NixOS VM, logged in once by QR
+The official WeChat for Linux runs in a NixOS VM, logged in once by QR
 code over VNC. wxdesk, in a repository of its own, reads the window
 through AT-SPI, as a screen reader does, and acts with XTEST and the X
 clipboard, as a person at the screen does; it serves what it reads over
-TCP to `max-wechat`.
+TCP to an adapter crate, `max-wechat`.
 
 ## Why
 
@@ -39,7 +37,7 @@ TCP to `max-wechat`.
   decrypted: what the account does is what a person at the window could
   do, and nothing in max's repository is a target.
 - Linux's client exposes its widgets on the accessibility bus with their
-  text, so reading needs no OCR; the Windows client was the other way to
+  text, so reading needs no OCR; the Windows client is the other way to
   this, at the cost of a Windows VM.
 - A VM keeps the client, its display and its login apart from the host,
   with the rest of Max's VMs on tank.

@@ -1,10 +1,10 @@
 # Matrix is deferred
 
-Matrix is not implemented for now, and neither is mirroring (see [Message format](../design/ledger.md#message-format)). It was originally to be built together with QQ so that the message format would not take the shape of any single platform; now that the format is settled, supporting Matrix later means adding one adapter.
+Matrix is not implemented for now, and neither is mirroring (see [Message format](../design/ledger.md#message-format)). The message format takes no single platform's shape, so supporting Matrix means adding one adapter.
 
 ## What was worked out for encrypted rooms
 
-Kept for when Matrix is built. Encrypted rooms are to be supported. matrix-sdk's `e2e-encryption` and `sqlite` features are both enabled; unencrypted rooms work as usual. The Haskell version called the Client-Server API with only an access token and could not read encrypted rooms.
+For when Matrix is built. Encrypted rooms are to be supported, with matrix-sdk's `e2e-encryption` and `sqlite` features both enabled; unencrypted rooms work as usual. Calling the Client-Server API with only an access token can't read encrypted rooms.
 
 - **State store**: matrix-sdk's room state and keys are stored in sqlite under the state directory (`/var/lib/max/matrix/`), with the passphrase coming from sops (`store_passphrase_file`). This is matrix-sdk's own storage: Max's code does not read it, and it is not mixed with Postgres.
 - **Login and device**: on first startup the bot logs in with a password (`password_file`) and stores the session (user id, device id, access token) in the same directory; every later startup restores that session. The device id therefore stays the same, and other people's clients do not see a new device after every restart.
@@ -14,7 +14,7 @@ Kept for when Matrix is built. Encrypted rooms are to be supported. matrix-sdk's
 - **Media**: media in encrypted rooms is itself encrypted; the decryption key is in the event, and `raw` keeps it. When media download is built (not in v1), matrix-sdk will download and decrypt the media.
 - **Sending**: matrix-sdk encrypts automatically when sending and sends the room key to all of the members' devices, without requiring them to be verified first.
 - **Initial setup**: the `max matrix-bootstrap` subcommand. It logs in with the password, creates the device, enables cross-signing, secret storage and key backup, and prints the recovery key, which a person then puts into sops. The service itself still exits with an error at startup if `recovery_key_file` is missing; the recovery key can only be obtained through this step first.
-- **Dependency constraints**: matrix-sdk is pinned to 0.18.0. Even without sqlx's sqlite feature enabled, sqlx-sqlite takes part in dependency resolution: sqlx 0.9.0 requires `libsqlite3-sys` `<0.38`, while matrix-sdk 0.19's rusqlite 0.40 requires `^0.38`, and both declare `links = "sqlite3"`, so cargo refuses to resolve them. 0.18.0 uses rusqlite 0.37 (`libsqlite3-sys` 0.35), which resolves together with sqlx 0.9.0, and there is still only one copy of reqwest. matrix-sdk will be upgraded once sqlx relaxes this range.
-- **Testing**: unit tests use decrypted events as fixtures. The full encrypted path is verified in a newly created encrypted test room, logging in with the same bot account as a new device; the Haskell version syncs only the one room it is configured for, so the two do not interfere. The original mirroring room is not encrypted, and encryption must not be enabled for it either, because once enabled it cannot be turned off.
+- **Dependency constraints**: matrix-sdk would be pinned to 0.18.0. Even without sqlx's sqlite feature enabled, sqlx-sqlite takes part in dependency resolution: sqlx 0.9.0 requires `libsqlite3-sys` `<0.38`, while matrix-sdk 0.19's rusqlite 0.40 requires `^0.38`, and both declare `links = "sqlite3"`, so cargo refuses to resolve them. 0.18.0 uses rusqlite 0.37 (`libsqlite3-sys` 0.35), which resolves together with sqlx 0.9.0, with only one copy of reqwest, until sqlx relaxes this range.
+- **Testing**: unit tests use decrypted events as fixtures. The full encrypted path is verified in a newly created encrypted test room, logging in with the same bot account as a new device. A room used for mirroring that is not encrypted must stay so: encryption, once enabled, cannot be turned off.
 
 The configuration would be in `[platforms.matrix]`: `homeserver`, `user_id`, `password_file`, `recovery_key_file`, `store_passphrase_file`, `rooms_file` (one room per line).

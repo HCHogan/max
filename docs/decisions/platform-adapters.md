@@ -7,16 +7,13 @@ Each chat platform Max is on is a crate of its own that implements
 
 ## Context
 
-QQ was a module of `max` (`max/src/qq`), and more of it had spread
-through the rest: the tools for recalling and muting applied QQ's rules
-and called its client, the conversation actor asked QQ for a group's name,
-`/bind` named QQ's old groups, the configuration had `[platforms.qq]`,
-`send_image` turned WebP into PNG because QQ won't take WebP, and the
-system prompt and the tools' descriptions spoke of QQ. The rule had been
-that adapters stay in `max` until it grows uncomfortably large, and that
-mapping QQ's events to nodes is `max`'s, not `qqbot`'s. A second platform
-is planned (WeChat, through iLink), and with the rule as it was it would
-have meant edits all over `max` again.
+A platform kept as a module of `max` spreads through the rest of it: the
+tools for recalling and muting apply the platform's rules and call its
+client, the conversation actor asks it for a group's name, `/bind` names
+its old groups, the configuration has its section, `send_image` turns
+WebP into PNG because QQ won't take WebP, and the system prompt and the
+tools' descriptions speak of QQ. A second platform is then edits all over
+`max` again.
 
 ## Decision
 
@@ -29,10 +26,10 @@ have meant edits all over `max` again.
   message may be recalled; muting; which old chat `/bind` continues; and
   notes for the system prompt, where the platform's own rules and limits
   are told to the model.
-- Each platform's adapter is a crate, `max-qq` first, which depends on
-  `max`, `max-core`, `max-db` and its protocol crate. `max` depends on no
-  platform crate and names none outside `max_core::message::Platform`,
-  which records where a row came from.
+- Each platform's adapter is a crate, `max-qq` the first, which depends
+  on `max`, `max-core`, `max-db` and its protocol crate. `max` depends on
+  no platform crate and names none outside
+  `max_core::message::Platform`, which records where a row came from.
 - The binary is `max-cli`: it reads `[platforms.*]`, starts each adapter
   and hands them to `max`.
 

@@ -67,5 +67,5 @@ Not there:
 
 ## See also
 
-- [Features deliberately left out](features-removed.md).
+- [Features deliberately removed](features-removed.md).
 - [Matrix is deferred](matrix-deferred.md).

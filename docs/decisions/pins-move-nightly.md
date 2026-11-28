@@ -7,18 +7,18 @@ the nested VM test. Nobody opens or reads a pull request for either.
 
 ## Context
 
-A pin moved only when someone moved it. Four weeks after the last time,
-`cargo update` had 84 entries of `Cargo.lock` to change, every one within
-`Cargo.toml`'s ranges, and crane, microvm and the advisory database were
-as old. The `audit` check reads the advisory database from its pin, since
-a build has no network: against that day's database the lock had two
-advisories the check did not report, and nothing else was there to report
-them.
+A pin that moves only when someone moves it goes stale. Four weeks after
+a move by hand, `cargo update` had 84 entries of `Cargo.lock` to change,
+every one within `Cargo.toml`'s ranges, and crane, microvm and the
+advisory database were as old. The `audit` check reads the advisory
+database from its pin, since a build has no network: against that day's
+database the lock had two advisories the check did not report, and
+nothing else was there to report them.
 
-What tank runs was already tested each night in part. nix-config's `maxx`
-input follows nix-config's nixpkgs, which its updater moves, so a new
-nixpkgs rebuilds max and the guest's image and runs max's nested VM test
-before it is pushed. max's own pins were outside that.
+nix-config's updater on tank moves nix-config's own inputs each night.
+Its `maxx` input follows nix-config's nixpkgs, so a new nixpkgs rebuilds
+max and the guest's image and runs max's nested VM test before it is
+pushed. max's own pins are max's repository's to move.
 
 ## Decision
 
