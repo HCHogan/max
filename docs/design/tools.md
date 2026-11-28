@@ -214,6 +214,13 @@ channel is plain HTTP, and every caller in a VM one caller, is in
   background command, an agent or a unit of Max's. `service::Context` is the
   conversation, its services, its `/work` and a `Poster` (none for
   `vm-check`, which runs the calls itself).
+- **One log line per call**, `a program's call ends`: the conversation,
+  the tool, how long it took and how it ended: `ok`, the failure's code, or
+  `dropped` when the caller left first. Not the arguments or the result. A
+  turn's run holds its programs and commands, not the calls they made, and
+  what agents and units call is written nowhere else: this is what says
+  which of Max's tools they use, how often one fails and how long one
+  takes.
 - **No retries, no classes of side effect**: the host never retries; that is
   the model's decision. What affects the group (saying, sending, retracting)
   goes through the actor into the ledger, so whether it happened shows on the

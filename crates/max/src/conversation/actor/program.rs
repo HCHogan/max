@@ -1,11 +1,15 @@
 //! Calls from the group's VM: Max's tools, run beside the core. Every
 //! call comes this way, a turn's program's and a unit's of Max's own
-//! alike. See "The guest's calls" in docs/design/tools.md.
+//! alike, and each leaves a line in the log: a turn's run holds only the
+//! programs, and what agents and units call is written nowhere else. See
+//! "The guest's calls" in docs/design/tools.md.
 
 use std::sync::Arc;
 
 use serde_json::Value;
 use tokio::sync::oneshot;
+use tokio::time::Instant;
+use tracing::info;
 
 use super::{Conversation, Does};
 use crate::conversation::Poster;
@@ -39,12 +43,28 @@ impl Conversation {
             call_time: self.call_time(),
             poster: Some(Poster::new(self.mailbox.clone())),
         };
+        let conversation = self.place.conversation;
         self.side.spawn(move |_| async move {
+            let started = Instant::now();
             let outcome = tokio::select! {
-                outcome = service::call(&tool, &context, args) => outcome,
-                () = reply.closed() => return,
+                outcome = service::call(&tool, &context, args) => Some(outcome),
+                () = reply.closed() => None,
             };
-            let _ = reply.send(outcome);
+            // Not the arguments or the result: they are the program's.
+            info!(
+                %conversation,
+                tool,
+                took_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                outcome = match &outcome {
+                    Some(Ok(_)) => "ok",
+                    Some(Err(failure)) => failure.code,
+                    None => "dropped",
+                },
+                "a program's call ends"
+            );
+            if let Some(outcome) = outcome {
+                let _ = reply.send(outcome);
+            }
         });
     }
 }
